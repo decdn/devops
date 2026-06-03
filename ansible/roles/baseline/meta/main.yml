@@ -1,9 +1,11 @@
 ---
 galaxy_info:
   role_name: baseline
+  author: deCDN Contributors
   description: Debian host baseline — firewall, auto-patching, fail2ban, time sync, DevSec OS/SSH hardening.
   license: MIT
   min_ansible_version: "2.15"
+  galaxy_tags: [decdn, hardening, firewall, fail2ban, devsec, debian]
   platforms:
     - name: Debian
       versions: [bookworm]

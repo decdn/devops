@@ -38,3 +38,10 @@
 
 # KICS security-scan output (`make security`; CI uploads it as an artifact)
 kics-results/
+
+# Galaxy collection build output (`make build`/`galaxy-check`; CI uploads the
+# tarball as an artifact). The collection is staged + built under ansible/build/.
+# galaxy-importer drops importer_result.json in its cwd (ansible/) when validating.
+ansible/build/
+*.tar.gz
+ansible/importer_result.json

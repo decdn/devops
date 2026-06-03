@@ -65,6 +65,42 @@ jobs:
             echo "::endgroup::"
           done
 
+  # Build the public `decdn.node` collection and run galaxy-importer's checks —
+  # the same validation Galaxy runs on upload (metadata, license, README, embedded
+  # ansible-lint). This is a readiness GATE only: it never publishes and needs no
+  # token. Runs only when ansible/ changed.
+  galaxy-build:
+    needs: changes
+    if: needs.changes.outputs.ansible == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Install build + import tooling
+        run: python -m pip install --upgrade ansible-core ansible-lint galaxy-importer
+      - name: Vendor collection dependencies
+        # So galaxy-importer's embedded ansible-lint can resolve the roles' FQCNs
+        # (devsec.hardening, ansible.posix). Installed under ansible/collections.
+        run: make deps
+        env:
+          ANSIBLE_COLLECTIONS_PATH: collections
+      - name: Build + validate the decdn.node collection
+        run: make galaxy-check
+        env:
+          ANSIBLE_COLLECTIONS_PATH: collections
+      - name: Upload collection artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: decdn-node-collection
+          path: ansible/build/decdn-node-*.tar.gz
+          if-no-files-found: ignore
+
   # Dedicated IaC security scan of the Ansible tree via the official KICS action.
   # KICS severities are HIGH/MEDIUM/LOW/INFO (no "critical"); we gate on HIGH.
   #

@@ -87,9 +87,17 @@ make deps             # vendor pinned Galaxy collections into ./collections
 make check / deploy             # deCDN node (site.yml): dry-run / provision
 make check-anvil / deploy-anvil # anvil devnet (anvil.yml)
 make add-dev USER_NAME=alice    # mint + reveal an anvil basic-auth dev user
+make build / galaxy-check       # stage + build the decdn.node collection, then validate it
 ```
+
+**Galaxy collection (`decdn.node`).** The public roles (`baseline` + `decdn_node`) ship as
+a distributable collection; the internal anvil tooling does not. The overlay lives in
+`ansible/galaxy/` and is staged into a clean collection tree by `galaxy/build.sh` — there is
+**no** `galaxy.yml` at the `ansible/` root (that would make ansible-lint/molecule treat the
+deploy project as a collection). Build/validate with `make build` / `make galaxy-check`;
+**publishing is a manual step** (`ansible-galaxy collection publish`), not automated.
 
 **Gotcha — pre-commit is local-only.** Hygiene/shellcheck/yamllint/markdown run via
 `make hooks`/`make lint` on your machine, **not** in CI. CI (`.github/workflows/`) is the
-blocking gate and runs `ansible-lint` + KICS (on `ansible/**`) + `actionlint`. `ansible-lint`
+blocking gate and runs `ansible-lint` + KICS + `galaxy-build` (on `ansible/**`) + `actionlint`. `ansible-lint`
 is **not** a per-commit hook (it needs collections vendored) — run `make lint-ansible`.

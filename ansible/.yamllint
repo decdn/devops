@@ -16,3 +16,4 @@ rules:
     max-spaces-inside: 1          # allow "{{ var }}" Jinja spacing
 ignore: |
   collections/
+  build/
