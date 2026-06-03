@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Shared config + helpers for the anvil-devnet ops scripts.
 # Sourced by install.sh / bootstrap.sh / caddy-add-user.sh / deploy.sh / reset.sh.
+#
+# Most names below are configuration constants read by the scripts that source
+# this file, so ShellCheck sees them as unused within lib.sh itself.
+# shellcheck disable=SC2034
 set -euo pipefail
 
 # --- Foundry -----------------------------------------------------------------
@@ -59,8 +63,10 @@ wait_for_rpc() {
 # Requires root (or the anvil user) because the file is mode 600.
 read_mnemonic() {
 	[ -r "$ANVIL_ENV" ] || die "Cannot read ${ANVIL_ENV}. Run as root, after bootstrap.sh."
+	set -a
 	# shellcheck disable=SC1090
-	set -a; . "$ANVIL_ENV"; set +a
+	. "$ANVIL_ENV"
+	set +a
 	[ -n "${ANVIL_MNEMONIC:-}" ] || die "ANVIL_MNEMONIC not set in ${ANVIL_ENV}."
 }
 

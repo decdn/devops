@@ -1,0 +1,31 @@
+---
+# Dependabot — keeps the SHA-pinned GitHub Actions current (it rewrites
+# `uses: owner/repo@<sha> # vX.Y.Z` to the new sha + version comment).
+#
+# github-actions is the only applicable ecosystem: the repo has no pip/npm/etc.
+# manifests, and `ansible/requirements.yml` is Ansible Galaxy, which Dependabot
+# does not support.
+#
+# NOT covered here, bump manually:
+#   - the KICS engine image digest in the Makefile — see CONTRIBUTING.md
+#   - the Galaxy collections in ansible/requirements.yml
+#   - pre-commit hook revs — run `pre-commit autoupdate`
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci          # conventional commits -> "ci(deps): ..."
+      include: scope
+    groups:
+      actions:
+        patterns: ["*"]
+    ignore:
+      # Pinned to the post-remediation hardened HEAD (see ci.yml). The newest
+      # RELEASE tag (v2.1.20) points at an older commit that predates the April
+      # 2026 base-image digest-pinning, so an automated bump would DOWNGRADE
+      # security. Re-pin manually only after verifying a newer clean commit/tag.
+      - dependency-name: "Checkmarx/kics-github-action"

@@ -1,0 +1,7 @@
+# Repo-wide ShellCheck settings (read by the shellcheck pre-commit hook and CI).
+#
+# SC1091: the ops scripts `source ./lib.sh` at runtime relative to their own
+# install dir; that file isn't resolvable during a static lint from the repo
+# root, and following it isn't needed to check the callers. lib.sh itself is
+# still linted directly.
+disable=SC1091

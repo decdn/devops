@@ -65,6 +65,8 @@ fi
 # ── 5. cloudflared (official Cloudflare apt repo) ────────────────────────────
 if ! command -v cloudflared >/dev/null 2>&1; then
 	log "Installing cloudflared…"
+	# -m applies only to the deepest dir, which is all we create here.
+	# shellcheck disable=SC2174
 	mkdir -p --mode=0755 /usr/share/keyrings
 	curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
 		> /usr/share/keyrings/cloudflare-main.gpg
