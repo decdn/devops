@@ -67,3 +67,29 @@ secrets; generated on host) and #2 (localhost-only by default) hold for both con
 The original bash + systemd `services/anvil-devnet/` devnet has been **removed** —
 superseded by `ansible/` (the `anvil.yml` path). `services/` remains the documented
 convention for any future imperative bash + systemd unit, but currently holds none.
+
+## Commands
+
+Two Makefiles: the **root** is the hygiene/security/CI mirror; **`ansible/`** drives
+deploys (its targets must run from `ansible/`). `make help` lists root targets.
+
+```bash
+# Root — lint & security (mirror CI)
+make hooks            # one-time: install pre-commit git hook (pip install pre-commit first)
+make lint             # all pre-commit hooks on all files (hygiene, shellcheck, yamllint, markdown)
+make lint-ansible     # vendor collections + full ansible-lint (production profile)
+make security         # KICS IaC scan of ansible/ (pinned engine image)
+make molecule         # containerised converge/verify of the anvil stack (needs Docker)
+
+# Ansible deploys — run from ansible/ (see ansible/README.md for the full flow)
+cd ansible
+make deps             # vendor pinned Galaxy collections into ./collections
+make check / deploy             # deCDN node (site.yml): dry-run / provision
+make check-anvil / deploy-anvil # anvil devnet (anvil.yml)
+make add-dev USER_NAME=alice    # mint + reveal an anvil basic-auth dev user
+```
+
+**Gotcha — pre-commit is local-only.** Hygiene/shellcheck/yamllint/markdown run via
+`make hooks`/`make lint` on your machine, **not** in CI. CI (`.github/workflows/`) is the
+blocking gate and runs `ansible-lint` + KICS (on `ansible/**`) + `actionlint`. `ansible-lint`
+is **not** a per-commit hook (it needs collections vendored) — run `make lint-ansible`.
