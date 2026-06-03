@@ -1,7 +1,7 @@
 # roles/contracts — STUB (out of scope for v1)
 
 Deterministic deployment of the deCDN contracts onto the devnet is **not wired up
-yet**, mirroring the `bin/deploy.sh` TODO in the legacy `services/anvil-devnet/`.
+yet**.
 
 When it lands, this role will:
 

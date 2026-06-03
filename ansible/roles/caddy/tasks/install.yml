@@ -1,6 +1,5 @@
 ---
-# Install Caddy from the official Cloudsmith apt repo (mirrors
-# services/anvil-devnet/bin/install.sh step 4). Idempotent.
+# Install Caddy from the official Cloudsmith apt repo. Idempotent.
 - name: Add Caddy apt signing key
   ansible.builtin.get_url:
     url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key

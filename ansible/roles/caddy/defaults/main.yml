@@ -8,7 +8,7 @@ rpc_hostname: rpc-dev.decdn.org      # used in the printed ETH_RPC_URL
 anvil_host: "127.0.0.1"
 anvil_port: 8545
 
-# On-host credential registry (mirrors services/anvil-devnet/bin/lib.sh paths).
+# On-host credential registry.
 caddy_users_tsv: /etc/caddy/rpc-dev.users.tsv       # username<TAB>bcrypt registry
 caddy_basicauth_file: /etc/caddy/rpc-dev.basicauth  # generated Caddyfile import
 caddy_initial_user: dev                              # always ensured to exist

@@ -63,7 +63,7 @@ secrets; generated on host) and #2 (localhost-only by default) hold for both con
   baseline + anvil + Caddy basic-auth, loopback) — team tooling, not the product. Shared
   DevSec-hardened `baseline`. See `ansible/README.md`. (On-chain node stake/registration,
   ADR 019 Phase 2, is an operator step, not automated.)
-- **`services/anvil-devnet/`** — _superseded by `ansible/` (the `anvil.yml` path)._ The
-  original bash + systemd shared devnet behind Caddy basic-auth and a Cloudflare Tunnel
-  (`https://rpc-dev.decdn.org`). Kept until the Ansible path is proven on the box, then to
-  be removed. See its README.
+
+The original bash + systemd `services/anvil-devnet/` devnet has been **removed** —
+superseded by `ansible/` (the `anvil.yml` path). `services/` remains the documented
+convention for any future imperative bash + systemd unit, but currently holds none.

@@ -12,7 +12,7 @@ anvil_port: 8545
 foundry_dir: /opt/foundry
 foundry_version: latest          # foundryup -i value: latest | nightly | vX.Y.Z (pin for reproducibility)
 
-# --- Fixed on-host identity/paths (mirror services/anvil-devnet/bin/lib.sh) ---
+# --- Fixed on-host identity/paths ---
 anvil_user: anvil
 anvil_group: anvil
 anvil_home: /opt/anvil

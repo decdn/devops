@@ -20,7 +20,7 @@ tree), and `markdownlint`.
 
 | Target | What it does |
 |--------|--------------|
-| `make lint` | run all pre-commit hooks on every file (mirrors the CI `pre-commit` job) |
+| `make lint` | run all pre-commit hooks on every file (the full local hygiene gate) |
 | `make lint-ansible` | install Galaxy collections + run `ansible-lint` (its production profile includes the Ansible security rules) |
 | `make security` | KICS IaC security scan of `ansible/` (engine image; CI uses the official KICS action) |
 | `make molecule` | containerised converge/verify of the anvil stack (needs Docker) |
@@ -30,8 +30,9 @@ Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hoo
 
 ## CI overview
 
-- **`ci.yml`** — `pre-commit`, `ansible-lint` + `kics` (on `ansible/**`), and
-  `actionlint`. Bash-only PRs skip the Ansible jobs.
+- **`ci.yml`** — `ansible-lint` + `kics` (on `ansible/**`) and `actionlint`.
+  Bash-only PRs skip the Ansible jobs. Hygiene/shellcheck/markdownlint run via
+  **pre-commit locally only** (`make hooks` / `make lint`), not in CI.
 - **`molecule.yml`** — runs on `ansible/**` changes; **blocking**. Add it as a
   required status check in branch protection (Settings → Branches) once proven,
   alongside the `ci.yml` jobs.
@@ -53,6 +54,7 @@ Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hoo
 
 ## Solidity
 
-The `services/anvil-devnet/contracts/` Foundry project has no `.sol` sources yet.
-The `forge fmt` pre-commit hook and the CI `solidity` job are present but
-commented out; they self-activate once real sources land.
+There is no Foundry project in the repo yet — deterministic on-devnet contract
+deployment is a future Ansible role (`ansible/roles/contracts/`, currently a stub).
+The `forge fmt` pre-commit hook and the CI `solidity` job are present but commented
+out; they self-activate once real sources land.
