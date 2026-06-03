@@ -55,9 +55,8 @@ repos:
       - id: markdownlint-cli2
 
   # ── YAML lint for the Ansible tree (reuses ansible/.yamllint) ──────────────
-  # Scoped to ansible/ so services/ YAML isn't held to Ansible style, and so it
-  # stays in lockstep with `make -C ansible lint`. *.yml.example templates don't
-  # match (they end in .example) and are skipped.
+  # Scoped to ansible/ so it stays in lockstep with `make -C ansible lint`.
+  # *.yml.example templates don't match (they end in .example) and are skipped.
   - repo: local
     hooks:
       - id: yamllint-ansible
@@ -76,13 +75,3 @@ repos:
         language: system
         pass_filenames: false
         stages: [manual]
-
-  # Solidity (forge fmt) self-activates once contracts/src has real .sol files:
-  # - repo: local
-  #   hooks:
-  #     - id: forge-fmt
-  #       name: forge fmt --check
-  #       entry: bash -c 'cd services/anvil-devnet/contracts && forge fmt --check'
-  #       language: system
-  #       files: ^services/anvil-devnet/contracts/.*\.sol$
-  #       exclude: \.example$

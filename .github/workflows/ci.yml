@@ -18,7 +18,7 @@ concurrency:
 # malicious code — cf. the March 2026 KICS action compromise). The trailing
 # comment records the human-readable version; .github/dependabot.yml bumps them.
 jobs:
-  # Detect which units changed so the heavy Ansible jobs skip bash-only PRs.
+  # Detect whether ansible/ changed so the heavy Ansible jobs skip unrelated PRs.
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -26,7 +26,6 @@ jobs:
       pull-requests: read
     outputs:
       ansible: ${{ steps.filter.outputs.ansible }}
-      services: ${{ steps.filter.outputs.services }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
@@ -35,8 +34,6 @@ jobs:
           filters: |
             ansible:
               - 'ansible/**'
-            services:
-              - 'services/**'
 
   # Ansible style + best-practice + the production-profile SECURITY rules,
   # plus a syntax-check of every playbook. Runs only when ansible/ changed.
@@ -124,17 +121,3 @@ jobs:
         with:
           reporter: github-check
           fail_on_error: true
-
-  # Solidity (forge fmt + build) self-activates once real .sol sources land:
-  # solidity:
-  #   needs: changes
-  #   if: needs.changes.outputs.services == 'true' && hashFiles('services/anvil-devnet/contracts/src/**/*.sol') != ''
-  #   runs-on: ubuntu-latest
-  #   defaults:
-  #     run:
-  #       working-directory: services/anvil-devnet/contracts
-  #   steps:
-  #     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-  #     - uses: foundry-rs/foundry-toolchain@c7450ba673e133f5ee30098b3b54f444d3a2ca2d # v1.8.0
-  #     - run: forge fmt --check
-  #     - run: forge build --sizes
