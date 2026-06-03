@@ -20,5 +20,7 @@ Not yet published to Galaxy (pre-1.0; the published shape may still change).
   Release tarball under a hardened systemd unit; public QUIC udp/4433, loopback
   metrics + admin RPC.
 
-[Unreleased]: https://github.com/decdn/devops/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/decdn/devops/releases/tag/v0.1.0
+<!-- No release tags exist yet; these resolve today. Switch to compare/tag links
+     (compare/v0.1.0...HEAD and releases/tag/v0.1.0) once v0.1.0 is cut. -->
+[Unreleased]: https://github.com/decdn/devops/commits/main
+[0.1.0]: https://github.com/decdn/devops/releases

@@ -21,6 +21,9 @@ roles=(baseline decdn_node)
 
 echo "staging decdn.node -> $stage"
 rm -rf "$stage"
+# Drop stale artifacts from earlier builds so the output dir holds exactly the
+# tarball we are about to produce (galaxy-check globs build/decdn-node-*.tar.gz).
+rm -f "$build_dir"/decdn-node-*.tar.gz
 mkdir -p "$stage/roles" "$stage/meta"
 
 # Canonical role sources (shared with the internal project).

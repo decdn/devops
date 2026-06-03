@@ -46,13 +46,16 @@ build:
 	./galaxy/build.sh
 
 # Validate the built artifact with galaxy-importer — the same checks Galaxy runs
-# on upload (metadata, license file, README, embedded ansible-lint). Fails on
-# importer ERRORs; warnings are kept in build/importer.log for review. (make
-# recipes don't run with pipefail, so we gate on the log, not the piped exit.)
+# on upload (metadata, license file, README, embedded ansible-lint). build.sh
+# leaves exactly one tarball, so the glob is unambiguous. We gate on BOTH the
+# pipeline exit (set -o pipefail catches a crash / "No module named …" that prints
+# no error keyword) AND the importer's explicit success line (it can log content
+# errors while still exiting 0). Warnings are kept in build/importer.log.
 galaxy-check: build
-	@tarball=$$(ls build/decdn-node-*.tar.gz); \
+	@set -o pipefail; \
+	  tarball=$$(ls -1 build/decdn-node-*.tar.gz); \
 	  echo "galaxy-importer: $$tarball"; \
-	  python -m galaxy_importer.main "$$tarball" 2>&1 | tee build/importer.log; \
-	  if grep -Eiq '(^|:)error|traceback' build/importer.log; then \
-	    echo "FAIL: galaxy-importer reported errors (see build/importer.log)"; exit 1; \
+	  if ! python -m galaxy_importer.main "$$tarball" 2>&1 | tee build/importer.log \
+	     || ! grep -q "Importer processing completed successfully" build/importer.log; then \
+	    echo "FAIL: galaxy-importer reported errors or did not complete (see build/importer.log)"; exit 1; \
 	  fi
