@@ -1,0 +1,89 @@
+---
+# Pre-commit hooks for the deCDN DevOps monorepo.
+#
+#   pip install pre-commit && make hooks      # one-time install
+#   make lint                                 # run on all files
+#
+# Heavier Ansible checks (ansible-lint, syntax-check, KICS security scan,
+# molecule) run in CI only — see .github/workflows/. ansible-lint's production
+# profile already carries the Ansible security rules; this file is the fast
+# local gate (hygiene, shellcheck, yamllint, markdown).
+minimum_pre_commit_version: "3.5.0"
+default_install_hook_types: [pre-commit]
+
+# Vendored / generated trees only.
+exclude: >-
+  (?x)^(
+    ansible/collections/|
+    ansible/\.ansible/|
+    services/anvil-devnet/contracts/(out|cache|broadcast)/
+  )
+
+repos:
+  # ── Generic hygiene ────────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]   # keep markdown hard line breaks
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=512]
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+        # Jinja2 templates render files that carry a shebang (e.g. nftables.conf
+        # starts with `#!/usr/sbin/nft -f`); the template itself isn't a script.
+        exclude: \.j2$
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-yaml
+        args: [--unsafe]   # tolerate custom/!vault tags; syntax check only
+      - id: check-json
+      - id: check-toml
+
+  # ── Bash ───────────────────────────────────────────────────────────────────
+  # Honors inline `# shellcheck` directives and the repo .shellcheckrc.
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.11.0
+    hooks:
+      - id: shellcheck
+
+  # ── Markdown (relaxed ruleset; see .markdownlint-cli2.yaml) ────────────────
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.22.1
+    hooks:
+      - id: markdownlint-cli2
+
+  # ── YAML lint for the Ansible tree (reuses ansible/.yamllint) ──────────────
+  # Scoped to ansible/ so services/ YAML isn't held to Ansible style, and so it
+  # stays in lockstep with `make -C ansible lint`. *.yml.example templates don't
+  # match (they end in .example) and are skipped.
+  - repo: local
+    hooks:
+      - id: yamllint-ansible
+        name: yamllint (ansible/)
+        entry: yamllint -c ansible/.yamllint
+        language: python
+        additional_dependencies: ["yamllint==1.35.1"]
+        files: ^ansible/.*\.(ya?ml)$
+        exclude: ^ansible/(collections|\.ansible)/
+
+      # Opt-in: full ansible-lint locally (needs `make -C ansible deps` first).
+      #   pre-commit run ansible-lint --hook-stage manual
+      - id: ansible-lint
+        name: ansible-lint (manual — run `make -C ansible deps` first)
+        entry: bash -c 'make -C ansible lint'
+        language: system
+        pass_filenames: false
+        stages: [manual]
+
+  # Solidity (forge fmt) self-activates once contracts/src has real .sol files:
+  # - repo: local
+  #   hooks:
+  #     - id: forge-fmt
+  #       name: forge fmt --check
+  #       entry: bash -c 'cd services/anvil-devnet/contracts && forge fmt --check'
+  #       language: system
+  #       files: ^services/anvil-devnet/contracts/.*\.sol$
+  #       exclude: \.example$

@@ -1,0 +1,150 @@
+---
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege by default; jobs widen only what they need.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Third-party actions are pinned to a full commit SHA (a re-pointed tag can ship
+# malicious code — cf. the March 2026 KICS action compromise). The trailing
+# comment records the human-readable version; .github/dependabot.yml bumps them.
+jobs:
+  # Detect which units changed so the heavy Ansible jobs skip bash-only PRs.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ansible: ${{ steps.filter.outputs.ansible }}
+      services: ${{ steps.filter.outputs.services }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        with:
+          filters: |
+            ansible:
+              - 'ansible/**'
+            services:
+              - 'services/**'
+
+  # Fast, repo-wide gate: hygiene, shellcheck, yamllint, markdown.
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+
+  # Ansible style + best-practice + the production-profile SECURITY rules,
+  # plus a syntax-check of every playbook. Runs only when ansible/ changed.
+  ansible-lint:
+    needs: changes
+    if: needs.changes.outputs.ansible == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+      - name: Install Ansible tooling
+        run: python -m pip install --upgrade ansible ansible-lint yamllint
+      - name: Install Galaxy collections
+        run: make deps          # must precede lint/syntax-check
+      - name: Lint (yamllint + ansible-lint)
+        run: make lint
+      - name: Syntax-check playbooks
+        # Dummy inventory: the real inventory/hosts.yml is git-ignored, and
+        # --syntax-check only parses, it never connects.
+        run: |
+          for p in playbooks/site.yml playbooks/anvil.yml playbooks/add-dev-user.yml; do
+            echo "::group::syntax-check $p"
+            ansible-playbook "$p" --syntax-check -i localhost,
+            echo "::endgroup::"
+          done
+
+  # Dedicated IaC security scan of the Ansible tree via the official KICS action.
+  # KICS severities are HIGH/MEDIUM/LOW/INFO (no "critical"); we gate on HIGH.
+  #
+  # SUPPLY-CHAIN NOTE: this action's git tags were hijacked in the March 2026
+  # TeamPCP attack (CISA KEV). It has since been remediated — tags restored to
+  # their legitimate pre-hijack commits and explicit hardening applied (base
+  # images digest-pinned, workflows SHA-pinned, StepSecurity best practices). We
+  # pin to the post-remediation hardened HEAD by SHA; the `v2.1.20` *tag* points
+  # at the older Mar-04 commit that predates the April base-image digest-pinning,
+  # so we deliberately do NOT use the tag (and Dependabot is told not to bump it
+  # — see .github/dependabot.yml). Re-verify the SHA before any change.
+  kics:
+    needs: changes
+    if: needs.changes.outputs.ansible == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: KICS Ansible security scan (fail on HIGH)
+        # master @ 2026-05-22 "[StepSecurity] Apply security best practices (#157)"
+        uses: Checkmarx/kics-github-action@7117906d8779ecaf5180f34c4931a774f10d7625
+        with:
+          path: ansible
+          platform_type: Ansible
+          exclude_paths: ansible/collections
+          fail_on: high
+          output_formats: json,sarif
+          output_path: kics-results
+          enable_jobs_summary: true
+      - name: Upload KICS results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: kics-results
+          path: kics-results/
+          if-no-files-found: ignore
+      # If GitHub Advanced Security is enabled on this private repo, surface KICS
+      # findings in the Security tab by un-commenting the block below (add
+      # `security-events: write` to this job's permissions):
+      # - name: Upload SARIF to code scanning
+      #   if: always()
+      #   uses: github/codeql-action/upload-sarif@d77b13a0df3134d64a457ea9003f600b09fa1c8a # v3.36.1
+      #   with:
+      #     sarif_file: kics-results/results.sarif
+
+  # Lint the workflow files themselves.
+  actionlint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: reviewdog/action-actionlint@6fb7acc99f4a1008869fa8a0f09cfca740837d9d # v1.72.0
+        with:
+          reporter: github-check
+          fail_on_error: true
+
+  # Solidity (forge fmt + build) self-activates once real .sol sources land:
+  # solidity:
+  #   needs: changes
+  #   if: needs.changes.outputs.services == 'true' && hashFiles('services/anvil-devnet/contracts/src/**/*.sol') != ''
+  #   runs-on: ubuntu-latest
+  #   defaults:
+  #     run:
+  #       working-directory: services/anvil-devnet/contracts
+  #   steps:
+  #     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+  #     - uses: foundry-rs/foundry-toolchain@c7450ba673e133f5ee30098b3b54f444d3a2ca2d # v1.8.0
+  #     - run: forge fmt --check
+  #     - run: forge build --sizes

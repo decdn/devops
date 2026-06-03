@@ -1,0 +1,22 @@
+# markdownlint-cli2 config — relaxed ruleset so the existing docs pass while
+# still catching genuine structural issues (broken links, empty/duplicate
+# headings, multiple H1s, …) in new Markdown. The disabled rules below are
+# purely stylistic or fire pervasively on the current docs; re-enable and fix
+# incrementally if the team wants stricter formatting.
+config:
+  MD013: false                 # line length — prose/tables run long here
+  MD033: false                 # inline HTML — allowed in docs
+  MD041: false                 # first line need not be a top-level heading
+  MD040: false                 # bare code fences (ASCII trees) are fine
+  MD031: false                 # blank lines around fences — pervasive in docs
+  MD022: false                 # blank lines around headings — pervasive in docs
+  MD049: false                 # emphasis style (underscore vs asterisk) — stylistic
+  MD060: false                 # table pipe spacing/alignment — finicky, opinionated
+  MD004: false                 # unordered list marker style (-, +, *) — stylistic
+  MD024:
+    siblings_only: true        # duplicate headings only flagged within a section
+
+# Vendored collection docs are excluded at the pre-commit layer too.
+ignores:
+  - "ansible/collections/**"
+  - "**/node_modules/**"

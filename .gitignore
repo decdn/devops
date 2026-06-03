@@ -35,3 +35,6 @@
 
 # Local, per-developer Claude Code settings (not shared)
 .claude/settings.local.json
+
+# KICS security-scan output (`make security`; CI uploads it as an artifact)
+kics-results/
