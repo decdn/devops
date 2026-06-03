@@ -24,7 +24,7 @@ lint-ansible:        ## full ansible-lint locally (installs collections first)
 
 security:            ## KICS IaC security scan of ansible/ (CI runs the official action)
 	mkdir -p kics-results
-	docker run --rm -v "$(CURDIR):/repo" $(KICS_IMAGE) \
+	docker run --rm --user $(shell id -u):$(shell id -g) -v "$(CURDIR):/repo" $(KICS_IMAGE) \
 		scan --path /repo/ansible --type Ansible \
 		--exclude-paths /repo/ansible/collections \
 		--report-formats json --output-path /repo/kics-results \

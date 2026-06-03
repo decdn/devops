@@ -38,7 +38,7 @@ jobs:
             services:
               - 'services/**'
 
-  # Fast, repo-wide gate: hygiene, secrets, shellcheck, yamllint, markdown.
+  # Fast, repo-wide gate: hygiene, shellcheck, yamllint, markdown.
   pre-commit:
     runs-on: ubuntu-latest
     steps:

@@ -63,10 +63,9 @@ wait_for_rpc() {
 # Requires root (or the anvil user) because the file is mode 600.
 read_mnemonic() {
 	[ -r "$ANVIL_ENV" ] || die "Cannot read ${ANVIL_ENV}. Run as root, after bootstrap.sh."
-	set -a
 	# shellcheck disable=SC1090
 	. "$ANVIL_ENV"
-	set +a
+	export ANVIL_MNEMONIC
 	[ -n "${ANVIL_MNEMONIC:-}" ] || die "ANVIL_MNEMONIC not set in ${ANVIL_ENV}."
 }
 
