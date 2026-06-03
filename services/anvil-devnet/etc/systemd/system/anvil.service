@@ -1,0 +1,71 @@
+# Installs to: /etc/systemd/system/anvil.service
+#
+# Shared deCDN settlement-layer devnet (Foundry Anvil).
+# - Runs as the dedicated, unprivileged `anvil` system user.
+# - Binds to 127.0.0.1:8545 ONLY (never 0.0.0.0). Public access is exclusively
+#   via Caddy basic-auth -> Cloudflare Tunnel; see the service README.
+# - Persists chain state to /var/lib/anvil/state.json: loaded on boot, dumped on
+#   stop (SIGTERM), and snapshotted every --state-interval seconds so an unclean
+#   reboot loses at most that interval rather than everything.
+
+[Unit]
+Description=deCDN shared Anvil devnet (EVM settlement layer)
+Documentation=https://github.com/decdn/decdn-devops
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=anvil
+Group=anvil
+
+# The shared mnemonic is the master secret. It is NOT in this unit or the repo;
+# it lives in /etc/anvil/anvil.env (mode 600, owned by anvil), generated once by
+# bin/bootstrap.sh. systemd reads it as root before dropping privileges.
+EnvironmentFile=/etc/anvil/anvil.env
+
+# ${ANVIL_MNEMONIC} (brace form) expands to a SINGLE argument even though the
+# phrase contains spaces — systemd does not word-split ${VAR}. Caveat: the phrase
+# is visible in `ps`/`systemctl show` on this host. That is acceptable here — it
+# only controls funded *test* accounts on a single-tenant box — but it is why the
+# RPC must never be exposed without auth.
+ExecStart=/opt/foundry/bin/anvil \
+    --host 127.0.0.1 \
+    --port 8545 \
+    --chain-id 31337 \
+    --block-time 2 \
+    --accounts 10 \
+    --mnemonic ${ANVIL_MNEMONIC} \
+    --state /var/lib/anvil/state.json \
+    --state-interval 30
+
+# Graceful stop so anvil can dump state. SIGTERM is anvil's clean-shutdown signal.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=always
+RestartSec=2
+
+# --- Hardening -------------------------------------------------------------
+# StateDirectory creates/owns /var/lib/anvil (0750, anvil:anvil) and is the only
+# writable path the process gets under ProtectSystem=strict.
+StateDirectory=anvil
+StateDirectoryMode=0750
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

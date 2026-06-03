@@ -1,0 +1,21 @@
+# Installs to: /etc/cloudflared/config.yml   (copy from this .example, fill in the id)
+#
+# Created AFTER you run, on the VPS:
+#   cloudflared tunnel login                 # browser auth -> ~/.cloudflared/cert.pem
+#   cloudflared tunnel create rpc-dev        # prints the TUNNEL_ID + credentials JSON
+# Then replace BOTH occurrences of <TUNNEL_ID> below and place the credentials
+# JSON at /etc/cloudflared/<TUNNEL_ID>.json (owned by the cloudflared user, 600).
+# See the service README "Cloudflare: manual steps" for the full sequence.
+
+tunnel: <TUNNEL_ID>
+credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
+
+# We pin updates via the systemd unit; keep autoupdate off here too.
+no-autoupdate: true
+
+# Route the public hostname to Caddy's loopback basic-auth listener.
+ingress:
+  - hostname: rpc-dev.decdn.org
+    service: http://127.0.0.1:8080
+  # Anything else gets a 404 (required catch-all rule).
+  - service: http_status:404

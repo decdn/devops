@@ -1,0 +1,37 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Secrets & generated state — NEVER commit these.
+# The repo ships only *.example templates; the real files are generated on the
+# VPS by bin/bootstrap.sh / bin/install.sh and live under /etc and /var/lib.
+# These patterns are defense-in-depth in case anyone copies generated files in.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Shared anvil mnemonic / env (the master secret for the devnet)
+**/anvil.env
+.env
+**/.env
+!**/.env.example
+
+# Caddy basic-auth material (bcrypt hashes + the username->hash registry)
+**/*.basicauth
+**/*.users.tsv
+!**/*.example
+
+# Cloudflare Tunnel credentials & cert
+**/cloudflared/*.json
+**/cert.pem
+**/*.pem
+**/config.yml
+!**/config.yml.example
+
+# anvil chain state + deployment manifests (regenerated, machine-specific)
+**/state.json
+**/deployments.json
+
+# Foundry build output (if contracts get compiled locally)
+**/out/
+**/cache/
+**/broadcast/
+**/.foundry/
+
+# Local, per-developer Claude Code settings (not shared)
+.claude/settings.local.json

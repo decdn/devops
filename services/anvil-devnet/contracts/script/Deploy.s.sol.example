@@ -1,0 +1,39 @@
+// SPDX-License-Identifier: MIT
+// ════════════════════════════════════════════════════════════════════════════
+//  TODO: This is a TEMPLATE. Rename to `Deploy.s.sol` (drop `.example`) and fill
+//  in the real deCDN contracts. Once renamed, ../../bin/deploy.sh broadcasts it
+//  automatically.
+//
+//  Deterministic addresses: deploy with a fixed CREATE2 salt so the resulting
+//  address depends only on (factory, salt, initcode) — never on the deployer's
+//  nonce. Foundry auto-deploys the canonical CREATE2 factory
+//  (0x4e59b44847b379578588920cA78FbF26c0B4956C) on first use. Keep the salt and
+//  the compiler version (foundry.toml) STABLE so every dev gets the same address.
+// ════════════════════════════════════════════════════════════════════════════
+pragma solidity ^0.8.28;
+
+import {Script, console2} from "forge-std/Script.sol";
+
+// import {SettlementVault} from "../src/SettlementVault.sol"; // TODO
+// import {DecdnToken}     from "../src/DecdnToken.sol";       // TODO
+
+contract Deploy is Script {
+    // Read from env so bin/deploy.sh controls the salt (DECDN_CREATE2_SALT).
+    function _salt() internal view returns (bytes32) {
+        return bytes32(vm.envOr("DECDN_CREATE2_SALT", uint256(1)));
+    }
+
+    function run() external {
+        bytes32 salt = _salt();
+        vm.startBroadcast();
+
+        // ── TODO: deploy real contracts with the salt, e.g.: ──────────────────
+        // DecdnToken token = new DecdnToken{salt: salt}();
+        // SettlementVault vault = new SettlementVault{salt: salt}(address(token));
+        // console2.log("DecdnToken    ", address(token));
+        // console2.log("SettlementVault", address(vault));
+        salt; // silence unused-var warning until contracts are added
+
+        vm.stopBroadcast();
+    }
+}
