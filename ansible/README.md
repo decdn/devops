@@ -131,6 +131,36 @@ Defaults live in each role (`roles/*/defaults/main.yml`); override in `group_var
 
 ---
 
+## Packaging as a Galaxy collection (`decdn.node`)
+
+The two public-facing roles (`baseline` + `decdn_node`) are also packaged as the
+distributable **`decdn.node`** collection — deployment options for external node
+operators. The internal anvil tooling (`anvil`/`caddy`/`contracts`) does **not** ship.
+
+The collection overlay lives in [`galaxy/`](galaxy/) (`galaxy.yml`, the collection
+`README.md`/`CHANGELOG.md`, `meta/runtime.yml`, `build.sh`). It is deliberately **not**
+a `galaxy.yml` at the project root: `galaxy/build.sh` stages only the two roles into a
+clean `ansible_collections/decdn/node/` tree and builds the artifact, so this project
+stays a plain Ansible project (the internal `make deploy`/`lint`/`molecule` flow is
+unchanged).
+
+```bash
+make build          # stage + build -> build/decdn-node-<version>.tar.gz
+make galaxy-check   # build + validate with galaxy-importer (the checks Galaxy runs)
+```
+
+Publishing is a **manual** step (no auto-publish workflow, no token in CI yet):
+
+```bash
+ansible-galaxy collection publish build/decdn-node-*.tar.gz --api-key "$GALAXY_TOKEN"
+```
+
+Bump `version:` in `galaxy/galaxy.yml` and add a `galaxy/CHANGELOG.md` entry per release.
+CI's `galaxy-build` job builds + validates the collection on every `ansible/**` change but
+never publishes.
+
+---
+
 ## Appendix — public path for the anvil devnet (Cloudflare Tunnel, manual)
 
 Out of scope for the playbook (browser SSO can't be scripted). Expose the loopback caddy

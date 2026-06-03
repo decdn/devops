@@ -8,3 +8,12 @@
 # 'production' profile.
 skip_list:
   - var-naming[no-role-prefix]
+
+# build/ is the generated collection staging tree (`make build`). galaxy/ is the
+# `decdn.node` collection overlay (a nested galaxy.yml + manifest) — it is built and
+# validated separately by galaxy-importer (the `galaxy-build` CI job), and its pre-1.0
+# version would otherwise trip galaxy[version-incrementing] here. Neither is part of
+# the deploy project's lint scope.
+exclude_paths:
+  - build/
+  - galaxy/
