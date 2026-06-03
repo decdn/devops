@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: baseline
+  description: Debian host baseline — firewall, auto-patching, fail2ban, time sync, DevSec OS/SSH hardening.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Debian
+      versions: [bookworm]
+    - name: Ubuntu
+      versions: [jammy, noble]
+dependencies: []

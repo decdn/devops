@@ -1,0 +1,7 @@
+---
+# The Caddyfile sets `admin off`, so `caddy reload` (admin-API based) is
+# unavailable — apply config changes with a restart (cheap for a devnet).
+- name: Restart caddy
+  ansible.builtin.systemd:
+    name: caddy
+    state: restarted

@@ -1,0 +1,46 @@
+---
+# Mint a single basic-auth user `{{ caddy_target_user }}`. Idempotent: an existing
+# user is left untouched and NEVER silently rotated. A freshly generated password
+# is revealed exactly once. All credential-handling tasks use no_log.
+- name: Check whether the basic-auth user already exists
+  ansible.builtin.command:
+    cmd: "grep -qP '^{{ caddy_target_user }}\\t' {{ caddy_users_tsv }}"
+  register: caddy_user_check
+  changed_when: false
+  failed_when: false
+
+- name: Mint '{{ caddy_target_user }}'
+  when: caddy_user_check.rc != 0
+  block:
+    - name: Generate a random password
+      ansible.builtin.shell:
+        cmd: "set -o pipefail; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 28"
+        executable: /bin/bash
+      register: caddy_pw_gen
+      changed_when: true
+      no_log: true
+
+    - name: Hash the password (bcrypt) with caddy
+      ansible.builtin.command:
+        cmd: "caddy hash-password --plaintext {{ caddy_pw_gen.stdout | quote }}"
+      register: caddy_hash
+      changed_when: true
+      no_log: true
+
+    - name: Upsert the user into the TSV registry
+      ansible.builtin.lineinfile:
+        path: "{{ caddy_users_tsv }}"
+        create: true
+        owner: root
+        group: caddy
+        mode: "0640"
+        regexp: "^{{ caddy_target_user }}\\t"
+        line: "{{ caddy_target_user }}\t{{ caddy_hash.stdout }}"
+      no_log: true
+
+    - name: Reveal the new credential ONCE
+      ansible.builtin.debug:
+        msg: >-
+          NEW basic-auth user '{{ caddy_target_user }}' — shown once, share securely:
+          password={{ caddy_pw_gen.stdout }} ·
+          ETH_RPC_URL=https://{{ caddy_target_user }}:{{ caddy_pw_gen.stdout }}@{{ rpc_hostname }}

@@ -1,0 +1,37 @@
+# MANAGED BY the decdn-node role — do not edit by hand.
+# Field names match decdn/crates/common/src/config/types.rs. The [cache] table
+# uses deny_unknown_fields upstream, so only documented keys are emitted.
+# Note: rpc_url is NOT here — it's the one sensitive value and is supplied via
+# DECDN_RPC_URL from the 0600 env file, so this file stays non-secret/diffable.
+
+[identity]
+data_dir = "{{ decdn_home }}"
+region = "{{ decdn_region }}"
+
+[network]
+bind_port = {{ decdn_bind_port }}
+{% if decdn_relay_url | length > 0 %}
+relay_url = "{{ decdn_relay_url }}"
+{% endif %}
+
+[blockchain]
+chain_id = {{ decdn_chain_id }}
+eth_keystore = "{{ decdn_keystore_file }}"
+payment_channel_address = "{{ decdn_payment_channel_address }}"
+capacity_bond_address = "{{ decdn_capacity_bond_address }}"
+slash_judge_address = "{{ decdn_slash_judge_address }}"
+
+[payment]
+rate_per_mb = {{ decdn_rate_per_mb }}
+
+[cache]
+cache_dir = "{{ decdn_cache_dir }}"
+cache_size_mb = {{ decdn_cache_size_mb }}
+max_blob_size_mb = {{ decdn_max_blob_size_mb }}
+
+[observability]
+log_level = "{{ decdn_log_level }}"
+log_format = "{{ decdn_log_format }}"
+metrics_port = {{ decdn_metrics_port }}
+metrics_bind = "{{ decdn_metrics_bind }}"
+admin_port = {{ decdn_admin_port }}

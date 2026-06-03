@@ -1,0 +1,15 @@
+---
+# caddy role defaults. Override in inventory/group_vars for a real deployment.
+
+caddy_bind_port: 8080                # loopback listener; public path bolted on later
+rpc_hostname: rpc-dev.decdn.org      # used in the printed ETH_RPC_URL
+
+# Upstream anvil RPC to proxy to (kept in sync with the anvil role defaults).
+anvil_host: "127.0.0.1"
+anvil_port: 8545
+
+# On-host credential registry (mirrors services/anvil-devnet/bin/lib.sh paths).
+caddy_users_tsv: /etc/caddy/rpc-dev.users.tsv       # username<TAB>bcrypt registry
+caddy_basicauth_file: /etc/caddy/rpc-dev.basicauth  # generated Caddyfile import
+caddy_initial_user: dev                              # always ensured to exist
+# caddy_extra_user: alice        # set by add-dev-user.yml to mint one more user

@@ -1,0 +1,13 @@
+# Galaxy collections vendored by `make deps`
+collections/
+
+# Real inventory (only the .example is committed — never a real host/IP)
+inventory/hosts.yml
+
+# Per-node deployment values incl. the sensitive rpc_url (only .example committed)
+inventory/host_vars/*.yml
+!inventory/host_vars/*.yml.example
+
+# Ansible / molecule scratch
+*.retry
+.molecule/

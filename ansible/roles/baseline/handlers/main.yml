@@ -1,0 +1,10 @@
+---
+- name: Reload nftables
+  ansible.builtin.systemd:
+    name: nftables
+    state: restarted
+
+- name: Restart fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    state: restarted

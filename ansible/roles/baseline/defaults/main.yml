@@ -1,0 +1,27 @@
+---
+# baseline role defaults. Override in inventory/group_vars for a real deployment.
+
+# Admin sudo account, created + keyed BEFORE ssh_hardening disables root login.
+# ssh_admin_pubkey MUST be set for a real deploy (lockout guard asserts it).
+ssh_admin_user: deploy
+ssh_admin_pubkey: ""
+# Optional inbound-SSH source allowlist (CIDRs). Empty = accept from any source.
+ssh_allow_cidrs: []
+
+# Extra public inbound ports beyond SSH. Each item: {proto, port, comment}.
+# Loopback services need NOTHING here; only genuinely public listeners (e.g. the
+# decdn node's QUIC udp/4433) do. Set per host/group, e.g. in group_vars.
+baseline_extra_inbound: []
+
+baseline_packages:
+  - curl
+  - git
+  - jq
+  - openssl
+  - ca-certificates
+  - gnupg
+  - lsb-release
+  - nftables
+  - fail2ban
+  - unattended-upgrades
+  - chrony

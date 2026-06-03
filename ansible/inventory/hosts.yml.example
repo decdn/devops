@@ -1,0 +1,24 @@
+---
+# Copy to inventory/hosts.yml and fill in your hosts. The real file is git-ignored —
+# no host or IP is ever committed.
+#
+# First run: connect as a user that can sudo (often root) to bootstrap the box.
+# After the baseline role creates {{ ssh_admin_user }} and ssh_hardening disables
+# root login, switch ansible_user to that admin account.
+
+# PRIMARY: public deCDN node(s) — provisioned by playbooks/site.yml.
+# Per-node secrets/knobs (rpc_url, contract addresses, region, version) go in
+# inventory/host_vars/<name>.yml (git-ignored; see the .example there).
+decdn_nodes:
+  hosts:
+    decdn-node-1:
+      ansible_host: REPLACE_WITH_NODE_VPS_IP_OR_DNS
+      ansible_user: root
+
+# INTERNAL: our anvil devnet — provisioned by playbooks/anvil.yml. Keep on a
+# separate host from the public node(s).
+anvil_devnet:
+  hosts:
+    anvil-vps:
+      ansible_host: REPLACE_WITH_INTERNAL_VPS_IP_OR_DNS
+      ansible_user: root
