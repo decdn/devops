@@ -9,13 +9,17 @@ decdn_node_sha256: ""            # optional "abc123..." to pin the daemon tarbal
 decdn_cli_sha256: ""            # optional, for the decdn CLI tarball
 decdn_node_release_base: "https://github.com/decdn/decdn/releases/download"
 
-# --- Identity / on-chain (REQUIRED, no baked defaults — supply via host_vars) -
+# --- Identity / on-chain -----------------------------------------------------
+# rpc_url, the three contract addresses and region are REQUIRED with no usable
+# default (empty → the asserts in tasks/main.yml fail loud). Supply via host_vars.
+# chain_id is the one exception: it defaults to the upstream binary's own default
+# (Arbitrum Sepolia) rather than being a deployment-specific fact to source.
 decdn_rpc_url: ""               # SENSITIVE; may embed an API key
-decdn_chain_id: 421614          # Arbitrum Sepolia (EIP-712 domain)
 decdn_payment_channel_address: ""
 decdn_capacity_bond_address: ""
 decdn_slash_judge_address: ""
 decdn_region: ""                # ISO 3166-1 alpha-2
+decdn_chain_id: 421614          # Arbitrum Sepolia (matches decdn-node's --chain-id default)
 
 # --- Network ------------------------------------------------------------------
 decdn_bind_port: 4433           # public QUIC (udp); opened in the baseline firewall

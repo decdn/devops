@@ -2,6 +2,16 @@
 # Mint a single basic-auth user `{{ caddy_target_user }}`. Idempotent: an existing
 # user is left untouched and NEVER silently rotated. A freshly generated password
 # is revealed exactly once. All credential-handling tasks use no_log.
+- name: Validate the basic-auth username
+  ansible.builtin.assert:
+    that:
+      - caddy_target_user is match('^[A-Za-z0-9_-]+$')
+    fail_msg: >-
+      Invalid basic-auth username '{{ caddy_target_user }}': use only
+      [A-Za-z0-9_-]. (Keeps the value safe to interpolate into the grep /
+      lineinfile regexes below.)
+    quiet: true
+
 - name: Check whether the basic-auth user already exists
   ansible.builtin.command:
     cmd: "grep -qP '^{{ caddy_target_user }}\\t' {{ caddy_users_tsv }}"
@@ -13,16 +23,15 @@
   when: caddy_user_check.rc != 0
   block:
     - name: Generate a random password
-      ansible.builtin.shell:
-        cmd: "set -o pipefail; openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 28"
-        executable: /bin/bash
-      register: caddy_pw_gen
-      changed_when: true
+      ansible.builtin.set_fact:
+        caddy_generated_pw: >-
+          {{ lookup('ansible.builtin.password', '/dev/null',
+                    chars=['ascii_letters', 'digits'], length=28) }}
       no_log: true
 
     - name: Hash the password (bcrypt) with caddy
       ansible.builtin.command:
-        cmd: "caddy hash-password --plaintext {{ caddy_pw_gen.stdout | quote }}"
+        cmd: "caddy hash-password --plaintext {{ caddy_generated_pw | quote }}"
       register: caddy_hash
       changed_when: true
       no_log: true
@@ -42,5 +51,5 @@
       ansible.builtin.debug:
         msg: >-
           NEW basic-auth user '{{ caddy_target_user }}' — shown once, share securely:
-          password={{ caddy_pw_gen.stdout }} ·
-          ETH_RPC_URL=https://{{ caddy_target_user }}:{{ caddy_pw_gen.stdout }}@{{ rpc_hostname }}
+          password={{ caddy_generated_pw }} ·
+          ETH_RPC_URL=https://{{ caddy_target_user }}:{{ caddy_generated_pw }}@{{ rpc_hostname }}

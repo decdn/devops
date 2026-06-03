@@ -64,7 +64,8 @@ facts — source them from the deployment / an ADR, never guess. See
 ## Files on the host
 
 - `/usr/local/bin/decdn-node`, `/usr/local/bin/decdn` — daemon + CLI
-- `/etc/decdn/node.toml` (`0600 decdn`) — rendered config (holds `rpc_url`)
+- `/etc/decdn/node.toml` (`0640 decdn`) — rendered config; non-secret (no `rpc_url`), so it stays `--check`-diffable
+- `/etc/decdn/decdn.env` (`0600 decdn`) — the one sensitive value, `DECDN_RPC_URL`, read by the unit via `EnvironmentFile`
 - `/etc/decdn/keystore.password` (`0600 decdn`) — operator-provisioned
 - `/var/lib/decdn/` (`0700 decdn`) — `node.secret`, `keystore.json`, `cache/`, state
 - `/etc/systemd/system/decdn-node.service` — hardened unit

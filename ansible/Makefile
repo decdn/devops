@@ -3,7 +3,8 @@
 .PHONY: deps lint check deploy check-anvil deploy-anvil add-dev molecule
 SHELL := /bin/bash
 
-# Install the pinned Galaxy collections into ./collections (git-ignored).
+# Install the required Galaxy collections (>= constraints in requirements.yml)
+# into ./collections (git-ignored).
 deps:
 	ansible-galaxy collection install -r requirements.yml -p collections
 
