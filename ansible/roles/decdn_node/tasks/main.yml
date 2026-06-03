@@ -1,0 +1,167 @@
+---
+# Provision a public deCDN node: install, configure, harden, start.
+# On-chain stake + registration (ADR 019 Phase 2) is an operator action — see
+# roles/decdn_node/README.md. This role covers host prep + Phase-3 startup.
+
+# --- Fail loud on missing required config -------------------------------------
+- name: Require a pinned release version
+  ansible.builtin.assert:
+    that:
+      - decdn_node_version | length > 0
+    fail_msg: >-
+      decdn_node_version must be set to a published release (e.g. "0.1.0"). A
+      matching v<version> GitHub Release must exist. Set it in host_vars.
+
+- name: Require chain + contract configuration
+  ansible.builtin.assert:
+    that:
+      - decdn_rpc_url | length > 0
+      - decdn_chain_id | int > 0
+      - decdn_payment_channel_address is match('^0x[0-9a-fA-F]{40}$')
+      - decdn_capacity_bond_address is match('^0x[0-9a-fA-F]{40}$')
+      - decdn_slash_judge_address is match('^0x[0-9a-fA-F]{40}$')
+      - decdn_payment_channel_address != decdn_zero_address
+      - decdn_capacity_bond_address != decdn_zero_address
+      - decdn_slash_judge_address != decdn_zero_address
+      - decdn_region is match('^[A-Z]{2}$')
+    fail_msg: >-
+      decdn_rpc_url, a positive decdn_chain_id, the three contract addresses
+      (0x + 40 hex, none the zero address), and an uppercase ISO-3166 2-letter
+      decdn_region are required. Source chain-id + contract addresses from the
+      deployment / an ADR in decdn/adr/ — never guess. Set them in host_vars.
+  vars:
+    decdn_zero_address: "0x0000000000000000000000000000000000000000"
+
+# --- User & directories -------------------------------------------------------
+- name: Create decdn system group
+  ansible.builtin.group:
+    name: "{{ decdn_group }}"
+    system: true
+
+- name: Create decdn system user
+  ansible.builtin.user:
+    name: "{{ decdn_user }}"
+    group: "{{ decdn_group }}"
+    system: true
+    home: "{{ decdn_home }}"
+    create_home: true
+    shell: /usr/sbin/nologin
+
+- name: Ensure data, cache and config directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ decdn_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ decdn_home }}", owner: "{{ decdn_user }}", mode: "0700"}
+    - {path: "{{ decdn_cache_dir }}", owner: "{{ decdn_user }}", mode: "0700"}
+    - {path: "{{ decdn_etc }}", owner: "{{ decdn_user }}", mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+
+# --- Install the binaries -----------------------------------------------------
+- name: Install decdn-node + decdn CLI
+  ansible.builtin.import_tasks: install.yml
+
+# --- Operator-provisioned eth wallet (never generated here) --------------------
+- name: Confirm the operator-provisioned eth keystore is present
+  ansible.builtin.stat:
+    path: "{{ decdn_keystore_file }}"
+  register: decdn_keystore_stat
+
+- name: Confirm the keystore password file is present
+  ansible.builtin.stat:
+    path: "{{ decdn_keystore_password_file }}"
+  register: decdn_pw_stat
+
+- name: Require keystore + password before starting
+  ansible.builtin.assert:
+    that:
+      - decdn_keystore_stat.stat.exists
+      - decdn_pw_stat.stat.exists
+    fail_msg: >-
+      Missing eth keystore ({{ decdn_keystore_file }}) and/or password file
+      ({{ decdn_keystore_password_file }}). Provision them on the host (the wallet
+      must be funded + staked per ADR 019). Generate both with, as the decdn user:
+        decdn key-gen --output-dir {{ decdn_home }}
+                      --password-file {{ decdn_keystore_password_file }}
+      (writes node.secret + keystore.json, prints the NodeId + eth address).
+
+- name: Lock down keystore + password file permissions
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: "{{ decdn_user }}"
+    group: "{{ decdn_group }}"
+    mode: "0600"
+  loop:
+    - "{{ decdn_keystore_file }}"
+    - "{{ decdn_keystore_password_file }}"
+
+# --- Config + hardened unit ---------------------------------------------------
+# The RPC URL is the one sensitive value (it may embed an API key), so it lives
+# in a 0600 EnvironmentFile (DECDN_RPC_URL, read by the binary's clap env) rather
+# than node.toml. That keeps node.toml non-secret and diffable under `--check`.
+- name: Write the secret environment file
+  ansible.builtin.copy:
+    dest: "{{ decdn_env_file }}"
+    owner: "{{ decdn_user }}"
+    group: "{{ decdn_group }}"
+    mode: "0600"
+    content: "DECDN_RPC_URL={{ decdn_rpc_url }}\n"
+  no_log: true                     # the RPC URL may embed an API key
+  notify: Restart decdn-node
+
+- name: Template node.toml (non-secret — RPC URL is in the env file)
+  ansible.builtin.template:
+    src: node.toml.j2
+    dest: "{{ decdn_config_file }}"
+    owner: "{{ decdn_user }}"
+    group: "{{ decdn_group }}"
+    mode: "0640"
+  notify: Restart decdn-node
+
+- name: Install decdn-node systemd unit
+  ansible.builtin.template:
+    src: decdn-node.service.j2
+    dest: /etc/systemd/system/decdn-node.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart decdn-node
+
+- name: Apply pending decdn-node changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start decdn-node
+  ansible.builtin.systemd:
+    name: decdn-node
+    enabled: true
+    state: started
+
+# --- Readiness ----------------------------------------------------------------
+- name: Wait for the node metrics endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ decdn_metrics_port }}/metrics"
+    status_code: 200
+  register: decdn_metrics_probe
+  retries: 30
+  delay: 2
+  until: decdn_metrics_probe.status == 200
+  changed_when: false
+
+# A stale/crash-looping process can answer /metrics, so also confirm THIS unit is
+# running. FULL readiness (serving paid traffic) additionally requires on-chain
+# registration — `decdn node health`.
+- name: Gather service facts
+  ansible.builtin.service_facts:
+
+- name: Confirm decdn-node is running (not failed/crash-looping)
+  ansible.builtin.assert:
+    that:
+      - "'decdn-node.service' in ansible_facts.services"
+      - ansible_facts.services['decdn-node.service'].state == 'running'
+    fail_msg: "decdn-node is not running (failed/crash-looping?) — check: journalctl -u decdn-node -e"

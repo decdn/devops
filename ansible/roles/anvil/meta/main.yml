@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: anvil
+  description: Foundry Anvil EVM devnet — dedicated user, on-host mnemonic, hardened systemd unit, loopback-only.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Debian
+      versions: [bookworm]
+    - name: Ubuntu
+      versions: [jammy, noble]
+dependencies: []

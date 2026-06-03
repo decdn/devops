@@ -35,18 +35,35 @@ economic claims — those live in `decdn/adr/`. If something here states a proto
 
 ## Layout
 
+Two top-level units, two conventions:
+
 ```
-services/<name>/
-  README.md          # runbook for that service
-  .env.example       # consumer-facing env template (if applicable)
-  etc/               # files that install under /etc (filesystem-mirrored)
-  bin/               # install / bootstrap / operational scripts (source bin/lib.sh)
-  contracts/         # (devnet) Foundry project + deploy scripts, if relevant
+services/<name>/        # imperative bash + systemd services
+  README.md             # runbook for that service
+  .env.example          # consumer-facing env template (if applicable)
+  etc/                  # files that install under /etc (filesystem-mirrored)
+  bin/                  # install / bootstrap / operational scripts (source bin/lib.sh)
+  contracts/            # (devnet) Foundry project + deploy scripts, if relevant
+
+ansible/                # declarative Ansible project (lean roles + DevSec hardening)
+  inventory/ playbooks/ roles/ molecule/   # see ansible/README.md
 ```
+
+For Ansible-managed services the `etc/`-mirror convention (hard-rule #3) does not apply —
+role **templates** render to their target paths instead. Hard-rules #1 (no committed
+secrets; generated on host) and #2 (localhost-only by default) hold for both conventions.
 
 ## Current services
 
-- **`services/anvil-devnet/`** — shared Foundry/Anvil EVM devnet behind Caddy basic-auth
-  and a Cloudflare Tunnel (`https://rpc-dev.decdn.org`). Persistent state, fixed
-  chain-id 31337, shared mnemonic, deterministic (CREATE2) contract addresses. See its
-  README for the full architecture and runbook.
+- **`ansible/`** — the team's declarative deployment project. **Primary: the public deCDN
+  node** (`playbooks/site.yml` → baseline + `decdn-node`), installed from a pinned GitHub
+  release tarball under a hardened systemd unit; public QUIC udp/4433, loopback
+  metrics/admin, operator-provisioned eth keystore, required chain knobs (no baked protocol
+  facts — sourced from ADRs). **Internal: the anvil devnet** (`playbooks/anvil.yml` →
+  baseline + anvil + Caddy basic-auth, loopback) — team tooling, not the product. Shared
+  DevSec-hardened `baseline`. See `ansible/README.md`. (On-chain node stake/registration,
+  ADR 019 Phase 2, is an operator step, not automated.)
+- **`services/anvil-devnet/`** — _superseded by `ansible/` (the `anvil.yml` path)._ The
+  original bash + systemd shared devnet behind Caddy basic-auth and a Cloudflare Tunnel
+  (`https://rpc-dev.decdn.org`). Kept until the Ansible path is proven on the box, then to
+  be removed. See its README.

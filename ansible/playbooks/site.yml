@@ -1,0 +1,14 @@
+---
+# PRIMARY deployment: a hardened, public deCDN node.
+#   baseline -> decdn-node
+# The node listens on public QUIC udp/4433; metrics + admin RPC stay loopback.
+# On-chain stake + registration (ADR 019 Phase 2) is an operator action, not
+# automated here — see roles/decdn_node/README.md.
+- name: Provision a hardened deCDN node
+  hosts: decdn_nodes
+  become: true
+  roles:
+    - role: baseline
+      tags: [baseline]
+    - role: decdn_node
+      tags: [decdn_node, node]

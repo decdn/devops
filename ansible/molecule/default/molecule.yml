@@ -1,0 +1,42 @@
+---
+# Containerised converge + verify + idempotence for the service roles.
+# Only `anvil` and `caddy` are exercised here — `baseline` applies DevSec
+# ssh_hardening (disables root/password login) which would sever Molecule's
+# connection to a throwaway container, so it is validated on real hosts instead.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../requirements.yml
+driver:
+  name: docker
+platforms:
+  - name: anvil-molecule
+    image: geerlingguy/docker-debian12-ansible:latest
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+  inventory:
+    group_vars:
+      all:
+        # Skip SSH hardening / admin-key gating inside the container.
+        ssh_admin_user: ""
+        ssh_admin_pubkey: ""
+        foundry_version: latest
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    - dependency
+    - create
+    - converge
+    - idempotence
+    - verify
+    - destroy

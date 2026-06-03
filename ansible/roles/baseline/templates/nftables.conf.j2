@@ -1,0 +1,39 @@
+#!/usr/sbin/nft -f
+# MANAGED BY the baseline role — do not edit by hand.
+#
+# Default-deny inbound. SSH is the only universally-opened port; a service that
+# must accept public traffic (e.g. the decdn node's QUIC listener) declares it
+# via `baseline_extra_inbound`. Loopback-only services (anvil, caddy, metrics,
+# admin RPC) need no hole at all. Egress is unrestricted. This is defence-in-
+# depth behind the binds, not a substitute for them.
+flush ruleset
+
+table inet filter {
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        iif "lo" accept
+        ct state established,related accept
+        ct state invalid drop
+
+        ip protocol icmp accept
+        ip6 nexthdr ipv6-icmp accept
+
+{% if ssh_allow_cidrs | length > 0 %}
+        tcp dport 22 ip saddr { {{ ssh_allow_cidrs | join(', ') }} } accept
+{% else %}
+        tcp dport 22 accept
+{% endif %}
+{% for rule in baseline_extra_inbound %}
+        {{ rule.proto }} dport {{ rule.port }} accept  # {{ rule.comment }}
+{% endfor %}
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}

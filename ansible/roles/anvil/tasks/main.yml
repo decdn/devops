@@ -1,0 +1,157 @@
+---
+# anvil daemon: dedicated user, pinned Foundry, on-host mnemonic, hardened unit.
+
+- name: Create anvil system group
+  ansible.builtin.group:
+    name: "{{ anvil_group }}"
+    system: true
+
+- name: Create anvil system user
+  ansible.builtin.user:
+    name: "{{ anvil_user }}"
+    group: "{{ anvil_group }}"
+    system: true
+    home: "{{ anvil_home }}"
+    create_home: true
+    shell: /usr/sbin/nologin
+
+- name: Install Foundry bootstrap prerequisites
+  ansible.builtin.apt:
+    name: [curl, git, jq, ca-certificates]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create Foundry directory
+  ansible.builtin.file:
+    path: "{{ foundry_dir }}"
+    state: directory
+    owner: "{{ anvil_user }}"
+    group: "{{ anvil_group }}"
+    mode: "0755"
+
+- name: Check whether anvil is already installed
+  ansible.builtin.stat:
+    path: "{{ foundry_dir }}/bin/anvil"
+  register: anvil_bin
+
+# foundryup installs anvil/cast/forge into $FOUNDRY_DIR/bin. Pinning to
+# {{ foundry_version }} is a deliberate improvement over the bash installer,
+# which always pulled latest.
+- name: Install Foundry ({{ foundry_version }})
+  become: true
+  become_user: "{{ anvil_user }}"
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      # The installer warns + exits non-zero when it can't update a shell profile
+      # (no login shell here); that is harmless — foundryup still lands in bin.
+      curl -L https://foundry.paradigm.xyz | bash || true
+      "{{ foundry_dir }}/bin/foundryup" --install "{{ foundry_version }}"
+    creates: "{{ foundry_dir }}/bin/anvil"
+    executable: /bin/bash
+  environment:
+    FOUNDRY_DIR: "{{ foundry_dir }}"
+  when: not anvil_bin.stat.exists
+
+- name: Ensure /etc/anvil exists
+  ansible.builtin.file:
+    path: "{{ anvil_env_file | dirname }}"
+    state: directory
+    owner: "{{ anvil_user }}"
+    group: "{{ anvil_group }}"
+    mode: "0750"
+
+# --- Shared mnemonic: generated on host, never overwritten (no silent rotate) --
+- name: Check for an existing mnemonic env file
+  ansible.builtin.stat:
+    path: "{{ anvil_env_file }}"
+  register: anvil_env_stat
+
+- name: Generate and install the shared mnemonic
+  when: not anvil_env_stat.stat.exists
+  block:
+    - name: Generate a fresh mnemonic with cast
+      ansible.builtin.command:
+        cmd: "{{ foundry_dir }}/bin/cast wallet new-mnemonic --json"
+      register: anvil_mnemonic_gen
+      changed_when: true
+      no_log: true
+      when: anvil_mnemonic_supplied is not defined or anvil_mnemonic_supplied | length == 0
+
+    - name: Resolve the effective mnemonic
+      ansible.builtin.set_fact:
+        anvil_effective_mnemonic: >-
+          {{ anvil_mnemonic_supplied
+             if (anvil_mnemonic_supplied is defined and anvil_mnemonic_supplied | length > 0)
+             else (anvil_mnemonic_gen.stdout | from_json).mnemonic }}
+      no_log: true
+
+    # The generate/parse chain runs under no_log, so a malformed cast output would
+    # otherwise write an empty ANVIL_MNEMONIC= that the never-overwrite guard then
+    # cements. Fail loud here instead, without echoing the secret (quiet).
+    - name: Validate the resolved mnemonic is well-formed
+      ansible.builtin.assert:
+        that:
+          - anvil_effective_mnemonic | default('') | trim | split | length in [12, 15, 18, 21, 24]
+        fail_msg: "Resolved mnemonic is empty or not a 12–24 word BIP-39 phrase; refusing to write it."
+        quiet: true
+
+    - name: Write the mnemonic env file (0600 {{ anvil_user }})
+      ansible.builtin.copy:
+        dest: "{{ anvil_env_file }}"
+        owner: "{{ anvil_user }}"
+        group: "{{ anvil_group }}"
+        mode: "0600"
+        content: "ANVIL_MNEMONIC={{ anvil_effective_mnemonic }}\n"
+      no_log: true
+      notify: Restart anvil
+
+    - name: Reveal the shared mnemonic ONCE (only when freshly generated)
+      ansible.builtin.debug:
+        msg: >-
+          SHARED ANVIL MNEMONIC — shown once, save to the team vault, never commit:
+          {{ anvil_effective_mnemonic }}
+      when: anvil_mnemonic_supplied is not defined or anvil_mnemonic_supplied | length == 0
+
+# --- Hardened systemd unit ----------------------------------------------------
+- name: Install anvil systemd unit
+  ansible.builtin.template:
+    src: anvil.service.j2
+    dest: /etc/systemd/system/anvil.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart anvil
+
+# Apply any pending unit/mnemonic changes before we probe the RPC.
+- name: Apply pending anvil changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start anvil
+  ansible.builtin.systemd:
+    name: anvil
+    enabled: true
+    state: started
+
+- name: Wait for the anvil RPC to answer on loopback
+  ansible.builtin.uri:
+    url: "http://{{ anvil_host }}:{{ anvil_port }}"
+    method: POST
+    body_format: json
+    body:
+      jsonrpc: "2.0"
+      id: 1
+      method: eth_chainId
+      params: []
+    status_code: 200
+  register: anvil_rpc_probe
+  retries: 30
+  delay: 1
+  until:
+    - anvil_rpc_probe.status == 200
+    # Assert it's OUR chain, not a stale process on the port answering 200.
+    - (anvil_rpc_probe.json.result | default('0x0')) | int(0, 16) == anvil_chain_id
+  changed_when: false

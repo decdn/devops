@@ -1,0 +1,28 @@
+# MANAGED BY the caddy role — do not edit by hand.
+# Mirrors services/anvil-devnet/etc/caddy/Caddyfile.
+#
+# Caddy's only job: per-dev HTTP basic auth + reverse proxy to the local anvil
+# RPC. TLS is terminated upstream (at the future tunnel/edge), so Caddy serves
+# plain HTTP on loopback only.
+{
+    # No upstream TLS to provision here, and no admin API surface needed.
+    auto_https off
+    admin off
+}
+
+# Loopback-only listener. `bind 127.0.0.1` is defence-in-depth so the port can
+# never answer on a public interface even if the firewall is misconfigured.
+:{{ caddy_bind_port }} {
+    bind 127.0.0.1
+
+    # Per-dev HTTP basic auth. Credentials are NOT in this repo: the block below
+    # is generated on the host into {{ caddy_basicauth_file }} from the TSV
+    # registry ({{ caddy_users_tsv }}) by this role.
+    import {{ caddy_basicauth_file }}
+
+    # Forward authenticated requests to the local anvil JSON-RPC.
+    reverse_proxy {{ anvil_host }}:{{ anvil_port }}
+
+    # Access logging to the journal (auditing who hit the RPC).
+    log
+}

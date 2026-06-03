@@ -1,0 +1,57 @@
+# MANAGED BY the decdn-node role — do not edit by hand.
+#
+# Runs the deCDN node daemon as the dedicated, unprivileged `{{ decdn_user }}`
+# user. The node LISTENS on public QUIC udp/{{ decdn_bind_port }} (opened in the
+# baseline firewall); metrics ({{ decdn_metrics_port }}) and admin RPC
+# ({{ decdn_admin_port }}) stay loopback. Data dir + eth keystore live under
+# {{ decdn_home }}; config + keystore password under {{ decdn_etc }}.
+[Unit]
+Description=deCDN node (cache/CDN daemon)
+Documentation=https://github.com/decdn/decdn
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ decdn_user }}
+Group={{ decdn_group }}
+
+# The sensitive RPC URL (DECDN_RPC_URL) is kept out of node.toml; systemd reads
+# it as root before dropping privileges. 0600, owned by {{ decdn_user }}.
+EnvironmentFile={{ decdn_env_file }}
+
+ExecStart={{ decdn_bin }} run \
+    --config {{ decdn_config_file }} \
+    --keystore-password-file {{ decdn_keystore_password_file }}
+
+# Graceful stop so the node can drain/flush. SIGTERM is its shutdown signal.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=always
+RestartSec=5
+
+# --- Hardening -------------------------------------------------------------
+# StateDirectory owns {{ decdn_home }} (the only writable path under
+# ProtectSystem=strict): node.secret, keystore.json, cache, redb state.
+StateDirectory=decdn
+StateDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+# AF_INET/AF_INET6 for QUIC; AF_NETLINK for interface/address discovery (STUN).
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

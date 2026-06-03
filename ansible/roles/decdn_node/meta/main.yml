@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: decdn_node
+  description: Public deCDN node — release-tarball install, hardened systemd unit, loopback metrics/admin, public QUIC.
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Debian
+      versions: [bookworm]
+    - name: Ubuntu
+      versions: [jammy, noble]
+dependencies: []

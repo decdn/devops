@@ -1,0 +1,10 @@
+---
+# These roles intentionally share a small set of GLOBAL configuration knobs that
+# are surfaced to operators in inventory/group_vars (ssh_admin_*, foundry_dir,
+# foundry_version, rpc_hostname, anvil_host/anvil_port). They are deliberately
+# unprefixed: conventional names read better for a public ops repo than
+# role-prefixed ones, and several are genuinely cross-role (anvil_host/port are
+# consumed by both the anvil and caddy roles). Everything else is held to the
+# 'production' profile.
+skip_list:
+  - var-naming[no-role-prefix]

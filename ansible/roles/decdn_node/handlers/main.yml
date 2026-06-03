@@ -1,0 +1,9 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart decdn-node
+  ansible.builtin.systemd:
+    name: decdn-node
+    state: restarted

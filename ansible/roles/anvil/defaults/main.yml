@@ -1,0 +1,22 @@
+---
+# anvil role defaults. Override in inventory/group_vars for a real deployment.
+
+# --- Chain (31337 is anvil's default — a devnet value, NOT a protocol claim) ---
+anvil_chain_id: 31337
+anvil_block_time: 2
+anvil_accounts: 10
+anvil_host: "127.0.0.1"          # loopback ONLY — never 0.0.0.0 (hard rule #2)
+anvil_port: 8545
+
+# --- Foundry ---
+foundry_dir: /opt/foundry
+foundry_version: latest          # foundryup -i value: latest | nightly | vX.Y.Z (pin for reproducibility)
+
+# --- Fixed on-host identity/paths (mirror services/anvil-devnet/bin/lib.sh) ---
+anvil_user: anvil
+anvil_group: anvil
+anvil_home: /opt/anvil
+anvil_env_file: /etc/anvil/anvil.env        # ANVIL_MNEMONIC=...  (0600 anvil:anvil)
+anvil_state_dir: /var/lib/anvil             # systemd StateDirectory=anvil
+# Optional: supply your own mnemonic instead of generating one (string of words).
+# anvil_mnemonic_supplied: "word word ... word"

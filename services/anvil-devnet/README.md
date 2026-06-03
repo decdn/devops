@@ -1,5 +1,11 @@
 # anvil-devnet — shared deCDN settlement-layer devnet
 
+> **⚠️ Superseded by [`../../ansible/`](../../ansible/README.md).** The canonical anvil
+> deployment is now the declarative Ansible project at the repo root, which reproduces this
+> service's hardening and adds a full host baseline. This bash + systemd version is kept
+> only until the Ansible path is proven on the box, then it will be removed. Prefer
+> `ansible/` for new deployments.
+
 A single, persistent **Foundry Anvil** EVM chain that the whole team points their
 tooling at. Fixed chain-id, a shared mnemonic (so everyone derives the same pre-funded
 accounts), deterministic contract addresses, and state that survives reboots. Public

@@ -1,0 +1,8 @@
+---
+# STUB — contract deployment is out of scope for v1. See roles/contracts/README.md.
+# This role intentionally does nothing yet; it is not wired into playbooks/site.yml.
+- name: Contracts role is a stub (out of scope v1)
+  ansible.builtin.debug:
+    msg: >-
+      The contracts role is a placeholder. Deterministic (CREATE2) deploys will
+      plug in here — see roles/contracts/README.md.

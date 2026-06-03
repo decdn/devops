@@ -1,0 +1,70 @@
+---
+# Caddy: per-dev basic auth + reverse proxy to the loopback anvil RPC.
+
+- name: Install Caddy
+  ansible.builtin.import_tasks: install.yml
+
+- name: Ensure /etc/caddy exists
+  ansible.builtin.file:
+    path: /etc/caddy
+    state: directory
+    owner: root
+    group: caddy
+    mode: "0750"
+
+- name: Ensure the initial basic-auth user exists
+  ansible.builtin.include_tasks: add_user.yml
+  vars:
+    caddy_target_user: "{{ caddy_initial_user }}"
+
+- name: Ensure the extra basic-auth user exists (add-dev-user.yml)
+  ansible.builtin.include_tasks: add_user.yml
+  vars:
+    caddy_target_user: "{{ caddy_extra_user }}"
+  when: caddy_extra_user is defined and caddy_extra_user | length > 0
+
+# Rebuild the Caddyfile import block from the TSV registry. Idempotent: identical
+# registry -> identical content -> no change -> no restart.
+- name: Read the basic-auth user registry
+  ansible.builtin.slurp:
+    src: "{{ caddy_users_tsv }}"
+  register: caddy_tsv_raw
+  no_log: true
+
+- name: Render the basic_auth import file from the registry
+  ansible.builtin.copy:
+    dest: "{{ caddy_basicauth_file }}"
+    owner: root
+    group: caddy
+    mode: "0640"
+    content: |
+      # GENERATED from {{ caddy_users_tsv }} by the caddy role — do not edit by hand.
+      basic_auth {
+      {% for line in (caddy_tsv_raw.content | b64decode).split('\n') %}
+      {% set parts = line.split('\t') %}
+      {% if parts | length == 2 and parts[0] | length > 0 %}
+          {{ parts[0] }} {{ parts[1] }}
+      {% endif %}
+      {% endfor %}
+      }
+  no_log: true
+  notify: Restart caddy
+
+- name: Install the Caddyfile
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: /etc/caddy/Caddyfile
+    owner: root
+    group: caddy
+    mode: "0644"
+    validate: "caddy validate --adapter caddyfile --config %s"
+  notify: Restart caddy
+
+- name: Enable and start caddy
+  ansible.builtin.systemd:
+    name: caddy
+    enabled: true
+    state: started
+
+- name: Apply caddy config changes now
+  ansible.builtin.meta: flush_handlers

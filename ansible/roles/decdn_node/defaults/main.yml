@@ -1,0 +1,54 @@
+---
+# decdn-node role defaults. Per-node deployment values (rpc_url, contract
+# addresses, region, version) belong in host_vars; see host_vars/*.yml.example.
+
+# --- Release to install (REQUIRED — a v<version> GitHub Release must exist) ---
+decdn_node_version: ""            # e.g. "0.1.0" (asserted non-empty)
+decdn_node_target: x86_64-unknown-linux-gnu
+decdn_node_sha256: ""            # optional "abc123..." to pin the daemon tarball
+decdn_cli_sha256: ""            # optional, for the decdn CLI tarball
+decdn_node_release_base: "https://github.com/decdn/decdn/releases/download"
+
+# --- Identity / on-chain -----------------------------------------------------
+# rpc_url, the three contract addresses and region are REQUIRED with no usable
+# default (empty → the asserts in tasks/main.yml fail loud). Supply via host_vars.
+# chain_id is the one exception: it defaults to the upstream binary's own default
+# (Arbitrum Sepolia) rather than being a deployment-specific fact to source.
+decdn_rpc_url: ""               # SENSITIVE; may embed an API key
+decdn_payment_channel_address: ""
+decdn_capacity_bond_address: ""
+decdn_slash_judge_address: ""
+decdn_region: ""                # ISO 3166-1 alpha-2
+decdn_chain_id: 421614          # Arbitrum Sepolia (matches decdn-node's --chain-id default)
+
+# --- Network ------------------------------------------------------------------
+decdn_bind_port: 4433           # public QUIC (udp); opened in the baseline firewall
+decdn_relay_url: ""             # optional iroh relay for NAT traversal
+
+# --- Economics ----------------------------------------------------------------
+decdn_rate_per_mb: 10           # USDC base units (6 decimals)
+
+# --- Cache --------------------------------------------------------------------
+decdn_cache_size_mb: 10240      # 10 GB
+decdn_max_blob_size_mb: 1024    # 1 GB
+
+# --- Observability (loopback only) --------------------------------------------
+decdn_log_level: info
+decdn_log_format: json
+decdn_metrics_port: 9090
+decdn_metrics_bind: "127.0.0.1"   # keep loopback — Prometheus scrape is a follow-up
+decdn_admin_port: 9191
+
+# --- Fixed on-host identity/paths ---------------------------------------------
+decdn_user: decdn
+decdn_group: decdn
+decdn_home: /var/lib/decdn               # data dir: node.secret + keystore.json — 0700
+decdn_etc: /etc/decdn
+decdn_config_file: /etc/decdn/node.toml
+decdn_env_file: /etc/decdn/decdn.env     # DECDN_RPC_URL (sensitive) — 0600
+# Eth keystore lives in the data dir (matches `decdn key-gen --output-dir`).
+decdn_keystore_file: /var/lib/decdn/keystore.json          # operator-provisioned (0600)
+decdn_keystore_password_file: /etc/decdn/keystore.password  # operator-provisioned (0600)
+decdn_cache_dir: /var/lib/decdn/cache
+decdn_bin: /usr/local/bin/decdn-node
+decdn_cli_bin: /usr/local/bin/decdn

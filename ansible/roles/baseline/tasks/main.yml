@@ -1,0 +1,105 @@
+---
+# Host baseline: packages, admin user, firewall, auto-patching, fail2ban, time
+# sync, then DevSec OS + SSH hardening LAST (it disables root/password login).
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name: "{{ baseline_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# --- Admin account (must exist + have a key BEFORE ssh_hardening locks root) ---
+- name: Create admin sudo user
+  ansible.builtin.user:
+    name: "{{ ssh_admin_user }}"
+    groups: [sudo]
+    append: true
+    shell: /bin/bash
+    create_home: true
+  when: ssh_admin_user | length > 0
+
+- name: Install admin authorized key
+  ansible.posix.authorized_key:
+    user: "{{ ssh_admin_user }}"
+    key: "{{ ssh_admin_pubkey }}"
+    state: present
+  when:
+    - ssh_admin_user | length > 0
+    - ssh_admin_pubkey | length > 0
+
+- name: Refuse to harden SSH without a working admin key (lockout guard)
+  ansible.builtin.assert:
+    that:
+      - ssh_admin_user | length > 0
+      - ssh_admin_pubkey | length > 0
+    fail_msg: >-
+      ssh_admin_user and ssh_admin_pubkey must be set so the admin account can log
+      in BEFORE devsec.hardening.ssh_hardening disables root and password auth.
+      Set them in inventory/group_vars/all.yml. (Molecule sets both to "" to skip
+      SSH hardening inside the throwaway container.)
+  when: ssh_admin_user | length > 0
+
+# --- Firewall: default-deny inbound, SSH only ---------------------------------
+- name: Install nftables ruleset
+  ansible.builtin.template:
+    src: nftables.conf.j2
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "nft -c -f %s"
+  notify: Reload nftables
+
+- name: Enable and start nftables
+  ansible.builtin.systemd:
+    name: nftables
+    enabled: true
+    state: started
+
+# --- Automatic security patches ----------------------------------------------
+- name: Enable unattended-upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+# --- fail2ban sshd jail -------------------------------------------------------
+- name: Configure fail2ban sshd jail
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/sshd.local
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [sshd]
+      enabled = true
+      mode = aggressive
+  notify: Restart fail2ban
+
+- name: Enable and start fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    enabled: true
+    state: started
+
+# --- Time sync ----------------------------------------------------------------
+- name: Enable and start chrony
+  ansible.builtin.systemd:
+    name: chrony
+    enabled: true
+    state: started
+
+# --- DevSec hardening (LAST: ssh_hardening disables root + password auth) ------
+- name: Apply DevSec OS hardening
+  ansible.builtin.include_role:
+    name: devsec.hardening.os_hardening
+
+- name: Apply DevSec SSH hardening
+  ansible.builtin.include_role:
+    name: devsec.hardening.ssh_hardening
+  when: ssh_admin_user | length > 0

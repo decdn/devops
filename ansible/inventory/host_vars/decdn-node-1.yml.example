@@ -1,0 +1,27 @@
+---
+# Per-node deployment values. Copy to inventory/host_vars/<node-name>.yml
+# (git-ignored) and fill in. The node refuses to start until these are set.
+#
+# Protocol facts (chain id, contract addresses) are NOT invented here — source
+# them from the canonical deployment / an ADR in decdn/adr/ and cite it.
+
+# Pinned release to install (a v<version> GitHub Release must exist).
+decdn_node_version: "0.1.0"
+# Recommended: pin the tarball's sha256 (no checksums file is published upstream).
+decdn_node_sha256: ""
+
+# --- Chain (required; sourced from the deployment / ADR — do not guess) -------
+decdn_rpc_url: "https://YOUR-ARB-SEPOLIA-RPC/with-key"   # SENSITIVE (may embed an API key)
+decdn_chain_id: 421614                                   # Arbitrum Sepolia
+# Non-hex sentinels so a half-filled copy fails the deploy-time asserts loudly
+# (the zero address would otherwise slip through). Replace with real addresses.
+decdn_payment_channel_address: "0xREPLACE_PaymentChannel_FROM_DEPLOYMENT"
+decdn_capacity_bond_address: "0xREPLACE_CapacityBond_FROM_DEPLOYMENT"
+decdn_slash_judge_address: "0xREPLACE_SlashJudge_FROM_DEPLOYMENT"
+
+# --- Node identity / locale ---------------------------------------------------
+decdn_region: "US"            # ISO 3166-1 alpha-2 of the node's physical location
+# decdn_relay_url: ""         # optional iroh relay for NAT traversal
+
+# --- Economics ----------------------------------------------------------------
+decdn_rate_per_mb: 10         # USDC base units (6 decimals); 10 = $0.00001/MB
