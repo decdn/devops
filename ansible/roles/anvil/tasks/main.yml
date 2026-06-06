@@ -15,6 +15,17 @@
     create_home: true
     shell: /usr/sbin/nologin
 
+# Under --check the user/apt/Foundry tasks below are no-ops, so on a fresh host the
+# anvil user and Foundry binaries don't exist yet — become_user, cast, and the
+# systemd unit would all hard-fail. Probe real on-host state (read-only, runs in
+# check mode) so those tasks skip in check mode while still previewing drift on an
+# already-provisioned host. (service existence reuses baseline's service_facts.)
+- name: Probe whether the anvil user already exists on the target
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ anvil_user }}"
+    fail_key: false
+
 - name: Install Foundry bootstrap prerequisites
   ansible.builtin.apt:
     name: [curl, git, jq, ca-certificates]
@@ -52,7 +63,11 @@
     executable: /bin/bash
   environment:
     FOUNDRY_DIR: "{{ foundry_dir }}"
-  when: not anvil_bin.stat.exists
+  when:
+    - not anvil_bin.stat.exists
+    # become_user requires the anvil user to exist; --check didn't create it.
+    # fail_key:false stores a missing user as {user: None}, so test the value.
+    - not ansible_check_mode or (getent_passwd | default({})).get(anvil_user)
 
 - name: Ensure /etc/anvil exists
   ansible.builtin.file:
@@ -69,7 +84,10 @@
   register: anvil_env_stat
 
 - name: Generate and install the shared mnemonic
-  when: not anvil_env_stat.stat.exists
+  when:
+    - not anvil_env_stat.stat.exists
+    # cast lives in the Foundry bin; under --check on a fresh host it isn't installed.
+    - not ansible_check_mode or anvil_bin.stat.exists
   block:
     - name: Generate a fresh mnemonic with cast
       ansible.builtin.command:
@@ -135,6 +153,7 @@
     name: anvil
     enabled: true
     state: started
+  when: not ansible_check_mode or 'anvil.service' in (ansible_facts.services | default({}))
 
 - name: Wait for the anvil RPC to answer on loopback
   ansible.builtin.uri:
@@ -155,3 +174,5 @@
     # Assert it's OUR chain, not a stale process on the port answering 200.
     - (anvil_rpc_probe.json.result | default('0x0')) | int(0, 16) == anvil_chain_id
   changed_when: false
+  # Nothing is listening under --check on a fresh host (anvil was never started).
+  when: not ansible_check_mode or 'anvil.service' in (ansible_facts.services | default({}))

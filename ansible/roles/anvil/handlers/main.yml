@@ -7,3 +7,6 @@
   ansible.builtin.systemd:
     name: anvil
     state: restarted
+  # Under --check on a fresh host the unit isn't installed yet; flush_handlers would
+  # otherwise fail trying to restart a non-existent service.
+  when: not ansible_check_mode or 'anvil.service' in (ansible_facts.services | default({}))
