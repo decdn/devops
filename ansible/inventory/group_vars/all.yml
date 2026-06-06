@@ -5,11 +5,21 @@
 # the roles are self-contained. Set anything here to override per host/group.
 # Secrets are generated ON THE HOST by the roles and never live here.
 
-# --- REQUIRED ---------------------------------------------------------------
-# Public key for the admin sudo user, installed BEFORE ssh_hardening disables
-# root + password login (the baseline role asserts this to prevent lockout).
-ssh_admin_user: deploy
-ssh_admin_pubkey: ""              # e.g. "ssh-ed25519 AAAA... you@laptop"
+# --- Admin SSH access (deploy as yourself by default) -----------------------
+# The admin sudo user + its key are installed BEFORE ssh_hardening disables root
+# + password login. Left empty they resolve from the control machine of whoever
+# runs ansible-playbook (NOTE: under `sudo ansible-playbook`, cron, or CI the
+# $USER/$HOME — and thus the autodetected key — may not be yours; set both
+# explicitly there). Explicit values always win. The baseline role aborts before
+# hardening unless a NON-ROOT user + a key resolve, so you can't lock yourself out.
+ssh_admin_user: ""                # "" -> your local $USER (e.g. "deploy" to share one account; never "root")
+ssh_admin_pubkey: ""              # "" -> autodetected ~/.ssh key; or "ssh-ed25519 AAAA... you@laptop"
+ssh_admin_pubkey_autodetect: true # read ~/.ssh (id_ed25519 > ecdsa > rsa) when pubkey is empty
+# Additional authorized keys for the admin user (e.g. teammates):
+# ssh_admin_extra_pubkeys:
+#   - "ssh-ed25519 AAAA... alice@laptop"
+#   - "ssh-ed25519 AAAA... bob@laptop"
+ssh_admin_extra_pubkeys: []
 
 # Optional inbound-SSH source allowlist (CIDRs). Empty = accept from any source.
 ssh_allow_cidrs: []

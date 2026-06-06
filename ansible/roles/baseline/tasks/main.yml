@@ -10,35 +10,85 @@
     cache_valid_time: 3600
 
 # --- Admin account (must exist + have a key BEFORE ssh_hardening locks root) ---
+# Resolve the user and key set from the control machine when left empty; explicit
+# values always win. Lookups run on the control node — that's the operator's box.
+- name: Resolve the admin sudo username (local $USER if unset)
+  ansible.builtin.set_fact:
+    ssh_admin_user_effective: >-
+      {{ ssh_admin_user if ssh_admin_user | length > 0
+         else lookup('ansible.builtin.env', 'USER') }}
+
+- name: Autodetect the operator's local SSH public key (control machine)
+  ansible.builtin.set_fact:
+    ssh_admin_detected_pubkey: "{{ lookup('ansible.builtin.file', found) | trim }}"
+  vars:
+    found: >-
+      {{ query('ansible.builtin.first_found',
+               {'files': candidates, 'skip': true}) | first | default('') }}
+    candidates:
+      - "{{ lookup('ansible.builtin.env', 'HOME') }}/.ssh/id_ed25519.pub"
+      - "{{ lookup('ansible.builtin.env', 'HOME') }}/.ssh/id_ecdsa.pub"
+      - "{{ lookup('ansible.builtin.env', 'HOME') }}/.ssh/id_rsa.pub"
+  when:
+    - ssh_admin_pubkey | length == 0
+    - ssh_admin_pubkey_autodetect | bool
+    - found | length > 0
+
+- name: Resolve the set of admin authorized keys
+  ansible.builtin.set_fact:
+    ssh_admin_keys: >-
+      {{ (([ssh_admin_pubkey] if ssh_admin_pubkey | length > 0
+           else [ssh_admin_detected_pubkey | default('')])
+          + ssh_admin_extra_pubkeys)
+         | map('trim') | reject('equalto', '') | unique | list }}
+
+# UNCONDITIONAL lockout guard — runs BEFORE the account is created and hardening
+# applied. It is the single gate that makes a keyless/root-only harden impossible;
+# downstream tasks therefore need no `when`. ssh_hardening disables root login, so a
+# resolved admin user of "root" (or an empty one, e.g. $USER unset under cron/CI)
+# would lock the host out — both are refused here rather than skipped silently.
+- name: Refuse to harden SSH without a non-root admin user and a key (lockout guard)
+  ansible.builtin.assert:
+    that:
+      - ssh_admin_user_effective | length > 0
+      - ssh_admin_user_effective != 'root'
+      - ssh_admin_keys | length > 0
+    fail_msg: >-
+      Cannot establish a working admin login before devsec.hardening.ssh_hardening
+      disables root + password auth. Resolved user='{{ ssh_admin_user_effective }}',
+      keys={{ ssh_admin_keys | length }}. Causes: ssh_admin_user is empty and the
+      control-machine $USER is unset (cron/CI/sudo with env_reset) -> set
+      ssh_admin_user; the resolved user is 'root' (hardening forbids root login) ->
+      set ssh_admin_user to a non-root account; or no key was found -> set
+      ssh_admin_pubkey, add ssh_admin_extra_pubkeys, or place a default key
+      (~/.ssh/id_ed25519.pub, id_ecdsa.pub, or id_rsa.pub) on the control machine.
+
+# Surface WHAT will be trusted: autodetect installs whatever key sits in the
+# control box's ~/.ssh, so echo the resolved user + key count (a silently dropped
+# malformed entry, or a wrong control machine, shows up as an unexpected count).
+- name: Report the resolved admin user and key count
+  ansible.builtin.debug:
+    msg: >-
+      Admin user '{{ ssh_admin_user_effective }}' will be authorized with
+      {{ ssh_admin_keys | length }} key(s)
+      ({{ 'explicit ssh_admin_pubkey' if ssh_admin_pubkey | length > 0
+          else 'autodetected ~/.ssh key' }}
+      + {{ ssh_admin_extra_pubkeys | length }} extra).
+
 - name: Create admin sudo user
   ansible.builtin.user:
-    name: "{{ ssh_admin_user }}"
+    name: "{{ ssh_admin_user_effective }}"
     groups: [sudo]
     append: true
     shell: /bin/bash
     create_home: true
-  when: ssh_admin_user | length > 0
 
-- name: Install admin authorized key
+- name: Install admin authorized keys
   ansible.posix.authorized_key:
-    user: "{{ ssh_admin_user }}"
-    key: "{{ ssh_admin_pubkey }}"
+    user: "{{ ssh_admin_user_effective }}"
+    key: "{{ item }}"
     state: present
-  when:
-    - ssh_admin_user | length > 0
-    - ssh_admin_pubkey | length > 0
-
-- name: Refuse to harden SSH without a working admin key (lockout guard)
-  ansible.builtin.assert:
-    that:
-      - ssh_admin_user | length > 0
-      - ssh_admin_pubkey | length > 0
-    fail_msg: >-
-      ssh_admin_user and ssh_admin_pubkey must be set so the admin account can log
-      in BEFORE devsec.hardening.ssh_hardening disables root and password auth.
-      Set them in inventory/group_vars/all.yml. (Molecule sets both to "" to skip
-      SSH hardening inside the throwaway container.)
-  when: ssh_admin_user | length > 0
+  loop: "{{ ssh_admin_keys }}"
 
 # --- Firewall: default-deny inbound, SSH only ---------------------------------
 - name: Install nftables ruleset
@@ -99,7 +149,9 @@
   ansible.builtin.include_role:
     name: devsec.hardening.os_hardening
 
+# No `when` guard here by design: the unconditional lockout assert above has already
+# proven a non-root admin user with >=1 key exists (or aborted the play), so hardening
+# can never run keyless. Re-adding a gate here would risk drifting out of sync with it.
 - name: Apply DevSec SSH hardening
   ansible.builtin.include_role:
     name: devsec.hardening.ssh_hardening
-  when: ssh_admin_user | length > 0
