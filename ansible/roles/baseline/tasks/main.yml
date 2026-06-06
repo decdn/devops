@@ -25,10 +25,12 @@
     found: >-
       {{ query('ansible.builtin.first_found',
                {'files': candidates, 'skip': true}) | first | default('') }}
+    # ~ expands via os.path.expanduser, which falls back to the passwd DB when
+    # $HOME is unset (cron/CI) — more robust than an env lookup that returns ''.
     candidates:
-      - "{{ lookup('ansible.builtin.env', 'HOME') }}/.ssh/id_ed25519.pub"
-      - "{{ lookup('ansible.builtin.env', 'HOME') }}/.ssh/id_ecdsa.pub"
-      - "{{ lookup('ansible.builtin.env', 'HOME') }}/.ssh/id_rsa.pub"
+      - "~/.ssh/id_ed25519.pub"
+      - "~/.ssh/id_ecdsa.pub"
+      - "~/.ssh/id_rsa.pub"
   when:
     - ssh_admin_pubkey | length == 0
     - ssh_admin_pubkey_autodetect | bool
@@ -70,10 +72,12 @@
   ansible.builtin.debug:
     msg: >-
       Admin user '{{ ssh_admin_user_effective }}' will be authorized with
-      {{ ssh_admin_keys | length }} key(s)
-      ({{ 'explicit ssh_admin_pubkey' if ssh_admin_pubkey | length > 0
-          else 'autodetected ~/.ssh key' }}
-      + {{ ssh_admin_extra_pubkeys | length }} extra).
+      {{ ssh_admin_keys | length }} key(s); primary source =
+      {{ 'explicit ssh_admin_pubkey' if ssh_admin_pubkey | length > 0
+         else ('autodetected ~/.ssh key'
+               if (ssh_admin_detected_pubkey | default('')) | length > 0
+               else 'none (extra keys only)') }},
+      plus {{ ssh_admin_extra_pubkeys | length }} extra.
 
 - name: Create admin sudo user
   ansible.builtin.user:
