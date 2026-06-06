@@ -26,9 +26,8 @@ provisioner:
   inventory:
     group_vars:
       all:
-        # Skip SSH hardening / admin-key gating inside the container.
-        ssh_admin_user: ""
-        ssh_admin_pubkey: ""
+        # converge.yml runs only anvil + caddy — baseline (and its admin-user /
+        # ssh_hardening logic) is never exercised here, so no ssh_admin_* is needed.
         foundry_version: latest
 verifier:
   name: ansible

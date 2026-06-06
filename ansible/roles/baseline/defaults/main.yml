@@ -2,9 +2,19 @@
 # baseline role defaults. Override in inventory/group_vars for a real deployment.
 
 # Admin sudo account, created + keyed BEFORE ssh_hardening disables root login.
-# ssh_admin_pubkey MUST be set for a real deploy (lockout guard asserts it).
-ssh_admin_user: deploy
+# "Deploy as yourself" by default — both knobs resolve from the control machine
+# when left empty, and explicit values always win:
+#   ssh_admin_user   ""  -> the control-machine local $USER (of whoever runs
+#                           ansible-playbook; under sudo/CI this may not be you)
+#   ssh_admin_pubkey ""  -> autodetected from that same ~/.ssh (id_ed25519 > ecdsa > rsa)
+# The lockout-guard assert in tasks/main.yml aborts the run (before any hardening)
+# unless a NON-ROOT admin user and >=1 key resolve — so hardening never runs keyless.
+ssh_admin_user: ""
 ssh_admin_pubkey: ""
+# When ssh_admin_pubkey is empty, read the operator's default local public key.
+ssh_admin_pubkey_autodetect: true
+# Additional authorized keys for the admin user (full pubkey strings, e.g. teammates).
+ssh_admin_extra_pubkeys: []
 # Optional inbound-SSH source allowlist (CIDRs). Empty = accept from any source.
 ssh_allow_cidrs: []
 

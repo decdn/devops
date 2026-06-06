@@ -43,12 +43,17 @@ cd ansible
 make deps                                    # vendor pinned collections into ./collections
 cp inventory/hosts.yml.example inventory/hosts.yml
 $EDITOR inventory/hosts.yml                   # set hosts for decdn_nodes and/or anvil_devnet
-$EDITOR inventory/group_vars/all.yml          # set ssh_admin_pubkey (REQUIRED)
+$EDITOR inventory/group_vars/all.yml          # optional: override admin user/keys, allowlists
 ```
 
-`ssh_admin_pubkey` is **mandatory** — baseline refuses to run `ssh_hardening` (which
-disables root + password login) without it, so you can't lock yourself out. After the first
-deploy, switch each host's `ansible_user` to your `ssh_admin_user` (default `deploy`).
+By default baseline **deploys you as yourself**: an empty `ssh_admin_user` resolves to your
+control-machine `$USER`, and an empty `ssh_admin_pubkey` is autodetected from `~/.ssh`
+(`id_ed25519` > `ecdsa` > `rsa`). Add teammates' keys via `ssh_admin_extra_pubkeys`. Set
+`ssh_admin_user`/`ssh_admin_pubkey` explicitly to override (e.g. a shared `deploy` account,
+or when deploying from CI). baseline **asserts a key resolves** before `ssh_hardening`
+disables root + password login, so you can't lock yourself out. After the first deploy,
+switch each host's `ansible_user` to that admin account (your local username unless you set
+one).
 
 ---
 
@@ -122,7 +127,8 @@ Defaults live in each role (`roles/*/defaults/main.yml`); override in `group_var
 
 | Var | Default | Notes |
 |-----|---------|-------|
-| `ssh_admin_user` / `ssh_admin_pubkey` | `deploy` / `""` | **pubkey required**; admin created before SSH hardening. |
+| `ssh_admin_user` / `ssh_admin_pubkey` | `""` / `""` | Empty = local `$USER` + autodetected `~/.ssh` key; admin created before SSH hardening. |
+| `ssh_admin_extra_pubkeys` | `[]` | Extra authorized keys for the admin user (teammates). |
 | `baseline_extra_inbound` | `[]` | public inbound ports; `decdn_nodes` opens udp/4433. |
 | `decdn_node_version` | `""` | **required**; a `v<version>` release must exist. |
 | `decdn_rpc_url` + 3 contract addresses | `""` | **required** per node (host_vars); sourced from an ADR/deployment. |
