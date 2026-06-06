@@ -35,6 +35,12 @@
     path: "{{ caddy_users_tsv }}"
   register: caddy_tsv_stat
 
+# Service guards below reuse baseline's service_facts; gather here too so the role
+# stays correct when run standalone (e.g. --tags caddy) without baseline first.
+- name: Probe service facts if not already gathered
+  ansible.builtin.service_facts:
+  when: ansible_facts.services is not defined
+
 - name: Read the basic-auth user registry
   ansible.builtin.slurp:
     src: "{{ caddy_users_tsv }}"

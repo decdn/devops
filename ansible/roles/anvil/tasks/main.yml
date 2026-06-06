@@ -19,12 +19,18 @@
 # anvil user and Foundry binaries don't exist yet — become_user, cast, and the
 # systemd unit would all hard-fail. Probe real on-host state (read-only, runs in
 # check mode) so those tasks skip in check mode while still previewing drift on an
-# already-provisioned host. (service existence reuses baseline's service_facts.)
+# already-provisioned host.
 - name: Probe whether the anvil user already exists on the target
   ansible.builtin.getent:
     database: passwd
     key: "{{ anvil_user }}"
     fail_key: false
+
+# Service guards below reuse baseline's service_facts; gather here too so the role
+# stays correct when run standalone (e.g. --tags anvil) without baseline first.
+- name: Probe service facts if not already gathered
+  ansible.builtin.service_facts:
+  when: ansible_facts.services is not defined
 
 - name: Install Foundry bootstrap prerequisites
   ansible.builtin.apt:
@@ -174,5 +180,7 @@
     # Assert it's OUR chain, not a stale process on the port answering 200.
     - (anvil_rpc_probe.json.result | default('0x0')) | int(0, 16) == anvil_chain_id
   changed_when: false
-  # Nothing is listening under --check on a fresh host (anvil was never started).
-  when: not ansible_check_mode or 'anvil.service' in (ansible_facts.services | default({}))
+  # Skip entirely in check mode: --check never (re)starts anvil, so this liveness
+  # probe would falsely fail against a stopped-but-provisioned host. It previews no
+  # drift (changed_when:false) — there is nothing to verify in a dry run.
+  when: not ansible_check_mode
