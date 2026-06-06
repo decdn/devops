@@ -20,7 +20,14 @@
   failed_when: false
 
 - name: Mint '{{ caddy_target_user }}'
-  when: caddy_user_check.rc != 0
+  # Never mint in check mode: minting needs the caddy binary (hash-password, which
+  # auto-skips under --check), writes the TSV, and reveals a password — all mutating
+  # side effects a dry run must not perform. Gating on ansible_check_mode first also
+  # means caddy_user_check.rc — undefined when the existence-check command auto-skips
+  # under --check — is never the deciding factor; default it so it can't error.
+  when:
+    - not ansible_check_mode
+    - caddy_user_check.rc | default(1) != 0
   block:
     - name: Generate a random password
       ansible.builtin.set_fact:
