@@ -1,10 +1,16 @@
 ---
+# Both units come from baseline_packages, a no-op under --check, so on a fresh host
+# the unit may not exist when a flush (e.g. anvil's flush_handlers) fires the handler.
+# Guard on real on-host state (service_facts, gathered in tasks/main.yml): run on a
+# provisioned host (drift preview), skip a missing unit in check mode.
 - name: Reload nftables
   ansible.builtin.systemd:
     name: nftables
     state: restarted
+  when: not ansible_check_mode or 'nftables.service' in (ansible_facts.services | default({}))
 
 - name: Restart fail2ban
   ansible.builtin.systemd:
     name: fail2ban
     state: restarted
+  when: not ansible_check_mode or 'fail2ban.service' in (ansible_facts.services | default({}))

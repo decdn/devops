@@ -25,11 +25,28 @@
 
 # Rebuild the Caddyfile import block from the TSV registry. Idempotent: identical
 # registry -> identical content -> no change -> no restart.
+# Under --check the user-mint tasks don't write (the existence probe is a command
+# that auto-skips; the lineinfile registry write is a no-op), so on a fresh host the
+# TSV registry is never created and the slurp below would fail (file not found).
+# Probe for it (read-only, runs in check mode); the slurp/render skip in check mode
+# when it's absent, but still preview drift on an already-provisioned host.
+- name: Check whether the basic-auth registry exists
+  ansible.builtin.stat:
+    path: "{{ caddy_users_tsv }}"
+  register: caddy_tsv_stat
+
+# Service guards below reuse baseline's service_facts; gather here too so the role
+# stays correct when run standalone (e.g. --tags caddy) without baseline first.
+- name: Probe service facts if not already gathered
+  ansible.builtin.service_facts:
+  when: ansible_facts.services is not defined
+
 - name: Read the basic-auth user registry
   ansible.builtin.slurp:
     src: "{{ caddy_users_tsv }}"
   register: caddy_tsv_raw
   no_log: true
+  when: not ansible_check_mode or caddy_tsv_stat.stat.exists
 
 - name: Render the basic_auth import file from the registry
   ansible.builtin.copy:
@@ -49,6 +66,8 @@
       }
   no_log: true
   notify: Restart caddy
+  # caddy_tsv_raw is only defined when the slurp above ran (skipped in check mode).
+  when: not ansible_check_mode or caddy_tsv_stat.stat.exists
 
 - name: Install the Caddyfile
   ansible.builtin.template:
@@ -59,12 +78,15 @@
     mode: "0644"
     validate: "caddy validate --adapter caddyfile --config %s"
   notify: Restart caddy
+  # validate shells out to the caddy binary, absent under --check on a fresh host.
+  when: not ansible_check_mode or 'caddy.service' in (ansible_facts.services | default({}))
 
 - name: Enable and start caddy
   ansible.builtin.systemd:
     name: caddy
     enabled: true
     state: started
+  when: not ansible_check_mode or 'caddy.service' in (ansible_facts.services | default({}))
 
 - name: Apply caddy config changes now
   ansible.builtin.meta: flush_handlers

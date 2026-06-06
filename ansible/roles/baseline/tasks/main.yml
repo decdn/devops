@@ -9,6 +9,14 @@
     update_cache: true
     cache_valid_time: 3600
 
+# Under --check the install above is a no-op, so packaged units (fail2ban, chrony,
+# nftables) may not exist yet on a fresh host and a systemd enable/start would
+# hard-fail ("Could not find the requested service"). Probe real on-host state
+# (read-only, runs in check mode) so the service tasks below can skip a missing
+# unit in check mode while still previewing drift on an already-provisioned host.
+- name: Probe which service units already exist on the target
+  ansible.builtin.service_facts:
+
 # --- Admin account (must exist + have a key BEFORE ssh_hardening locks root) ---
 # Resolve the user and key set from the control machine when left empty; explicit
 # values always win. Lookups run on the control node — that's the operator's box.
@@ -87,12 +95,27 @@
     shell: /bin/bash
     create_home: true
 
+# authorized_key resolves the user's ~/.ssh to write the key, so the account must
+# already exist. Under --check the create task above is a no-op, so on a not-yet-
+# provisioned host the user is absent and the module hard-fails ("Either user must
+# exist or you must provide full path to key file in check mode"). Probe real
+# on-host state (read-only, runs in check mode) and skip the key install only when
+# check mode meets a missing user; real runs and check runs on a provisioned host
+# (where drift is worth previewing) always proceed.
+- name: Probe whether the admin user already exists on the target
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ ssh_admin_user_effective }}"
+    fail_key: false
+
 - name: Install admin authorized keys
   ansible.posix.authorized_key:
     user: "{{ ssh_admin_user_effective }}"
     key: "{{ item }}"
     state: present
   loop: "{{ ssh_admin_keys }}"
+  # fail_key:false stores a missing user as {user: None}, so test the value, not `in`.
+  when: not ansible_check_mode or (getent_passwd | default({})).get(ssh_admin_user_effective)
 
 # --- Firewall: default-deny inbound, SSH only ---------------------------------
 - name: Install nftables ruleset
@@ -110,6 +133,7 @@
     name: nftables
     enabled: true
     state: started
+  when: not ansible_check_mode or 'nftables.service' in (ansible_facts.services | default({}))
 
 # --- Automatic security patches ----------------------------------------------
 - name: Enable unattended-upgrades
@@ -140,6 +164,7 @@
     name: fail2ban
     enabled: true
     state: started
+  when: not ansible_check_mode or 'fail2ban.service' in (ansible_facts.services | default({}))
 
 # --- Time sync ----------------------------------------------------------------
 - name: Enable and start chrony
@@ -147,6 +172,7 @@
     name: chrony
     enabled: true
     state: started
+  when: not ansible_check_mode or 'chrony.service' in (ansible_facts.services | default({}))
 
 # --- DevSec hardening (LAST: ssh_hardening disables root + password auth) ------
 - name: Apply DevSec OS hardening
