@@ -9,7 +9,7 @@
     # No admin API surface needed; auto_https stays ON so Caddy provisions and
     # renews the cert for the site address below.
     admin off
-{% if caddy_acme_email | length > 0 %}
+{% if caddy_acme_email | default('') %}
     email {{ caddy_acme_email }}
 {% endif %}
 }
