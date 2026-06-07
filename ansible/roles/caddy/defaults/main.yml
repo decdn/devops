@@ -1,8 +1,18 @@
 ---
 # caddy role defaults. Override in inventory/group_vars for a real deployment.
 
-caddy_bind_port: 8080                # loopback listener; public path bolted on later
-rpc_hostname: rpc-dev.decdn.org      # used in the printed ETH_RPC_URL
+# Exposure mode:
+#   true  -> public HTTPS listener on rpc_hostname:443 with auto-TLS (Let's Encrypt)
+#            + per-dev basic auth, reverse-proxying to the loopback anvil. Requires
+#            inbound tcp/80+443 (open them via baseline_extra_inbound; see
+#            inventory/group_vars/anvil_devnet.yml).
+#   false -> loopback plain-HTTP listener on caddy_bind_port, for dev/CI (molecule)
+#            or when TLS is terminated upstream by a tunnel/edge.
+caddy_public: true
+caddy_acme_email: ""                 # "" -> anonymous ACME; set for an LE account contact
+
+caddy_bind_port: 8080                # loopback listener; only used when caddy_public is false
+rpc_hostname: rpc-dev.decdn.org      # public HTTPS host (caddy_public) + printed in ETH_RPC_URL
 
 # Upstream anvil RPC to proxy to (kept in sync with the anvil role defaults).
 anvil_host: "127.0.0.1"

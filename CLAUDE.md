@@ -22,8 +22,10 @@ economic claims — those live in `decdn/adr/`. If something here states a proto
    and a dedicated owner. The repo ships `*.example` templates only. The root
    `.gitignore` is a backstop — do not rely on it; keep secrets out by design.
 2. **Localhost-only by default.** Service daemons (anvil, etc.) bind `127.0.0.1`. The
-   *only* sanctioned public path is an explicit reverse proxy + tunnel with auth in
-   front. Never bind a backend to `0.0.0.0` or expose its raw port.
+   *only* sanctioned public path is an explicit reverse proxy with auth + TLS in front
+   (e.g. the anvil devnet's public-HTTPS Caddy, or that same proxy behind an outbound
+   tunnel). Never bind a *backend* to `0.0.0.0` or expose its raw port — only the
+   auth-terminating proxy faces the internet.
 3. **`etc/` mirrors the target filesystem.** Put a config where it installs:
    `services/<svc>/etc/systemd/system/foo.service` → `/etc/systemd/system/foo.service`.
 4. **Scripts are idempotent and fail loud.** `set -euo pipefail`, re-runnable, refuse to
@@ -60,7 +62,9 @@ secrets; generated on host) and #2 (localhost-only by default) hold for both con
   release tarball under a hardened systemd unit; public QUIC udp/4433, loopback
   metrics/admin, operator-provisioned eth keystore, required chain knobs (no baked protocol
   facts — sourced from ADRs). **Internal: the anvil devnet** (`playbooks/anvil.yml` →
-  baseline + anvil + Caddy basic-auth, loopback) — team tooling, not the product. Shared
+  baseline + anvil + Caddy basic-auth; anvil stays loopback while Caddy fronts it on public
+  https/443 with auto-TLS — `caddy_public: true`, default; flip to loopback-only for a tunnel)
+  — team tooling, not the product. Shared
   DevSec-hardened `baseline`. See `ansible/README.md`. (On-chain node stake/registration,
   ADR 019 Phase 2, is an operator step, not automated.)
 
