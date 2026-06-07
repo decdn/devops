@@ -136,16 +136,23 @@
     mode: "0644"
     content: |
       # MANAGED BY the caddy role — do not edit by hand.
-      # Match a basic-auth failure (HTTP 401) in Caddy's JSON access log and
-      # capture the connecting IP. The whole JSON record is one line, so the
-      # logger -> remote_ip -> status ordering lets a single failregex span it
-      # (relies on Caddy's current JSON field emission order).
+      # Ban on a basic-auth failure (HTTP 401) in Caddy's one-line JSON access
+      # record, capturing the connecting IP. Order-independent lookaheads: JSON
+      # keys are unordered and Caddy/zap may reorder them across versions, so a
+      # positional `field.*field` regex would silently stop matching. Each
+      # `(?<!\\)` requires an UNescaped quote, so only real root-level keys match
+      # — never a `"status":401` injected inside an escaped header/URI value
+      # (Caddy escapes those to `\"status\":401`). No `logger` assertion needed:
+      # the jail's logpath is Caddy's dedicated access log (only access entries).
       [Definition]
-      failregex = ^.*"logger":"http\.log\.access[^"]*".*"remote_ip":"<HOST>".*"status":401.*$
+      failregex = ^(?=.*(?<!\\)"remote_ip":"<HOST>")(?=.*(?<!\\)"status":401).*$
       # `%%` is fail2ban config-parser escaping for a literal `%` (a bare `%`
-      # raises InterpolationSyntaxError and the filter won't load). Requires the
-      # Caddyfile's `format json { time_format iso8601 }` — the string `ts` field.
-      datepattern = "ts":"%%Y-%%m-%%dT%%H:%%M:%%S
+      # raises InterpolationSyntaxError and the filter won't load). `%%z` parses
+      # the trailing `Z` AS UTC — a literal `Z` would only consume the char and
+      # leave the time read in host-local zone, silently skewing the findtime
+      # window on a non-UTC host. `(?:\.%%f)?` allows the optional fractional
+      # seconds. Requires the Caddyfile's `format json { time_format iso8601 }`.
+      datepattern = "ts":"%%Y-%%m-%%dT%%H:%%M:%%S(?:\.%%f)?%%z
       ignoreregex =
   notify: Restart fail2ban
   when: caddy_public | bool and caddy_fail2ban | bool
