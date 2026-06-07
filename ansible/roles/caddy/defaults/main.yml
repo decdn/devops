@@ -23,3 +23,16 @@ caddy_users_tsv: /etc/caddy/rpc-dev.users.tsv       # username<TAB>bcrypt regist
 caddy_basicauth_file: /etc/caddy/rpc-dev.basicauth  # generated Caddyfile import
 caddy_initial_user: dev                              # always ensured to exist
 # caddy_extra_user: alice        # set by add-dev-user.yml to mint one more user
+
+# JSON access log (self-rolling) recording who hit the RPC; also the log the
+# fail2ban caddy-rpc jail watches for repeated basic-auth failures.
+caddy_access_log: /var/log/caddy/rpc-access.log
+
+# fail2ban jail banning IPs that repeatedly fail RPC basic auth. Only wired up on
+# the public listener (caddy_public) — loopback/CI has no attack surface and runs
+# without baseline, so fail2ban isn't installed there. Lenient by default:
+# caddy_fail2ban_maxretry failures within findtime -> bantime ban (via nftables).
+caddy_fail2ban: true
+caddy_fail2ban_maxretry: 5
+caddy_fail2ban_findtime: 10m
+caddy_fail2ban_bantime: 1h

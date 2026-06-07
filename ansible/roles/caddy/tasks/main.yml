@@ -69,6 +69,28 @@
   # caddy_tsv_raw is only defined when the slurp above ran (skipped in check mode).
   when: not ansible_check_mode or caddy_tsv_stat.stat.exists
 
+- name: Ensure the caddy log directory exists
+  ansible.builtin.file:
+    path: "{{ caddy_access_log | dirname }}"
+    state: directory
+    owner: caddy
+    group: caddy
+    mode: "0750"
+
+# `caddy validate` (run as root by the template task below) instantiates the file
+# logger and CREATES the log file if absent — as root, which the caddy daemon then
+# can't open. Pre-create it owned by caddy so validate only ever opens an existing
+# caddy-owned file; touch+preserve keeps this idempotent and corrects ownership drift.
+- name: Ensure the caddy access log is owned by caddy
+  ansible.builtin.file:
+    path: "{{ caddy_access_log }}"
+    state: touch
+    owner: caddy
+    group: caddy
+    mode: "0640"
+    modification_time: preserve
+    access_time: preserve
+
 - name: Install the Caddyfile
   ansible.builtin.template:
     src: Caddyfile.j2
@@ -88,5 +110,88 @@
     state: started
   when: not ansible_check_mode or 'caddy.service' in (ansible_facts.services | default({}))
 
+# --- fail2ban: ban IPs that repeatedly fail RPC basic auth (public listener) ---
+# Only meaningful for the public HTTPS listener; the loopback/CI listener has no
+# attack surface and runs without baseline (so fail2ban isn't installed there).
+# fail2ban itself ships with baseline, which always runs before caddy in anvil.yml.
+
+# Fail loud, at the cause: if the jail is enabled but fail2ban is absent (e.g. a
+# standalone `--tags caddy` run that skipped baseline), the copies below would
+# write config for a non-existent service and the handler would abort later with a
+# confusing "service not found". Skipped under --check on a not-yet-provisioned host.
+- name: Assert fail2ban is installed before wiring the caddy-rpc jail
+  ansible.builtin.assert:
+    that: "'fail2ban.service' in (ansible_facts.services | default({}))"
+    fail_msg: >-
+      caddy_fail2ban is enabled but fail2ban is not installed on this host. It
+      ships with the baseline role — run the full anvil.yml (baseline before
+      caddy), or set caddy_fail2ban=false to skip RPC brute-force protection.
+  when: caddy_public | bool and caddy_fail2ban | bool and not ansible_check_mode
+
+- name: Install the caddy-rpc fail2ban filter
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/filter.d/caddy-rpc.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # MANAGED BY the caddy role — do not edit by hand.
+      # Ban on a basic-auth failure (HTTP 401) in Caddy's one-line JSON access
+      # record, capturing the connecting IP. Order-independent lookaheads: JSON
+      # keys are unordered and Caddy/zap may reorder them across versions, so a
+      # positional `field.*field` regex would silently stop matching. Each
+      # `(?<!\\)` requires an UNescaped quote, so only real root-level keys match
+      # — never a `"status":401` injected inside an escaped header/URI value
+      # (Caddy escapes those to `\"status\":401`). No `logger` assertion needed:
+      # the jail's logpath is Caddy's dedicated access log (only access entries).
+      [Definition]
+      failregex = ^(?=.*(?<!\\)"remote_ip":"<HOST>")(?=.*(?<!\\)"status":401).*$
+      # `%%` is fail2ban config-parser escaping for a literal `%` (a bare `%`
+      # raises InterpolationSyntaxError and the filter won't load). `%%z` parses
+      # the trailing `Z` AS UTC — a literal `Z` would only consume the char and
+      # leave the time read in host-local zone, silently skewing the findtime
+      # window on a non-UTC host. `(?:\.%%f)?` allows the optional fractional
+      # seconds. Requires the Caddyfile's `format json { time_format iso8601 }`.
+      datepattern = "ts":"%%Y-%%m-%%dT%%H:%%M:%%S(?:\.%%f)?%%z
+      ignoreregex =
+  notify: Restart fail2ban
+  when: caddy_public | bool and caddy_fail2ban | bool
+
+- name: Install the caddy-rpc fail2ban jail
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/caddy-rpc.local
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # MANAGED BY the caddy role — do not edit by hand.
+      [caddy-rpc]
+      enabled   = true
+      filter    = caddy-rpc
+      backend   = auto
+      logpath   = {{ caddy_access_log }}
+      maxretry  = {{ caddy_fail2ban_maxretry }}
+      findtime  = {{ caddy_fail2ban_findtime }}
+      bantime   = {{ caddy_fail2ban_bantime }}
+      # Ban on the nftables firewall (the host has no iptables); drop 80+443.
+      banaction = nftables-multiport
+      port      = http,https
+  notify: Restart fail2ban
+  when: caddy_public | bool and caddy_fail2ban | bool
+
 - name: Apply caddy config changes now
   ansible.builtin.meta: flush_handlers
+
+# A malformed filter/jail lets fail2ban start but silently never load the jail —
+# leaving the operator believing brute-force protection is active when no IP can
+# ever be banned. Confirm it loaded; fail loud at deploy. Retry: the client socket
+# can briefly lag the restart. (This is the only check on the public path, which
+# molecule never exercises — see roles/caddy/README.md.)
+- name: Verify the caddy-rpc fail2ban jail is loaded
+  ansible.builtin.command: fail2ban-client status caddy-rpc
+  changed_when: false
+  register: caddy_f2b_status
+  until: caddy_f2b_status.rc == 0
+  retries: 5
+  delay: 2
+  when: caddy_public | bool and caddy_fail2ban | bool and not ansible_check_mode

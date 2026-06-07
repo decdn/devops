@@ -105,8 +105,9 @@ make add-dev USER_NAME=alice    # mint + reveal a basic-auth dev user
 On the first anvil deploy the shared **mnemonic** and the `dev` basic-auth password are
 printed **once** — save them to the team vault. anvil binds `127.0.0.1` only; **caddy fronts
 it on public https/443** with auto-TLS + per-dev basic auth (`caddy_public: true`, default),
-so the DNS A record must already point at the host. To keep it loopback-only instead (e.g.
-behind a tunnel) set `caddy_public: false` — see the appendix.
+so the DNS A record must already point at the host. Repeated basic-auth failures are
+**fail2ban-banned** (the `caddy-rpc` jail, public listener only — see `roles/caddy`). To keep
+it loopback-only instead (e.g. behind a tunnel) set `caddy_public: false` — see the appendix.
 
 ---
 
@@ -139,6 +140,7 @@ Defaults live in each role (`roles/*/defaults/main.yml`); override in `group_var
 | `decdn_rpc_url` + 3 contract addresses | `""` | **required** per node (host_vars); sourced from an ADR/deployment. |
 | `decdn_region` / `decdn_bind_port` / `decdn_rate_per_mb` | `""` / `4433` / `10` | node identity, QUIC port, USDC base units/MB. |
 | `anvil_chain_id` … `rpc_hostname` | see `roles/anvil`,`roles/caddy` | internal devnet knobs. |
+| `caddy_fail2ban` (+ `_maxretry`/`_findtime`/`_bantime`) | `true` (5 / 10m / 1h) | RPC basic-auth brute-force jail; public listener only. |
 
 ---
 

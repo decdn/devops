@@ -63,7 +63,8 @@ secrets; generated on host) and #2 (localhost-only by default) hold for both con
   metrics/admin, operator-provisioned eth keystore, required chain knobs (no baked protocol
   facts — sourced from ADRs). **Internal: the anvil devnet** (`playbooks/anvil.yml` →
   baseline + anvil + Caddy basic-auth; anvil stays loopback while Caddy fronts it on public
-  https/443 with auto-TLS — `caddy_public: true`, default; flip to loopback-only for a tunnel)
+  https/443 with auto-TLS — `caddy_public: true`, default; flip to loopback-only for a tunnel;
+  repeated basic-auth failures are fail2ban-banned via the public-only `caddy-rpc` jail)
   — team tooling, not the product. Shared
   DevSec-hardened `baseline`. See `ansible/README.md`. (On-chain node stake/registration,
   ADR 019 Phase 2, is an operator step, not automated.)
