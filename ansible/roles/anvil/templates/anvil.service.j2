@@ -4,6 +4,11 @@
 # {{ anvil_host }}:{{ anvil_port }} ONLY (never 0.0.0.0), and persists chain state
 # to {{ anvil_state_dir }}/state.json (loaded on boot, dumped on SIGTERM,
 # snapshotted every 30s so an unclean reboot loses at most that interval).
+#
+# Resilience: ExecStartPre runs anvil-state-guard to quarantine an empty/corrupt
+# snapshot (an OOM-truncated state.json otherwise wedges the unit in a crash loop),
+# --prune-history bounds in-memory growth, and the cgroup Memory* limits below cap
+# the process so a runaway can't take the whole box down via the global OOM-killer.
 [Unit]
 Description=deCDN anvil devnet (EVM settlement layer)
 Documentation=https://github.com/decdn/decdn-devops
@@ -24,6 +29,10 @@ EnvironmentFile={{ anvil_env_file }}
 # phrase contains spaces. Caveat: it is visible in `ps`/`systemctl show` ON THIS
 # HOST — acceptable because it only controls funded *test* accounts, and is why
 # the RPC must never be exposed without auth. Do not reuse it with real value.
+# Quarantine an empty/corrupt snapshot before anvil reads it, so a truncated
+# state.json (e.g. from an OOM-kill mid-write) self-heals instead of crash-looping.
+ExecStartPre={{ anvil_state_guard_bin }}
+
 ExecStart={{ foundry_dir }}/bin/anvil \
     --host {{ anvil_host }} \
     --port {{ anvil_port }} \
@@ -31,6 +40,12 @@ ExecStart={{ foundry_dir }}/bin/anvil \
     --block-time {{ anvil_block_time }} \
     --accounts {{ anvil_accounts }} \
     --mnemonic ${ANVIL_MNEMONIC} \
+{% if anvil_prune_history %}
+    --prune-history {{ anvil_prune_history }} \
+{% endif %}
+{% if anvil_transaction_block_keeper %}
+    --transaction-block-keeper {{ anvil_transaction_block_keeper }} \
+{% endif %}
     --state {{ anvil_state_dir }}/state.json \
     --state-interval 30
 
@@ -40,6 +55,19 @@ TimeoutStopSec=30
 
 Restart=always
 RestartSec=2
+
+# --- Memory ceilings (cgroup) ----------------------------------------------
+# Confine a runaway anvil to its own slice: MemoryHigh throttles via reclaim,
+# MemoryMax is the hard kill. Without these, unbounded history growth invokes the
+# GLOBAL OOM-killer, which may pick Caddy/sshd instead. A MemoryMax kill truncates
+# the snapshot the same way — the state guard above makes that recoverable. Sizing
+# is host-specific; set in inventory/group_vars (empty here => no limit).
+{% if anvil_memory_high %}
+MemoryHigh={{ anvil_memory_high }}
+{% endif %}
+{% if anvil_memory_max %}
+MemoryMax={{ anvil_memory_max }}
+{% endif %}
 
 # --- Hardening -------------------------------------------------------------
 # StateDirectory creates/owns {{ anvil_state_dir }} (0750) and is the only

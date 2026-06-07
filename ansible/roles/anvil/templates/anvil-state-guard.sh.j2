@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# MANAGED BY the anvil role — do not edit by hand.
+#
+# anvil's --state flag refuses to start when the snapshot file exists but is empty
+# or not valid JSON (it aborts with "EOF while parsing a value at line 1 column 0",
+# exit 2). An OOM-kill mid-snapshot (--state-interval writes) truncates the file to
+# zero bytes, which then wedges the service into a permanent restart loop — exactly
+# the incident this guard exists to prevent.
+#
+# Run as ExecStartPre: if the state file is empty or corrupt, move it aside so anvil
+# starts from a fresh chain instead of crash-looping. A devnet can afford to lose
+# state; it cannot afford to be down. The moved-aside file is kept for forensics.
+set -euo pipefail
+
+state="{{ anvil_state_dir }}/state.json"
+
+# No snapshot yet (first boot): anvil will create one. Nothing to guard.
+[ -e "$state" ] || exit 0
+
+bad=0
+if [ ! -s "$state" ]; then
+    bad=1   # zero bytes — the OOM-truncation failure mode
+elif command -v jq >/dev/null 2>&1 && ! jq -e . "$state" >/dev/null 2>&1; then
+    bad=1   # non-empty but not parseable JSON (partial write)
+fi
+
+if [ "$bad" -eq 1 ]; then
+    ts="$(date -u +%Y%m%dT%H%M%SZ)"
+    corrupt="${state}.corrupt-${ts}"
+    echo "anvil-state-guard: '${state}' is empty or invalid JSON; moving to '${corrupt}' so anvil can start from a fresh chain" >&2
+    mv -f "$state" "$corrupt"
+fi
