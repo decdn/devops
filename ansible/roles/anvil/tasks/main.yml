@@ -138,6 +138,19 @@
           {{ anvil_effective_mnemonic }}
       when: anvil_mnemonic_supplied is not defined or anvil_mnemonic_supplied | length == 0
 
+# --- State-resilience guard (ExecStartPre) ------------------------------------
+# Quarantines an empty/corrupt state.json so an OOM-truncated snapshot can't wedge
+# the unit in a crash loop. Installed before the unit so the ExecStartPre target
+# exists the first time the unit (re)starts.
+- name: Install the anvil state-resilience guard
+  ansible.builtin.template:
+    src: anvil-state-guard.sh.j2
+    dest: "{{ anvil_state_guard_bin }}"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart anvil
+
 # --- Hardened systemd unit ----------------------------------------------------
 - name: Install anvil systemd unit
   ansible.builtin.template:

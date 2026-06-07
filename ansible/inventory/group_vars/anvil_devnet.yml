@@ -15,3 +15,12 @@ baseline_extra_inbound:
 
 # Optional Let's Encrypt account contact (used by the caddy role's global block):
 # caddy_acme_email: ops@decdn.org
+
+# --- anvil memory ceilings (this host is a ~3.8 GB / no-swap VPS) --------------
+# Sized to leave headroom for Caddy + the system on a small box. On 2026-06-07 an
+# unbounded anvil grew to ~3.7 GB and the GLOBAL OOM-killer killed it mid state
+# snapshot, truncating state.json and crash-looping the unit. The cgroup cap below
+# (plus anvil_prune_history in the role defaults) confines a runaway to its own
+# slice; raise both on a larger host.
+anvil_memory_high: "2G"
+anvil_memory_max: "2560M"

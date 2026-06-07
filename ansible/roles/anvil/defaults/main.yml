@@ -8,6 +8,25 @@ anvil_accounts: 10
 anvil_host: "127.0.0.1"          # loopback ONLY — never 0.0.0.0 (hard rule #2)
 anvil_port: 8545
 
+# --- Resilience: bound in-memory growth so the box can't OOM the daemon --------
+# anvil keeps chain history in RAM; with a fixed block-time it grows without bound
+# and eventually trips the kernel OOM-killer (which can truncate the state file and
+# wedge the service — see anvil-state-guard.sh). prune-history caps the number of
+# historical states kept in memory. Set falsy to keep full history (the old, OOM-
+# prone behaviour). transaction-block-keeper is optional and omitted unless set.
+anvil_prune_history: 5000            # --prune-history N  (falsy => omit, keep full history)
+anvil_transaction_block_keeper: ""   # --transaction-block-keeper N  ("" => omit)
+
+# cgroup memory ceilings for the unit. Empty => no limit (role default). Sizing is
+# host-specific, so set these in inventory/group_vars for small VPSes — a cgroup cap
+# confines a runaway anvil to its own slice instead of letting the GLOBAL OOM-killer
+# pick a victim (e.g. Caddy or sshd). MemoryHigh throttles via reclaim; MemoryMax is
+# the hard kill. Pair with the state guard so a MemoryMax kill self-heals on restart.
+anvil_memory_high: ""                # e.g. "2G"     (systemd MemoryHigh=, "" => omit)
+anvil_memory_max: ""                 # e.g. "2560M"  (systemd MemoryMax=, "" => omit)
+
+anvil_state_guard_bin: /usr/local/sbin/anvil-state-guard
+
 # --- Foundry ---
 foundry_dir: /opt/foundry
 foundry_version: latest          # foundryup -i value: latest | nightly | vX.Y.Z (pin for reproducibility)
