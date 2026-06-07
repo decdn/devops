@@ -26,8 +26,19 @@
     # Forward authenticated requests to the local anvil JSON-RPC.
     reverse_proxy {{ anvil_host }}:{{ anvil_port }}
 
-    # Access logging to the journal (auditing who hit the RPC).
-    log
+    # Access logging as JSON to a (self-rolling) file: auditing who hit the RPC,
+    # and the log fail2ban's caddy-rpc jail watches for repeated 401s. The jail's
+    # datepattern parses the `ts` string field, so `time_format iso8601` is required
+    # here (the Caddy default is a Unix-epoch float the datepattern can't read).
+    log {
+        output file {{ caddy_access_log }} {
+            roll_size 10MiB
+            roll_keep 5
+        }
+        format json {
+            time_format iso8601
+        }
+    }
 }
 {% else %}
 {
@@ -49,7 +60,18 @@
     # Forward authenticated requests to the local anvil JSON-RPC.
     reverse_proxy {{ anvil_host }}:{{ anvil_port }}
 
-    # Access logging to the journal (auditing who hit the RPC).
-    log
+    # Access logging as JSON to a (self-rolling) file: auditing who hit the RPC,
+    # and the log fail2ban's caddy-rpc jail watches for repeated 401s. The jail's
+    # datepattern parses the `ts` string field, so `time_format iso8601` is required
+    # here (the Caddy default is a Unix-epoch float the datepattern can't read).
+    log {
+        output file {{ caddy_access_log }} {
+            roll_size 10MiB
+            roll_keep 5
+        }
+        format json {
+            time_format iso8601
+        }
+    }
 }
 {% endif %}
