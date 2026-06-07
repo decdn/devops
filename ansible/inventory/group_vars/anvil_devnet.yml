@@ -1,0 +1,17 @@
+---
+# Shared config for the internal anvil devnet host(s) (playbooks/anvil.yml).
+
+# Public HTTPS exposure for the anvil devnet RPC. Caddy serves rpc-dev.decdn.org
+# on 443 (auto-TLS) with per-dev basic auth; anvil itself stays loopback. 80
+# carries the ACME HTTP-01 challenge and the HTTP->HTTPS redirect. This pairs with
+# the caddy role's caddy_public mode (default true); flip both to go loopback-only.
+baseline_extra_inbound:
+  - proto: tcp
+    port: "80"
+    comment: "caddy ACME + http->https redirect"
+  - proto: tcp
+    port: "443"
+    comment: "caddy public RPC (rpc-dev)"
+
+# Optional Let's Encrypt account contact (used by the caddy role's global block):
+# caddy_acme_email: ops@decdn.org

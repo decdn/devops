@@ -1,8 +1,35 @@
 # MANAGED BY the caddy role — do not edit by hand.
 #
-# Caddy's only job: per-dev HTTP basic auth + reverse proxy to the local anvil
-# RPC. TLS is terminated upstream (at the future tunnel/edge), so Caddy serves
-# plain HTTP on loopback only.
+# Caddy's job: per-dev HTTP basic auth + reverse proxy to the local anvil RPC.
+# The listener shape depends on caddy_public:
+#   true  -> public HTTPS on {{ rpc_hostname }}, Caddy terminates TLS (auto-cert).
+#   false -> plain HTTP on loopback :{{ caddy_bind_port }} (dev/CI; TLS upstream).
+{% if caddy_public %}
+{
+    # No admin API surface needed; auto_https stays ON so Caddy provisions and
+    # renews the cert for the site address below.
+    admin off
+{% if caddy_acme_email | default('') %}
+    email {{ caddy_acme_email }}
+{% endif %}
+}
+
+# Public HTTPS listener. Caddy provisions a Let's Encrypt cert for the host
+# (HTTP-01 on :80 / TLS-ALPN-01 on :443) and redirects :80 -> :443. The firewall
+# must allow inbound tcp/80+443 (baseline_extra_inbound). anvil stays loopback.
+{{ rpc_hostname }} {
+    # Per-dev HTTP basic auth. Credentials are NOT in this repo: the block below
+    # is generated on the host into {{ caddy_basicauth_file }} from the TSV
+    # registry ({{ caddy_users_tsv }}) by this role.
+    import {{ caddy_basicauth_file }}
+
+    # Forward authenticated requests to the local anvil JSON-RPC.
+    reverse_proxy {{ anvil_host }}:{{ anvil_port }}
+
+    # Access logging to the journal (auditing who hit the RPC).
+    log
+}
+{% else %}
 {
     # No upstream TLS to provision here, and no admin API surface needed.
     auto_https off
@@ -25,3 +52,4 @@
     # Access logging to the journal (auditing who hit the RPC).
     log
 }
+{% endif %}

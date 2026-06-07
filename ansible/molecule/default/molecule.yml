@@ -29,6 +29,9 @@ provisioner:
         # converge.yml runs only anvil + caddy — baseline (and its admin-user /
         # ssh_hardening logic) is never exercised here, so no ssh_admin_* is needed.
         foundry_version: latest
+        # Loopback plain-HTTP caddy: a container can't satisfy public ACME, and
+        # verify.yml asserts the loopback bind. Production defaults to caddy_public: true.
+        caddy_public: false
 verifier:
   name: ansible
 scenario:
