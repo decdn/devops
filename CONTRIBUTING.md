@@ -46,8 +46,9 @@ Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hoo
   hardened HEAD** by SHA — *not* a release tag, because the newest tag (`v2.1.20`)
   predates the April hardening. Dependabot is told **not** to bump it
   (`.github/dependabot.yml`); re-pin manually only after verifying a newer clean
-  commit. The KICS engine image used locally (`make security`) is pinned to the
-  pre-incident `v2.1.19` digest.
+  commit. The KICS engine image used locally (`make security`) is the **Docker Hub**
+  engine (a different artifact than the hijacked action) and is pinned by a
+  digest verified against Docker Hub — currently `v2.1.20`.
 - **Dependabot** (`.github/dependabot.yml`) bumps the other action SHAs weekly.
 - **Bump manually** (Dependabot can't): the `KICS_IMAGE` digest in the `Makefile`,
   and the pre-commit hook revs via `pre-commit autoupdate`.

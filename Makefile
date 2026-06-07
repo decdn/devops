@@ -4,9 +4,11 @@
 SHELL := /bin/bash
 
 # Local KICS runs use the engine image pinned by digest. CI runs the official
-# Checkmarx/kics-github-action instead (a GitHub Action can't run outside CI);
-# v2.1.19 (Jan 2026) predates the March/April 2026 supply-chain incidents.
-KICS_IMAGE := checkmarx/kics:v2.1.19-alpine@sha256:e0335bf6e906183f9b3e243500cb055b7aeb72a7150841115fc45b6f14519732
+# Checkmarx/kics-github-action instead (a GitHub Action can't run outside CI).
+# Pinning by digest means a re-pointed tag can't ship malicious code (cf. the
+# March 2026 KICS action compromise); the digest is verified against Docker Hub
+# on each bump. v2.1.20 (March 2026).
+KICS_IMAGE := checkmarx/kics:v2.1.20-alpine@sha256:990ae994fbbe59760c8e4f7e89b1193a39a0c2968909058ec29335cb6d80efc1
 
 help:                ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort \
