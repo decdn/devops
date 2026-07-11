@@ -18,6 +18,13 @@ decdn_rpc_url: ""               # SENSITIVE; may embed an API key
 decdn_payment_channel_address: ""
 decdn_capacity_bond_address: ""
 decdn_slash_judge_address: ""
+# Optional (ADR 028). SlashAppeal contract — only needed to file appeals with
+# `decdn appeal slash`; the daemon ignores it. Empty => key omitted from node.toml.
+decdn_slash_appeal_address: ""
+# Optional. SlashJudge deploy block: the slash-detection watcher rescans from
+# here on EVERY daemon start, so 0 (the upstream default) re-scans the full chain
+# each restart — RPC-heavy on an established L2. Set to bound restart cost.
+decdn_slash_judge_from_block: 0
 decdn_region: ""                # ISO 3166-1 alpha-2
 decdn_chain_id: 421614          # Arbitrum Sepolia (matches decdn-node's --chain-id default)
 

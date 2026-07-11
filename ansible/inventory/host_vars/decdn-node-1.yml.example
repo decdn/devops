@@ -19,6 +19,10 @@ decdn_payment_channel_address: "0xREPLACE_PaymentChannel_FROM_DEPLOYMENT"
 decdn_capacity_bond_address: "0xREPLACE_CapacityBond_FROM_DEPLOYMENT"
 decdn_slash_judge_address: "0xREPLACE_SlashJudge_FROM_DEPLOYMENT"
 
+# --- Slash appeals (optional; ADR 028) ----------------------------------------
+# decdn_slash_appeal_address: "0xREPLACE_SlashAppeal_FROM_DEPLOYMENT"  # for `decdn appeal slash`
+# decdn_slash_judge_from_block: 0   # SlashJudge deploy block — set to bound per-restart RPC rescan
+
 # --- Node identity / locale ---------------------------------------------------
 decdn_region: "US"            # ISO 3166-1 alpha-2 of the node's physical location
 # decdn_relay_url: ""         # optional iroh relay for NAT traversal
