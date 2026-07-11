@@ -134,15 +134,24 @@
 # intentionally NOT auto-reverted: unlocking a never-set password is unsafe/undefined
 # — older shadow-utils blank it (passwordless account), newer ones (Debian bookworm /
 # current Ubuntu) refuse. Regaining password sudo is a manual `passwd <user>` step.
+# The `length > 0` guard is defence-in-depth: the lockout-guard assert above already
+# aborts on an empty user, but if it were ever bypassed the path would collapse to the
+# bare `/etc/sudoers.d/` directory and state:absent would recursively delete it,
+# breaking sudo host-wide. Never run this destructive task on an empty username.
 - name: Remove the passwordless-sudo drop-in when disabled
   ansible.builtin.file:
     path: "{{ ssh_admin_sudoers_file }}"
     state: absent
-  when: not (ssh_admin_passwordless_sudo | bool)
+  when:
+    - not (ssh_admin_passwordless_sudo | bool)
+    - ssh_admin_user_effective | length > 0
 
 # Loud fallback warning: with the knob off there is no NOPASSWD grant, and a fresh
 # account (or one locked by a prior passwordless run) has no usable password — so it
-# cannot sudo after ssh_hardening unless the operator sets one on the host.
+# cannot sudo after ssh_hardening unless the operator sets one on the host. Flipping
+# this true->false on an ALREADY-hardened host while connected as that admin user also
+# breaks the current run once the drop-in is removed (later tasks can no longer
+# `sudo -n`) — set a password first and re-run with `--ask-become-pass`.
 - name: Warn that classic password sudo needs a password set on the host
   ansible.builtin.debug:
     msg: >-
@@ -150,6 +159,8 @@
       uses classic sudo-group password sudo. If its password is unset or locked (fresh
       account, or a prior passwordless run), run `passwd {{ ssh_admin_user_effective }}`
       on the host or it will be unable to sudo once SSH hardening disables root login.
+      Switching from passwordless to password sudo on a live hardened host needs that
+      password set first, then a re-run with `--ask-become-pass`.
   when: not (ssh_admin_passwordless_sudo | bool)
 
 # authorized_key resolves the user's ~/.ssh to write the key, so the account must
