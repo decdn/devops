@@ -4,6 +4,14 @@
 # roles/decdn_node/README.md. This role covers host prep + Phase-3 startup.
 
 # --- Fail loud on missing required config -------------------------------------
+- name: Require a valid install method
+  ansible.builtin.assert:
+    that:
+      - decdn_node_install_method in ["release", "manual"]
+    fail_msg: >-
+      decdn_node_install_method must be "release" (pinned GitHub Release tarballs)
+      or "manual" (copy locally-built binaries from the control machine).
+
 - name: Require a pinned release version
   ansible.builtin.assert:
     that:
@@ -11,6 +19,18 @@
     fail_msg: >-
       decdn_node_version must be set to a published release (e.g. "0.1.0"). A
       matching v<version> GitHub Release must exist. Set it in host_vars.
+  when: decdn_node_install_method == "release"
+
+- name: Require manual binary sources when install method is manual
+  ansible.builtin.assert:
+    that:
+      - decdn_node_manual_bin_src | length > 0
+      - decdn_cli_manual_bin_src | length > 0
+    fail_msg: >-
+      decdn_node_install_method "manual" requires decdn_node_manual_bin_src and
+      decdn_cli_manual_bin_src — control-machine paths to the locally-built
+      decdn-node daemon and decdn CLI binaries. Set them in host_vars.
+  when: decdn_node_install_method == "manual"
 
 - name: Require chain + contract configuration
   ansible.builtin.assert:
