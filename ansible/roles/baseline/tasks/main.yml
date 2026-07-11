@@ -251,9 +251,55 @@
   when: not ansible_check_mode or 'chrony.service' in (ansible_facts.services | default({}))
 
 # --- DevSec hardening (LAST: ssh_hardening disables root + password auth) ------
+# The `| bool` filter is non-strict: an unparseable value (typo, quoted string, trailing
+# space) coerces to false with no error — which would silently DROP the connectivity
+# override and let CIS hardening sever IPv6/QUIC. Fail loud instead, matching the
+# `is boolean` guards in roles/decdn_node/tasks/main.yml.
+- name: Validate the sysctl-override knobs are real booleans
+  ansible.builtin.assert:
+    that:
+      - baseline_preserve_ipv6_autoconf is boolean
+      - baseline_rp_filter_loose is boolean
+    fail_msg: >-
+      baseline_preserve_ipv6_autoconf and baseline_rp_filter_loose must be real
+      booleans (true/false), not quoted strings — each gates a `| bool` conditional
+      that decides whether the node-connectivity sysctl overrides apply. A mistyped
+      value silently coerces to false and lets CIS hardening sever IPv6/QUIC.
+
+# os_hardening merges sysctl_overwrite LAST over its own hardened sysctl dict, so this
+# wins over the CIS defaults for exactly the keys a node needs relaxed and nothing else.
+# An off knob contributes an empty dict — the hardened default then stands.
+- name: Assemble sysctl overrides that keep node connectivity under hardening
+  ansible.builtin.set_fact:
+    baseline_os_sysctl_overwrite: >-
+      {{ (ipv6 if baseline_preserve_ipv6_autoconf | bool else {})
+         | combine(rpf if baseline_rp_filter_loose | bool else {}) }}
+  vars:
+    # os_hardening disables the WHOLE RA path, so re-enabling accept_ra/autoconf alone is
+    # not enough: without accept_ra_pinfo the kernel ignores the RA prefix (no SLAAC
+    # address) and without accept_ra_defrtr it installs no default route. os_hardening
+    # sets these on `default` only (the template new interfaces inherit at boot), so the
+    # counter goes on `default` too — otherwise a rebooted host comes up v6-dead.
+    ipv6:
+      net.ipv6.conf.all.accept_ra: 1
+      net.ipv6.conf.default.accept_ra: 1
+      net.ipv6.conf.all.autoconf: 1
+      net.ipv6.conf.default.autoconf: 1
+      net.ipv6.conf.all.router_solicitations: -1
+      net.ipv6.conf.default.router_solicitations: -1
+      net.ipv6.conf.default.accept_ra_pinfo: 1     # learn RA prefix -> SLAAC address
+      net.ipv6.conf.default.accept_ra_defrtr: 1    # learn default route from RA
+      net.ipv6.conf.default.max_addresses: 16
+    rpf:
+      net.ipv4.conf.all.rp_filter: 2
+      net.ipv4.conf.default.rp_filter: 2
+
 - name: Apply DevSec OS hardening
   ansible.builtin.include_role:
     name: devsec.hardening.os_hardening
+  vars:
+    sysctl_overwrite: "{{ baseline_os_sysctl_overwrite }}"
+    ufw_manage_defaults: false   # nftables is the firewall; don't write /etc/default/ufw
 
 # No `when` guard here by design: the unconditional lockout assert above has already
 # proven a non-root admin user with >=1 key exists (or aborted the play), so hardening
