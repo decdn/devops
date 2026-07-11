@@ -4,7 +4,5 @@
 collections:
   - name: devsec.hardening      # os_hardening + ssh_hardening (CIS-style baseline)
     version: ">=10.0.0"
-  - name: community.general     # misc modules/helpers
-    version: ">=9.0.0"
   - name: ansible.posix         # authorized_key, mount, sysctl helpers
     version: ">=1.5.0"

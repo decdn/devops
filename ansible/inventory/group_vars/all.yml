@@ -1,5 +1,5 @@
 ---
-# Deployment overrides for the anvil devnet.
+# Deployment overrides for the deCDN node.
 #
 # Sane defaults for every knob live in the roles (roles/*/defaults/main.yml) so
 # the roles are self-contained. Set anything here to override per host/group.
@@ -25,9 +25,5 @@ ssh_admin_extra_pubkeys: []
 ssh_allow_cidrs: []
 
 # --- Common overrides (uncomment to change; see roles/*/defaults for all) ----
-# rpc_hostname: rpc-dev.decdn.org   # printed in ETH_RPC_URL; change if running
-#                                   # alongside the existing box
-# foundry_version: latest           # latest | nightly | vX.Y.Z (pin for reproducibility)
-# anvil_chain_id: 31337             # devnet default; NOT a protocol claim (ADR)
-# anvil_block_time: 2
-# anvil_accounts: 10
+# See roles/decdn_node/defaults/main.yml for the node's tunable knobs, and set
+# per-node config in inventory/host_vars/<name>/main.yml.

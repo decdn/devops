@@ -3,11 +3,10 @@
 # slice of this DevOps repo: deploy + harden a deCDN node.
 #
 # This file is an OVERLAY, not the project root manifest. It is assembled into a
-# clean collection tree (with only the baseline + decdn_node roles) by
-# galaxy/build.sh; it is deliberately NOT placed at ansible/ root, so the
-# internal deploy project stays a plain Ansible project (bare role names,
-# roles_path, production-profile ansible-lint) rather than being reinterpreted as
-# a collection. See galaxy/README.md.
+# clean collection tree (with the baseline + decdn_node roles) by galaxy/build.sh;
+# it is deliberately NOT placed at ansible/ root, so the deploy project stays a
+# plain Ansible project (bare role names, roles_path, production-profile
+# ansible-lint) rather than being reinterpreted as a collection. See galaxy/README.md.
 namespace: decdn
 name: node
 version: 0.1.0                      # pre-1.0: published shape not yet stable
@@ -31,8 +30,7 @@ tags:
 #   baseline -> devsec.hardening (os_hardening + ssh_hardening), ansible.posix
 #               (authorized_key)
 #   decdn_node -> ansible.builtin only
-# community.general is NOT used by either shipped role (it backs the internal
-# anvil/caddy roles, which do not ship), so it is intentionally absent here.
+# community.general is NOT used by either role, so it is intentionally absent here.
 dependencies:
   devsec.hardening: ">=10.0.0"
   ansible.posix: ">=1.5.0"

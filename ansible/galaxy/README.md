@@ -9,9 +9,6 @@ repository — two roles and nothing else:
 | `decdn.node.baseline` | Debian host baseline — nftables default-deny inbound, fail2ban, unattended-upgrades, chrony, an admin sudo user, then DevSec OS + SSH hardening (applied last). |
 | `decdn.node.decdn_node` | The `decdn-node` daemon — installed from a pinned GitHub Release tarball under a hardened systemd unit; public QUIC udp/4433, loopback metrics + admin RPC. |
 
-> The repo's internal team tooling (the anvil devnet — `anvil`, `caddy`, `contracts`
-> roles) is **not** part of this collection.
-
 ## Requirements
 
 - **ansible-core ≥ 2.15** on the control machine.

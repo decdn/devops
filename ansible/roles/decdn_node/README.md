@@ -1,8 +1,8 @@
 # roles/decdn_node
 
 Provisions a **public deCDN node** (`decdn-node` daemon) from a pinned GitHub
-Release tarball, under a hardened systemd unit. This is the repo's **primary**
-deployment (`playbooks/site.yml`); the anvil devnet is separate internal tooling.
+Release tarball, under a hardened systemd unit. This is the repo's deployment
+(`playbooks/site.yml`).
 
 ## What this role does (and does not)
 

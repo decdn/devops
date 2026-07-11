@@ -1,6 +1,6 @@
 ---
 # Both units come from baseline_packages, a no-op under --check, so on a fresh host
-# the unit may not exist when a flush (e.g. anvil's flush_handlers) fires the handler.
+# the unit may not exist when a flush (e.g. a role's flush_handlers) fires the handler.
 # Guard on real on-host state (service_facts, gathered in tasks/main.yml): run on a
 # provisioned host (drift preview), skip a missing unit in check mode.
 - name: Reload nftables

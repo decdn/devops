@@ -1,8 +1,7 @@
 # roles/baseline
 
-Hardened **Debian/Ubuntu host baseline**, shared by every deCDN deployment in this
-repo (the public node via `playbooks/site.yml`, the internal anvil devnet via
-`playbooks/anvil.yml`). Run it first; it prepares the host and then locks it down.
+Hardened **Debian/Ubuntu host baseline** for the deCDN node deployment
+(`playbooks/site.yml`). Run it first; it prepares the host and then locks it down.
 
 ## What this role does
 
@@ -42,8 +41,7 @@ out — when any of these hold:
 
 Because resolution reads the **control node's** `$USER`/`$HOME` of whoever invokes
 `ansible-playbook`, a `sudo`/CI run can autodetect a different user/key than you
-expect — set both explicitly in that case. (Molecule never runs `baseline`, so the
-assert never fires there.)
+expect — set both explicitly in that case.
 
 ## Key variables
 

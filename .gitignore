@@ -6,33 +6,14 @@
 # These patterns are defense-in-depth in case anyone copies generated files in.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Shared anvil mnemonic / env (the master secret for the devnet)
-**/anvil.env
+# Environment files (may hold secrets)
 .env
 **/.env
 !**/.env.example
 
-# Caddy basic-auth material (bcrypt hashes + the username->hash registry)
-**/*.basicauth
-**/*.users.tsv
-!**/*.example
-
-# Cloudflare Tunnel credentials & cert
-**/cloudflared/*.json
+# Private keys & certs (defense-in-depth; real keystores live under /etc on the host)
 **/cert.pem
 **/*.pem
-**/config.yml
-!**/config.yml.example
-
-# anvil chain state + deployment manifests (regenerated, machine-specific)
-**/state.json
-**/deployments.json
-
-# Foundry build output (if contracts get compiled locally)
-**/out/
-**/cache/
-**/broadcast/
-**/.foundry/
 
 # Local, per-developer Claude Code settings (not shared)
 .claude/settings.local.json
