@@ -8,7 +8,7 @@ yet. This is the repo's deployment (`playbooks/site.yml`).
 
 ## What this role does (and does not)
 
-Per `decdn/adr/019-node-onboarding.md`, a node only serves paid traffic after
+Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
 **on-chain stake + registration**. That split maps onto this role as:
 
 - **Ansible (this role): Phase 1 host prep + Phase 3 startup** — install binaries,
@@ -24,9 +24,12 @@ Per `decdn/adr/019-node-onboarding.md`, a node only serves paid traffic after
 
    - **`release`** (default) — the role downloads
      `decdn-node-<ver>-<target>.tar.gz` (and the `decdn` CLI) from
-     `github.com/decdn/decdn/releases`. Set `decdn_node_version` to a real
-     `v<version>` release. *(No release exists yet — either cut one with the
-     upstream `release.yml` workflow, or use `manual` below in the meantime.)*
+     `decdn_node_release_base` (default
+     `https://github.com/decdn/decdn/releases/download`). Set `decdn_node_version` to a real
+     `v<version>` release, which must be **publicly reachable** from the target host;
+     override `decdn_node_release_base` to fetch from a mirror. *(No release exists yet —
+     either cut one with the upstream `release.yml` workflow, or use `manual` below in the
+     meantime.)*
    - **`manual`** — the role copies the two binaries **verbatim** from the paths
      you give it (`decdn_node_manual_bin_src` + `decdn_cli_manual_bin_src`) on the
      Ansible control machine; it does *not* consult `decdn_node_target`, so you are
@@ -85,9 +88,9 @@ Optional (omitted from `node.toml` unless set):
   `[cache.origin]` and cache misses fail `NoOrigin` (the node can only serve blobs it
   already holds).
 
-Source contract addresses / chain-id from the deployment
-(`contracts/deployments/<chainId>.json`) or an ADR — never guess. See
-`roles/decdn_node/defaults/main.yml` for the full knob list and defaults.
+Source contract addresses / chain-id from the deCDN contract deployment for your target
+chain, or the relevant ADR — never guess. See `roles/decdn_node/defaults/main.yml` for the
+full knob list and defaults.
 
 ## Network
 

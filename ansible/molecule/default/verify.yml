@@ -1,0 +1,74 @@
+---
+# Verify what a container can assert without a live chain: the node user, a
+# valid non-secret node.toml, a valid + hardened systemd unit, loopback-only
+# metrics binding, 0600 on the secret env file, and a running service. Real
+# paid-traffic readiness additionally needs on-chain registration (not tested).
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    decdn_etc: /etc/decdn
+  tasks:
+    - name: Look up the decdn user
+      ansible.builtin.getent:
+        database: passwd
+        key: decdn
+
+    - name: Assert the decdn system user exists with a nologin shell
+      ansible.builtin.assert:
+        that:
+          - getent_passwd['decdn'] is defined
+          - "'nologin' in getent_passwd['decdn'][5]"
+        fail_msg: "decdn system user missing or has a login shell"
+
+    - name: Stat the rendered config + secret env file
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: decdn_files
+      loop:
+        - "{{ decdn_etc }}/node.toml"
+        - "{{ decdn_etc }}/decdn.env"
+        - /etc/systemd/system/decdn-node.service
+
+    - name: Assert node.toml (0640) and the secret env file (0600) modes
+      ansible.builtin.assert:
+        that:
+          - decdn_files.results[0].stat.exists
+          - decdn_files.results[0].stat.mode == '0640'
+          - decdn_files.results[1].stat.exists
+          - decdn_files.results[1].stat.mode == '0600'
+          - decdn_files.results[2].stat.exists
+        fail_msg: "node.toml / decdn.env / unit missing or wrong mode"
+
+    - name: Assert node.toml parses as valid TOML
+      ansible.builtin.command:
+        cmd: python3 -c "import tomllib; tomllib.load(open('/etc/decdn/node.toml','rb'))"
+      changed_when: false
+
+    - name: Validate the systemd unit
+      ansible.builtin.command:
+        cmd: systemd-analyze verify /etc/systemd/system/decdn-node.service
+      changed_when: false
+
+    - name: Collect listening TCP sockets
+      ansible.builtin.command:
+        cmd: ss -ltn
+      register: listeners
+      changed_when: false
+
+    - name: Assert metrics bind loopback only (never 0.0.0.0)
+      ansible.builtin.assert:
+        that:
+          - "'127.0.0.1:9090' in listeners.stdout"
+          - "'0.0.0.0:9090' not in listeners.stdout"
+        fail_msg: "metrics port 9090 is not loopback-only: {{ listeners.stdout }}"
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert decdn-node is enabled and running
+      ansible.builtin.assert:
+        that:
+          - "'decdn-node.service' in ansible_facts.services"
+          - ansible_facts.services['decdn-node.service'].state == 'running'
+        fail_msg: "decdn-node is not running — check: journalctl -u decdn-node -e"

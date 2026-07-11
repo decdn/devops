@@ -8,14 +8,13 @@
 [![shellcheck](https://img.shields.io/badge/shellcheck-passing-brightgreen)](https://www.shellcheck.net/)
 [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow.svg)](https://www.conventionalcommits.org)
 
-The deCDN team's **DevOps monorepo** — infrastructure, deployment, and operational
-tooling for the deCDN project, driven by a single declarative [Ansible](ansible/README.md)
-project.
+The official **DevOps repo** for deploying a deCDN node — infrastructure, deployment, and
+operational tooling, driven by a single declarative [Ansible](ansible/README.md) project.
 
 This repo is **infrastructure only**. It is *not* a source of truth for protocol or
-economic facts (chain-id, token addresses, fee splits) — those live in `decdn/adr/` (see
-the workspace `CLAUDE.md`). Anything here that states a protocol fact traces back to an
-ADR; nothing is invented in this repo.
+economic facts (chain-id, token addresses, fee splits) — those trace to the deCDN ADRs.
+Anything here that states a protocol fact traces back to an ADR; nothing is invented in
+this repo.
 
 ## What it deploys
 
@@ -42,10 +41,10 @@ automated here — the node serves paid traffic only after it is staked and regi
 
 | Path | What it is |
 |------|------------|
-| [`ansible/`](ansible/README.md) | The team's **declarative deployment project** — `inventory/`, `playbooks/`, `roles/` (baseline, decdn_node). The whole deploy surface lives here. |
+| [`ansible/`](ansible/README.md) | The **declarative deployment project** — `inventory/`, `playbooks/`, `roles/` (baseline, decdn_node). The whole deploy surface lives here. |
 | `Makefile` | Root hygiene/security/CI mirror — runs the same lint + IaC scans CI does. |
 | `ansible/Makefile` | The deploy driver — `make deps/check/deploy`. |
-| `.github/workflows/` | The blocking CI gate (`ansible-lint` + KICS + `galaxy-build` + `actionlint`). |
+| `.github/workflows/` | The blocking CI gate (`ansible-lint` + KICS + `galaxy-build` + `molecule` + `actionlint`). |
 
 ## Quickstart
 
@@ -101,7 +100,8 @@ make check / deploy               # deCDN node (site.yml): dry-run / provision
 
 **Gotcha — pre-commit is local-only.** Hygiene/shellcheck/yamllint/markdown run via
 `make hooks`/`make lint` on your machine, **not** in CI. The blocking gate is
-`.github/workflows/` (`ansible-lint` + KICS on `ansible/**` + `actionlint`). `ansible-lint`
+`.github/workflows/` (`ansible-lint` + KICS + `galaxy-build` + `molecule` on `ansible/**`,
+plus `actionlint`). `ansible-lint`
 is not a per-commit hook (it needs collections vendored) — run `make lint-ansible`.
 
 ## CI & quality gates
@@ -111,12 +111,14 @@ is not a per-commit hook (it needs collections vendored) — run `make lint-ansi
   collection and runs galaxy-importer's checks), **KICS** IaC scan (fail on HIGH), and
   `actionlint` on the workflows themselves. The KICS engine is pinned by digest and every
   third-party action by full commit SHA (a re-pointed tag can ship malicious code).
+- **`molecule.yml`** — a containerised converge + idempotence + verify of the `decdn_node`
+  role in a privileged systemd Docker container (scoped to `ansible/**` changes).
 
 ## Conventions & source of truth
 
-- **ADRs are the only source of truth for protocol facts.** They live in `decdn/adr/`
-  (a separate repo in the workspace) — e.g. payments (ADR 003), node onboarding
-  (ADR 019), tokenomics (ADR 026). If a doc here contradicts an ADR, fix the doc.
+- **ADRs are the only source of truth for protocol facts.** The deCDN ADRs cover, e.g.,
+  payments (ADR 003), node onboarding (ADR 019), and tokenomics (ADR 026). If a doc here
+  contradicts an ADR, fix the doc.
 - **Role templates render to their target paths.** Ansible roles template config directly
   onto the host (e.g. `roles/decdn_node/templates/decdn-node.service.j2` →
   `/etc/systemd/system/`), with secrets generated on the host at `0600`.
@@ -126,4 +128,4 @@ is not a per-commit hook (it needs collections vendored) — run `make lint-ansi
 - [`ansible/README.md`](ansible/README.md) — full setup, security model, and deploy steps
 - [`ansible/roles/decdn_node/README.md`](ansible/roles/decdn_node/README.md) — the deCDN node role
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — the local + CI check workflow
-- workspace `CLAUDE.md` — repo hard rules and the single-source-of-truth policy
+- [`AGENTS.md`](AGENTS.md) — repo hard rules and conventions (for humans and AI agents)

@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN DevOps monorepo.
 # Run from the repo root. Ansible-specific work is delegated to ansible/Makefile.
-.PHONY: help hooks lint lint-ansible security galaxy-build galaxy-check
+.PHONY: help hooks lint lint-ansible security molecule galaxy-build galaxy-check
 SHELL := /bin/bash
 
 # Local KICS runs use the engine image pinned by digest. CI runs the official
@@ -31,6 +31,9 @@ security:            ## KICS IaC security scan of ansible/ (CI runs the official
 		--exclude-paths /repo/ansible/collections \
 		--report-formats json --output-path /repo/kics-results \
 		--no-progress --fail-on high
+
+molecule:            ## containerised converge/verify of the decdn_node role (needs Docker)
+	$(MAKE) -C ansible molecule
 
 galaxy-build:        ## stage + build the decdn.node Galaxy collection artifact
 	$(MAKE) -C ansible build

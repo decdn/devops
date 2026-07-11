@@ -1,0 +1,23 @@
+---
+# Exercise the decdn_node role only (baseline is real-host-only — see molecule.yml).
+# `manual` install copies the stub daemon from the scenario's files/ dir, so no
+# published release is needed. The required chain/contract knobs use placeholder
+# (but well-formed) values — the role's fail-loud asserts still run against them.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/files/decdn-node-stub"
+    decdn_node_install_method: manual
+    decdn_node_manual_bin_src: "{{ stub_bin }}"
+    decdn_cli_manual_bin_src: "{{ stub_bin }}"
+    decdn_rpc_url: "https://rpc.example.invalid/"
+    decdn_chain_id: 421614
+    decdn_region: "US"
+    decdn_payment_channel_address: "0x1111111111111111111111111111111111111111"
+    decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
+    decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
+    decdn_cache_origin_kind: "http"
+    decdn_cache_origin_url: "https://origin.example.invalid/"
+  roles:
+    - role: decdn_node

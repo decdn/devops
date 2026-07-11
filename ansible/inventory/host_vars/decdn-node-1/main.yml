@@ -6,9 +6,9 @@
 # until both this file and secret.yml are set.
 #
 # The contract addresses below are the canonical Arbitrum Sepolia (chain 421614)
-# v0.1.0 genesis deploy, cited to decdn/contracts/deployments/421614.json
-# (deployBlock 11249862) — public on-chain facts, not invented here. If you target
-# a different deployment, replace them (and chain_id) with that deployment's values.
+# v0.1.0 genesis deploy (deployBlock 11249862) — public on-chain facts from the deCDN
+# contract deployment, not invented here. If you target a different deployment, replace
+# them (and chain_id) with that deployment's values.
 # MUST-EDIT lines are yours to fill; the rest match the genesis deploy.
 
 # Pinned release to install (a v<version> GitHub Release must exist).
@@ -19,7 +19,7 @@ decdn_node_sha256: ""
 # --- Chain (Arbitrum Sepolia, chain 421614) -----------------------------------
 # The RPC endpoint (decdn_rpc_url) is the one sensitive value — set it in secret.yml.
 decdn_chain_id: 421614                                   # Arbitrum Sepolia
-# Required contracts (deployments/421614.json).
+# Required contracts (from the chain-421614 deployment).
 decdn_payment_channel_address: "0xb4bcA0AbF679212708164dCAb98eFa621Fa0F4d3"   # PaymentChannel
 decdn_capacity_bond_address: "0x2aF490628579c08DC6D0B013090cDC11D4d60Dd4"     # CapacityBond
 decdn_slash_judge_address: "0x20abcCC80F595a586f4Bd906a1b00c4196416EB7"       # SlashJudge

@@ -27,3 +27,7 @@ kics-results/
 ansible/build/
 *.tar.gz
 ansible/importer_result.json
+
+# Python bytecode (e.g. from the molecule stub daemon or any local tooling)
+__pycache__/
+*.pyc

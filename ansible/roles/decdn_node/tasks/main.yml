@@ -47,8 +47,8 @@
     fail_msg: >-
       decdn_rpc_url, a positive decdn_chain_id, the three contract addresses
       (0x + 40 hex, none the zero address), and an uppercase ISO-3166 2-letter
-      decdn_region are required. Source chain-id + contract addresses from the
-      deployment / an ADR in decdn/adr/ — never guess. Set them in host_vars.
+      decdn_region are required. Source chain-id + contract addresses from the deCDN
+      contract deployment / the relevant ADR — never guess. Set them in host_vars.
   vars:
     decdn_zero_address: "0x0000000000000000000000000000000000000000"
 
@@ -98,8 +98,8 @@
     fail_msg: >-
       The origin directory (ADR 022) needs BOTH decdn_origin_assignment_address and
       decdn_publisher_registry_address set to valid contract addresses (0x + 40 hex,
-      not the zero address) — or BOTH empty to omit it. Source them from the
-      deployment (contracts/deployments/<chainId>.json) / ADR 022.
+      not the zero address) — or BOTH empty to omit it. Source them from the deCDN
+      contract deployment for your target chain / ADR 022.
   vars:
     decdn_zero_address: "0x0000000000000000000000000000000000000000"
   when: >-

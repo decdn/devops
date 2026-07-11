@@ -131,8 +131,8 @@ jobs:
           name: kics-results
           path: kics-results/
           if-no-files-found: ignore
-      # If GitHub Advanced Security is enabled on this private repo, surface KICS
-      # findings in the Security tab by un-commenting the block below (add
+      # To surface KICS findings in the repo's Security tab, enable GitHub code
+      # scanning (free on public repos) and un-comment the block below (add
       # `security-events: write` to this job's permissions):
       # - name: Upload SARIF to code scanning
       #   if: always()

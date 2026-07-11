@@ -1,0 +1,32 @@
+---
+# The decdn_node role requires an operator-provisioned eth keystore + password
+# file to already exist before it starts the daemon (it never generates them).
+# Stage placeholder files here so the role's keystore gate passes in CI. The
+# stub daemon ignores them; this scenario does not exercise real wallet logic.
+- name: Prepare
+  hosts: all
+  become: true
+  vars:
+    decdn_home: /var/lib/decdn
+    decdn_etc: /etc/decdn
+  tasks:
+    - name: Ensure data + config directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ decdn_home }}"
+        - "{{ decdn_etc }}"
+
+    - name: Stage a placeholder eth keystore
+      ansible.builtin.copy:
+        dest: "{{ decdn_home }}/keystore.json"
+        content: "{{ '{}' }}\n"
+        mode: "0600"
+
+    - name: Stage a placeholder keystore password file
+      ansible.builtin.copy:
+        dest: "{{ decdn_etc }}/keystore.password"
+        content: "molecule-placeholder\n"
+        mode: "0600"
