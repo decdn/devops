@@ -27,7 +27,7 @@
       - decdn_node_manual_bin_src | length > 0
       - decdn_cli_manual_bin_src | length > 0
     fail_msg: >-
-      install_method "manual" requires decdn_node_manual_bin_src and
+      decdn_node_install_method "manual" requires decdn_node_manual_bin_src and
       decdn_cli_manual_bin_src — control-machine paths to the locally-built
       decdn-node daemon and decdn CLI binaries. Set them in host_vars.
   when: decdn_node_install_method == "manual"

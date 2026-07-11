@@ -129,9 +129,8 @@ Upgrades (`manual` mode): there is **no** version stamp — rebuild the binaries
 locally and re-deploy. `copy` compares checksums and re-pushes (and restarts) only
 when the control-machine binary actually changed.
 
-Switching methods: the version stamp is written only by `release` deploys, so a
-`release` → `manual` → `release` round-trip that reuses the **same**
-`decdn_node_version` will find a matching stamp and skip the re-download, leaving
-the manual build in place. When returning to `release` after a manual detour, bump
-`decdn_node_version` (or delete `/usr/local/lib/decdn/installed-version` on the
-host) so the official tarball is re-fetched.
+Switching methods: a `manual` deploy clears the release version stamp on the host,
+so returning to `release` afterwards always re-fetches and re-installs the official
+tarball — even when `decdn_node_version` is unchanged. (This is separate from the
+`--version` backstop: a `decdn_node_version` left set in `manual` mode is still
+enforced against the local build — see the `manual` prerequisite above.)

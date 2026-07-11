@@ -90,6 +90,15 @@
         label: "{{ item.dest }}"
       notify: Restart decdn-node
 
+    # Manual mode never reads the release version stamp, but a leftover stamp from
+    # a prior release deploy would make a later release re-deploy of the SAME
+    # version skip the download (decdn_need_install stays false). Clear it so a
+    # release <-> manual round-trip always re-fetches the official tarball.
+    - name: Clear the release version stamp in manual mode
+      ansible.builtin.file:
+        path: /usr/local/lib/decdn/installed-version
+        state: absent
+
 # Integrity backstop: runs EVERY converge (not just on install), so a host whose
 # binary drifted from the pin is caught loudly rather than trusted via the stamp.
 # rc != 0 is included because a custom failed_when suppresses the module's default
