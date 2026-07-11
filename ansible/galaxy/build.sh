@@ -4,8 +4,8 @@
 # Only the roles/baseline + roles/decdn_node sources ship. All deploy machinery
 # (inventory, Makefile, ansible.cfg) is excluded BY CONSTRUCTION — it is simply
 # never copied into the staging tree. This keeps the artifact clean and leaves the
-# internal project untouched (no galaxy.yml at the project root, so ansible-lint /
-# ansible still see a plain project).
+# internal project untouched (no galaxy.yml at the project root, so ansible-lint
+# and ansible still see a plain project).
 #
 # Output: ansible/build/decdn-node-<version>.tar.gz
 set -euo pipefail
