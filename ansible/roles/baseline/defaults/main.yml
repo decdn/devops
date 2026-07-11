@@ -15,6 +15,13 @@ ssh_admin_pubkey: ""
 ssh_admin_pubkey_autodetect: true
 # Additional authorized keys for the admin user (full pubkey strings, e.g. teammates).
 ssh_admin_extra_pubkeys: []
+# Passwordless, key-only admin account. ssh_hardening disables SSH password auth, so
+# the admin user logs in by key only; with this on (default) the account gets a
+# NOPASSWD sudoers drop-in AND its password is locked — non-interactive sudo / `make
+# deploy` works with no become password, and no password can authenticate at all.
+# Set false to keep the classic password-sudo model (you must then set a password on
+# the account yourself, e.g. `passwd <user>`, to be able to sudo).
+ssh_admin_passwordless_sudo: true
 # Optional inbound-SSH source allowlist (CIDRs). Empty = accept from any source.
 ssh_allow_cidrs: []
 

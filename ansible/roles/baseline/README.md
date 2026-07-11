@@ -13,7 +13,11 @@ In order — the ordering matters:
    **before** SSH is hardened, so you keep a way in. Both resolve from the control
    machine when left empty: the user falls back to the local `$USER`, and the key is
    autodetected from `~/.ssh` (`id_ed25519` > `id_ecdsa` > `id_rsa`). Extra operator keys
-   come from `ssh_admin_extra_pubkeys`. Explicit values always win.
+   come from `ssh_admin_extra_pubkeys`. Explicit values always win. By default the
+   account is **key-only**: it gets a NOPASSWD sudoers drop-in and its password is
+   locked (`ssh_admin_passwordless_sudo`), so sudo / `make deploy` needs no become
+   password and no password can authenticate. Set the knob `false` for classic
+   password sudo (you must then set a password on the account yourself).
 3. **Firewall** — nftables **default-deny inbound**; SSH is the only universally-open
    port. Extra public listeners are declared explicitly via `baseline_extra_inbound`.
 4. **Auto-patching** — `unattended-upgrades` for security updates.
@@ -51,6 +55,7 @@ expect — set both explicitly in that case.
 | `ssh_admin_pubkey` | `""` | Admin key. Empty = autodetected from `~/.ssh` (`id_ed25519`/`ecdsa`/`rsa`). Set to override. |
 | `ssh_admin_pubkey_autodetect` | `true` | When `ssh_admin_pubkey` is empty, read the operator's default local public key. |
 | `ssh_admin_extra_pubkeys` | `[]` | Additional authorized keys (full pubkey strings) — e.g. other operators. |
+| `ssh_admin_passwordless_sudo` | `true` | Give the admin user NOPASSWD sudo and lock its password (key-only). Set `false` for classic password sudo. |
 | `ssh_allow_cidrs` | `[]` | Optional inbound-SSH source allowlist (CIDRs). Empty = any source. |
 | `baseline_extra_inbound` | `[]` | Extra public inbound ports. Each item `{proto, port, comment}`. Loopback services need nothing here; the deCDN node opens udp/4433. |
 | `baseline_packages` | see `defaults/main.yml` | Base package set. |

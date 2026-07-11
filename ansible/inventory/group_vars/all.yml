@@ -21,6 +21,10 @@ ssh_admin_pubkey_autodetect: true # read ~/.ssh (id_ed25519 > ecdsa > rsa) when 
 #   - "ssh-ed25519 AAAA... bob@laptop"
 ssh_admin_extra_pubkeys: []
 
+# Key-only admin account: NOPASSWD sudo + locked password (default true). Set false to
+# keep classic password sudo — you must then set a password on the account yourself.
+ssh_admin_passwordless_sudo: true
+
 # Optional inbound-SSH source allowlist (CIDRs). Empty = accept from any source.
 ssh_allow_cidrs: []
 
