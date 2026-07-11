@@ -4,8 +4,7 @@ Provisions a **public deCDN node** (`decdn-node` daemon) under a hardened system
 unit. Two install methods (`decdn_node_install_method`): the default `release`
 pulls a pinned GitHub Release tarball, and `manual` copies locally-built binaries
 from the Ansible control machine — the pre-release path for when no release exists
-yet. This is the repo's **primary** deployment (`playbooks/site.yml`); the anvil
-devnet is separate internal tooling.
+yet. This is the repo's deployment (`playbooks/site.yml`).
 
 ## What this role does (and does not)
 

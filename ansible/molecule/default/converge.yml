@@ -1,8 +1,0 @@
----
-# Exercise the service roles only (baseline is real-host-only — see molecule.yml).
-- name: Converge
-  hosts: all
-  become: true
-  roles:
-    - role: anvil
-    - role: caddy

@@ -55,15 +55,10 @@ jobs:
         run: make deps          # must precede lint/syntax-check
       - name: Lint (yamllint + ansible-lint)
         run: make lint
-      - name: Syntax-check playbooks
+      - name: Syntax-check playbook
         # Dummy inventory: no real hosts.yml is committed upstream (only hosts.yml.example),
         # and --syntax-check only parses, it never connects.
-        run: |
-          for p in playbooks/site.yml playbooks/anvil.yml playbooks/add-dev-user.yml; do
-            echo "::group::syntax-check $p"
-            ansible-playbook "$p" --syntax-check -i localhost,
-            echo "::endgroup::"
-          done
+        run: ansible-playbook playbooks/site.yml --syntax-check -i localhost,
 
   # Build the public `decdn.node` collection and run galaxy-importer's checks —
   # the same validation Galaxy runs on upload (metadata, license, README, embedded

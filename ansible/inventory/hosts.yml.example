@@ -28,12 +28,3 @@ decdn_nodes:
       ansible_host: REPLACE_WITH_NODE_VPS_IP_OR_DNS
       ansible_user: root
       # ansible_become_exe: /usr/bin/sudo.ws   # Ubuntu sudo-rs workaround — see note above
-
-# INTERNAL: our anvil devnet — provisioned by playbooks/anvil.yml. Keep on a
-# separate host from the public node(s).
-anvil_devnet:
-  hosts:
-    anvil-vps:
-      ansible_host: REPLACE_WITH_INTERNAL_VPS_IP_OR_DNS
-      ansible_user: root
-      # ansible_become_exe: /usr/bin/sudo.ws   # Ubuntu sudo-rs workaround — see note above

@@ -1,11 +1,11 @@
 ---
-# These roles intentionally share a small set of GLOBAL configuration knobs that
-# are surfaced to operators in inventory/group_vars (ssh_admin_*, foundry_dir,
-# foundry_version, rpc_hostname, anvil_host/anvil_port). They are deliberately
-# unprefixed: conventional names read better for a public ops repo than
-# role-prefixed ones, and several are genuinely cross-role (anvil_host/port are
-# consumed by both the anvil and caddy roles). Everything else is held to the
-# 'production' profile.
+# Both roles carry deliberately short var names, so the no-role-prefix rule is
+# skipped project-wide (removing the skip surfaces ~60 violations):
+#   - decdn_node uses a `decdn_` prefix, not the rule-expected `decdn_node_`
+#     (decdn_rpc_url, decdn_bind_port, decdn_user, …) — the bulk of the skip.
+#   - baseline surfaces a few global knobs in group_vars (ssh_admin_*, ssh_allow_cidrs).
+# Conventional names read better for a public ops repo than role-prefixed ones;
+# everything else is held to the 'production' profile.
 skip_list:
   - var-naming[no-role-prefix]
 

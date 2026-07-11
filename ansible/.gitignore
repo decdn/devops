@@ -9,6 +9,5 @@ collections/
 inventory/host_vars/*/secret.*
 !inventory/host_vars/*/secret.*.example
 
-# Ansible / molecule scratch
+# Ansible scratch
 *.retry
-.molecule/
