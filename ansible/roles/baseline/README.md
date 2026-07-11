@@ -30,7 +30,14 @@ In order — the ordering matters:
 6. **Time sync** — `chrony`.
 7. **DevSec hardening (LAST)** — `devsec.hardening.os_hardening` +
    `devsec.hardening.ssh_hardening` (key-only SSH, no root login, kernel/sysctl/PAM
-   hardening). Applied last so the admin key is already in place.
+   hardening). Applied last so the admin key is already in place. baseline overrides a
+   few `os_hardening` defaults so the CIS baseline can't sever node connectivity: it
+   re-enables IPv6 RA/autoconf (`baseline_preserve_ipv6_autoconf`, so SLAAC-assigned
+   addresses survive), optionally loosens reverse-path filtering for multi-homed hosts
+   (`baseline_rp_filter_loose`), and disables `os_hardening`'s ufw template
+   (`ufw_manage_defaults: false`) so no misleading DROP-policy `/etc/default/ufw` is
+   written — **nftables is the firewall; do not install or enable ufw, which would
+   replace the ruleset and drop QUIC/SSH.**
 
 ## Lockout guard
 
@@ -64,6 +71,8 @@ expect — set both explicitly in that case.
 | `ssh_admin_passwordless_sudo` | `true` | Give the admin user NOPASSWD sudo and lock its password (key-only). Set `false` for classic password sudo. |
 | `ssh_allow_cidrs` | `[]` | Optional inbound-SSH source allowlist (CIDRs). Empty = any source. |
 | `baseline_extra_inbound` | `[]` | Extra public inbound ports. Each item `{proto, port, comment}`. Loopback services need nothing here; the deCDN node opens udp/4433. |
+| `baseline_preserve_ipv6_autoconf` | `true` | Re-enable IPv6 RA/autoconf under `os_hardening` (which disables it, breaking SLAAC addresses). Set `false` for statically-addressed IPv6 hosts to keep full CIS IPv6 hardening. |
+| `baseline_rp_filter_loose` | `false` | `true` sets loose reverse-path filtering (`rp_filter=2`) for multi-homed/policy-routed nodes; default keeps strict (`1`). |
 | `baseline_packages` | see `defaults/main.yml` | Base package set. |
 
 ## Dependencies

@@ -36,6 +36,23 @@ ssh_allow_cidrs: []
 # decdn node's QUIC udp/4433) do. Set per host/group, e.g. in group_vars.
 baseline_extra_inbound: []
 
+# --- os_hardening sysctl overrides (keep node connectivity under CIS hardening) ---
+# devsec.hardening.os_hardening applies CIS-style network sysctls that can degrade a
+# node. baseline feeds these knobs into its sysctl_overwrite so the hardened defaults
+# still apply everywhere EXCEPT where a node needs them relaxed.
+# Keep IPv6 RA/autoconf working: os_hardening disables the whole RA path (accept_ra,
+# autoconf, and RA prefix/default-route learning) per CIS, which breaks SLAAC-assigned
+# addresses (common on VPS) — the node loses its IPv6 address + default route on the next
+# RA cycle (notably after a reboot). true = re-enable the RA sysctls SLAAC needs; set
+# false on hosts with statically-configured IPv6 to keep the full CIS IPv6 hardening.
+# Only takes effect where os_hardening applies sysctls — its sysctl block is skipped on
+# container virtualization (lxc/openvz/docker), so on those VPS the knob is a no-op.
+baseline_preserve_ipv6_autoconf: true
+# os_hardening sets strict reverse-path filtering (rp_filter=1), which silently drops
+# inbound QUIC arriving on the "wrong" interface of a multi-homed / policy-routed host.
+# true = loose (rp_filter=2). Default keeps strict — correct for typical single-homed nodes.
+baseline_rp_filter_loose: false
+
 baseline_packages:
   - curl
   - git

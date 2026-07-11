@@ -19,13 +19,21 @@ baseline   host hardening — DevSec os/ssh, nftables default-deny inbound,
 
 - **Default-deny inbound (nftables).** SSH is the only universally-open port. The node host
   additionally opens **udp/4433** (QUIC) via `baseline_extra_inbound`. Everything else
-  (node metrics 9090, admin RPC 9191) stays **loopback** with no hole.
+  (node metrics 9090, admin RPC 9191) stays **loopback** with no hole. **nftables is the
+  firewall** — baseline turns off `os_hardening`'s ufw config template (`ufw_manage_defaults:
+  false`) so a misleading DROP-policy `/etc/default/ufw` is never written; and, separately,
+  operators must not install or enable ufw, which would replace the nftables ruleset and
+  drop QUIC/SSH.
 - **No secrets in the repo.** The node's eth keystore is **operator-provisioned** and never
   generated here; its `rpc_url` (which may embed an API key) lives in a git-ignored
   `host_vars/<node>/secret.yml` (the rest of `host_vars` is committed, non-secret config) and
   is rendered to a `0600` config.
 - **Host hardening via DevSec** (`os_hardening` + `ssh_hardening`): key-only SSH, no root
   login, kernel/sysctl/PAM hardening — applied last, after the admin key is in place.
+  baseline overrides a few `os_hardening` sysctls so hardening can't sever node
+  connectivity: it preserves IPv6 RA/autoconf (`baseline_preserve_ipv6_autoconf`, so
+  SLAAC-assigned addresses survive) and can loosen reverse-path filtering for multi-homed
+  hosts (`baseline_rp_filter_loose`).
 
 ## Requirements
 
@@ -143,6 +151,8 @@ the RPC URL). Highlights:
 | `ssh_admin_user` / `ssh_admin_pubkey` | `""` / `""` | Empty = local `$USER` + autodetected `~/.ssh` key; admin created before SSH hardening. |
 | `ssh_admin_extra_pubkeys` | `[]` | Extra authorized keys for the admin user (additional operators). |
 | `baseline_extra_inbound` | `[]` | public inbound ports; `decdn_nodes` opens udp/4433. |
+| `baseline_preserve_ipv6_autoconf` | `true` | Keep IPv6 RA/autoconf under hardening; set `false` for static-IPv6 hosts. |
+| `baseline_rp_filter_loose` | `false` | `true` loosens reverse-path filtering (`rp_filter=2`) for multi-homed nodes. |
 | `decdn_node_version` | `""` | **required**; a `v<version>` release must exist. |
 | `decdn_rpc_url` + 3 contract addresses | `""` | **required** per node — `rpc_url` in `host_vars/<node>/secret.yml`, addresses in `main.yml`; sourced from an ADR/deployment. |
 | `decdn_region` / `decdn_bind_port` / `decdn_rate_per_mb` | `""` / `4433` / `10` | node identity, QUIC port, USDC base units/MB. |
