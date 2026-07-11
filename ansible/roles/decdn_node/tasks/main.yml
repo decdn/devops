@@ -32,6 +32,38 @@
   vars:
     decdn_zero_address: "0x0000000000000000000000000000000000000000"
 
+# slash_appeal_address is optional (only `decdn appeal slash` uses it — the daemon
+# ignores the key), so it is not in the hard assert above. But if an operator sets
+# it, a half-filled/zero value would silently render a bad node.toml, so validate
+# it the same fail-loud way as the required addresses when present.
+- name: Validate the optional SlashAppeal address when set
+  ansible.builtin.assert:
+    that:
+      - decdn_slash_appeal_address is match('^0x[0-9a-fA-F]{40}$')
+      - decdn_slash_appeal_address != decdn_zero_address
+    fail_msg: >-
+      decdn_slash_appeal_address is set but is not a valid contract address
+      (0x + 40 hex, not the zero address). Leave it empty to omit it, or set the
+      deployed SlashAppeal address (source it from the deployment / ADR 028).
+  vars:
+    decdn_zero_address: "0x0000000000000000000000000000000000000000"
+  when: decdn_slash_appeal_address | length > 0
+
+# slash_judge_from_block feeds a `| int > 0` gate in node.toml.j2, and Jinja's int
+# filter silently coerces any unparseable value to 0 — which drops the key and
+# reverts the daemon to a full-chain rescan on every restart, discarding the
+# operator's input with no trace in the rendered config. Assert integer shape so a
+# typo fails loud at deploy time instead. Runs unconditionally: the default 0
+# passes, so a malformed value can never slip through the coercion silently.
+- name: Validate the SlashJudge scan-floor block is a non-negative integer
+  ansible.builtin.assert:
+    that:
+      - decdn_slash_judge_from_block | string is match('^[0-9]+$')
+    fail_msg: >-
+      decdn_slash_judge_from_block must be a non-negative integer (the SlashJudge
+      deploy block). Got "{{ decdn_slash_judge_from_block }}". Leave it 0 to scan
+      from genesis, or set the deploy block to bound per-restart rescan cost.
+
 # --- User & directories -------------------------------------------------------
 - name: Create decdn system group
   ansible.builtin.group:

@@ -50,7 +50,12 @@ Per `decdn/adr/019-node-onboarding.md`, a node only serves paid traffic after
 `decdn_payment_channel_address`, `decdn_capacity_bond_address`,
 `decdn_slash_judge_address` (all `0x`+40-hex; SlashJudge non-zero),
 `decdn_region` (ISO 3166-1 alpha-2). Contract addresses/chain-id are protocol
-facts — source them from the deployment / an ADR, never guess. See
+facts — source them from the deployment / an ADR, never guess.
+
+Optional (omitted from `node.toml` unless set): `decdn_slash_appeal_address`
+(SlashAppeal contract, source from the deployment / ADR 028 — only needed to file
+appeals with `decdn appeal slash`) and `decdn_slash_judge_from_block` (SlashJudge
+deploy block; bounds the slash-detection watcher's per-restart chain rescan). See
 `roles/decdn_node/defaults/main.yml` for the full knob list and defaults.
 
 ## Network
@@ -77,6 +82,11 @@ systemctl status decdn-node
 journalctl -u decdn-node -e
 decdn node health        # admin RPC (127.0.0.1:9191)
 decdn node peers
+
+# If this node is slashed (surfaced via the admin RPC — admin_v1_slashes), file an
+# appeal within the ADR 028 window. Needs decdn_slash_appeal_address set in node.toml
+# (else pass --slash-appeal-address / DECDN_SLASH_APPEAL_ADDRESS):
+decdn appeal slash <SLASH_ID> <EVIDENCE_BUNDLE_HASH>
 ```
 
 Upgrades: bump `decdn_node_version` (+ `decdn_node_sha256`) and re-deploy — the

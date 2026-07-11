@@ -20,6 +20,12 @@ eth_keystore = "{{ decdn_keystore_file }}"
 payment_channel_address = "{{ decdn_payment_channel_address }}"
 capacity_bond_address = "{{ decdn_capacity_bond_address }}"
 slash_judge_address = "{{ decdn_slash_judge_address }}"
+{% if decdn_slash_appeal_address | length > 0 %}
+slash_appeal_address = "{{ decdn_slash_appeal_address }}"
+{% endif %}
+{% if decdn_slash_judge_from_block | int > 0 %}
+slash_judge_from_block = {{ decdn_slash_judge_from_block | int }}
+{% endif %}
 
 [payment]
 rate_per_mb = {{ decdn_rate_per_mb }}
