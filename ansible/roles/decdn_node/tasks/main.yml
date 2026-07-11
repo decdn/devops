@@ -32,6 +32,14 @@
       decdn-node daemon and decdn CLI binaries. Set them in host_vars.
   when: decdn_node_install_method == "manual"
 
+- name: Validate decdn_node_generate_keystore is a real boolean
+  ansible.builtin.assert:
+    that:
+      - decdn_node_generate_keystore is boolean
+    fail_msg: >-
+      decdn_node_generate_keystore must be a boolean (true/false), not a quoted
+      string — it gates a `| bool` conditional on host-side wallet generation.
+
 - name: Require chain + contract configuration
   ansible.builtin.assert:
     that:
@@ -201,31 +209,117 @@
 - name: Install decdn-node + decdn CLI
   ansible.builtin.import_tasks: install.yml
 
-# --- Operator-provisioned eth wallet (never generated here) --------------------
-- name: Confirm the operator-provisioned eth keystore is present
+# --- Opt-in turnkey wallet generation (decdn_node_generate_keystore) -----------
+# Off by default. When on, mint a *fresh* wallet ONLY when the keystore is absent —
+# never touching an existing (possibly funded) one. `decdn key-gen` needs a password
+# file first, so we generate a random one, but ONLY when the keystore is ALSO absent:
+# minting a password beside a pre-existing keystore it can't decrypt would silently
+# orphan that wallet, so we refuse (the gate below then fails loud for the operator
+# to supply the matching password). The generated wallet is still unfunded + unstaked;
+# funding + on-chain staking/registration (ADR 019 Phase 2) stay operator steps.
+- name: Check for an existing eth keystore (generate mode)
+  ansible.builtin.stat:
+    path: "{{ decdn_keystore_file }}"
+  register: decdn_keystore_pregen_stat
+  when: decdn_node_generate_keystore | bool
+
+- name: Check for an existing keystore password file (generate mode)
+  ansible.builtin.stat:
+    path: "{{ decdn_keystore_password_file }}"
+  register: decdn_pw_pregen_stat
+  when: decdn_node_generate_keystore | bool
+
+# Only for a fresh wallet: keystore absent AND password absent. A password present
+# beside a missing keystore is a valid operator-first-provisioned password — keep it
+# and let key-gen bind to it below.
+- name: Generate a random keystore password (fresh wallet only)
+  ansible.builtin.command: openssl rand -base64 32
+  register: decdn_pw_gen
+  no_log: true                     # the generated value protects the keystore
+  changed_when: true
+  when:
+    - decdn_node_generate_keystore | bool
+    - not decdn_keystore_pregen_stat.stat.exists
+    - not decdn_pw_pregen_stat.stat.exists
+
+- name: Write the generated keystore password file (fresh wallet only)
+  ansible.builtin.copy:
+    dest: "{{ decdn_keystore_password_file }}"
+    owner: "{{ decdn_user }}"
+    group: "{{ decdn_group }}"
+    mode: "0600"
+    content: "{{ decdn_pw_gen.stdout }}\n"
+  no_log: true                     # the password protects the keystore at rest
+  when:
+    - decdn_node_generate_keystore | bool
+    - not decdn_keystore_pregen_stat.stat.exists
+    - not decdn_pw_pregen_stat.stat.exists
+
+- name: Generate the eth keystore + node identity (only if keystore absent)
+  ansible.builtin.command:
+    cmd: >-
+      {{ decdn_cli_bin }} key-gen
+      --output-dir {{ decdn_home }}
+      --password-file {{ decdn_keystore_password_file }}
+    creates: "{{ decdn_keystore_file }}"
+  become: true
+  become_user: "{{ decdn_user }}"
+  register: decdn_keygen
+  when: decdn_node_generate_keystore | bool
+
+# NOTE: key-gen uses keystore.json as its `creates:` sentinel, but the pre-start gate
+# below stats node.secret too — so a partial run (keystore.json written, node.secret
+# not) is NOT masked on rerun: key-gen skips on the sentinel, then the gate fails loud
+# on the missing node identity. No separate post-condition check needed here.
+- name: Show the generated NodeId + eth address (fund + stake this wallet)
+  ansible.builtin.debug:
+    # stdout is the CLI's public NodeId + eth address per its documented contract
+    # (no secret material) — safe to surface so the operator can fund + stake it.
+    msg: "{{ decdn_keygen.stdout_lines }}"
+  when:
+    - decdn_node_generate_keystore | bool
+    - decdn_keygen.changed | default(false)
+
+# --- Require the eth wallet before start (operator-provisioned, or minted above) ---
+- name: Confirm the eth keystore is present
   ansible.builtin.stat:
     path: "{{ decdn_keystore_file }}"
   register: decdn_keystore_stat
+
+- name: Confirm the node identity is present
+  ansible.builtin.stat:
+    path: "{{ decdn_home }}/node.secret"
+  register: decdn_node_secret_stat
 
 - name: Confirm the keystore password file is present
   ansible.builtin.stat:
     path: "{{ decdn_keystore_password_file }}"
   register: decdn_pw_stat
 
-- name: Require keystore + password before starting
+- name: Require keystore + node identity + password before starting
   ansible.builtin.assert:
     that:
       - decdn_keystore_stat.stat.exists
+      - decdn_node_secret_stat.stat.exists
       - decdn_pw_stat.stat.exists
-    fail_msg: >-
-      Missing eth keystore ({{ decdn_keystore_file }}) and/or password file
-      ({{ decdn_keystore_password_file }}). Provision them on the host (the wallet
-      must be funded + staked per ADR 019). Generate both with, as the decdn user:
-        decdn key-gen --output-dir {{ decdn_home }}
-                      --password-file {{ decdn_keystore_password_file }}
-      (writes node.secret + keystore.json, prints the NodeId + eth address).
+    fail_msg: |-
+      Missing eth keystore ({{ decdn_keystore_file }}), node identity
+      ({{ decdn_home }}/node.secret) and/or password file
+      ({{ decdn_keystore_password_file }}). Provision the wallet on the host as the
+      {{ decdn_user }} user. key-gen READS the password file (it never creates one),
+      so make it FIRST, then generate the keys INTO the data dir:
+        umask 077
+        openssl rand -base64 32 | sudo -u {{ decdn_user }} tee {{ decdn_keystore_password_file }} >/dev/null
+        sudo -u {{ decdn_user }} chmod 600 {{ decdn_keystore_password_file }}
+        sudo -u {{ decdn_user }} decdn key-gen \
+          --output-dir {{ decdn_home }} --password-file {{ decdn_keystore_password_file }}
+      Pass --output-dir {{ decdn_home }} explicitly: a bare `decdn key-gen` writes to
+      ~/.decdn and the node would not find its keys. That writes node.secret +
+      keystore.json and prints the NodeId + eth address; fund + stake that address per
+      ADR 019 (still manual). Or set decdn_node_generate_keystore: true to have this
+      role run all of the above on the host (the wallet is still unfunded + unstaked).
 
-- name: Lock down keystore + password file permissions
+- name: Lock down keystore + node identity + password file permissions
   ansible.builtin.file:
     path: "{{ item }}"
     owner: "{{ decdn_user }}"
@@ -233,6 +327,7 @@
     mode: "0600"
   loop:
     - "{{ decdn_keystore_file }}"
+    - "{{ decdn_home }}/node.secret"
     - "{{ decdn_keystore_password_file }}"
 
 # --- Config + hardened unit ---------------------------------------------------
