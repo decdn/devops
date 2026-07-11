@@ -12,7 +12,7 @@ In order — the ordering matters:
 2. **Admin sudo user** — creates `ssh_admin_user` and installs its key(s)
    **before** SSH is hardened, so you keep a way in. Both resolve from the control
    machine when left empty: the user falls back to the local `$USER`, and the key is
-   autodetected from `~/.ssh` (`id_ed25519` > `id_ecdsa` > `id_rsa`). Extra team keys
+   autodetected from `~/.ssh` (`id_ed25519` > `id_ecdsa` > `id_rsa`). Extra operator keys
    come from `ssh_admin_extra_pubkeys`. Explicit values always win.
 3. **Firewall** — nftables **default-deny inbound**; SSH is the only universally-open
    port. Extra public listeners are declared explicitly via `baseline_extra_inbound`.
@@ -50,7 +50,7 @@ expect — set both explicitly in that case.
 | `ssh_admin_user` | `""` | Admin sudo account; created before SSH hardening. Empty = the control machine's local `$USER`. |
 | `ssh_admin_pubkey` | `""` | Admin key. Empty = autodetected from `~/.ssh` (`id_ed25519`/`ecdsa`/`rsa`). Set to override. |
 | `ssh_admin_pubkey_autodetect` | `true` | When `ssh_admin_pubkey` is empty, read the operator's default local public key. |
-| `ssh_admin_extra_pubkeys` | `[]` | Additional authorized keys (full pubkey strings) — e.g. teammates. |
+| `ssh_admin_extra_pubkeys` | `[]` | Additional authorized keys (full pubkey strings) — e.g. other operators. |
 | `ssh_allow_cidrs` | `[]` | Optional inbound-SSH source allowlist (CIDRs). Empty = any source. |
 | `baseline_extra_inbound` | `[]` | Extra public inbound ports. Each item `{proto, port, comment}`. Loopback services need nothing here; the deCDN node opens udp/4433. |
 | `baseline_packages` | see `defaults/main.yml` | Base package set. |

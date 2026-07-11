@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Stub deCDN node binary for the Molecule scenario.
+
+Stands in for the real `decdn-node` (and `decdn` CLI) so the `decdn_node` role
+can be exercised end-to-end without a published release or a live chain:
+
+  * `--version`   -> print a version line and exit 0 (satisfies the role's
+                     install-time `--version` backstop / version-match check).
+  * `run ...`     -> serve HTTP 200 on 127.0.0.1:9090/metrics (404 elsewhere) so
+                     the role's `/metrics` readiness probe succeeds, and block
+                     forever under systemd (Type=simple). CLI args (`--config`,
+                     `--keystore-password-file`) are accepted and ignored.
+  * anything else -> exit non-zero (fail loud) rather than silently pretending
+                     to succeed — so a wrong/renamed invocation surfaces.
+
+It intentionally implements no protocol behaviour — the scenario verifies host
+prep, config/unit rendering, hardening, and loopback binding, not node logic.
+"""
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+METRICS_ADDR = ("127.0.0.1", 9090)  # matches the role's default metrics_bind/port
+# Must match decdn_node_version in converge.yml (the version-match backstop).
+VERSION = "decdn-node 0.0.0-molecule-stub"
+
+
+class _Handler(BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802 (stdlib-mandated name)
+        # Answer only the real readiness path; 404 elsewhere so the test asserts
+        # the probe hit /metrics, not that any HTTP server is up.
+        if self.path != "/metrics":
+            self.send_response(404)
+            self.end_headers()
+            return
+        body = b"# stub decdn-node metrics\ndecdn_stub_up 1\n"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; version=0.0.4")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):  # silence per-request logging
+        pass
+
+
+def main():
+    args = sys.argv[1:]
+    if "--version" in args:
+        print(VERSION)
+        return 0
+    if args and args[0] == "run":
+        try:
+            HTTPServer(METRICS_ADDR, _Handler).serve_forever()
+        except OSError as exc:
+            addr = f"{METRICS_ADDR[0]}:{METRICS_ADDR[1]}"
+            print(f"stub: cannot bind {addr}: {exc}", file=sys.stderr)
+            return 1
+        return 0
+    print(f"stub: unrecognised invocation: {args!r}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

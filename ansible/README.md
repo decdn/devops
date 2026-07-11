@@ -1,6 +1,6 @@
 # ansible — deCDN deployment
 
-Declarative Ansible project for the deCDN team. One deployment over a shared host
+Declarative Ansible project for deploying a deCDN node. One deployment over a shared host
 baseline:
 
 | Playbook | Purpose | Exposure |
@@ -56,7 +56,7 @@ it local.
 
 By default baseline **deploys you as yourself**: an empty `ssh_admin_user` resolves to your
 control-machine `$USER`, and an empty `ssh_admin_pubkey` is autodetected from `~/.ssh`
-(`id_ed25519` > `ecdsa` > `rsa`). Add teammates' keys via `ssh_admin_extra_pubkeys`. Set
+(`id_ed25519` > `ecdsa` > `rsa`). Add additional operators' keys via `ssh_admin_extra_pubkeys`. Set
 `ssh_admin_user`/`ssh_admin_pubkey` explicitly to override (e.g. a shared `deploy` account,
 or when deploying from CI). baseline **asserts a key resolves** before `ssh_hardening`
 disables root + password login, so you can't lock yourself out. After the first deploy,
@@ -69,16 +69,22 @@ one).
 
 **Prerequisites** (see `roles/decdn_node/README.md` for the full flow):
 
-1. A published **`v<version>` release** exists (the role downloads the release tarball).
+1. A published **`v<version>` release** exists and is **publicly downloadable** — the role
+   fetches the release tarball from `decdn_node_release_base`
+   (default `https://github.com/decdn/decdn/releases/download`). To install from a mirror,
+   override `decdn_node_release_base`; to deploy a locally-built binary with no release at
+   all, use the **`manual`** install method (`decdn_node_install_method: manual` +
+   `decdn_node_manual_bin_src` / `decdn_cli_manual_bin_src`).
 2. Per-node config in `inventory/host_vars/<node>/main.yml` (committed) —
    `decdn_node_version`, the three contract addresses, `decdn_region`, cache origin, … — plus
    the one secret, `decdn_rpc_url`, in a sibling git-ignored `secret.yml` (copy the shipped
    `host_vars/decdn-node-1/secret.yml.example`). The committed `main.yml` already carries the
    Arbitrum Sepolia genesis contract addresses; edit `decdn_region` + cache origin for your
-   node. Contract addresses are protocol facts — source them from the deployment / an ADR,
-   never guess.
+   node. Contract addresses are protocol facts — source them from the deCDN contract
+   deployment / an ADR, never guess.
 3. The **eth keystore + password file** provisioned on the host (operator step — the wallet
-   must be funded + staked per `decdn/adr/019`). Generate with, as the `decdn` user:
+   must be funded + staked per the deCDN node-onboarding ADR, 019). Generate with, as the
+   `decdn` user:
    `decdn key-gen --output-dir /var/lib/decdn --password-file /etc/decdn/keystore.password`.
 
 ```bash
@@ -107,13 +113,20 @@ with no turnkey CLI yet (see `roles/decdn_node/README.md`).
 ```bash
 make lint           # yamllint + ansible-lint (production profile)
 ansible-playbook playbooks/site.yml --syntax-check
+make molecule       # containerised converge + idempotence + verify (needs Docker)
 ```
 
-The **node** role is verified statically pre-release (syntax-check, `systemd-analyze verify`
-on the rendered unit, TOML validity, fail-loud asserts); a live deploy follows once a
-`v<version>` release is published (no real chain runs in CI). `baseline` is not exercised in
-a container (its `ssh_hardening` would sever the connection); `make check` covers it as a
-non-mutating dry run.
+`make molecule` converges the **`decdn_node`** role in a privileged systemd container
+against a stub daemon (`molecule/default/`): it installs via the `manual` method (no
+published release needed), stages a placeholder keystore, renders `node.toml` + the
+hardened unit, starts the service, and passes the role's own `/metrics` readiness probe;
+`verify.yml` then asserts the node user, valid TOML, a valid systemd unit, loopback-only
+metrics binding, and the `0600` secret env file. It does **not** exercise real node logic
+or a live chain — full paid-traffic readiness still needs on-chain registration and a real
+release. `baseline` is not exercised in a container — the scenario connects over Docker
+(not SSH), and baseline's host-level hardening (nftables default-deny, DevSec os/ssh
+hardening, fail2ban) isn't meaningful in a throwaway container; `make check` covers it as
+a non-mutating dry run.
 
 ## Configuration
 
@@ -124,7 +137,7 @@ the RPC URL). Highlights:
 | Var | Default | Notes |
 |-----|---------|-------|
 | `ssh_admin_user` / `ssh_admin_pubkey` | `""` / `""` | Empty = local `$USER` + autodetected `~/.ssh` key; admin created before SSH hardening. |
-| `ssh_admin_extra_pubkeys` | `[]` | Extra authorized keys for the admin user (teammates). |
+| `ssh_admin_extra_pubkeys` | `[]` | Extra authorized keys for the admin user (additional operators). |
 | `baseline_extra_inbound` | `[]` | public inbound ports; `decdn_nodes` opens udp/4433. |
 | `decdn_node_version` | `""` | **required**; a `v<version>` release must exist. |
 | `decdn_rpc_url` + 3 contract addresses | `""` | **required** per node — `rpc_url` in `host_vars/<node>/secret.yml`, addresses in `main.yml`; sourced from an ADR/deployment. |

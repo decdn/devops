@@ -1,18 +1,16 @@
 # AGENTS.md — decdn-devops
 
 Guidance for AI coding agents (Claude Code, Codex, Cursor, …) working in the deCDN
-DevOps monorepo.
+DevOps repo.
 
 ## What this repo is
 
-This is the deCDN team's **DevOps monorepo**: infrastructure, deployment, and
-operational tooling. It is one of the independent git repositories inside the
-`/home/thiras/dev/decdn/` workspace (see the workspace-level `CLAUDE.md`). Today the
-whole repo is **Ansible-driven**: `ansible/` is the deployment project. `services/` is a
-reserved convention for future imperative bash + systemd units and is currently empty.
+The official Ansible project for deploying a **deCDN node**: infrastructure, deployment,
+and operational tooling. The whole repo is **Ansible-driven** — `ansible/` is the
+deployment project.
 
 This repo is **infrastructure only**. It is *not* a source of truth for protocol or
-economic claims — those live in `decdn/adr/`. If something here states a protocol fact
+economic claims — those trace to the deCDN ADRs. If something here states a protocol fact
 (chain-id, token address, fee split), it must trace back to an ADR, not invent one.
 
 ## Hard rules
@@ -28,9 +26,9 @@ economic claims — those live in `decdn/adr/`. If something here states a proto
    node's QUIC udp/4433) via `baseline_extra_inbound`; if a service ever needs an HTTP-facing
    public path, front it with an explicit reverse proxy that terminates auth + TLS. Never
    bind a *backend* to `0.0.0.0` or expose its raw port.
-3. **`etc/` mirrors the target filesystem** (the `services/` convention, currently unused —
-   see Layout). Put a config where it installs:
-   `services/<svc>/etc/systemd/system/foo.service` → `/etc/systemd/system/foo.service`.
+3. **Role templates render to their target paths.** Ansible roles template config directly
+   onto the host (e.g. `roles/decdn_node/templates/decdn-node.service.j2` →
+   `/etc/systemd/system/`), with secrets generated on the host at `0600`.
 4. **Scripts are idempotent and fail loud.** `set -euo pipefail`, re-runnable, refuse to
    overwrite existing secrets, and require typed confirmation before destructive ops.
 5. **Show before installing.** When building or changing infra, present the files; the
@@ -39,33 +37,21 @@ economic claims — those live in `decdn/adr/`. If something here states a proto
 
 ## Layout
 
-The repo's one active unit is the Ansible project; `services/` is a reserved convention:
-
 ```
 ansible/                # the deployment project (DevSec-hardened, lean roles)
   playbooks/            # site.yml (decdn node)
   roles/                # baseline, decdn_node
-  inventory/ galaxy/    # see ansible/README.md
-
-services/<name>/        # reserved: future imperative bash + systemd units (currently empty)
-  README.md  bin/  etc/ (filesystem-mirrored)  contracts/
+  inventory/ galaxy/ molecule/    # see ansible/README.md
 ```
-
-For Ansible-managed services the `etc/`-mirror convention (hard-rule #3) does not apply —
-role **templates** render to their target paths instead. Hard-rules #1 (no committed
-secrets; generated on host) and #2 (localhost-only by default) hold for both conventions.
 
 ## Current services
 
-- **`ansible/`** — the team's declarative deployment project. **The public deCDN node**
+- **`ansible/`** — the declarative deployment project. **The public deCDN node**
   (`playbooks/site.yml` → baseline + `decdn-node`), installed from a pinned GitHub release
   tarball under a hardened systemd unit; public QUIC udp/4433, loopback metrics/admin,
   operator-provisioned eth keystore, required chain knobs (no baked protocol facts — sourced
   from ADRs), over a shared DevSec-hardened `baseline`. See `ansible/README.md`. (On-chain
   node stake/registration, ADR 019 Phase 2, is an operator step, not automated.)
-
-`services/` remains the documented convention for any future imperative bash + systemd
-unit, but currently holds none.
 
 ## Commands
 
@@ -78,6 +64,7 @@ make hooks            # one-time: install pre-commit git hook (pip install pre-c
 make lint             # all pre-commit hooks on all files (hygiene, shellcheck, yamllint, markdown)
 make lint-ansible     # vendor collections + full ansible-lint (production profile)
 make security         # KICS IaC scan of ansible/ (pinned engine image)
+make molecule         # containerised converge/verify of the decdn_node role (needs Docker)
 
 # Ansible deploys — run from ansible/ (see ansible/README.md for the full flow)
 cd ansible
@@ -97,3 +84,5 @@ collection tree by `galaxy/build.sh` — there is **no** `galaxy.yml` at the `an
 `make hooks`/`make lint` on your machine, **not** in CI. CI (`.github/workflows/`) is the
 blocking gate and runs `ansible-lint` + KICS + `galaxy-build` (on `ansible/**`) + `actionlint`. `ansible-lint`
 is **not** a per-commit hook (it needs collections vendored) — run `make lint-ansible`.
+A separate `molecule.yml` workflow runs the containerised converge/verify in CI too, so
+`make molecule` is not purely local.

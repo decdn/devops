@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN Ansible project.
 # Always run from the ansible/ directory.
-.PHONY: deps lint check deploy build galaxy-check
+.PHONY: deps lint check deploy molecule build galaxy-check
 SHELL := /bin/bash
 
 # Install the required Galaxy collections (>= constraints in requirements.yml)
@@ -21,6 +21,12 @@ check:
 # Provision the deCDN node host(s) in inventory/hosts.yml.
 deploy:
 	ansible-playbook playbooks/site.yml
+
+# --- Tests -------------------------------------------------------------------
+# Containerised converge + idempotence + verify of the decdn_node role against a
+# stub daemon (needs Docker; a privileged systemd container). See molecule/.
+molecule:
+	molecule test
 
 # --- Galaxy collection (decdn.node) ------------------------------------------
 # Stage baseline + decdn_node into a clean collection tree and build the artifact

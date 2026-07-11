@@ -1,0 +1,151 @@
+---
+# Verify what a container can assert without a live chain: the node user, a
+# valid non-secret node.toml, a valid + hardened systemd unit, loopback-only
+# metrics binding, 0600 on the secret env file, and a running service. Real
+# paid-traffic readiness additionally needs on-chain registration (not tested).
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    decdn_etc: /etc/decdn
+  tasks:
+    - name: Look up the decdn user
+      ansible.builtin.getent:
+        database: passwd
+        key: decdn
+
+    - name: Assert the decdn system user exists with a nologin shell
+      ansible.builtin.assert:
+        that:
+          # Single expression so a missing user short-circuits to the fail_msg
+          # rather than raising AnsibleUndefinedVariable on the [5] deref.
+          - getent_passwd['decdn'] is defined and 'nologin' in getent_passwd['decdn'][5]
+        fail_msg: "decdn system user missing or has a login shell"
+
+    - name: Stat the rendered config + secret env file
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: decdn_files
+      loop:
+        - "{{ decdn_etc }}/node.toml"
+        - "{{ decdn_etc }}/decdn.env"
+        - /etc/systemd/system/decdn-node.service
+
+    - name: Assert node.toml (0640) and the secret env file (0600) modes
+      ansible.builtin.assert:
+        that:
+          # exists-and-mode in one expression: a missing file short-circuits to
+          # the fail_msg instead of raising on the absent stat.mode.
+          - decdn_files.results[0].stat.exists and decdn_files.results[0].stat.mode == '0640'
+          - decdn_files.results[1].stat.exists and decdn_files.results[1].stat.mode == '0600'
+          - decdn_files.results[2].stat.exists
+        fail_msg: "node.toml / decdn.env / unit missing or wrong mode"
+
+    # prepare.yml stages the keystore + password at 0644; the role is responsible
+    # for locking them to 0600. Asserting 0600 here therefore verifies the role's
+    # lock-down actually ran, not a mode prepare pre-set.
+    - name: Stat the operator keystore + password file
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: decdn_secrets
+      loop:
+        - /var/lib/decdn/keystore.json
+        - "{{ decdn_etc }}/keystore.password"
+
+    - name: Assert the keystore + password file are locked to 0600
+      ansible.builtin.assert:
+        that:
+          - decdn_secrets.results[0].stat.exists and decdn_secrets.results[0].stat.mode == '0600'
+          - decdn_secrets.results[1].stat.exists and decdn_secrets.results[1].stat.mode == '0600'
+        fail_msg: "keystore / password file missing or not 0600 (role lock-down did not run)"
+
+    # Parse node.toml AND assert its content — a validity-only check would pass
+    # even if the role rendered metrics_bind = 0.0.0.0 or dropped a contract
+    # address (still valid TOML). This asserts the role's actual output, not just
+    # that it parses. Values mirror converge.yml + the role's loopback default.
+    # Staged as a file (not python3 -c / a shell heredoc) to avoid quoting hazards.
+    - name: Stage the node.toml content assertion script
+      ansible.builtin.copy:
+        dest: /root/molecule-assert-node-toml.py
+        mode: "0755"
+        content: |
+          import sys, tomllib
+          d = tomllib.load(open("/etc/decdn/node.toml", "rb"))
+          want = {
+              ("identity", "region"): "US",
+              ("observability", "metrics_bind"): "127.0.0.1",
+              ("observability", "metrics_port"): 9090,
+              ("blockchain", "chain_id"): 421614,
+              ("blockchain", "payment_channel_address"): "0x1111111111111111111111111111111111111111",
+              ("blockchain", "capacity_bond_address"): "0x2222222222222222222222222222222222222222",
+              ("blockchain", "slash_judge_address"): "0x3333333333333333333333333333333333333333",
+          }
+          bad = {
+              ".".join(k): (d.get(k[0], {}).get(k[1]), v)
+              for k, v in want.items()
+              if d.get(k[0], {}).get(k[1]) != v
+          }
+          if bad:
+              print("node.toml content mismatch (got, want):", bad, file=sys.stderr)
+              sys.exit(1)
+
+    - name: Assert node.toml is valid TOML and renders the expected content
+      ansible.builtin.command:
+        cmd: python3 /root/molecule-assert-node-toml.py
+      changed_when: false
+
+    - name: Validate the systemd unit
+      ansible.builtin.command:
+        cmd: systemd-analyze verify /etc/systemd/system/decdn-node.service
+      changed_when: false
+
+    # systemd-analyze only checks unit syntax — it does not confirm the security
+    # directives are present. Assert the load-bearing hardening lines the role's
+    # template is responsible for, so a regression that drops one fails loudly.
+    - name: Read the rendered systemd unit
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/decdn-node.service
+      register: decdn_unit
+
+    - name: Assert the unit carries the key hardening directives
+      ansible.builtin.assert:
+        that:
+          - "'NoNewPrivileges=true' in unit"
+          - "'ProtectSystem=strict' in unit"
+          - "'RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK' in unit"
+          - "'SystemCallFilter=@system-service' in unit"
+          - "'User=decdn' in unit"
+        fail_msg: "hardened unit is missing an expected directive"
+      vars:
+        unit: "{{ decdn_unit.content | b64decode }}"
+
+    - name: Collect listening TCP sockets
+      ansible.builtin.command:
+        cmd: ss -ltn
+      register: listeners
+      changed_when: false
+
+    # Runtime backstop to the node.toml metrics_bind assertion above: confirm the
+    # live socket is loopback. Reject every non-loopback wildcard form ss can
+    # print (IPv4 0.0.0.0, IPv6 [::], and *) — not just 0.0.0.0.
+    - name: Assert metrics bind loopback only (never a wildcard address)
+      ansible.builtin.assert:
+        that:
+          - "'127.0.0.1:9090' in listeners.stdout"
+          - "'0.0.0.0:9090' not in listeners.stdout"
+          - "'[::]:9090' not in listeners.stdout"
+          - "'*:9090' not in listeners.stdout"
+        fail_msg: "metrics port 9090 is not loopback-only: {{ listeners.stdout }}"
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert decdn-node is enabled and running
+      ansible.builtin.assert:
+        that:
+          # Membership-and-state in one expression so an absent service
+          # short-circuits to the fail_msg instead of raising on .state.
+          - >-
+            'decdn-node.service' in ansible_facts.services
+            and ansible_facts.services['decdn-node.service'].state == 'running'
+        fail_msg: "decdn-node is not running — check: journalctl -u decdn-node -e"
