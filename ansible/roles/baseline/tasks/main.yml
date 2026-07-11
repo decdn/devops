@@ -185,6 +185,14 @@
   # fail_key:false stores a missing user as {user: None}, so test the value, not `in`.
   when: not ansible_check_mode or (getent_passwd | default({})).get(ssh_admin_user_effective)
 
+# --- Additional named sudo users (own account+home+key, key-only NOPASSWD) -----
+# Separate from the admin above: these are DISTINCT teammate accounts, not extra
+# keys on the shared admin account. Kept in their own file so molecule can exercise
+# this container-safe block on its own (the rest of baseline is real-host-only).
+- name: Create the additional named sudo users
+  ansible.builtin.include_tasks: sudo_users.yml
+  when: baseline_sudo_users | length > 0
+
 # --- Firewall: default-deny inbound, SSH only ---------------------------------
 - name: Install nftables ruleset
   ansible.builtin.template:

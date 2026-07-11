@@ -151,3 +151,81 @@
             'decdn-node.service' in ansible_facts.services
             and ansible_facts.services['decdn-node.service'].state == 'running'
         fail_msg: "decdn-node is not running — check: journalctl -u decdn-node -e"
+
+    # --- baseline_sudo_users: the two named sudo users created by converge ---------
+    # molecule-operator (simple name, one key) and alice.smith (a '.' in the name, so
+    # the sudoers.d filename-sanitize must map it to /etc/sudoers.d/alice_smith; two
+    # keys, and seeded with a '*' password so the lock is verifiable — see below).
+    - name: Read the whole passwd, shadow, and group databases
+      ansible.builtin.getent:
+        database: "{{ item }}"
+      loop:
+        - passwd
+        - shadow
+        - group
+
+    - name: Assert both named users exist, are in the sudo group, and are password-locked
+      ansible.builtin.assert:
+        that:
+          # Each clause self-guards (`is defined and …`) so a missing key routes to
+          # the fail_msg instead of raising AnsibleUndefinedVariable on the deref.
+          - getent_passwd['molecule-operator'] is defined
+          - getent_passwd['alice.smith'] is defined
+          # Exact membership (split on ',') — not a substring match against the raw
+          # comma-joined member field.
+          - >-
+            getent_group['sudo'] is defined
+            and 'molecule-operator' in getent_group['sudo'][2].split(',')
+          - >-
+            getent_group['sudo'] is defined
+            and 'alice.smith' in getent_group['sudo'][2].split(',')
+          # password_lock runs `usermod -L`, prepending '!'. molecule-operator was
+          # never given a password, so its field is a bare '!'. alice.smith was seeded
+          # with '*', so a correctly-run lock yields exactly '!*' — a bare '!' there
+          # would mean the seed or the lock silently didn't happen (a vacuous pass).
+          - >-
+            getent_shadow['molecule-operator'] is defined
+            and getent_shadow['molecule-operator'][0].startswith('!')
+          - >-
+            getent_shadow['alice.smith'] is defined
+            and getent_shadow['alice.smith'][0] == '!*'
+        fail_msg: "a named sudo user is missing, not in sudo, or not password-locked"
+
+    - name: Stat both named-user sudoers.d drop-ins (alice.smith at its SANITIZED path)
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: sudoers_stats
+      loop:
+        - /etc/sudoers.d/molecule-operator
+        - /etc/sudoers.d/alice_smith
+
+    - name: Read both drop-ins and both authorized_keys files
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: sudo_user_files
+      loop:
+        - /etc/sudoers.d/molecule-operator
+        - /etc/sudoers.d/alice_smith
+        - /home/molecule-operator/.ssh/authorized_keys
+        - /home/alice.smith/.ssh/authorized_keys
+
+    - name: Assert both drop-ins are 0440 NOPASSWD and every key was installed
+      ansible.builtin.assert:
+        that:
+          - sudoers_stats.results[0].stat.exists and sudoers_stats.results[0].stat.mode == '0440'
+          - sudoers_stats.results[1].stat.exists and sudoers_stats.results[1].stat.mode == '0440'
+          - "'molecule-operator ALL=(ALL) NOPASSWD:ALL' in op_dropin"
+          # Sanitized filename, but the rule inside still names the real user.
+          - "'alice.smith ALL=(ALL) NOPASSWD:ALL' in alice_dropin"
+          - op_key in op_keys
+          - alice_key1 in alice_keys
+          - alice_key2 in alice_keys
+        fail_msg: "a sudoers drop-in has the wrong mode/content, or an authorized key is missing"
+      vars:
+        op_dropin: "{{ sudo_user_files.results[0].content | b64decode }}"
+        alice_dropin: "{{ sudo_user_files.results[1].content | b64decode }}"
+        op_keys: "{{ sudo_user_files.results[2].content | b64decode }}"
+        alice_keys: "{{ sudo_user_files.results[3].content | b64decode }}"
+        op_key: "AAAAC3NzaC1lZDI1NTE5AAAAIA/WM19rWc9jhe0qncc4EuoLzkpR28E+oq77lV2HNvaV"
+        alice_key1: "AAAAC3NzaC1lZDI1NTE5AAAAIAiMn5YPa5+zTGH+dtmHTWBxw5H2/Z587gzTM44n0T9A"
+        alice_key2: "AAAAC3NzaC1lZDI1NTE5AAAAID0mUUEyMOboViIle8vOOa3aGVXiH5NC2HnxLp+A5Gj+"

@@ -24,5 +24,38 @@
     decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
     decdn_cache_origin_kind: "http"
     decdn_cache_origin_url: "https://origin.example.invalid/"
+    # Exercise baseline's named-sudo-users feature (see pre_tasks below). Throwaway
+    # keys, generated for this test only — public keys, not credentials. Two users
+    # on purpose: `alice.smith` has a '.' (so the sudoers.d filename-sanitize maps it
+    # to /etc/sudoers.d/alice_smith — the one branch whose failure is silent) and two
+    # keys (exercises the subelements fan-out), while molecule-operator stays single.
+    baseline_sudo_users:
+      - name: molecule-operator
+        keys:
+          - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA/WM19rWc9jhe0qncc4EuoLzkpR28E+oq77lV2HNvaV molecule@test"
+      - name: alice.smith
+        keys:
+          - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAiMn5YPa5+zTGH+dtmHTWBxw5H2/Z587gzTM44n0T9A alice-key1@test"
+          - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID0mUUEyMOboViIle8vOOa3aGVXiH5NC2HnxLp+A5Gj+ alice-key2@test"
+  # baseline as a whole is real-host-only (firewall + DevSec hardening — see
+  # molecule.yml), but its named-sudo-users block is container-safe, so run just
+  # that task file here to give the feature real converge/idempotence/verify coverage.
+  pre_tasks:
+    # Pre-create alice.smith with a DISABLED-password sentinel ('*', not a real
+    # credential) so the role's `password_lock` has an unlocked field to convert
+    # (usermod -L prepends '!' -> '!*'). Without this the account would already be
+    # '!' from useradd and the lock assertion in verify.yml would pass vacuously.
+    # update_password: on_create keeps the field stable across the idempotence re-run.
+    - name: Seed alice.smith with a disabled password so the lock is verifiable
+      ansible.builtin.user:
+        name: alice.smith
+        password: "*"
+        update_password: on_create
+        shell: /bin/bash
+        create_home: true
+    - name: Exercise baseline's named-sudo-users block (container-safe subset)
+      ansible.builtin.include_role:
+        name: baseline
+        tasks_from: sudo_users
   roles:
     - role: decdn_node

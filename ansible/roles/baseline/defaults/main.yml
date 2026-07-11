@@ -15,6 +15,12 @@ ssh_admin_pubkey: ""
 ssh_admin_pubkey_autodetect: true
 # Additional authorized keys for the admin user (full pubkey strings, e.g. teammates).
 ssh_admin_extra_pubkeys: []
+# Additional named sudo users — DISTINCT accounts, not extra keys on the shared admin
+# (that is ssh_admin_extra_pubkeys above). Each entry gets its OWN username, home, and
+# key(s), created key-only exactly like the admin: member of `sudo`, a NOPASSWD
+# sudoers.d drop-in, and a locked password (login by key only). Pubkeys only — no
+# passwords. Shape: [{name: <login>, keys: ["<full pubkey string>", ...]}, ...].
+baseline_sudo_users: []
 # Passwordless, key-only admin account. ssh_hardening disables SSH password auth, so
 # the admin user logs in by key only; with this on (default) the account gets a
 # NOPASSWD sudoers drop-in AND its password is locked — non-interactive sudo / `make
