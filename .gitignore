@@ -1,7 +1,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Secrets & generated state — NEVER commit these.
-# The repo ships only *.example templates; the real files are generated on the
-# VPS by bin/bootstrap.sh / bin/install.sh and live under /etc and /var/lib.
+# The repo ships *.example templates for secret files; the real secrets are generated
+# on the host by the Ansible role tasks and live under /etc and /var/lib. Non-secret
+# config (e.g. ansible host_vars/<node>/main.yml) is committed directly.
 # These patterns are defense-in-depth in case anyone copies generated files in.
 # ─────────────────────────────────────────────────────────────────────────────
 

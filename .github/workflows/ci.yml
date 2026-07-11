@@ -56,8 +56,8 @@ jobs:
       - name: Lint (yamllint + ansible-lint)
         run: make lint
       - name: Syntax-check playbooks
-        # Dummy inventory: the real inventory/hosts.yml is git-ignored, and
-        # --syntax-check only parses, it never connects.
+        # Dummy inventory: no real hosts.yml is committed upstream (only hosts.yml.example),
+        # and --syntax-check only parses, it never connects.
         run: |
           for p in playbooks/site.yml playbooks/anvil.yml playbooks/add-dev-user.yml; do
             echo "::group::syntax-check $p"

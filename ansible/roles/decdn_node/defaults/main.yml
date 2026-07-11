@@ -1,6 +1,7 @@
 ---
-# decdn-node role defaults. Per-node deployment values (rpc_url, contract
-# addresses, region, version) belong in host_vars; see host_vars/*.yml.example.
+# decdn-node role defaults. Per-node deployment values belong in host_vars/<node>/:
+# non-secret config (contract addresses, region, version) in the committed main.yml,
+# and the sensitive rpc_url in a git-ignored secret.yml (see secret.yml.example).
 
 # --- Release to install (REQUIRED — a v<version> GitHub Release must exist) ---
 decdn_node_version: ""            # e.g. "0.1.0" (asserted non-empty)

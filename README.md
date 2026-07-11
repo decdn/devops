@@ -55,10 +55,12 @@ automated here — the node serves paid traffic only after it is staked and regi
 
 ```bash
 cd ansible
-make deps                                     # vendor pinned Galaxy collections into ./collections
+make deps                                      # vendor pinned Galaxy collections into ./collections
 cp inventory/hosts.yml.example inventory/hosts.yml
-$EDITOR inventory/hosts.yml                    # set hosts for decdn_nodes and/or anvil_devnet
-$EDITOR inventory/group_vars/all.yml           # set ssh_admin_pubkey (REQUIRED — prevents lockout)
+$EDITOR inventory/hosts.yml                     # set hosts for decdn_nodes and/or anvil_devnet
+$EDITOR inventory/group_vars/all.yml            # set ssh_admin_pubkey (REQUIRED — prevents lockout)
+cp inventory/host_vars/decdn-node-1/secret.yml.example inventory/host_vars/decdn-node-1/secret.yml
+$EDITOR inventory/host_vars/decdn-node-1/secret.yml   # set decdn_rpc_url (per-node config is in main.yml)
 make check                                     # dry run (--check --diff)
 make deploy                                    # provision the deCDN node
 ```
@@ -71,8 +73,10 @@ and the anvil devnet flow.
 
 - **Nothing secret is committed.** Mnemonics, basic-auth credentials, and eth keystores
   are **generated on — or operator-provisioned to — the target host**, never the repo.
-  Ansible roles render them on the host (`no_log`, `0600`); the repo ships `*.example`
-  templates only, with the root `.gitignore` as a backstop.
+  Ansible roles render them on the host (`no_log`, `0600`); the repo ships a `*.example`
+  template for the one node secret (`rpc_url`) plus a `hosts.yml.example` starter, and commits
+  non-secret per-node config directly (`host_vars/<node>/main.yml`), with the root `.gitignore`
+  as a backstop.
 - **Localhost-only by default.** Backends bind `127.0.0.1`; the only sanctioned public
   path is an explicit reverse proxy / tunnel with auth in front. The node host opens one
   extra hole (udp/4433 QUIC); everything else (anvil 8545, caddy 8080, node metrics 9090,

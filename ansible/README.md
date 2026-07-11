@@ -29,7 +29,8 @@ baseline   host hardening — DevSec os/ssh, nftables default-deny inbound,
 - **No secrets in the repo.** anvil's mnemonic + caddy basic-auth are **generated on the
   host** (stat-guarded, `no_log`, revealed once). The node's eth keystore is
   **operator-provisioned** and never generated here; its `rpc_url` (which may embed an API
-  key) lives in git-ignored `host_vars` and is rendered to a `0600` config.
+  key) lives in a git-ignored `host_vars/<node>/secret.yml` (the rest of `host_vars` is
+  committed, non-secret config) and is rendered to a `0600` config.
 - **Host hardening via DevSec** (`os_hardening` + `ssh_hardening`): key-only SSH, no root
   login, kernel/sysctl/PAM hardening — applied last, after the admin key is in place.
 
@@ -47,7 +48,13 @@ make deps                                    # vendor pinned collections into ./
 cp inventory/hosts.yml.example inventory/hosts.yml
 $EDITOR inventory/hosts.yml                   # set hosts for decdn_nodes and/or anvil_devnet
 $EDITOR inventory/group_vars/all.yml          # optional: override admin user/keys, allowlists
+# Per-node RPC secret (the rest of host_vars/<node>/main.yml is committed config):
+cp inventory/host_vars/decdn-node-1/secret.yml.example inventory/host_vars/decdn-node-1/secret.yml
+$EDITOR inventory/host_vars/decdn-node-1/secret.yml   # set decdn_rpc_url
 ```
+
+Your `hosts.yml` is no longer force-ignored — commit it in your fork if you want, or keep
+it local.
 
 By default baseline **deploys you as yourself**: an empty `ssh_admin_user` resolves to your
 control-machine `$USER`, and an empty `ssh_admin_pubkey` is autodetected from `~/.ssh`
@@ -65,10 +72,13 @@ one).
 **Prerequisites** (see `roles/decdn_node/README.md` for the full flow):
 
 1. A published **`v<version>` release** exists (the role downloads the release tarball).
-2. Per-node `inventory/host_vars/<node>.yml` (git-ignored) with `decdn_node_version`,
-   `decdn_rpc_url`, the three contract addresses, and `decdn_region`. Copy the shipped
-   `host_vars/decdn-node-1.yml.example`. Contract addresses are protocol facts — source
-   them from the deployment / an ADR, never guess.
+2. Per-node config in `inventory/host_vars/<node>/main.yml` (committed) —
+   `decdn_node_version`, the three contract addresses, `decdn_region`, cache origin, … — plus
+   the one secret, `decdn_rpc_url`, in a sibling git-ignored `secret.yml` (copy the shipped
+   `host_vars/decdn-node-1/secret.yml.example`). The committed `main.yml` already carries the
+   Arbitrum Sepolia genesis contract addresses; edit `decdn_region` + cache origin for your
+   node. Contract addresses are protocol facts — source them from the deployment / an ADR,
+   never guess.
 3. The **eth keystore + password file** provisioned on the host (operator step — the wallet
    must be funded + staked per `decdn/adr/019`). Generate with, as the `decdn` user:
    `decdn key-gen --output-dir /var/lib/decdn --password-file /etc/decdn/keystore.password`.
@@ -129,7 +139,8 @@ covers it as a non-mutating dry run.
 ## Configuration
 
 Defaults live in each role (`roles/*/defaults/main.yml`); override in `group_vars`
-(shared) or `host_vars` (per node, git-ignored). Highlights:
+(shared) or `host_vars` (per node; `main.yml` committed config, `secret.yml` git-ignored for
+the RPC URL). Highlights:
 
 | Var | Default | Notes |
 |-----|---------|-------|
@@ -137,7 +148,7 @@ Defaults live in each role (`roles/*/defaults/main.yml`); override in `group_var
 | `ssh_admin_extra_pubkeys` | `[]` | Extra authorized keys for the admin user (teammates). |
 | `baseline_extra_inbound` | `[]` | public inbound ports; `decdn_nodes` opens udp/4433. |
 | `decdn_node_version` | `""` | **required**; a `v<version>` release must exist. |
-| `decdn_rpc_url` + 3 contract addresses | `""` | **required** per node (host_vars); sourced from an ADR/deployment. |
+| `decdn_rpc_url` + 3 contract addresses | `""` | **required** per node — `rpc_url` in `host_vars/<node>/secret.yml`, addresses in `main.yml`; sourced from an ADR/deployment. |
 | `decdn_region` / `decdn_bind_port` / `decdn_rate_per_mb` | `""` / `4433` / `10` | node identity, QUIC port, USDC base units/MB. |
 | `anvil_chain_id` … `rpc_hostname` | see `roles/anvil`,`roles/caddy` | internal devnet knobs. |
 | `caddy_fail2ban` (+ `_maxretry`/`_findtime`/`_bantime`) | `true` (5 / 10m / 1h) | RPC basic-auth brute-force jail; public listener only. |

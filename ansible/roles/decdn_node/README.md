@@ -44,9 +44,10 @@ Per `decdn/adr/019-node-onboarding.md`, a node only serves paid traffic after
    The role **refuses to start** until the keystore + password file exist — it
    never generates wallet material itself.
 
-## Required variables (set in `host_vars/<node>.yml`)
+## Required variables (set in `host_vars/<node>/`)
 
-`decdn_node_version`, `decdn_rpc_url` (sensitive — may embed an API key),
+`decdn_node_version`, `decdn_rpc_url` (sensitive — may embed an API key; goes in the
+git-ignored `secret.yml`, everything else in the committed `main.yml`),
 `decdn_payment_channel_address`, `decdn_capacity_bond_address`,
 `decdn_slash_judge_address` (all `0x`+40-hex; SlashJudge non-zero),
 `decdn_region` (ISO 3166-1 alpha-2). Contract addresses/chain-id are protocol
