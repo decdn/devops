@@ -2,29 +2,49 @@
 # Per-node deployment values. Copy to inventory/host_vars/<node-name>.yml
 # (git-ignored) and fill in. The node refuses to start until these are set.
 #
-# Protocol facts (chain id, contract addresses) are NOT invented here — source
-# them from the canonical deployment / an ADR in decdn/adr/ and cite it.
+# The contract addresses below are the canonical Arbitrum Sepolia (chain 421614)
+# v0.1.0 genesis deploy, cited to decdn/contracts/deployments/421614.json
+# (deployBlock 11249862) — public on-chain facts, not invented here. If you target
+# a different deployment, replace them (and chain_id) with that deployment's values.
+# MUST-EDIT lines are yours to fill; the rest match the genesis deploy.
 
 # Pinned release to install (a v<version> GitHub Release must exist).
 decdn_node_version: "0.1.0"
 # Recommended: pin the tarball's sha256 (no checksums file is published upstream).
 decdn_node_sha256: ""
 
-# --- Chain (required; sourced from the deployment / ADR — do not guess) -------
-decdn_rpc_url: "https://YOUR-ARB-SEPOLIA-RPC/with-key"   # SENSITIVE (may embed an API key)
+# --- Chain (Arbitrum Sepolia, chain 421614) -----------------------------------
+# MUST-EDIT — SENSITIVE (may embed an API key). The public endpoint below works
+# for light use; run your own or use a provider for production reliability.
+decdn_rpc_url: "https://sepolia-rollup.arbitrum.io/rpc"
 decdn_chain_id: 421614                                   # Arbitrum Sepolia
-# Non-hex sentinels so a half-filled copy fails the deploy-time asserts loudly
-# (the zero address would otherwise slip through). Replace with real addresses.
-decdn_payment_channel_address: "0xREPLACE_PaymentChannel_FROM_DEPLOYMENT"
-decdn_capacity_bond_address: "0xREPLACE_CapacityBond_FROM_DEPLOYMENT"
-decdn_slash_judge_address: "0xREPLACE_SlashJudge_FROM_DEPLOYMENT"
+# Required contracts (deployments/421614.json).
+decdn_payment_channel_address: "0xb4bcA0AbF679212708164dCAb98eFa621Fa0F4d3"   # PaymentChannel
+decdn_capacity_bond_address: "0x2aF490628579c08DC6D0B013090cDC11D4d60Dd4"     # CapacityBond
+decdn_slash_judge_address: "0x20abcCC80F595a586f4Bd906a1b00c4196416EB7"       # SlashJudge
 
 # --- Slash appeals (optional; ADR 028) ----------------------------------------
-# decdn_slash_appeal_address: "0xREPLACE_SlashAppeal_FROM_DEPLOYMENT"  # for `decdn appeal slash`
-# decdn_slash_judge_from_block: 0   # SlashJudge deploy block — set to bound per-restart RPC rescan
+decdn_slash_appeal_address: "0x0D60c0AbffBb5D612B66DB6bDd0d741BB36072cF"       # SlashAppeal
+decdn_slash_judge_from_block: 11249862   # SlashJudge deploy block — bounds per-restart rescan
+
+# --- Origin directory (optional; ADR 022 — set both or neither) ---------------
+decdn_origin_assignment_address: "0x06b394f497481c33FB5ae164d5FbB0307299546c"  # OriginAssignment
+decdn_publisher_registry_address: "0x32c811eA20326B911B518c2Cf38f9f172aC02e6c" # PublisherRegistry
+decdn_origin_directory_from_block: 11249862   # PublisherRegistry deploy block
+
+# --- Content blacklist compliance (optional; ADR 011/031) ---------------------
+decdn_content_blacklist_address: "0xd4b2b7CC768c14004dC3400743E2EDB0724355f3"  # ContentBlacklist
+decdn_content_blacklist_from_block: 11249862  # ContentBlacklist deploy block
+
+# --- Cache pull-through origin (what the node fetches on a cache miss) ---------
+# MUST-EDIT — operator-specific backing origin (NOT a chain fact). A serving node
+# needs one, else cache misses fail NoOrigin. http shown; see defaults/main.yml for
+# fs / s3 fields.
+decdn_cache_origin_kind: "http"
+decdn_cache_origin_url: "https://your-origin.example/"
 
 # --- Node identity / locale ---------------------------------------------------
-decdn_region: "US"            # ISO 3166-1 alpha-2 of the node's physical location
+decdn_region: "US"            # MUST-EDIT — ISO 3166-1 alpha-2 of the node's physical location
 # decdn_relay_url: ""         # optional iroh relay for NAT traversal
 
 # --- Economics ----------------------------------------------------------------
