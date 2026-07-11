@@ -229,6 +229,12 @@
   register: decdn_pw_pregen_stat
   when: decdn_node_generate_keystore | bool
 
+# Wallet generation mutates host state via a binary, which `--check` cannot dry-run
+# faithfully (the command modules skip, and the password copy would otherwise simulate
+# an empty-content write). Skip generation under check mode so `make check` stays clean
+# and deterministic; on a genuinely unprovisioned host the gate below then reports what
+# is missing — the same as the default (generate=false) posture.
+#
 # Only for a fresh wallet: keystore absent AND password absent. A password present
 # beside a missing keystore is a valid operator-first-provisioned password — keep it
 # and let key-gen bind to it below.
@@ -239,6 +245,7 @@
   changed_when: true
   when:
     - decdn_node_generate_keystore | bool
+    - not ansible_check_mode
     - not decdn_keystore_pregen_stat.stat.exists
     - not decdn_pw_pregen_stat.stat.exists
 
@@ -252,6 +259,7 @@
   no_log: true                     # the password protects the keystore at rest
   when:
     - decdn_node_generate_keystore | bool
+    - not ansible_check_mode
     - not decdn_keystore_pregen_stat.stat.exists
     - not decdn_pw_pregen_stat.stat.exists
 
@@ -265,7 +273,9 @@
   become: true
   become_user: "{{ decdn_user }}"
   register: decdn_keygen
-  when: decdn_node_generate_keystore | bool
+  when:
+    - decdn_node_generate_keystore | bool
+    - not ansible_check_mode
 
 # NOTE: key-gen uses keystore.json as its `creates:` sentinel, but the pre-start gate
 # below stats node.secret too — so a partial run (keystore.json written, node.secret

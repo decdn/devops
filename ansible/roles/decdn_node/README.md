@@ -68,8 +68,9 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
    §2.2–2.3. There is **no turnkey `decdn` subcommand** for registration yet (the
    onboarding CLI is listed as *Deferred* in ADR 019); perform the txns out-of-band.
 
-   The role **refuses to start** until the keystore + password file exist — by
-   default it never generates wallet material itself. Set
+   The role **refuses to start** until the keystore, node identity (`node.secret`),
+   and password file all exist — by default it never generates wallet material
+   itself. Set
    `decdn_node_generate_keystore: true` to have the role run the `key-gen` above
    for you on first converge (it mints a random password file too, and never
    overwrites existing material) — but the wallet is still **unfunded + unstaked**,

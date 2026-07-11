@@ -44,11 +44,12 @@
           (all 0600) from nothing, but one is missing or not 0600 — the
           decdn_node_generate_keystore block did not run as expected.
 
-    - name: Assert the keystore + password are owned by the decdn user
+    - name: Assert the keystore + password + node identity are owned by the decdn user
       ansible.builtin.assert:
         that:
           - decdn_wallet.results[0].stat.pw_name == 'decdn'
           - decdn_wallet.results[1].stat.pw_name == 'decdn'
+          - decdn_wallet.results[2].stat.pw_name == 'decdn'
         fail_msg: "generated wallet material is not owned by the decdn user"
 
     - name: Stat the systemd unit
