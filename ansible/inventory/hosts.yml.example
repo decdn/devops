@@ -11,12 +11,14 @@
 # /usr/bin/sudo. Ansible's sudo become plugin passes a custom `-p` prompt sentinel and
 # waits for it before sending the become password; sudo-rs does not honor that custom
 # `-p`, so `--ask-become-pass` / -K hangs with "Timeout waiting for privilege
-# escalation prompt". Classic sudo is still installed at /usr/bin/sudo.ws and honors
-# the -p prompt Ansible expects — point become at it with the per-host
-# `ansible_become_exe` line below. Password sudo is preserved (no NOPASSWD, no host
-# change). Only uncomment on an affected host: `sudo --version` reports "sudo-rs"
-# and/or /usr/bin/sudo.ws exists. Leave it commented on Debian bookworm / Ubuntu
-# noble — that path does not exist there.
+# escalation prompt". This only bites when a become PASSWORD is actually sent: with the
+# default `ssh_admin_passwordless_sudo: true` the admin user has NOPASSWD sudo, so
+# Ansible sends no become password and the hang never occurs. It resurfaces only if you
+# set `ssh_admin_passwordless_sudo: false` (classic password sudo). Fix: classic sudo is
+# still installed at /usr/bin/sudo.ws and honors the -p prompt Ansible expects — point
+# become at it with the per-host `ansible_become_exe` line below. Only uncomment on an
+# affected host: `sudo --version` reports "sudo-rs" and/or /usr/bin/sudo.ws exists. Leave
+# it commented on Debian bookworm / Ubuntu noble — that path does not exist there.
 
 # PRIMARY: public deCDN node(s) — provisioned by playbooks/site.yml.
 # Per-node config (contract addresses, region, version, …) goes in the committed
