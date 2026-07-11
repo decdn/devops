@@ -39,6 +39,12 @@ baseline   host hardening — DevSec os/ssh, nftables default-deny inbound,
 - Control machine: **Ansible ≥ 2.15**, `ansible-lint`, `yamllint` (and Docker + `molecule`
   + `molecule-plugins[docker]` for the anvil molecule scenario).
 - Target: **Debian (bookworm)** host(s) reachable over SSH with a sudo-capable user.
+  - **Ubuntu sudo-rs note:** 25.10+ (and 26.04) ship `sudo-rs` as the default `sudo`,
+    which doesn't honor the custom `-p` become prompt Ansible relies on — so
+    `--ask-become-pass` hangs with "Timeout waiting for privilege escalation prompt". On
+    an affected host uncomment `ansible_become_exe: /usr/bin/sudo.ws` for that host in
+    `hosts.yml` (see the note in `inventory/hosts.yml.example`) to route become through
+    classic sudo.
 
 ## Setup
 
