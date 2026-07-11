@@ -18,6 +18,11 @@ In order — the ordering matters:
    locked (`ssh_admin_passwordless_sudo`), so sudo / `make deploy` needs no become
    password and no password can authenticate. Set the knob `false` for classic
    password sudo (you must then set a password on the account yourself).
+   Additional **named** operator accounts come from `baseline_sudo_users` — each a
+   distinct login (own username, home, and key), created key-only exactly like the
+   admin (member of `sudo`, NOPASSWD drop-in, locked password). Use this to give
+   teammates their own accounts rather than sharing keys on the admin via
+   `ssh_admin_extra_pubkeys`.
 3. **Firewall** — nftables **default-deny inbound**; SSH is the only universally-open
    port. Extra public listeners are declared explicitly via `baseline_extra_inbound`.
 4. **Auto-patching** — `unattended-upgrades` for security updates.
@@ -54,7 +59,8 @@ expect — set both explicitly in that case.
 | `ssh_admin_user` | `""` | Admin sudo account; created before SSH hardening. Empty = the control machine's local `$USER`. |
 | `ssh_admin_pubkey` | `""` | Admin key. Empty = autodetected from `~/.ssh` (`id_ed25519`/`ecdsa`/`rsa`). Set to override. |
 | `ssh_admin_pubkey_autodetect` | `true` | When `ssh_admin_pubkey` is empty, read the operator's default local public key. |
-| `ssh_admin_extra_pubkeys` | `[]` | Additional authorized keys (full pubkey strings) — e.g. other operators. |
+| `ssh_admin_extra_pubkeys` | `[]` | Additional authorized keys (full pubkey strings) on the **shared** admin account — e.g. other operators. |
+| `baseline_sudo_users` | `[]` | **Distinct** named sudo accounts, created key-only like the admin. Each item `{name, keys: [...]}` (pubkeys only). |
 | `ssh_admin_passwordless_sudo` | `true` | Give the admin user NOPASSWD sudo and lock its password (key-only). Set `false` for classic password sudo. |
 | `ssh_allow_cidrs` | `[]` | Optional inbound-SSH source allowlist (CIDRs). Empty = any source. |
 | `baseline_extra_inbound` | `[]` | Extra public inbound ports. Each item `{proto, port, comment}`. Loopback services need nothing here; the deCDN node opens udp/4433. |

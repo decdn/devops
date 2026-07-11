@@ -21,6 +21,14 @@ ssh_admin_pubkey_autodetect: true # read ~/.ssh (id_ed25519 > ecdsa > rsa) when 
 #   - "ssh-ed25519 AAAA... bob@laptop"
 ssh_admin_extra_pubkeys: []
 
+# Additional NAMED sudo users — DISTINCT accounts (own username, home, key), not extra
+# keys on the shared admin above. Each is created key-only like the admin (sudo group,
+# NOPASSWD drop-in, locked password). Uncomment and add real users to enable:
+# baseline_sudo_users:
+#   - name: alice
+#     keys:
+#       - "ssh-ed25519 AAAA... alice@laptop"
+
 # Key-only admin account: NOPASSWD sudo + locked password (default true). Set false to
 # keep classic password sudo — you must then set a password on the account yourself.
 ssh_admin_passwordless_sudo: true
