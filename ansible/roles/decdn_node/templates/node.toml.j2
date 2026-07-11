@@ -24,7 +24,7 @@ slash_judge_address = "{{ decdn_slash_judge_address }}"
 slash_appeal_address = "{{ decdn_slash_appeal_address }}"
 {% endif %}
 {% if decdn_slash_judge_from_block | int > 0 %}
-slash_judge_from_block = {{ decdn_slash_judge_from_block }}
+slash_judge_from_block = {{ decdn_slash_judge_from_block | int }}
 {% endif %}
 
 [payment]
