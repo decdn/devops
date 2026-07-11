@@ -17,8 +17,9 @@
     - name: Assert the decdn system user exists with a nologin shell
       ansible.builtin.assert:
         that:
-          - getent_passwd['decdn'] is defined
-          - "'nologin' in getent_passwd['decdn'][5]"
+          # Single expression so a missing user short-circuits to the fail_msg
+          # rather than raising AnsibleUndefinedVariable on the [5] deref.
+          - getent_passwd['decdn'] is defined and 'nologin' in getent_passwd['decdn'][5]
         fail_msg: "decdn system user missing or has a login shell"
 
     - name: Stat the rendered config + secret env file
@@ -33,10 +34,10 @@
     - name: Assert node.toml (0640) and the secret env file (0600) modes
       ansible.builtin.assert:
         that:
-          - decdn_files.results[0].stat.exists
-          - decdn_files.results[0].stat.mode == '0640'
-          - decdn_files.results[1].stat.exists
-          - decdn_files.results[1].stat.mode == '0600'
+          # exists-and-mode in one expression: a missing file short-circuits to
+          # the fail_msg instead of raising on the absent stat.mode.
+          - decdn_files.results[0].stat.exists and decdn_files.results[0].stat.mode == '0640'
+          - decdn_files.results[1].stat.exists and decdn_files.results[1].stat.mode == '0600'
           - decdn_files.results[2].stat.exists
         fail_msg: "node.toml / decdn.env / unit missing or wrong mode"
 
@@ -69,6 +70,9 @@
     - name: Assert decdn-node is enabled and running
       ansible.builtin.assert:
         that:
-          - "'decdn-node.service' in ansible_facts.services"
-          - ansible_facts.services['decdn-node.service'].state == 'running'
+          # Membership-and-state in one expression so an absent service
+          # short-circuits to the fail_msg instead of raising on .state.
+          - >-
+            'decdn-node.service' in ansible_facts.services
+            and ansible_facts.services['decdn-node.service'].state == 'running'
         fail_msg: "decdn-node is not running — check: journalctl -u decdn-node -e"
