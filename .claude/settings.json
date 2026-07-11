@@ -1,0 +1,5 @@
+{
+  "enabledPlugins": {
+    "cicd-automation@claude-code-workflows": true
+  }
+}
