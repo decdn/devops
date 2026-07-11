@@ -6,6 +6,17 @@
 # First run: connect as a user that can sudo (often root) to bootstrap the box.
 # After the baseline role creates {{ ssh_admin_user }} and ssh_hardening disables
 # root login, switch ansible_user to that admin account.
+#
+# Ubuntu sudo-rs workaround: 25.10 (Questing) and 26.04 ship sudo-rs as the default
+# /usr/bin/sudo. Ansible's sudo become plugin passes a custom `-p` prompt sentinel and
+# waits for it before sending the become password; sudo-rs does not honor that custom
+# `-p`, so `--ask-become-pass` / -K hangs with "Timeout waiting for privilege
+# escalation prompt". Classic sudo is still installed at /usr/bin/sudo.ws and honors
+# the -p prompt Ansible expects — point become at it with the per-host
+# `ansible_become_exe` line below. Password sudo is preserved (no NOPASSWD, no host
+# change). Only uncomment on an affected host: `sudo --version` reports "sudo-rs"
+# and/or /usr/bin/sudo.ws exists. Leave it commented on Debian bookworm / Ubuntu
+# noble — that path does not exist there.
 
 # PRIMARY: public deCDN node(s) — provisioned by playbooks/site.yml.
 # Per-node config (contract addresses, region, version, …) goes in the committed
@@ -16,6 +27,7 @@ decdn_nodes:
     decdn-node-1:
       ansible_host: REPLACE_WITH_NODE_VPS_IP_OR_DNS
       ansible_user: root
+      # ansible_become_exe: /usr/bin/sudo.ws   # Ubuntu sudo-rs workaround — see note above
 
 # INTERNAL: our anvil devnet — provisioned by playbooks/anvil.yml. Keep on a
 # separate host from the public node(s).
@@ -24,3 +36,4 @@ anvil_devnet:
     anvil-vps:
       ansible_host: REPLACE_WITH_INTERNAL_VPS_IP_OR_DNS
       ansible_user: root
+      # ansible_become_exe: /usr/bin/sudo.ws   # Ubuntu sudo-rs workaround — see note above
