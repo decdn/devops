@@ -3,8 +3,16 @@
 # non-secret config (contract addresses, region, version) in the committed main.yml,
 # and the sensitive rpc_url in a git-ignored secret.yml (see secret.yml.example).
 
-# --- Release to install (REQUIRED — a v<version> GitHub Release must exist) ---
-decdn_node_version: ""            # e.g. "0.1.0" (asserted non-empty)
+# --- Install method -----------------------------------------------------------
+# "release" (default): download the pinned GitHub Release tarballs (a v<version>
+# release must exist). "manual": copy locally-built binaries from the Ansible
+# control machine — for pre-release / dev deploys where no release exists yet.
+decdn_node_install_method: release   # "release" | "manual"
+decdn_node_manual_bin_src: ""        # manual: control-machine path to the decdn-node daemon binary
+decdn_cli_manual_bin_src: ""         # manual: control-machine path to the decdn CLI binary
+
+# --- Release to install (REQUIRED in "release" mode — a v<version> GitHub Release must exist) ---
+decdn_node_version: ""            # e.g. "0.1.0" (asserted non-empty in "release" mode)
 decdn_node_target: x86_64-unknown-linux-gnu
 decdn_node_sha256: ""            # optional "abc123..." to pin the daemon tarball
 decdn_cli_sha256: ""            # optional, for the decdn CLI tarball

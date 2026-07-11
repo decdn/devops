@@ -1,8 +1,11 @@
 # roles/decdn_node
 
-Provisions a **public deCDN node** (`decdn-node` daemon) from a pinned GitHub
-Release tarball, under a hardened systemd unit. This is the repo's **primary**
-deployment (`playbooks/site.yml`); the anvil devnet is separate internal tooling.
+Provisions a **public deCDN node** (`decdn-node` daemon) under a hardened systemd
+unit. Two install methods (`decdn_node_install_method`): the default `release`
+pulls a pinned GitHub Release tarball, and `manual` copies locally-built binaries
+from the Ansible control machine — the pre-release path for when no release exists
+yet. This is the repo's **primary** deployment (`playbooks/site.yml`); the anvil
+devnet is separate internal tooling.
 
 ## What this role does (and does not)
 
@@ -18,11 +21,22 @@ Per `decdn/adr/019-node-onboarding.md`, a node only serves paid traffic after
 
 ## Prerequisites
 
-1. **A published release.** The role downloads
-   `decdn-node-<ver>-<target>.tar.gz` (and the `decdn` CLI) from
-   `github.com/decdn/decdn/releases`. Set `decdn_node_version` to a real
-   `v<version>` release. *(No release exists yet — cut one with the upstream
-   `release.yml` workflow first.)*
+1. **The binaries.** Pick an install method with `decdn_node_install_method`:
+
+   - **`release`** (default) — the role downloads
+     `decdn-node-<ver>-<target>.tar.gz` (and the `decdn` CLI) from
+     `github.com/decdn/decdn/releases`. Set `decdn_node_version` to a real
+     `v<version>` release. *(No release exists yet — either cut one with the
+     upstream `release.yml` workflow, or use `manual` below in the meantime.)*
+   - **`manual`** — the role copies the two binaries **verbatim** from the paths
+     you give it (`decdn_node_manual_bin_src` + `decdn_cli_manual_bin_src`) on the
+     Ansible control machine; it does *not* consult `decdn_node_target`, so you are
+     responsible for building for the host's architecture (the default target is
+     `x86_64-unknown-linux-gnu`). Build both `decdn-node` and `decdn` from the
+     upstream `decdn` repo, then set the two paths. `decdn_node_version` is **not**
+     required in this mode — but if it is set (e.g. left over from a `release`
+     deploy) the `--version` backstop still enforces it, so clear it when switching
+     to `manual` unless you intend that binary to report that exact version.
 
 2. **Eth wallet (operator-provisioned).** Generate the node identity + eth
    keystore on the host, as the `decdn` user, into the data dir:
@@ -46,9 +60,10 @@ Per `decdn/adr/019-node-onboarding.md`, a node only serves paid traffic after
 
 ## Required variables (set in `host_vars/<node>/`)
 
-`decdn_node_version`, `decdn_rpc_url` (sensitive — may embed an API key; goes in the
-git-ignored `secret.yml`, everything else in the committed `main.yml`),
-`decdn_payment_channel_address`, `decdn_capacity_bond_address`,
+`decdn_node_version` (`release` mode only) **or** `decdn_node_manual_bin_src` +
+`decdn_cli_manual_bin_src` (`manual` mode), `decdn_rpc_url` (sensitive — may embed an
+API key; goes in the git-ignored `secret.yml`, everything else in the committed
+`main.yml`), `decdn_payment_channel_address`, `decdn_capacity_bond_address`,
 `decdn_slash_judge_address` (all `0x`+40-hex; SlashJudge non-zero),
 `decdn_region` (ISO 3166-1 alpha-2). Contract addresses/chain-id are protocol
 facts — source them from the deployment / an ADR, never guess.
@@ -106,6 +121,16 @@ decdn node peers
 decdn appeal slash <SLASH_ID> <EVIDENCE_BUNDLE_HASH>
 ```
 
-Upgrades: bump `decdn_node_version` (+ `decdn_node_sha256`) and re-deploy — the
-version stamp triggers re-install + restart; the persistent `node.secret` and
-`keystore.json` are untouched.
+Upgrades (`release` mode): bump `decdn_node_version` (+ `decdn_node_sha256`) and
+re-deploy — the version stamp triggers re-install + restart; the persistent
+`node.secret` and `keystore.json` are untouched.
+
+Upgrades (`manual` mode): there is **no** version stamp — rebuild the binaries
+locally and re-deploy. `copy` compares checksums and re-pushes (and restarts) only
+when the control-machine binary actually changed.
+
+Switching methods: a `manual` deploy clears the release version stamp on the host,
+so returning to `release` afterwards always re-fetches and re-installs the official
+tarball — even when `decdn_node_version` is unchanged. (This is separate from the
+`--version` backstop: a `decdn_node_version` left set in `manual` mode is still
+enforced against the local build — see the `manual` prerequisite above.)
