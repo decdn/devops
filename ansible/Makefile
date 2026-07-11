@@ -25,8 +25,10 @@ deploy:
 # --- Tests -------------------------------------------------------------------
 # Containerised converge + idempotence + verify of the decdn_node role against a
 # stub daemon (needs Docker; a privileged systemd container). See molecule/.
+# `--all` runs every scenario: `default` (operator-provisioned keystore) and
+# `generate-keystore` (opt-in host-side wallet generation).
 molecule:
-	molecule test
+	molecule test --all
 
 # --- Galaxy collection (decdn.node) ------------------------------------------
 # Stage baseline + decdn_node into a clean collection tree and build the artifact

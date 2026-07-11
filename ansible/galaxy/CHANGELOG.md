@@ -19,6 +19,11 @@ Not yet published to Galaxy (pre-1.0; the published shape may still change).
 - `decdn.node.decdn_node` — the `decdn-node` daemon, installed from a pinned GitHub
   Release tarball under a hardened systemd unit; public QUIC udp/4433, loopback
   metrics + admin RPC.
+- `decdn_node_generate_keystore` (default `false`) — opt-in host-side wallet
+  generation: when `true` the `decdn_node` role runs `decdn key-gen` only if the
+  keystore is absent (minting a random `0600` password file first, but only when the
+  keystore is also absent), never overwriting an existing wallet. Funding + on-chain
+  staking/registration remain a manual step.
 
 <!-- No release tags exist yet; these resolve today. Switch to compare/tag links
      (compare/v0.1.0...HEAD and releases/tag/v0.1.0) once v0.1.0 is cut. -->

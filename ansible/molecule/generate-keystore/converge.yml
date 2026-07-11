@@ -1,0 +1,28 @@
+---
+# Converge with decdn_node_generate_keystore: true and NO pre-staged keystore, so
+# the role's opt-in generation block has to mint the password file + keystore on the
+# host. Chain/contract knobs mirror ../default/converge.yml (placeholder but well-
+# formed, so the role's fail-loud asserts still run). The stub daemon is shared with
+# the default scenario — it implements the `key-gen` subcommand this path invokes.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    # Reuse the single shared stub from the default scenario (do not duplicate it).
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/default/files/decdn-node-stub"
+    decdn_node_install_method: manual
+    decdn_node_manual_bin_src: "{{ stub_bin }}"
+    decdn_cli_manual_bin_src: "{{ stub_bin }}"
+    decdn_node_version: "0.0.0-molecule-stub"
+    # The feature under test: generate the wallet on the host if absent.
+    decdn_node_generate_keystore: true
+    decdn_rpc_url: "https://rpc.example.invalid/"
+    decdn_chain_id: 421614
+    decdn_region: "US"
+    decdn_payment_channel_address: "0x1111111111111111111111111111111111111111"
+    decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
+    decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
+    decdn_cache_origin_kind: "http"
+    decdn_cache_origin_url: "https://origin.example.invalid/"
+  roles:
+    - role: decdn_node

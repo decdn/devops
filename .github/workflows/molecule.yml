@@ -36,4 +36,6 @@ jobs:
       - name: Install Galaxy collections
         run: make deps
       - name: molecule test
-        run: molecule test
+        # --all runs both scenarios: default (operator-provisioned keystore) and
+        # generate-keystore (opt-in host-side wallet generation).
+        run: molecule test --all

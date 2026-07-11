@@ -83,9 +83,13 @@ one).
    node. Contract addresses are protocol facts — source them from the deCDN contract
    deployment / an ADR, never guess.
 3. The **eth keystore + password file** provisioned on the host (operator step — the wallet
-   must be funded + staked per the deCDN node-onboarding ADR, 019). Generate with, as the
-   `decdn` user:
-   `decdn key-gen --output-dir /var/lib/decdn --password-file /etc/decdn/keystore.password`.
+   must be funded + staked per the deCDN node-onboarding ADR, 019). As the `decdn` user,
+   create the password file FIRST (`key-gen` reads it, never creates it), then generate the
+   keys into the data dir — pass `--output-dir` explicitly (a bare `decdn key-gen` writes to
+   `~/.decdn`, which the node won't read). Full copy-pasteable sequence: see
+   [`roles/decdn_node/README.md`](roles/decdn_node/README.md) step 2. Or set
+   `decdn_node_generate_keystore: true` to have the role do all of that on first converge
+   (never overwriting existing material); funding + staking stay manual regardless.
 
 ```bash
 make check          # dry run (--check --diff); asserts fire if required knobs are missing

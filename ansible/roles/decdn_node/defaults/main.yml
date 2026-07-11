@@ -93,6 +93,14 @@ decdn_env_file: /etc/decdn/decdn.env     # DECDN_RPC_URL (sensitive) — 0600
 # Eth keystore lives in the data dir (matches `decdn key-gen --output-dir`).
 decdn_keystore_file: /var/lib/decdn/keystore.json          # operator-provisioned (0600)
 decdn_keystore_password_file: /etc/decdn/keystore.password  # operator-provisioned (0600)
+# Opt-in turnkey wallet: when true, this role mints a fresh wallet on the host ONLY
+# when the keystore is absent — it never overwrites an existing (possibly funded) one.
+# It runs `decdn key-gen`, generating a random 0600 password file first, but only when
+# the keystore is ALSO absent (a password beside a missing keystore is treated as
+# operator-provided and reused). Default false keeps the operator-provisioned posture.
+# NOTE: the generated wallet is still UNFUNDED and UNSTAKED — funding the wallet plus
+# on-chain staking + registration (ADR 019 Phase 2) remain a manual operator step.
+decdn_node_generate_keystore: false
 decdn_cache_dir: /var/lib/decdn/cache
 decdn_bin: /usr/local/bin/decdn-node
 decdn_cli_bin: /usr/local/bin/decdn

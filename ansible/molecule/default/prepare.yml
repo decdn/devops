@@ -33,3 +33,12 @@
         dest: "{{ decdn_etc }}/keystore.password"
         content: "molecule-placeholder\n"
         mode: "0644"
+
+    # The role's pre-start gate also requires the node identity (node.secret), a
+    # co-equal key-gen output. Stage it at 0644 so verify.yml can attribute the
+    # 0600 lock-down to the role.
+    - name: Stage a placeholder node identity
+      ansible.builtin.copy:
+        dest: "{{ decdn_home }}/node.secret"
+        content: "molecule-placeholder-node-secret\n"
+        mode: "0644"

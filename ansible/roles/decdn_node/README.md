@@ -41,14 +41,25 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
      to `manual` unless you intend that binary to report that exact version.
 
 2. **Eth wallet (operator-provisioned).** Generate the node identity + eth
-   keystore on the host, as the `decdn` user, into the data dir:
+   keystore on the host, as the `decdn` user, directly into the data dir. `key-gen`
+   **reads** the password file — it does *not* create it — so make it first:
 
    ```bash
-   # create the password file first (0600), then:
+   # 1) create the keystore password file FIRST (key-gen reads it; never creates it)
+   umask 077
+   openssl rand -base64 32 | sudo -u decdn tee /etc/decdn/keystore.password >/dev/null
+   sudo -u decdn chmod 600 /etc/decdn/keystore.password
+
+   # 2) generate keys INTO the data dir. Pass --output-dir explicitly: a bare
+   #    `decdn key-gen` writes to ~/.decdn and the node would NOT find its keys.
    sudo -u decdn decdn key-gen \
      --output-dir /var/lib/decdn \
      --password-file /etc/decdn/keystore.password
    # prints: node id: <NodeId>   eth address: <0x…>
+
+   # 3) verify all three are present (the role locks them to 0600 on deploy)
+   ls -l /var/lib/decdn/node.secret /var/lib/decdn/keystore.json \
+         /etc/decdn/keystore.password
    ```
 
    This writes `/var/lib/decdn/node.secret` + `/var/lib/decdn/keystore.json`.
@@ -57,8 +68,13 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
    §2.2–2.3. There is **no turnkey `decdn` subcommand** for registration yet (the
    onboarding CLI is listed as *Deferred* in ADR 019); perform the txns out-of-band.
 
-   The role **refuses to start** until the keystore + password file exist — it
-   never generates wallet material itself.
+   The role **refuses to start** until the keystore, node identity (`node.secret`),
+   and password file all exist — by default it never generates wallet material
+   itself. Set
+   `decdn_node_generate_keystore: true` to have the role run the `key-gen` above
+   for you on first converge (it mints a random password file too, and never
+   overwrites existing material) — but the wallet is still **unfunded + unstaked**,
+   so the funding + registration steps below stay manual either way.
 
 ## Required variables (set in `host_vars/<node>/`)
 
@@ -87,6 +103,15 @@ Optional (omitted from `node.toml` unless set):
   origin the node fetches on a cache miss. **A serving node needs one:** unset ⇒ no
   `[cache.origin]` and cache misses fail `NoOrigin` (the node can only serve blobs it
   already holds).
+- `decdn_node_generate_keystore` (default `false`) — opt-in turnkey wallet. When `true`
+  the role runs `decdn key-gen` on the host **only if the keystore is absent** (minting a
+  random `0600` password file first, but only when the keystore is *also* absent) — it
+  never overwrites an existing wallet, and it will not mint a password beside a
+  pre-existing keystore (that password couldn't decrypt it; the gate fails loud instead so
+  you supply the matching one). The generated wallet is still **unfunded + unstaked**
+  (funding + on-chain staking/registration stay manual — see the eth-wallet step above).
+  Leave `false` to keep the operator-provisioned posture (the fail-loud gate then requires
+  you to provision the keystore, `node.secret`, and password yourself).
 
 Source contract addresses / chain-id from the deCDN contract deployment for your target
 chain, or the relevant ADR — never guess. See `roles/decdn_node/defaults/main.yml` for the

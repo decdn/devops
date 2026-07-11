@@ -44,20 +44,22 @@
     # prepare.yml stages the keystore + password at 0644; the role is responsible
     # for locking them to 0600. Asserting 0600 here therefore verifies the role's
     # lock-down actually ran, not a mode prepare pre-set.
-    - name: Stat the operator keystore + password file
+    - name: Stat the operator keystore + node identity + password file
       ansible.builtin.stat:
         path: "{{ item }}"
       register: decdn_secrets
       loop:
         - /var/lib/decdn/keystore.json
+        - /var/lib/decdn/node.secret
         - "{{ decdn_etc }}/keystore.password"
 
-    - name: Assert the keystore + password file are locked to 0600
+    - name: Assert the keystore + node identity + password file are locked to 0600
       ansible.builtin.assert:
         that:
           - decdn_secrets.results[0].stat.exists and decdn_secrets.results[0].stat.mode == '0600'
           - decdn_secrets.results[1].stat.exists and decdn_secrets.results[1].stat.mode == '0600'
-        fail_msg: "keystore / password file missing or not 0600 (role lock-down did not run)"
+          - decdn_secrets.results[2].stat.exists and decdn_secrets.results[2].stat.mode == '0600'
+        fail_msg: "keystore / node.secret / password file missing or not 0600 (role lock-down did not run)"
 
     # Parse node.toml AND assert its content — a validity-only check would pass
     # even if the role rendered metrics_bind = 0.0.0.0 or dropped a contract

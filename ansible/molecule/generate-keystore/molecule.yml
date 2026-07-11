@@ -1,0 +1,44 @@
+---
+# Containerised converge + idempotence + verify for the OPT-IN turnkey wallet path
+# (decdn_node_generate_keystore: true). Unlike the `default` scenario, this one does
+# NOT stage a keystore in a prepare step — the whole point is to prove the role mints
+# the password file + keystore from nothing (and never re-mints on a second converge).
+#
+# `baseline` is NOT exercised here for the same reasons as the `default` scenario
+# (host-level hardening is meaningless in a throwaway systemd container) — see
+# ../default/molecule.yml. This scenario reuses the shared stub daemon under
+# ../default/files/decdn-node-stub (which implements a `key-gen` subcommand).
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../requirements.yml
+driver:
+  name: docker
+platforms:
+  - name: decdn-node-genks-molecule
+    # Same image as the default scenario, pinned by digest for reproducible CI.
+    # Re-resolve the digest to bump (keep in sync with ../default/molecule.yml).
+    image: geerlingguy/docker-debian12-ansible@sha256:4553092be2c00b1ffe580927b9ff03f3c3a0df32b7dd693a3eb02efb6c2b77b7
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+verifier:
+  name: ansible
+scenario:
+  # No `prepare` — the role must generate the wallet itself. `idempotence` proves
+  # the stat/`creates:` gating makes a second converge a no-op (nothing re-minted).
+  test_sequence:
+    - dependency
+    - create
+    - converge
+    - idempotence
+    - verify
+    - destroy
