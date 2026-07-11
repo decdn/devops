@@ -131,12 +131,14 @@
         (decdn_cache_origin_kind != "s3")
         or (decdn_cache_origin_s3_bucket | length > 0
             and decdn_cache_origin_s3_region | length > 0)
-      # Optional http knob — the daemon's DecompressMode enum accepts only these
-      # two; an unchecked typo renders TOML that fails config load as a crash-loop.
-      - decdn_cache_origin_decompress in ["", "auto", "strict"]
-      # path_style feeds a `| bool` gate in node.toml.j2. Assert a real boolean so a
-      # quoted "false" fails here rather than silently coercing to path_style = true.
-      - decdn_cache_origin_s3_path_style | string | lower in ["true", "false"]
+      # Validate each kind's optional value-shape ONLY for the selected kind — a
+      # leftover value for a non-selected kind is never rendered, so it must not
+      # fail an unrelated deploy. http: DecompressMode accepts only auto|strict (a
+      # typo would render TOML the daemon rejects at load — an opaque crash-loop).
+      - (decdn_cache_origin_kind != "http") or (decdn_cache_origin_decompress in ["", "auto", "strict"])
+      # s3: path_style feeds a `| bool` gate in node.toml.j2; require a REAL boolean
+      # so a quoted "false" is rejected here, not silently coerced to path_style = true.
+      - (decdn_cache_origin_kind != "s3") or (decdn_cache_origin_s3_path_style is boolean)
     fail_msg: >-
       decdn_cache_origin_kind must be one of http|fs|s3 and carry that kind's
       required fields — http: decdn_cache_origin_url; fs: decdn_cache_origin_path;
