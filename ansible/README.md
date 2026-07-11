@@ -123,8 +123,10 @@ hardened unit, starts the service, and passes the role's own `/metrics` readines
 `verify.yml` then asserts the node user, valid TOML, a valid systemd unit, loopback-only
 metrics binding, and the `0600` secret env file. It does **not** exercise real node logic
 or a live chain — full paid-traffic readiness still needs on-chain registration and a real
-release. `baseline` is not exercised in a container (its `ssh_hardening` would sever the
-connection); `make check` covers it as a non-mutating dry run.
+release. `baseline` is not exercised in a container — the scenario connects over Docker
+(not SSH), and baseline's host-level hardening (nftables default-deny, DevSec os/ssh
+hardening, fail2ban) isn't meaningful in a throwaway container; `make check` covers it as
+a non-mutating dry run.
 
 ## Configuration
 

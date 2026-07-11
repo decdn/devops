@@ -11,6 +11,11 @@
     decdn_node_install_method: manual
     decdn_node_manual_bin_src: "{{ stub_bin }}"
     decdn_cli_manual_bin_src: "{{ stub_bin }}"
+    # Manual mode doesn't require a version, but setting one that MATCHES the stub's
+    # `--version` output exercises the install-time version-match backstop
+    # (install.yml) instead of letting it degrade to a bare liveness check. Must
+    # stay in sync with the version string printed by files/decdn-node-stub.
+    decdn_node_version: "0.0.0-molecule-stub"
     decdn_rpc_url: "https://rpc.example.invalid/"
     decdn_chain_id: 421614
     decdn_region: "US"

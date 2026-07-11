@@ -41,9 +41,57 @@
           - decdn_files.results[2].stat.exists
         fail_msg: "node.toml / decdn.env / unit missing or wrong mode"
 
-    - name: Assert node.toml parses as valid TOML
+    # prepare.yml stages the keystore + password at 0644; the role is responsible
+    # for locking them to 0600. Asserting 0600 here therefore verifies the role's
+    # lock-down actually ran, not a mode prepare pre-set.
+    - name: Stat the operator keystore + password file
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: decdn_secrets
+      loop:
+        - /var/lib/decdn/keystore.json
+        - "{{ decdn_etc }}/keystore.password"
+
+    - name: Assert the keystore + password file are locked to 0600
+      ansible.builtin.assert:
+        that:
+          - decdn_secrets.results[0].stat.exists and decdn_secrets.results[0].stat.mode == '0600'
+          - decdn_secrets.results[1].stat.exists and decdn_secrets.results[1].stat.mode == '0600'
+        fail_msg: "keystore / password file missing or not 0600 (role lock-down did not run)"
+
+    # Parse node.toml AND assert its content — a validity-only check would pass
+    # even if the role rendered metrics_bind = 0.0.0.0 or dropped a contract
+    # address (still valid TOML). This asserts the role's actual output, not just
+    # that it parses. Values mirror converge.yml + the role's loopback default.
+    # Staged as a file (not python3 -c / a shell heredoc) to avoid quoting hazards.
+    - name: Stage the node.toml content assertion script
+      ansible.builtin.copy:
+        dest: /root/molecule-assert-node-toml.py
+        mode: "0755"
+        content: |
+          import sys, tomllib
+          d = tomllib.load(open("/etc/decdn/node.toml", "rb"))
+          want = {
+              ("identity", "region"): "US",
+              ("observability", "metrics_bind"): "127.0.0.1",
+              ("observability", "metrics_port"): 9090,
+              ("blockchain", "chain_id"): 421614,
+              ("blockchain", "payment_channel_address"): "0x1111111111111111111111111111111111111111",
+              ("blockchain", "capacity_bond_address"): "0x2222222222222222222222222222222222222222",
+              ("blockchain", "slash_judge_address"): "0x3333333333333333333333333333333333333333",
+          }
+          bad = {
+              ".".join(k): (d.get(k[0], {}).get(k[1]), v)
+              for k, v in want.items()
+              if d.get(k[0], {}).get(k[1]) != v
+          }
+          if bad:
+              print("node.toml content mismatch (got, want):", bad, file=sys.stderr)
+              sys.exit(1)
+
+    - name: Assert node.toml is valid TOML and renders the expected content
       ansible.builtin.command:
-        cmd: python3 -c "import tomllib; tomllib.load(open('/etc/decdn/node.toml','rb'))"
+        cmd: python3 /root/molecule-assert-node-toml.py
       changed_when: false
 
     - name: Validate the systemd unit
@@ -51,17 +99,42 @@
         cmd: systemd-analyze verify /etc/systemd/system/decdn-node.service
       changed_when: false
 
+    # systemd-analyze only checks unit syntax — it does not confirm the security
+    # directives are present. Assert the load-bearing hardening lines the role's
+    # template is responsible for, so a regression that drops one fails loudly.
+    - name: Read the rendered systemd unit
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/decdn-node.service
+      register: decdn_unit
+
+    - name: Assert the unit carries the key hardening directives
+      ansible.builtin.assert:
+        that:
+          - "'NoNewPrivileges=true' in unit"
+          - "'ProtectSystem=strict' in unit"
+          - "'RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK' in unit"
+          - "'SystemCallFilter=@system-service' in unit"
+          - "'User=decdn' in unit"
+        fail_msg: "hardened unit is missing an expected directive"
+      vars:
+        unit: "{{ decdn_unit.content | b64decode }}"
+
     - name: Collect listening TCP sockets
       ansible.builtin.command:
         cmd: ss -ltn
       register: listeners
       changed_when: false
 
-    - name: Assert metrics bind loopback only (never 0.0.0.0)
+    # Runtime backstop to the node.toml metrics_bind assertion above: confirm the
+    # live socket is loopback. Reject every non-loopback wildcard form ss can
+    # print (IPv4 0.0.0.0, IPv6 [::], and *) — not just 0.0.0.0.
+    - name: Assert metrics bind loopback only (never a wildcard address)
       ansible.builtin.assert:
         that:
           - "'127.0.0.1:9090' in listeners.stdout"
           - "'0.0.0.0:9090' not in listeners.stdout"
+          - "'[::]:9090' not in listeners.stdout"
+          - "'*:9090' not in listeners.stdout"
         fail_msg: "metrics port 9090 is not loopback-only: {{ listeners.stdout }}"
 
     - name: Gather service facts

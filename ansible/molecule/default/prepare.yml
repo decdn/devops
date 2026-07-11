@@ -19,14 +19,17 @@
         - "{{ decdn_home }}"
         - "{{ decdn_etc }}"
 
+    # Stage these at 0644 (deliberately looser than the target). The role locks
+    # them to 0600; verify.yml asserts 0600, so the assertion actually attributes
+    # the mode to the role rather than to what prepare pre-set.
     - name: Stage a placeholder eth keystore
       ansible.builtin.copy:
         dest: "{{ decdn_home }}/keystore.json"
         content: "{{ '{}' }}\n"
-        mode: "0600"
+        mode: "0644"
 
     - name: Stage a placeholder keystore password file
       ansible.builtin.copy:
         dest: "{{ decdn_etc }}/keystore.password"
         content: "molecule-placeholder\n"
-        mode: "0600"
+        mode: "0644"

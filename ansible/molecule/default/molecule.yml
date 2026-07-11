@@ -5,9 +5,12 @@
 # node.toml + a hardened systemd unit, service start, and the role's own
 # /metrics readiness probe.
 #
-# `baseline` is NOT exercised here — it applies DevSec ssh_hardening (disables
-# root/password login) which would sever Molecule's connection to a throwaway
-# container, so it is validated on real hosts via `make check` instead.
+# `baseline` is NOT exercised here — this scenario connects over the Docker driver
+# (docker exec, not SSH), and `baseline` applies host-level hardening built for a
+# real machine: a default-deny nftables firewall plus DevSec os_hardening/
+# ssh_hardening (sysctl, mount, auth, sshd) and fail2ban — none of which behave
+# meaningfully in a throwaway systemd container. It is validated on real hosts via
+# `make check` instead.
 dependency:
   name: galaxy
   options:
