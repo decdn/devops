@@ -3,7 +3,8 @@
 Two checks run on every change: **pre-commit** locally and **GitHub Actions** on
 push / PR. The repo's #1 rule still stands — **never commit secrets** (see
 [`CLAUDE.md`](CLAUDE.md)); secrets are generated on the target host and the repo
-ships `*.example` templates only. There is no dedicated secret-scanner in the
+ships `*.example` templates for them (never the real thing; non-secret config is
+committed directly). There is no dedicated secret-scanner in the
 pipeline — keep secrets out by design (and rely on GitHub's push protection).
 
 ## One-time setup

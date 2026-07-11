@@ -20,8 +20,9 @@ economic claims — those live in `decdn/adr/`. If something here states a proto
 1. **Never commit secrets.** No mnemonics, passwords, bcrypt hashes, private keys, API
    tokens, or tunnel credentials in any tracked file. Secrets are *generated on the
    target host* by the role tasks (e.g. basic-auth creds) and stored under `/etc/<svc>/` with `chmod 600`
-   and a dedicated owner. The repo ships `*.example` templates only. The root
-   `.gitignore` is a backstop — do not rely on it; keep secrets out by design.
+   and a dedicated owner. The repo ships `*.example` templates for secret files only
+   (non-secret config may be committed directly). The root `.gitignore` is a backstop —
+   do not rely on it; keep secrets out by design.
 2. **Localhost-only by default.** Service daemons (anvil, etc.) bind `127.0.0.1`. The
    *only* sanctioned public path is an explicit reverse proxy with auth + TLS in front
    (e.g. the anvil devnet's public-HTTPS Caddy, or that same proxy behind an outbound

@@ -1,6 +1,7 @@
 ---
 # Shared config for public deCDN node hosts (playbooks/site.yml).
-# Per-node values (rpc_url, addresses, region, version) live in host_vars.
+# Per-node values live in host_vars/<node>/: addresses/region/version in main.yml,
+# the sensitive rpc_url in a git-ignored secret.yml.
 
 # Open the node's public QUIC listener in the baseline firewall. Metrics (9090)
 # and admin RPC (9191) stay loopback and get NO hole.

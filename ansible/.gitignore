@@ -1,12 +1,11 @@
 # Galaxy collections vendored by `make deps`
 collections/
 
-# Real inventory (only the .example is committed — never a real host/IP)
-inventory/hosts.yml
-
-# Per-node deployment values incl. the sensitive rpc_url (only .example committed)
-inventory/host_vars/*.yml
-!inventory/host_vars/*.yml.example
+# Per-node RPC secret only (may embed an API key). Everything else in host_vars —
+# main.yml (contract addresses, region, cache origin, …) — is committable template
+# config. hosts.yml is committable too (your fork's inventory is yours to track).
+inventory/host_vars/*/secret.yml
+!inventory/host_vars/*/secret.yml.example
 
 # Ansible / molecule scratch
 *.retry

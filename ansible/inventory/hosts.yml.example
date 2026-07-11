@@ -1,14 +1,16 @@
 ---
-# Copy to inventory/hosts.yml and fill in your hosts. The real file is git-ignored —
-# no host or IP is ever committed.
+# Copy to inventory/hosts.yml and fill in your hosts. This .example is the shipped
+# template; your real hosts.yml is yours — commit it in your fork if you like, or keep
+# it local. (Just never push real host IPs to the upstream template.)
 #
 # First run: connect as a user that can sudo (often root) to bootstrap the box.
 # After the baseline role creates {{ ssh_admin_user }} and ssh_hardening disables
 # root login, switch ansible_user to that admin account.
 
 # PRIMARY: public deCDN node(s) — provisioned by playbooks/site.yml.
-# Per-node secrets/knobs (rpc_url, contract addresses, region, version) go in
-# inventory/host_vars/<name>.yml (git-ignored; see the .example there).
+# Per-node config (contract addresses, region, version, …) goes in the committed
+# inventory/host_vars/<name>/main.yml; the one secret, rpc_url, goes in a git-ignored
+# secret.yml beside it (copy the shipped secret.yml.example there).
 decdn_nodes:
   hosts:
     decdn-node-1:
