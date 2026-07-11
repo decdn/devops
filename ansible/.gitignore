@@ -1,11 +1,13 @@
 # Galaxy collections vendored by `make deps`
 collections/
 
-# Per-node RPC secret only (may embed an API key). Everything else in host_vars —
-# main.yml (contract addresses, region, cache origin, …) — is committable template
-# config. hosts.yml is committable too (your fork's inventory is yours to track).
-inventory/host_vars/*/secret.yml
-!inventory/host_vars/*/secret.yml.example
+# Per-node RPC secret (may embed an API key). Ignore secret.* under any host dir so a
+# copy named secret.yaml or secret.json (Ansible loads .yml/.yaml/.json all the same)
+# can't leak; the committed secret.*.example template is re-included. Everything else in
+# host_vars — main.yml (contract addresses, region, cache origin, …) — is committable
+# template config. hosts.yml is committable too (your fork's inventory is yours to track).
+inventory/host_vars/*/secret.*
+!inventory/host_vars/*/secret.*.example
 
 # Ansible / molecule scratch
 *.retry
