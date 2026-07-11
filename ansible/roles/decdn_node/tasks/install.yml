@@ -1,74 +1,107 @@
 ---
-# Install the pinned decdn-node daemon + decdn CLI from GitHub Release tarballs.
-# Idempotent and upgrade-aware via a version stamp; re-extracts only on change.
-# NOTE: requires a published v<version> release (see role README).
+# Install the decdn-node daemon + decdn CLI. Two methods, selected by
+# decdn_node_install_method:
+#   "release" (default): download the pinned GitHub Release tarballs. Idempotent
+#     and upgrade-aware via a version stamp; re-extracts only on change. NOTE:
+#     requires a published v<version> release (see role README).
+#   "manual": copy locally-built binaries from the Ansible control machine (for
+#     pre-release / dev deploys). copy's checksum idempotency replaces the stamp.
+# A --version backstop runs in both modes.
 
-- name: Build the release tarball list
-  ansible.builtin.set_fact:
-    decdn_release_tarballs:
-      - {archive: decdn-node, sha: "{{ decdn_node_sha256 }}"}
-      - {archive: decdn, sha: "{{ decdn_cli_sha256 }}"}
-
-- name: Read the installed-version stamp
-  ansible.builtin.slurp:
-    src: /usr/local/lib/decdn/installed-version
-  register: decdn_stamp
-  failed_when: false
-  changed_when: false
-
-- name: Decide whether (re)install is needed
-  ansible.builtin.set_fact:
-    decdn_need_install: >-
-      {{ (decdn_stamp.content is not defined)
-         or ((decdn_stamp.content | b64decode | trim) != decdn_node_version) }}
-
-- name: Install decdn-node + decdn CLI {{ decdn_node_version }}
-  when: decdn_need_install
+- name: Install from pinned GitHub Release tarballs
+  when: decdn_node_install_method == "release"
   block:
-    - name: Download release tarballs
-      ansible.builtin.get_url:
-        url: "{{ decdn_node_release_base }}/v{{ decdn_node_version }}/\
-              {{ item.archive }}-{{ decdn_node_version }}-{{ decdn_node_target }}.tar.gz"
-        dest: "/tmp/{{ item.archive }}-{{ decdn_node_version }}.tar.gz"
-        mode: "0644"
-        checksum: "{{ ('sha256:' + item.sha) if (item.sha | length > 0) else omit }}"
-      loop: "{{ decdn_release_tarballs }}"
-      loop_control:
-        label: "{{ item.archive }}"
+    - name: Build the release tarball list
+      ansible.builtin.set_fact:
+        decdn_release_tarballs:
+          - {archive: decdn-node, sha: "{{ decdn_node_sha256 }}"}
+          - {archive: decdn, sha: "{{ decdn_cli_sha256 }}"}
 
-    - name: Extract binaries into /usr/local/bin
-      ansible.builtin.unarchive:
-        src: "/tmp/{{ item.archive }}-{{ decdn_node_version }}.tar.gz"
-        dest: /usr/local/bin
-        remote_src: true
-        owner: root
-        group: root
-        mode: "0755"
-      loop: "{{ decdn_release_tarballs }}"
-      loop_control:
-        label: "{{ item.archive }}"
-      notify: Restart decdn-node
+    - name: Read the installed-version stamp
+      ansible.builtin.slurp:
+        src: /usr/local/lib/decdn/installed-version
+      register: decdn_stamp
+      failed_when: false
+      changed_when: false
 
-    - name: Ensure the stamp directory exists
-      ansible.builtin.file:
-        path: /usr/local/lib/decdn
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
+    - name: Decide whether (re)install is needed
+      ansible.builtin.set_fact:
+        decdn_need_install: >-
+          {{ (decdn_stamp.content is not defined)
+             or ((decdn_stamp.content | b64decode | trim) != decdn_node_version) }}
 
-    - name: Record the installed version
+    - name: Install decdn-node + decdn CLI {{ decdn_node_version }}
+      when: decdn_need_install
+      block:
+        - name: Download release tarballs
+          ansible.builtin.get_url:
+            url: "{{ decdn_node_release_base }}/v{{ decdn_node_version }}/\
+                  {{ item.archive }}-{{ decdn_node_version }}-{{ decdn_node_target }}.tar.gz"
+            dest: "/tmp/{{ item.archive }}-{{ decdn_node_version }}.tar.gz"
+            mode: "0644"
+            checksum: "{{ ('sha256:' + item.sha) if (item.sha | length > 0) else omit }}"
+          loop: "{{ decdn_release_tarballs }}"
+          loop_control:
+            label: "{{ item.archive }}"
+
+        - name: Extract binaries into /usr/local/bin
+          ansible.builtin.unarchive:
+            src: "/tmp/{{ item.archive }}-{{ decdn_node_version }}.tar.gz"
+            dest: /usr/local/bin
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+          loop: "{{ decdn_release_tarballs }}"
+          loop_control:
+            label: "{{ item.archive }}"
+          notify: Restart decdn-node
+
+        - name: Ensure the stamp directory exists
+          ansible.builtin.file:
+            path: /usr/local/lib/decdn
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Record the installed version
+          ansible.builtin.copy:
+            dest: /usr/local/lib/decdn/installed-version
+            content: "{{ decdn_node_version }}\n"
+            owner: root
+            group: root
+            mode: "0644"
+
+- name: Install locally-built binaries from the control machine
+  when: decdn_node_install_method == "manual"
+  block:
+    - name: Copy the decdn-node daemon + decdn CLI from the control machine
       ansible.builtin.copy:
-        dest: /usr/local/lib/decdn/installed-version
-        content: "{{ decdn_node_version }}\n"
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
         owner: root
         group: root
-        mode: "0644"
+        mode: "0755"
+      loop:
+        - {src: "{{ decdn_node_manual_bin_src }}", dest: "{{ decdn_bin }}"}
+        - {src: "{{ decdn_cli_manual_bin_src }}", dest: "{{ decdn_cli_bin }}"}
+      loop_control:
+        label: "{{ item.dest }}"
+      notify: Restart decdn-node
 
 # Integrity backstop: runs EVERY converge (not just on install), so a host whose
 # binary drifted from the pin is caught loudly rather than trusted via the stamp.
-- name: Verify the installed decdn-node reports the pinned version
+# rc != 0 is included because a custom failed_when suppresses the module's default
+# non-zero-exit check — else a broken manual binary (rc != 0) would pass silently.
+# In "release" mode decdn_node_version is always set (asserted), so the version
+# match is enforced; in "manual" mode with no version it degrades to a liveness
+# check (rc == 0).
+- name: Verify the installed decdn-node runs (version backstop)
   ansible.builtin.command: "{{ decdn_bin }} --version"
   register: decdn_installed_version
   changed_when: false
-  failed_when: decdn_node_version not in decdn_installed_version.stdout
+  failed_when: >-
+    decdn_installed_version.rc != 0
+    or (decdn_node_version | length > 0
+        and decdn_node_version not in decdn_installed_version.stdout)

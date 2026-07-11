@@ -2,7 +2,9 @@
 galaxy_info:
   role_name: decdn_node
   author: deCDN Contributors
-  description: Public deCDN node — release-tarball install, hardened systemd unit, loopback metrics/admin, public QUIC.
+  description: >-
+    Public deCDN node — release-tarball or manual local-binary install, hardened
+    systemd unit, loopback metrics/admin, public QUIC.
   license: MIT
   min_ansible_version: "2.15"
   galaxy_tags: [decdn, cdn, node, systemd, web3, debian]
