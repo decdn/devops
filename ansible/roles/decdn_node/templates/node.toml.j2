@@ -26,6 +26,19 @@ slash_appeal_address = "{{ decdn_slash_appeal_address }}"
 {% if decdn_slash_judge_from_block | int > 0 %}
 slash_judge_from_block = {{ decdn_slash_judge_from_block | int }}
 {% endif %}
+{% if decdn_origin_assignment_address | length > 0 %}
+origin_assignment_address = "{{ decdn_origin_assignment_address }}"
+publisher_registry_address = "{{ decdn_publisher_registry_address }}"
+{% if decdn_origin_directory_from_block | int > 0 %}
+origin_directory_from_block = {{ decdn_origin_directory_from_block | int }}
+{% endif %}
+{% endif %}
+{% if decdn_content_blacklist_address | length > 0 %}
+content_blacklist_address = "{{ decdn_content_blacklist_address }}"
+{% if decdn_content_blacklist_from_block | int > 0 %}
+content_blacklist_from_block = {{ decdn_content_blacklist_from_block | int }}
+{% endif %}
+{% endif %}
 
 [payment]
 rate_per_mb = {{ decdn_rate_per_mb }}
@@ -34,6 +47,31 @@ rate_per_mb = {{ decdn_rate_per_mb }}
 cache_dir = "{{ decdn_cache_dir }}"
 cache_size_mb = {{ decdn_cache_size_mb }}
 max_blob_size_mb = {{ decdn_max_blob_size_mb }}
+{% if decdn_cache_origin_kind | length > 0 %}
+
+[cache.origin]
+kind = "{{ decdn_cache_origin_kind }}"
+{% if decdn_cache_origin_kind == "http" %}
+url = "{{ decdn_cache_origin_url }}"
+{% if decdn_cache_origin_decompress | length > 0 %}
+decompress = "{{ decdn_cache_origin_decompress }}"
+{% endif %}
+{% elif decdn_cache_origin_kind == "fs" %}
+path = "{{ decdn_cache_origin_path }}"
+{% elif decdn_cache_origin_kind == "s3" %}
+bucket = "{{ decdn_cache_origin_s3_bucket }}"
+region = "{{ decdn_cache_origin_s3_region }}"
+{% if decdn_cache_origin_s3_endpoint_url | length > 0 %}
+endpoint_url = "{{ decdn_cache_origin_s3_endpoint_url }}"
+{% endif %}
+{% if decdn_cache_origin_s3_path_style | bool %}
+path_style = true
+{% endif %}
+{% if decdn_cache_origin_s3_prefix | length > 0 %}
+prefix = "{{ decdn_cache_origin_s3_prefix }}"
+{% endif %}
+{% endif %}
+{% endif %}
 
 [observability]
 log_level = "{{ decdn_log_level }}"

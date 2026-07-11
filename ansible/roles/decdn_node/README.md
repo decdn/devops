@@ -52,10 +52,26 @@ Per `decdn/adr/019-node-onboarding.md`, a node only serves paid traffic after
 `decdn_region` (ISO 3166-1 alpha-2). Contract addresses/chain-id are protocol
 facts — source them from the deployment / an ADR, never guess.
 
-Optional (omitted from `node.toml` unless set): `decdn_slash_appeal_address`
-(SlashAppeal contract, source from the deployment / ADR 028 — only needed to file
-appeals with `decdn appeal slash`) and `decdn_slash_judge_from_block` (SlashJudge
-deploy block; bounds the slash-detection watcher's per-restart chain rescan). See
+Optional (omitted from `node.toml` unless set):
+
+- `decdn_slash_appeal_address` — SlashAppeal contract (ADR 028); only needed to file
+  appeals with `decdn appeal slash`, and `decdn_slash_judge_from_block` — SlashJudge
+  deploy block; bounds the slash-detection watcher's per-restart chain rescan.
+- `decdn_origin_assignment_address` + `decdn_publisher_registry_address` — the ADR 022
+  chain-backed origin directory that gates DHT prefetch. **Set both or neither** (either
+  alone fails the deploy-time assert); `decdn_origin_directory_from_block` bounds its
+  per-restart log replay.
+- `decdn_content_blacklist_address` — the ADR 011/031 compliance watcher (evicts
+  blacklisted blobs in your region scope); `decdn_content_blacklist_from_block` bounds
+  its per-restart log replay. Unset ⇒ no watcher (serving a blacklisted hash past its
+  compliance window is then slashable with no local protection).
+- `decdn_cache_origin_kind` (`http`|`fs`|`s3`) + that kind's fields — the pull-through
+  origin the node fetches on a cache miss. **A serving node needs one:** unset ⇒ no
+  `[cache.origin]` and cache misses fail `NoOrigin` (the node can only serve blobs it
+  already holds).
+
+Source contract addresses / chain-id from the deployment
+(`contracts/deployments/<chainId>.json`) or an ADR — never guess. See
 `roles/decdn_node/defaults/main.yml` for the full knob list and defaults.
 
 ## Network

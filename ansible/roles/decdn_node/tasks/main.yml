@@ -64,6 +64,88 @@
       deploy block). Got "{{ decdn_slash_judge_from_block }}". Leave it 0 to scan
       from genesis, or set the deploy block to bound per-restart rescan cost.
 
+# The ADR 022 origin directory needs BOTH OriginAssignment + PublisherRegistry (it
+# gates prefetch on the pair); the template emits them together, so reject a
+# one-sided config here. Runs when EITHER is set — an empty counterpart then fails
+# the address regex, turning "both or neither" into a loud, specific failure.
+- name: Validate the optional origin-directory contract pair (ADR 022)
+  ansible.builtin.assert:
+    that:
+      - decdn_origin_assignment_address is match('^0x[0-9a-fA-F]{40}$')
+      - decdn_publisher_registry_address is match('^0x[0-9a-fA-F]{40}$')
+      - decdn_origin_assignment_address != decdn_zero_address
+      - decdn_publisher_registry_address != decdn_zero_address
+    fail_msg: >-
+      The origin directory (ADR 022) needs BOTH decdn_origin_assignment_address and
+      decdn_publisher_registry_address set to valid contract addresses (0x + 40 hex,
+      not the zero address) — or BOTH empty to omit it. Source them from the
+      deployment (contracts/deployments/<chainId>.json) / ADR 022.
+  vars:
+    decdn_zero_address: "0x0000000000000000000000000000000000000000"
+  when: >-
+    (decdn_origin_assignment_address | length > 0)
+    or (decdn_publisher_registry_address | length > 0)
+
+# content_blacklist_address is optional (ADR 011/031); a half-filled/zero value
+# would silently render a bad node.toml, so validate it fail-loud when present —
+# same posture as the SlashAppeal address.
+- name: Validate the optional ContentBlacklist address when set
+  ansible.builtin.assert:
+    that:
+      - decdn_content_blacklist_address is match('^0x[0-9a-fA-F]{40}$')
+      - decdn_content_blacklist_address != decdn_zero_address
+    fail_msg: >-
+      decdn_content_blacklist_address is set but is not a valid contract address
+      (0x + 40 hex, not the zero address). Leave it empty to omit it, or set the
+      deployed ContentBlacklist address (source it from the deployment / ADR 011).
+  vars:
+    decdn_zero_address: "0x0000000000000000000000000000000000000000"
+  when: decdn_content_blacklist_address | length > 0
+
+# The *_from_block knobs feed `| int > 0` gates in node.toml.j2, and Jinja's int
+# filter silently coerces an unparseable value to 0 — dropping the key and
+# reverting to a full-chain rescan with no trace. Assert integer shape (like
+# slash_judge_from_block) so a typo fails loud. Unconditional: the default 0 passes.
+- name: Validate the origin-directory and blacklist scan-floor blocks are integers
+  ansible.builtin.assert:
+    that:
+      - decdn_origin_directory_from_block | string is match('^[0-9]+$')
+      - decdn_content_blacklist_from_block | string is match('^[0-9]+$')
+    fail_msg: >-
+      decdn_origin_directory_from_block and decdn_content_blacklist_from_block must
+      be non-negative integers (the respective contract deploy blocks). Got
+      "{{ decdn_origin_directory_from_block }}" / "{{ decdn_content_blacklist_from_block }}".
+      Leave them 0 to scan from genesis, or set the deploy block to bound rescan cost.
+
+# The cache pull-through origin is a tagged [cache.origin] table: node.toml.j2
+# emits only the chosen kind's fields, and the daemon denies unknown fields. Reject
+# an unknown kind or a kind missing its required field(s) so a serving node never
+# starts with an unusable (or NoOrigin) cache backend.
+- name: Validate the cache pull-through origin when set
+  ansible.builtin.assert:
+    that:
+      - decdn_cache_origin_kind in ["http", "fs", "s3"]
+      - (decdn_cache_origin_kind != "http") or (decdn_cache_origin_url | length > 0)
+      - (decdn_cache_origin_kind != "fs") or (decdn_cache_origin_path | length > 0)
+      - >-
+        (decdn_cache_origin_kind != "s3")
+        or (decdn_cache_origin_s3_bucket | length > 0
+            and decdn_cache_origin_s3_region | length > 0)
+      # Optional http knob — the daemon's DecompressMode enum accepts only these
+      # two; an unchecked typo renders TOML that fails config load as a crash-loop.
+      - decdn_cache_origin_decompress in ["", "auto", "strict"]
+      # path_style feeds a `| bool` gate in node.toml.j2. Assert a real boolean so a
+      # quoted "false" fails here rather than silently coercing to path_style = true.
+      - decdn_cache_origin_s3_path_style | string | lower in ["true", "false"]
+    fail_msg: >-
+      decdn_cache_origin_kind must be one of http|fs|s3 and carry that kind's
+      required fields — http: decdn_cache_origin_url; fs: decdn_cache_origin_path;
+      s3: decdn_cache_origin_s3_bucket + decdn_cache_origin_s3_region.
+      decdn_cache_origin_decompress, if set, must be auto|strict, and
+      decdn_cache_origin_s3_path_style must be a boolean (true/false). Leave the
+      kind empty to omit [cache.origin] (cache misses then fail NoOrigin).
+  when: decdn_cache_origin_kind | length > 0
+
 # --- User & directories -------------------------------------------------------
 - name: Create decdn system group
   ansible.builtin.group:

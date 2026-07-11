@@ -25,6 +25,22 @@ decdn_slash_appeal_address: ""
 # here on EVERY daemon start, so 0 (the upstream default) re-scans the full chain
 # each restart — RPC-heavy on an established L2. Set to bound restart cost.
 decdn_slash_judge_from_block: 0
+# Optional (ADR 022). Chain-backed origin directory that gates DHT prefetch. Set
+# BOTH or NEITHER — either alone fails the deploy-time assert. Empty => both keys
+# omitted and the directory is deny-all (prefetch finds no authorized origins).
+decdn_origin_assignment_address: ""
+decdn_publisher_registry_address: ""
+# Optional. PublisherRegistry deploy block: bounds the origin-directory log replay
+# on restart (absent/0 => scans the whole chain — RPC-heavy on an established L2).
+# Only emitted when the pair above is set AND this is > 0.
+decdn_origin_directory_from_block: 0
+# Optional (ADR 011/031). ContentBlacklist watcher — evicts blacklisted blobs in
+# your region scope. Empty => no watcher (serving a blacklisted hash past its
+# compliance window is then slashable with no local protection).
+decdn_content_blacklist_address: ""
+# Optional. ContentBlacklist deploy block; bounds the blacklist log replay on
+# restart. Only emitted when decdn_content_blacklist_address is set AND this is > 0.
+decdn_content_blacklist_from_block: 0
 decdn_region: ""                # ISO 3166-1 alpha-2
 decdn_chain_id: 421614          # Arbitrum Sepolia (matches decdn-node's --chain-id default)
 
@@ -38,6 +54,18 @@ decdn_rate_per_mb: 10           # USDC base units (6 decimals)
 # --- Cache --------------------------------------------------------------------
 decdn_cache_size_mb: 10240      # 10 GB
 decdn_max_blob_size_mb: 1024    # 1 GB
+# Pull-through origin (#437): what the node fetches on a cache miss. Empty kind =>
+# the [cache.origin] table is omitted and misses fail NoOrigin — a serving node
+# needs an origin. Pick ONE kind and set that kind's fields; the others are ignored.
+decdn_cache_origin_kind: ""             # "" (omit) | http | fs | s3
+decdn_cache_origin_url: ""              # http: base URL (blobs served at {url}/{blake3_hex})
+decdn_cache_origin_decompress: ""       # http, optional: "auto" (default) | "strict"
+decdn_cache_origin_path: ""             # fs: filesystem root
+decdn_cache_origin_s3_bucket: ""        # s3: bucket name
+decdn_cache_origin_s3_region: ""        # s3: AWS region (used for SigV4 even with a custom endpoint)
+decdn_cache_origin_s3_endpoint_url: ""  # s3, optional: custom endpoint for R2/B2/MinIO (omit for AWS)
+decdn_cache_origin_s3_path_style: false # s3, optional: path-style addressing (MinIO & many self-hosted)
+decdn_cache_origin_s3_prefix: ""        # s3, optional: key prefix prepended to every object
 
 # --- Observability (loopback only) --------------------------------------------
 decdn_log_level: info
