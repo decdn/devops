@@ -24,28 +24,55 @@
 #     AFTER the admin block): the copy loop would silently overwrite, leaving a user
 #     with `sudo` + a locked password but NO NOPASSWD grant. `visudo -cf` validates
 #     content, not a clobbered file, so it cannot catch this.
-- name: Assert each named sudo user has key(s) and a unique sudoers.d filename
+- name: Assert each named sudo user is well-formed and has a unique sudoers.d filename
   ansible.builtin.assert:
     that:
+      - unnamed_entries | length == 0
+      # `keys` as a scalar string (a common `- "ssh-..."` mistake) is truthy, so it
+      # slips past the keyless check below, but subelements() then mis-iterates it AFTER
+      # accounts are already changed. Reject it up front to keep this a pre-flight gate.
+      - stringy_keys_entries | length == 0
       - keyless_named_users | length == 0
       - sudoers_dropin_names | length == (sudoers_dropin_names | unique | length)
     fail_msg: >-
       baseline_sudo_users is misconfigured (validated before any account is created).
+      Entries with a missing/empty `name`: {{ unnamed_entries | length }}.
+      Entries whose `keys` is a string, not a list: {{ stringy_keys_entries }}.
       Entries lacking a non-empty `keys` list: {{ keyless_named_users }}.
       Sanitized /etc/sudoers.d/ filenames must be unique (including vs the admin
       drop-in), else one grant silently overwrites another -> silent sudo lockout;
       got {{ sudoers_dropin_names }}.
   vars:
+    # `keys` must NOT be read with map(attribute='keys'): it collides with the dict
+    # .keys() METHOD, so an entry that omits `keys` (a `key:` typo) yields the bound
+    # method (truthy) and silently escapes the keyless check. `map('list')` yields each
+    # entry's real key NAMES instead, so `superset(['keys'])` tells us which entries
+    # actually carry a `keys` key; attribute access is then safe only on those.
+    names: "{{ baseline_sudo_users | map(attribute='name', default='') | list }}"
+    key_names_per_entry: "{{ baseline_sudo_users | map('list') | list }}"
+    with_keys: >-
+      {{ baseline_sudo_users | zip(key_names_per_entry)
+         | selectattr('1', 'superset', ['keys']) | map(attribute='0') | list }}
+    # `default=''` on the name deref so a missing `name` reports cleanly here rather
+    # than raising an undefined-attribute error while building fail_msg.
+    unnamed_entries: >-
+      {{ (baseline_sudo_users | rejectattr('name', 'defined') | list)
+         + (baseline_sudo_users | selectattr('name', 'defined')
+            | rejectattr('name', 'truthy') | list) }}
+    stringy_keys_entries: >-
+      {{ with_keys | selectattr('keys', 'string')
+         | map(attribute='name', default='') | list }}
+    # Keyless = entries with no `keys` key at all (absent), plus entries whose `keys`
+    # is present but empty/null (falsy).
     keyless_named_users: >-
-      {{ (baseline_sudo_users | rejectattr('keys', 'defined')
-          | map(attribute='name') | list)
-         + (baseline_sudo_users | selectattr('keys', 'defined')
-            | selectattr('keys', 'falsy') | map(attribute='name') | list) }}
+      {{ (names | zip(key_names_per_entry)
+          | rejectattr('1', 'superset', ['keys']) | map(attribute='0') | list)
+         + (with_keys | selectattr('keys', 'falsy')
+            | map(attribute='name', default='') | list) }}
     # ssh_admin_user_effective is resolved by the admin block in main.yml; on the
     # molecule `tasks_from: sudo_users` path that block never runs, so default it out.
     sudoers_dropin_names: >-
-      {{ (baseline_sudo_users | map(attribute='name')
-          | map('regex_replace', '[^A-Za-z0-9_-]', '_') | list)
+      {{ (names | map('regex_replace', '[^A-Za-z0-9_-]', '_') | list)
          + ([ssh_admin_user_effective | regex_replace('[^A-Za-z0-9_-]', '_')]
             if ssh_admin_user_effective is defined else []) }}
 
