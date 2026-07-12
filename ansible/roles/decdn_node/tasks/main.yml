@@ -209,9 +209,12 @@
 # fails fast if the base path is missing or is not a directory — a crash-loop on every
 # (re)start. Create it here so a kind: fs deploy is self-contained. The sharded blob
 # files under it ({path}/{hex[0..2]}/{hex}) are content, not config, and stay an
-# operator concern — only the base dir is role-managed. 0755 (looser than the 0700
-# data dirs above) because pull-through origin blobs are public CDN content, not
-# secrets, and an operator may populate the tree out-of-band as a different user.
+# operator concern — only the base dir is role-managed. mode 0755 (looser than the
+# 0700 data dirs above) per issue #28: the pull-through origin blobs are public CDN
+# content, not secrets, so world-readable is harmless. It grants no write — the
+# daemon reads as decdn (owner) and out-of-band population runs as decdn or root
+# regardless — and in the default layout the 0700 parent (/var/lib/decdn) still
+# blocks traversal; 0755 only widens read access if an operator relocates the path.
 - name: Ensure the fs cache-origin base directory exists (kind == fs)
   ansible.builtin.file:
     path: "{{ decdn_cache_origin_path }}"

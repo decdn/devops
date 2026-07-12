@@ -113,10 +113,14 @@
     - name: Assert the fs cache-origin dir exists (decdn:decdn, 0755, directory)
       ansible.builtin.assert:
         that:
-          - decdn_origin_dir.stat.exists and decdn_origin_dir.stat.isdir
-          - decdn_origin_dir.stat.pw_name == 'decdn'
-          - decdn_origin_dir.stat.gr_name == 'decdn'
-          - decdn_origin_dir.stat.mode == '0755'
+          # Single short-circuiting expression (file convention — cf. lines 39-40,
+          # 59-61): a missing dir stops at `stat.exists` and routes to fail_msg
+          # instead of raising AnsibleUndefinedVariable on the absent pw_name/mode.
+          - >-
+            decdn_origin_dir.stat.exists and decdn_origin_dir.stat.isdir
+            and decdn_origin_dir.stat.pw_name == 'decdn'
+            and decdn_origin_dir.stat.gr_name == 'decdn'
+            and decdn_origin_dir.stat.mode == '0755'
         fail_msg: "fs cache-origin dir missing / not a dir / wrong owner / wrong mode"
 
     - name: Validate the systemd unit
