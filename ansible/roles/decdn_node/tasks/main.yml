@@ -205,6 +205,24 @@
   loop_control:
     label: "{{ item.path }}"
 
+# For a filesystem pull-through origin (kind: fs), the daemon's FilesystemOrigin::new
+# fails fast if the base path is missing or is not a directory — a crash-loop on every
+# (re)start. Create it here so a kind: fs deploy is self-contained. The sharded blob
+# files under it ({path}/{hex[0..2]}/{hex}) are content, not config, and stay an
+# operator concern — only the base dir is role-managed. 0755 (looser than the 0700
+# data dirs above) because pull-through origin blobs are public CDN content, not
+# secrets, and an operator may populate the tree out-of-band as a different user.
+- name: Ensure the fs cache-origin base directory exists (kind == fs)
+  ansible.builtin.file:
+    path: "{{ decdn_cache_origin_path }}"
+    state: directory
+    owner: "{{ decdn_user }}"
+    group: "{{ decdn_group }}"
+    mode: "0755"
+  when:
+    - decdn_cache_origin_kind == "fs"
+    - decdn_cache_origin_path | length > 0
+
 # --- Install the binaries -----------------------------------------------------
 - name: Install decdn-node + decdn CLI
   ansible.builtin.import_tasks: install.yml

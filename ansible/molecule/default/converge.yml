@@ -22,8 +22,11 @@
     decdn_payment_channel_address: "0x1111111111111111111111111111111111111111"
     decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
     decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
-    decdn_cache_origin_kind: "http"
-    decdn_cache_origin_url: "https://origin.example.invalid/"
+    # fs origin: exercises the role's "create the fs cache-origin base dir" task
+    # (#28) — /var/lib/decdn/origin does not pre-exist, so the run genuinely creates
+    # it (verify.yml asserts owner/group/mode). Keep in sync with verify.yml.
+    decdn_cache_origin_kind: "fs"
+    decdn_cache_origin_path: "/var/lib/decdn/origin"
     # Exercise baseline's named-sudo-users feature (see pre_tasks below). Throwaway
     # keys, generated for this test only — public keys, not credentials. Two users
     # on purpose: `alice.smith` has a '.' (so the sudoers.d filename-sanitize maps it
