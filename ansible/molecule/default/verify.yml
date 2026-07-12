@@ -96,6 +96,39 @@
           if origin.get("kind") != "fs" or origin.get("path") != "/var/lib/decdn/origin":
               print("node.toml [cache.origin] mismatch (got):", origin, file=sys.stderr)
               sys.exit(1)
+          # Operator-facing tuning knobs (#29 + siblings), set in converge.yml. Assert
+          # exact value AND type: a dropped `0`, a stringified Bytes, or a bool rendered
+          # as an int/string are real regressions a loose `==` would miss (in Python
+          # `0 == False` and `1 == True`, so isinstance guards are load-bearing here).
+          def _is_int(x):
+              return isinstance(x, int) and not isinstance(x, bool)
+          cache, net, pay, bc = (d.get(s, {}) for s in ("cache", "network", "payment", "blockchain"))
+          knob_checks = [
+              ("cache.node_to_node_pull_through_enabled",
+               cache.get("node_to_node_pull_through_enabled") is True),
+              ("cache.gc_interval_sec (explicit 0 must emit)",
+               _is_int(cache.get("gc_interval_sec")) and cache.get("gc_interval_sec") == 0),
+              ("cache.pull_ahead_bytes (bare-int Bytes)",
+               _is_int(cache.get("pull_ahead_bytes")) and cache.get("pull_ahead_bytes") == 2097152),
+              ("cache.pull_share_ratio_percent (bare-int Percent)",
+               _is_int(cache.get("pull_share_ratio_percent")) and cache.get("pull_share_ratio_percent") == 400),
+              # Two-element lists in exact order — exercises the comma-join branch.
+              ("cache.pinned_hashes", cache.get("pinned_hashes") == ["a" * 64, "b" * 64]),
+              ("network.relay_urls",
+               net.get("relay_urls") == ["https://relay1.example.invalid:443",
+                                         "https://relay2.example.invalid:443"]),
+              ("network.enable_0rtt", net.get("enable_0rtt") is False),
+              ("payment.delivery_floor (explicit 0 must emit)",
+               _is_int(pay.get("delivery_floor")) and pay.get("delivery_floor") == 0),
+              ("blockchain.settlement_auto_threshold_micro_usdc",
+               _is_int(bc.get("settlement_auto_threshold_micro_usdc"))
+               and bc.get("settlement_auto_threshold_micro_usdc") == 50000000),
+          ]
+          knob_bad = [name for name, ok in knob_checks if not ok]
+          if knob_bad:
+              print("node.toml tuning-knob mismatch:", knob_bad, file=sys.stderr)
+              print("  cache=", cache, "\n  network=", net, "\n  payment=", pay, file=sys.stderr)
+              sys.exit(1)
 
     - name: Assert node.toml is valid TOML and renders the expected content
       ansible.builtin.command:

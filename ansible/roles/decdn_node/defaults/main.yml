@@ -55,14 +55,56 @@ decdn_chain_id: 421614          # Arbitrum Sepolia (matches decdn-node's --chain
 
 # --- Network ------------------------------------------------------------------
 decdn_bind_port: 4433           # public QUIC (udp); opened in the baseline firewall
-decdn_relay_url: ""             # optional iroh relay for NAT traversal
+decdn_relay_url: ""             # optional iroh relay for NAT traversal (deprecated single alias)
+# iroh relay URLs; [] => n0 default relays. When this list is non-empty the template
+# emits it and omits decdn_relay_url (this list supersedes the singular alias).
+# e.g. ["https://relay1.example:443", "https://relay2.example:443"]
+decdn_relay_urls: []
+# The optional knobs below default to "" (or []) => "omit the key, use the daemon's
+# own default". Set a value only to override; an explicit 0/false IS emitted.
+decdn_enable_0rtt: ""           # bool; daemon dflt true — QUIC 0-RTT for cdn/probe/v1 (ADR 015)
 
 # --- Economics ----------------------------------------------------------------
 decdn_rate_per_mb: 10           # USDC base units (6 decimals)
+# Delivery-rate clamps + voucher cadence (µUSDC; "" => daemon default).
+decdn_delivery_floor: ""        # daemon dflt 0 — rate clamp floor before signing ProbeResponse
+decdn_delivery_ceiling: ""      # daemon dflt 1_000_000_000_000 (protocol MAX) — rate clamp ceiling
+decdn_voucher_interval_mb: ""   # daemon dflt 1; range 1..=1024 — voucher cadence (ADR 003)
+
+# --- Settlement / channels (all µUSDC; "" => daemon default) ------------------
+decdn_redeem_threshold_micro_usdc: ""    # daemon dflt 1_000_000 (1 USDC) — accrued µUSDC to trigger withdraw
+decdn_buyer_deposit_micro_usdc: ""       # daemon dflt 10_000_000 (10 USDC) — escrow on a buyer-channel open
+decdn_buyer_max_approve: ""              # bool; daemon dflt true — one-time max USDC approval to PaymentChannel
+# Auto-closeChannel triggers (OR'd). "" => off (disabled upstream); a configured 0 is rejected.
+decdn_settlement_auto_threshold_micro_usdc: ""    # un-redeemed µUSDC threshold
+decdn_settlement_auto_by_voucher_nonce_span: ""   # nonce-span companion trigger
+
+# --- Blockchain watcher tuning ("" => daemon default) -------------------------
+decdn_rpc_watchdog_interval_sec: ""    # daemon dflt 30; 0 disables, else >= 10 — RPC watchdog
+decdn_event_poll_interval_ms: ""       # daemon dflt 7000; >= 250 — eth_getFilterChanges poll
+decdn_content_blacklist_poll_interval_sec: ""    # daemon dflt 600; >= 1 — blacklist re-scope cadence
 
 # --- Cache --------------------------------------------------------------------
 decdn_cache_size_mb: 10240      # 10 GB
 decdn_max_blob_size_mb: 1024    # 1 GB
+# Cache tuning ("" / [] => omit + use the daemon default; an explicit 0 IS emitted —
+# 0 is meaningful here, e.g. gc_interval_sec = 0 disables the sweep and
+# max_unrecouped_leech_bytes = 0 turns the cap off).
+decdn_max_probe_holds: ""             # daemon dflt 256 — eviction-exempt holds (ADR 005); 0 = has_blob answers false
+decdn_stake_lane_reserved_holds: ""   # daemon dflt 0 — holds reserved for node-to-node probes (#757)
+decdn_gc_interval_sec: ""             # daemon dflt 300 — iroh-blobs GC sweep; 0 = off
+decdn_pinned_hashes: []               # eviction-exempt pins; each a 64-char lowercase-hex BLAKE3 hash
+decdn_cache_user_agent: ""            # daemon dflt decdn-node/<version> — HTTP origin User-Agent
+# Node-to-node pull-through (#29). The toggle gates all serve-time origin pull from
+# upstream nodes; the knobs below only take effect when it is true. *_bytes / *_percent
+# are BARE INTEGERS on the wire (bytes; percent at scale 100, so 400 = 4.0x).
+decdn_node_to_node_pull_through_enabled: ""      # bool; daemon dflt false — enable pull from upstream nodes (#29)
+decdn_node_pull_probe_fanout: ""                 # daemon dflt 5 — providers probed per miss; 0 disables pull
+decdn_node_pull_timeout_sec: ""                  # daemon dflt 20 — per-upstream pull timeout
+decdn_pull_ahead_bytes: ""                       # daemon dflt 1048576 (1 MiB) — speculative pull window (ADR 037)
+decdn_max_unrecouped_leech_bytes: ""             # daemon dflt 268435456 (256 MiB) — speculative-spend cap; 0 = off
+decdn_pull_share_ratio_percent: ""               # daemon dflt 400 (=4.0x) — per-peer speculative ceiling
+decdn_pull_through_require_authorized_origin: "" # bool; daemon dflt false — gate pulls on the ADR 022 directory
 # Pull-through origin (#437): what the node fetches on a cache miss. Empty kind =>
 # the [cache.origin] table is omitted and misses fail NoOrigin — a serving node
 # needs an origin. Pick ONE kind and set that kind's fields; the others are ignored.
@@ -82,6 +124,9 @@ decdn_log_format: json
 decdn_metrics_port: 9090
 decdn_metrics_bind: "127.0.0.1"   # keep loopback — Prometheus scrape is a follow-up
 decdn_admin_port: 9191
+# Optional ("" => omit + use the daemon default).
+decdn_otlp_endpoint: ""    # OTLP span export; http(s)://; needs the node built --features otlp
+decdn_region_accounting_interval_sec: ""    # daemon dflt 3600 — per-region bandwidth log; 0 = off
 
 # --- Readiness probe (advisory) -----------------------------------------------
 # After start, the role probes http://127.0.0.1:<metrics_port>/metrics as a

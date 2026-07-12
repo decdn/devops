@@ -118,6 +118,38 @@ Optional (omitted from `node.toml` unless set):
   defaults). A **timeout** only warns; it never fails the deploy — but a non-200 *answer*
   does. See [Readiness](#readiness).
 
+### Optional tuning knobs
+
+These expose daemon config fields that most operators never touch. Each defaults to
+`""` (or `[]`), meaning **omit the key and use the daemon's own default** — set one only
+to override. Unlike the `*_from_block` knobs above, an explicit `0`/`false` **is** emitted
+(`0` is meaningful — e.g. `decdn_gc_interval_sec: 0` disables the GC sweep). A malformed
+or out-of-range value fails loud at deploy time (the daemon would otherwise reject it at
+load and crash-loop). See `defaults/main.yml` for every knob's upstream default and unit.
+
+- **Node-to-node pull-through (#29)** — `decdn_node_to_node_pull_through_enabled` (bool)
+  gates all serve-time origin pull from upstream nodes; the tuning knobs
+  (`decdn_node_pull_probe_fanout`, `decdn_node_pull_timeout_sec`, `decdn_pull_ahead_bytes`,
+  `decdn_max_unrecouped_leech_bytes`, `decdn_pull_share_ratio_percent`,
+  `decdn_pull_through_require_authorized_origin`) only take effect when it is `true`.
+  `*_bytes` / `*_percent` are **bare integers** (bytes; percent at scale 100, `400` = 4.0×).
+- **Settlement / channels** — `decdn_redeem_threshold_micro_usdc`,
+  `decdn_buyer_deposit_micro_usdc`, `decdn_buyer_max_approve` (bool), and the opt-in
+  auto-close pair `decdn_settlement_auto_threshold_micro_usdc` /
+  `decdn_settlement_auto_by_voucher_nonce_span` (`""` disables — a configured `0` is
+  rejected upstream). All µUSDC.
+- **Delivery-rate clamps** — `decdn_delivery_floor` / `decdn_delivery_ceiling` (µUSDC;
+  floor ≤ ceiling) and `decdn_voucher_interval_mb` (`1..=1024`).
+- **Cache tuning** — `decdn_max_probe_holds`, `decdn_stake_lane_reserved_holds`,
+  `decdn_gc_interval_sec`, `decdn_pinned_hashes` (list of 64-char **lowercase-hex** BLAKE3
+  hashes), `decdn_cache_user_agent`.
+- **Blockchain watchers** — `decdn_rpc_watchdog_interval_sec` (`0` or `>= 10`),
+  `decdn_event_poll_interval_ms` (`>= 250`), `decdn_content_blacklist_poll_interval_sec` (`>= 1`).
+- **Network** — `decdn_relay_urls` (list; when non-empty the role emits it and omits the
+  singular `decdn_relay_url`), `decdn_enable_0rtt` (bool).
+- **Observability** — `decdn_otlp_endpoint` (OTLP span export; needs the node built
+  `--features otlp`), `decdn_region_accounting_interval_sec`.
+
 Source contract addresses / chain-id from the deCDN contract deployment for your target
 chain, or the relevant ADR — never guess. See `roles/decdn_node/defaults/main.yml` for the
 full knob list and defaults.

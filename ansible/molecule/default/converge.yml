@@ -27,6 +27,26 @@
     # it (verify.yml asserts owner/group/mode). Keep in sync with verify.yml.
     decdn_cache_origin_kind: "fs"
     decdn_cache_origin_path: "/var/lib/decdn/origin"
+    # Operator-facing tuning knobs (#29 + siblings): exercise the new emission +
+    # validation. Chosen to cover the forms a naive template would get wrong — an
+    # explicit 0 (must EMIT, not be dropped), bare-integer Bytes/Percent (never
+    # "2MiB"/"4.0"), a bool (rendered lowercase via `| lower`), and a string list.
+    # verify.yml asserts each renders with the exact value AND type. Keep in sync.
+    decdn_node_to_node_pull_through_enabled: true
+    decdn_gc_interval_sec: 0
+    decdn_pull_ahead_bytes: 2097152
+    decdn_pull_share_ratio_percent: 400
+    decdn_enable_0rtt: false
+    decdn_delivery_floor: 0
+    decdn_settlement_auto_threshold_micro_usdc: 50000000
+    # Two entries each so the {% for %} comma-join branch (loop.last) is exercised —
+    # a single-element list never renders the separator. verify.yml asserts order.
+    decdn_relay_urls:
+      - "https://relay1.example.invalid:443"
+      - "https://relay2.example.invalid:443"
+    decdn_pinned_hashes:
+      - "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      - "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     # Exercise baseline's named-sudo-users feature (see pre_tasks below). Throwaway
     # keys, generated for this test only — public keys, not credentials. Two users
     # on purpose: `alice.smith` has a '.' (so the sudoers.d filename-sanitize maps it

@@ -176,6 +176,149 @@
       kind empty to omit [cache.origin] (cache misses then fail NoOrigin).
   when: decdn_cache_origin_kind | length > 0
 
+# --- Optional tuning knobs ("" => omit + use the daemon default) --------------
+# These template with a `!= ""` gate (NOT `| int > 0`) because 0/false are
+# meaningful values here. A bad value would render TOML the daemon rejects at
+# load — an opaque crash-loop — so validate shape + upstream range/constraints at
+# deploy time instead (AGENTS.md hard-rule 4). Every check is guarded `== "" or
+# (...)` so the unset default always passes.
+
+- name: Validate optional boolean tuning knobs
+  ansible.builtin.assert:
+    that:
+      - decdn_enable_0rtt == "" or decdn_enable_0rtt is boolean
+      - decdn_buyer_max_approve == "" or decdn_buyer_max_approve is boolean
+      - decdn_node_to_node_pull_through_enabled == "" or decdn_node_to_node_pull_through_enabled is boolean
+      - decdn_pull_through_require_authorized_origin == "" or decdn_pull_through_require_authorized_origin is boolean
+    fail_msg: >-
+      decdn_enable_0rtt, decdn_buyer_max_approve,
+      decdn_node_to_node_pull_through_enabled and
+      decdn_pull_through_require_authorized_origin must each be a real boolean
+      (true/false), not a quoted string — they template through `| lower` into a
+      bare TOML bool. Leave a knob "" to omit it (daemon default applies).
+
+# Integer shape first (a separate task): if a value is non-numeric this fails loud
+# BEFORE the range task below runs its `| int` comparisons, so `| int` there never
+# silently coerces a typo to 0.
+- name: Validate optional integer tuning knobs are non-negative integers
+  ansible.builtin.assert:
+    that:
+      # Shape AND magnitude: TOML integers are i64-domain, so a value above
+      # i64::MAX (9223372036854775807) renders but fails the daemon's TOML parse
+      # (a crash-loop) even though it is a "valid u64". Cap it here.
+      - item == "" or (item | string is match('^[0-9]+$') and item | int <= 9223372036854775807)
+    quiet: true
+    fail_msg: >-
+      "{{ item }}" is not a non-negative integer <= i64::MAX (9223372036854775807).
+      Every optional numeric knob (delivery/settlement/watcher/cache-tuning/
+      pull-through) must be a bare u64 in that range, or "" to omit it. See
+      roles/decdn_node/defaults/main.yml for the full list.
+  loop:
+    - "{{ decdn_delivery_floor }}"
+    - "{{ decdn_delivery_ceiling }}"
+    - "{{ decdn_voucher_interval_mb }}"
+    - "{{ decdn_redeem_threshold_micro_usdc }}"
+    - "{{ decdn_buyer_deposit_micro_usdc }}"
+    - "{{ decdn_settlement_auto_threshold_micro_usdc }}"
+    - "{{ decdn_settlement_auto_by_voucher_nonce_span }}"
+    - "{{ decdn_rpc_watchdog_interval_sec }}"
+    - "{{ decdn_event_poll_interval_ms }}"
+    - "{{ decdn_content_blacklist_poll_interval_sec }}"
+    - "{{ decdn_max_probe_holds }}"
+    - "{{ decdn_stake_lane_reserved_holds }}"
+    - "{{ decdn_gc_interval_sec }}"
+    - "{{ decdn_node_pull_probe_fanout }}"
+    - "{{ decdn_node_pull_timeout_sec }}"
+    - "{{ decdn_pull_ahead_bytes }}"
+    - "{{ decdn_max_unrecouped_leech_bytes }}"
+    - "{{ decdn_pull_share_ratio_percent }}"
+    - "{{ decdn_region_accounting_interval_sec }}"
+
+# Range / nonzero constraints the daemon enforces at load (out-of-range => the node
+# refuses to start). Values are integer-shaped by the task above, so `| int` is safe.
+- name: Validate optional knob ranges the daemon rejects out-of-range
+  ansible.builtin.assert:
+    that:
+      # rpc_watchdog: 0 disables, otherwise must be >= 10 (1..9 rejected upstream).
+      - >-
+        decdn_rpc_watchdog_interval_sec == ""
+        or (decdn_rpc_watchdog_interval_sec | int == 0 or decdn_rpc_watchdog_interval_sec | int >= 10)
+      - decdn_event_poll_interval_ms == "" or (decdn_event_poll_interval_ms | int >= 250)
+      - decdn_content_blacklist_poll_interval_sec == "" or (decdn_content_blacklist_poll_interval_sec | int >= 1)
+      - decdn_redeem_threshold_micro_usdc == "" or (decdn_redeem_threshold_micro_usdc | int >= 1)
+      - decdn_buyer_deposit_micro_usdc == "" or (decdn_buyer_deposit_micro_usdc | int >= 1)
+      # settlement auto-close: 0 is rejected (omit to disable), so require >= 1.
+      - decdn_settlement_auto_threshold_micro_usdc == "" or (decdn_settlement_auto_threshold_micro_usdc | int >= 1)
+      - decdn_settlement_auto_by_voucher_nonce_span == "" or (decdn_settlement_auto_by_voucher_nonce_span | int >= 1)
+      - >-
+        decdn_delivery_ceiling == ""
+        or (decdn_delivery_ceiling | int >= 1 and decdn_delivery_ceiling | int <= 1000000000000)
+      - >-
+        decdn_voucher_interval_mb == ""
+        or (decdn_voucher_interval_mb | int >= 1 and decdn_voucher_interval_mb | int <= 1024)
+    fail_msg: >-
+      An optional knob is out of the range the daemon accepts:
+      decdn_rpc_watchdog_interval_sec (0 or >= 10),
+      decdn_event_poll_interval_ms (>= 250),
+      decdn_content_blacklist_poll_interval_sec (>= 1),
+      decdn_redeem_threshold_micro_usdc / decdn_buyer_deposit_micro_usdc (>= 1),
+      decdn_settlement_auto_threshold_micro_usdc /
+      decdn_settlement_auto_by_voucher_nonce_span (>= 1 — leave "" to disable, 0 is
+      rejected), decdn_delivery_ceiling (1..=1_000_000_000_000),
+      decdn_voucher_interval_mb (1..=1024).
+
+- name: Validate optional cross-field knob constraints
+  ansible.builtin.assert:
+    that:
+      # The daemon fills each UNSET side with its own default and THEN enforces the
+      # constraint, so compare effective (default-substituted) values — NOT "skip if
+      # either side is unset". Skipping would let a raised pull_ahead with an unset
+      # leech cap (which resolves to 256 MiB), or a floor above the default ceiling,
+      # slip through here and crash-loop the daemon at config load.
+      - _eff_dfloor | int <= _eff_dceil | int
+      # leech cap: a RESOLVED 0 disables it; otherwise pull_ahead <= leech.
+      - _eff_leech | int == 0 or (_eff_pull | int <= _eff_leech | int)
+    fail_msg: >-
+      Cross-field constraint violated (unset sides compared against the daemon
+      default): decdn_delivery_floor must be <= decdn_delivery_ceiling (default
+      1_000_000_000_000), and decdn_pull_ahead_bytes must be <=
+      decdn_max_unrecouped_leech_bytes (default 268435456) unless that cap is 0 (off).
+  vars:
+    _eff_dfloor: "{{ decdn_delivery_floor if decdn_delivery_floor != '' else 0 }}"
+    _eff_dceil: "{{ decdn_delivery_ceiling if decdn_delivery_ceiling != '' else 1000000000000 }}"
+    _eff_pull: "{{ decdn_pull_ahead_bytes if decdn_pull_ahead_bytes != '' else 1048576 }}"
+    _eff_leech: "{{ decdn_max_unrecouped_leech_bytes if decdn_max_unrecouped_leech_bytes != '' else 268435456 }}"
+
+- name: Validate optional list knobs (relay_urls, pinned_hashes)
+  ansible.builtin.assert:
+    that:
+      # Fully anchored (^...$) with [^"\s]: a start-anchored '^https?://' prefix
+      # match would accept a value like 'https://x" injected = 1' whose unescaped
+      # quote breaks the rendered TOML array (a crash-loop). Disallow quotes/space.
+      - decdn_relay_urls | reject('match', '^https?://[^\"\\s]+$') | list | length == 0
+      - decdn_pinned_hashes | reject('match', '^[0-9a-f]{64}$') | list | length == 0
+    fail_msg: >-
+      decdn_relay_urls entries must each be an http(s):// URL with no quote or
+      whitespace, and decdn_pinned_hashes entries must each be a 64-char
+      lowercase-hex BLAKE3 hash (uppercase is rejected upstream). Leave either
+      list empty ([]) to omit it.
+
+# user_agent + otlp_endpoint interpolate into TOML basic strings ("..."). An
+# unescaped '"' or newline breaks the rendered node.toml (a daemon crash-loop), and
+# the daemon additionally requires otlp_endpoint to be an http(s):// URL. Neither is
+# emitted through | int, so validate their shape here (guarded == "" so unset passes).
+- name: Validate optional string knobs (user_agent, otlp_endpoint)
+  ansible.builtin.assert:
+    that:
+      # No '"', CR or LF (would break the TOML string / are rejected upstream).
+      - decdn_cache_user_agent == "" or (decdn_cache_user_agent is match('^[^\"\\r\\n]+$'))
+      # http(s):// URL, and no quote/whitespace (same TOML-injection guard as relay_urls).
+      - decdn_otlp_endpoint == "" or (decdn_otlp_endpoint is match('^https?://[^\"\\s]+$'))
+    fail_msg: >-
+      decdn_cache_user_agent must contain no double-quote or newline, and
+      decdn_otlp_endpoint must be an http(s):// URL with no quote or whitespace
+      (both are interpolated verbatim into node.toml). Leave either "" to omit it.
+
 # --- User & directories -------------------------------------------------------
 - name: Create decdn system group
   ansible.builtin.group:
