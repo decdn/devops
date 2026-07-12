@@ -1,127 +1,111 @@
 ---
-# Additional named sudo users — each its OWN account (own username, home, key),
-# created key-only EXACTLY like the admin: member of `sudo`, a NOPASSWD sudoers.d
-# drop-in, and a locked password (login by key only). Distinct from
-# ssh_admin_extra_pubkeys, which only adds keys to the SHARED admin account. Runs
-# after the admin block and before the firewall / DevSec hardening, so a listed
+# Provision a set of key-only NOPASSWD sudo operators through the shared sudo_account.yml
+# primitive. Called two ways:
+#   * from main.yml with the `baseline_operators` fact = the auto-detected admin head plus
+#     any committed `baseline_sudo_users` — the whole operator set, validated together;
+#   * standalone via molecule's `tasks_from: sudo_users` (no admin context), where
+#     `baseline_operators` is unset and it falls back to `baseline_sudo_users` — so the
+#     named-users block keeps its container-safe standalone converge/idempotence/verify
+#     coverage (the rest of baseline is real-host-only).
+# Each operator becomes its OWN account (own username, home, key(s)), created key-only:
+# member of `sudo`, a NOPASSWD sudoers.d drop-in, and a locked password. This runs after
+# the admin identity is resolved and BEFORE the firewall / DevSec hardening, so a listed
 # operator can log in immediately once hardening applies.
 #
-# These accounts are NOT lockout-critical — the play always connects as the admin
-# user — so, unlike the admin path, this block needs no getent-probe or lockout
-# assert: a plain `when: not ansible_check_mode` guard on the key install is enough
-# to keep `make check` on a fresh host (where the account doesn't exist yet, so
-# authorized_key would hard-fail) from blowing up.
+# On the production (main.yml) path these accounts are not individually lockout-critical —
+# the play connects as the admin head, whose non-root/keyed viability is proven by the
+# UNCONDITIONAL lockout assert in main.yml before this file runs. On the molecule
+# `tasks_from` path main.yml never runs, but that is a throwaway container with no hardening,
+# so lockout is moot there. Per-account check-mode safety lives in the primitive
+# (a getent probe gates each key install, so `make check` on a fresh host — where an account
+# doesn't exist yet — doesn't hard-fail).
 
-# Refuse two operator-input shapes that would otherwise misconfigure an account
-# SILENTLY (the role's ethos: fail loud, never a silent sudo lockout) — checked here,
-# before any account is touched:
-#   * An entry with no `keys` (or keys: []): the tasks below would still create the
-#     account, join it to `sudo`, write its NOPASSWD drop-in, and lock its password —
-#     a dormant account with passwordless root and no way to log in (ssh_hardening
-#     disables password auth). A `key:`/`keys:` typo hits exactly this.
+# Refuse operator-input shapes that would otherwise misconfigure an account SILENTLY (the
+# role's ethos: fail loud, never a silent sudo lockout) — checked here, before any account
+# is touched, over the WHOLE set. With the admin head as a real list member (when called
+# from main), an admin-vs-named sudoers.d collision is caught by the same uniqueness check
+# with no special-casing:
+#   * An entry with no `keys` (or keys: []): the primitive would still create the account,
+#     join it to `sudo`, write its NOPASSWD drop-in, and lock its password — a dormant
+#     account with passwordless root and no way to log in (ssh_hardening disables password
+#     auth). A `key:`/`keys:` typo hits exactly this.
+#   * `keys` as a scalar string (a common `- "ssh-..."` mistake): truthy, so it slips past
+#     the keyless check, but the primitive's authorized_key loop would then mis-iterate the
+#     string char-by-char AFTER the account is already changed. Reject it up front.
 #   * Two names that sanitize to the SAME sudoers.d filename (e.g. `deploy.bot` and
-#     `deploy_bot`, or a name colliding with the admin's own drop-in — this block runs
-#     AFTER the admin block): the copy loop would silently overwrite, leaving a user
-#     with `sudo` + a locked password but NO NOPASSWD grant. `visudo -cf` validates
-#     content, not a clobbered file, so it cannot catch this.
-- name: Assert each named sudo user is well-formed and has a unique sudoers.d filename
+#     `deploy_bot`, or a named user colliding with the admin's own drop-in): the primitive's
+#     copy would silently overwrite, leaving a user with `sudo` + a locked password but NO
+#     NOPASSWD grant. `visudo -cf` validates content, not a clobbered file, so it can't catch
+#     this.
+- name: Assert each sudo operator is well-formed and has a unique sudoers.d filename
   ansible.builtin.assert:
     that:
       - unnamed_entries | length == 0
-      # `keys` as a scalar string (a common `- "ssh-..."` mistake) is truthy, so it
-      # slips past the keyless check below, but subelements() then mis-iterates it AFTER
-      # accounts are already changed. Reject it up front to keep this a pre-flight gate.
+      # `keys` as a scalar string is truthy, so it slips past the keyless check below, but
+      # the authorized_key loop would then mis-iterate it char-by-char AFTER accounts are
+      # changed. Reject up front.
       - stringy_keys_entries | length == 0
-      - keyless_named_users | length == 0
+      - keyless_operators | length == 0
+      # A non-empty keys list whose MEMBERS are blank/whitespace passes keyless (the list
+      # is truthy) yet installs no key — leaving a password-locked, sudo-group, NOPASSWD
+      # account with no way to log in (a silent lockout if it is the sole admin). Reject it.
+      - blank_key_entries | length == 0
       - sudoers_dropin_names | length == (sudoers_dropin_names | unique | length)
     fail_msg: >-
-      baseline_sudo_users is misconfigured (validated before any account is created).
+      The sudo operator set is misconfigured (validated before any account is created).
       Entries with a missing/empty `name`: {{ unnamed_entries | length }}.
       Entries whose `keys` is a string, not a list: {{ stringy_keys_entries }}.
-      Entries lacking a non-empty `keys` list: {{ keyless_named_users }}.
-      Sanitized /etc/sudoers.d/ filenames must be unique (including vs the admin
-      drop-in), else one grant silently overwrites another -> silent sudo lockout;
-      got {{ sudoers_dropin_names }}.
+      Entries lacking a non-empty `keys` list: {{ keyless_operators }}.
+      Entries with a blank/whitespace-only key: {{ blank_key_entries }}.
+      Sanitized /etc/sudoers.d/ filenames must be unique (admin head included), else one
+      grant silently overwrites another -> silent sudo lockout; got {{ sudoers_dropin_names }}.
   vars:
-    # `keys` must NOT be read with map(attribute='keys'): it collides with the dict
-    # .keys() METHOD, so an entry that omits `keys` (a `key:` typo) yields the bound
-    # method (truthy) and silently escapes the keyless check. `map('list')` yields each
-    # entry's real key NAMES instead, so `superset(['keys'])` tells us which entries
-    # actually carry a `keys` key; attribute access is then safe only on those.
-    names: "{{ baseline_sudo_users | map(attribute='name', default='') | list }}"
-    key_names_per_entry: "{{ baseline_sudo_users | map('list') | list }}"
+    # The set to validate: the merged operator list from main.yml, or — on the standalone
+    # molecule `tasks_from` path where that fact is unset — just the committed named users.
+    _ops: "{{ baseline_operators | default(baseline_sudo_users) }}"
+    # `keys` must NOT be read with map(attribute='keys'): it collides with the dict .keys()
+    # METHOD, so an entry that omits `keys` (a `key:` typo) yields the bound method (truthy)
+    # and silently escapes the keyless check. `map('list')` yields each entry's real key
+    # NAMES instead, so `superset(['keys'])` tells us which entries actually carry a `keys`
+    # key; attribute access is then safe only on those.
+    names: "{{ _ops | map(attribute='name', default='') | list }}"
+    key_names_per_entry: "{{ _ops | map('list') | list }}"
     with_keys: >-
-      {{ baseline_sudo_users | zip(key_names_per_entry)
+      {{ _ops | zip(key_names_per_entry)
          | selectattr('1', 'superset', ['keys']) | map(attribute='0') | list }}
-    # `default=''` on the name deref so a missing `name` reports cleanly here rather
-    # than raising an undefined-attribute error while building fail_msg.
+    # `default=''` on the name deref so a missing `name` reports cleanly here rather than
+    # raising an undefined-attribute error while building fail_msg.
     unnamed_entries: >-
-      {{ (baseline_sudo_users | rejectattr('name', 'defined') | list)
-         + (baseline_sudo_users | selectattr('name', 'defined')
+      {{ (_ops | rejectattr('name', 'defined') | list)
+         + (_ops | selectattr('name', 'defined')
             | rejectattr('name', 'truthy') | list) }}
     stringy_keys_entries: >-
       {{ with_keys | selectattr('keys', 'string')
          | map(attribute='name', default='') | list }}
-    # Keyless = entries with no `keys` key at all (absent), plus entries whose `keys`
-    # is present but empty/null (falsy).
-    keyless_named_users: >-
+    # Keyless = entries with no `keys` key at all (absent), plus entries whose `keys` is
+    # present but empty/null (falsy).
+    keyless_operators: >-
       {{ (names | zip(key_names_per_entry)
           | rejectattr('1', 'superset', ['keys']) | map(attribute='0') | list)
          + (with_keys | selectattr('keys', 'falsy')
             | map(attribute='name', default='') | list) }}
-    # ssh_admin_user_effective is resolved by the admin block in main.yml; on the
-    # molecule `tasks_from: sudo_users` path that block never runs, so default it out.
+    # Names of entries with a blank/whitespace-only key MEMBER (list truthy, so it escapes
+    # keyless above). subelements pairs each (entry, key); `match '^\s*$'` flags empty/blank
+    # keys; then report the entry name. rejectattr('keys','string') keeps subelements off a
+    # scalar `keys` (already rejected by stringy_keys_entries, but belt-and-suspenders).
+    blank_key_entries: >-
+      {{ with_keys | rejectattr('keys', 'string')
+         | subelements('keys', skip_missing=true)
+         | selectattr('1', 'match', '^\s*$')
+         | map(attribute='0') | map(attribute='name', default='') | unique | list }}
+    # Uniqueness over the whole set (admin head is already a member, so no separate
+    # admin-drop-in term is needed — this subsumes the old admin-vs-named collision check).
     sudoers_dropin_names: >-
-      {{ (names | map('regex_replace', '[^A-Za-z0-9_-]', '_') | list)
-         + ([ssh_admin_user_effective | regex_replace('[^A-Za-z0-9_-]', '_')]
-            if ssh_admin_user_effective is defined else []) }}
+      {{ names | map('regex_replace', '[^A-Za-z0-9_-]', '_') | list }}
 
-- name: Create the additional named sudo users
-  ansible.builtin.user:
-    name: "{{ item.name }}"
-    groups: [sudo]
-    append: true
-    shell: /bin/bash
-    create_home: true
-  loop: "{{ baseline_sudo_users }}"
+- name: Provision each sudo operator via the shared account primitive
+  ansible.builtin.include_tasks: sudo_account.yml
+  loop: "{{ baseline_operators | default(baseline_sudo_users) }}"
   loop_control:
-    label: "{{ item.name }}"
-
-# Same sudoers.d filename hazard as the admin drop-in: sudo's #includedir SKIPS any
-# file whose name contains a '.' or ends in '~' — which, with the password locked
-# below, is a silent sudo lockout. Sanitize the username into the filename (the rule
-# inside still names the real user); `visudo -cf` validates content, not the name.
-- name: Grant each named sudo user passwordless sudo
-  ansible.builtin.copy:
-    dest: "/etc/sudoers.d/{{ item.name | regex_replace('[^A-Za-z0-9_-]', '_') }}"
-    owner: root
-    group: root
-    mode: "0440"
-    content: "{{ item.name }} ALL=(ALL) NOPASSWD:ALL\n"
-    validate: "visudo -cf %s"
-  loop: "{{ baseline_sudo_users }}"
-  loop_control:
-    label: "{{ item.name }}"
-
-- name: Lock each named sudo user's password (key-only login; NOPASSWD sudo)
-  ansible.builtin.user:
-    name: "{{ item.name }}"
-    password_lock: true
-  loop: "{{ baseline_sudo_users }}"
-  loop_control:
-    label: "{{ item.name }}"
-
-# subelements flattens each (user, key) pair. The assert above already rejects a
-# keyless entry, so skip_missing=true here is just defence-in-depth (it would emit
-# no pairs rather than error). authorized_key writes into the account's ~/.ssh, so
-# the user must exist first — under --check the create above is a no-op, so skip the
-# install in check mode (see the not-lockout-critical note in the block header above).
-- name: Install each named sudo user's authorized keys
-  ansible.posix.authorized_key:
-    user: "{{ item.0.name }}"
-    key: "{{ item.1 }}"
-    state: present
-  loop: "{{ baseline_sudo_users | subelements('keys', skip_missing=true) }}"
-  loop_control:
-    label: "{{ item.0.name }}"
-  when: not ansible_check_mode
+    loop_var: sudo_account
+    label: "{{ sudo_account['name'] }}"

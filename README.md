@@ -53,7 +53,7 @@ cd ansible
 make deps                                      # vendor pinned Galaxy collections into ./collections
 cp inventory/hosts.yml.example inventory/hosts.yml
 $EDITOR inventory/hosts.yml                     # set hosts for decdn_nodes
-$EDITOR inventory/group_vars/all.yml            # set ssh_admin_pubkey (REQUIRED — prevents lockout)
+$EDITOR inventory/group_vars/all.yml            # optional: add admins to baseline_sudo_users (runner is auto-detected)
 cp inventory/host_vars/decdn-node-1/secret.yml.example inventory/host_vars/decdn-node-1/secret.yml
 $EDITOR inventory/host_vars/decdn-node-1/secret.yml   # set decdn_rpc_url (per-node config is in main.yml)
 make check                                     # dry run (--check --diff)

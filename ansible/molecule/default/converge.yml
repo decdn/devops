@@ -28,7 +28,7 @@
     # keys, generated for this test only — public keys, not credentials. Two users
     # on purpose: `alice.smith` has a '.' (so the sudoers.d filename-sanitize maps it
     # to /etc/sudoers.d/alice_smith — the one branch whose failure is silent) and two
-    # keys (exercises the subelements fan-out), while molecule-operator stays single.
+    # keys (exercises the multi-key authorized_key loop), while molecule-operator stays single.
     baseline_sudo_users:
       - name: molecule-operator
         keys:

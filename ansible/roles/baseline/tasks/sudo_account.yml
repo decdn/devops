@@ -1,0 +1,106 @@
+---
+# One key-only NOPASSWD sudo account — the single primitive that the auto-detected admin
+# head and every named operator both route through. Takes a `sudo_account` dict
+# {name, keys, passwordless} (passwordless is optional; it defaults to the role-wide
+# baseline_sudo_passwordless) and renders the account ONCE: create the user, write its
+# sanitized sudoers.d drop-in, lock its password, and install its keys — with all the
+# sanitize / lock / check-mode reasoning that used to live twice.
+#
+# `name`/`keys` are read with SUBSCRIPT, never dot-access: `sudo_account.keys` resolves to
+# the dict's `.keys()` METHOD (truthy garbage), so it would silently install no real keys.
+# `sudo_account['keys']` returns the list.
+
+- name: Create sudo user
+  ansible.builtin.user:
+    name: "{{ sudo_account['name'] }}"
+    groups: [sudo]
+    append: true
+    shell: /bin/bash
+    create_home: true
+
+# sudo's #includedir SKIPS any file in sudoers.d whose name contains a '.' or ends in '~'.
+# A username like `deploy.bot` would produce a valid-but-ignored drop-in, so NOPASSWD would
+# silently not apply — and with the password locked below that is a sudo lockout. `visudo
+# -cf` validates content, not the filename, so it can't catch this. Sanitize the name to
+# sudo's accepted charset; the rule inside still names the real user, so the grant is
+# unaffected. (Uniqueness of these sanitized names across the whole operator set is asserted
+# up front in sudo_users.yml, so two names can't collide onto one drop-in here.)
+- name: Resolve the sudoers.d drop-in path (sudo ignores '.'/'~' in filenames)
+  ansible.builtin.set_fact:
+    sudo_account_sudoers_file: >-
+      /etc/sudoers.d/{{ sudo_account['name'] | regex_replace('[^A-Za-z0-9_-]', '_') }}
+
+# Passwordless, key-only account (the default): grant NOPASSWD sudo (so non-interactive
+# sudo / `make deploy` works with no become password) and lock the password (so nothing can
+# authenticate by password — ssh_hardening disables SSH password auth anyway). Both are
+# gated on the same per-account flag; turning it off falls back to classic sudo-group
+# password sudo (see the disabled-path warning below).
+- name: Grant the user passwordless sudo
+  ansible.builtin.copy:
+    dest: "{{ sudo_account_sudoers_file }}"
+    owner: root
+    group: root
+    mode: "0440"
+    content: "{{ sudo_account['name'] }} ALL=(ALL) NOPASSWD:ALL\n"
+    validate: "visudo -cf %s"
+  when: sudo_account['passwordless'] | default(baseline_sudo_passwordless) | bool
+
+- name: Lock the user's password (key-only login; NOPASSWD sudo)
+  ansible.builtin.user:
+    name: "{{ sudo_account['name'] }}"
+    password_lock: true
+  when: sudo_account['passwordless'] | default(baseline_sudo_passwordless) | bool
+
+# Reverse the NOPASSWD grant if passwordless is turned off. The password lock is
+# intentionally NOT auto-reverted: unlocking a never-set password is unsafe/undefined —
+# older shadow-utils blank it (passwordless account), newer ones (Debian bookworm / current
+# Ubuntu) refuse. Regaining password sudo is a manual `passwd <user>` step. The `length > 0`
+# guard is defence-in-depth: the pre-flight assert already rejects an empty name, but if it
+# were ever bypassed the path would collapse to the bare `/etc/sudoers.d/` directory and
+# state:absent would recursively delete it, breaking sudo host-wide. Never run this
+# destructive task on an empty username.
+- name: Remove the passwordless-sudo drop-in when disabled
+  ansible.builtin.file:
+    path: "{{ sudo_account_sudoers_file }}"
+    state: absent
+  when:
+    - not (sudo_account['passwordless'] | default(baseline_sudo_passwordless) | bool)
+    - sudo_account['name'] | length > 0
+
+# Loud fallback warning: with passwordless off there is no NOPASSWD grant, and a fresh
+# account (or one locked by a prior passwordless run) has no usable password — so it cannot
+# sudo after ssh_hardening unless a password is set on the host. Flipping this true->false
+# on an ALREADY-hardened host while connected as that user also breaks the current run once
+# the drop-in is removed (later tasks can no longer `sudo -n`) — set a password first and
+# re-run with `--ask-become-pass`.
+- name: Warn that classic password sudo needs a password set on the host
+  ansible.builtin.debug:
+    msg: >-
+      passwordless sudo is off for '{{ sudo_account['name'] }}': it uses classic sudo-group
+      password sudo. If its password is unset or locked (fresh account, or a prior
+      passwordless run), run `passwd {{ sudo_account['name'] }}` on the host or it will be
+      unable to sudo once SSH hardening disables root login. Switching from passwordless to
+      password sudo on a live hardened host needs that password set first, then a re-run
+      with `--ask-become-pass`.
+  when: not (sudo_account['passwordless'] | default(baseline_sudo_passwordless) | bool)
+
+# authorized_key resolves the user's ~/.ssh to write the key, so the account must already
+# exist. Under --check the create task above is a no-op, so on a not-yet-provisioned host
+# the user is absent and the module hard-fails ("Either user must exist or you must provide
+# full path to key file in check mode"). Probe real on-host state (read-only, runs in check
+# mode) and skip the key install only when check mode meets a missing user; real runs and
+# check runs on a provisioned host (where drift is worth previewing) always proceed.
+- name: Probe whether the user already exists on the target
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ sudo_account['name'] }}"
+    fail_key: false
+
+- name: Install the user's authorized keys
+  ansible.posix.authorized_key:
+    user: "{{ sudo_account['name'] }}"
+    key: "{{ item }}"
+    state: present
+  loop: "{{ sudo_account['keys'] }}"
+  # fail_key:false stores a missing user as {user: None}, so test the value, not `in`.
+  when: not ansible_check_mode or (getent_passwd | default({})).get(sudo_account['name'])

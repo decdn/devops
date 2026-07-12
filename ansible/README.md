@@ -62,14 +62,15 @@ $EDITOR inventory/host_vars/decdn-node-1/secret.yml   # set decdn_rpc_url
 Your `hosts.yml` is no longer force-ignored — commit it in your fork if you want, or keep
 it local.
 
-By default baseline **deploys you as yourself**: an empty `ssh_admin_user` resolves to your
-control-machine `$USER`, and an empty `ssh_admin_pubkey` is autodetected from `~/.ssh`
-(`id_ed25519` > `ecdsa` > `rsa`). Add additional operators' keys via `ssh_admin_extra_pubkeys`. Set
-`ssh_admin_user`/`ssh_admin_pubkey` explicitly to override (e.g. a shared `deploy` account,
-or when deploying from CI). baseline **asserts a key resolves** before `ssh_hardening`
-disables root + password login, so you can't lock yourself out. After the first deploy,
-switch each host's `ansible_user` to that admin account (your local username unless you set
-one).
+By default baseline **deploys you as yourself**: the runner (your control-machine `$USER` +
+its autodetected `~/.ssh` key, `id_ed25519` > `ecdsa` > `rsa`) is prepended as the head of
+the one operator list, `baseline_sudo_users`. Add other admins there — list yourself (same
+name) to override the auto-detected head with explicit keys. Set
+`baseline_sudo_autodetect_runner: false` to skip the runner and provision only the explicit
+list (e.g. from CI). baseline **asserts a non-root account with a key resolves** before
+`ssh_hardening` disables root + password login, so you can't lock yourself out. After the
+first deploy, switch each host's `ansible_user` to that admin account (your local username
+unless you listed one).
 
 ---
 
@@ -148,8 +149,8 @@ the RPC URL). Highlights:
 
 | Var | Default | Notes |
 |-----|---------|-------|
-| `ssh_admin_user` / `ssh_admin_pubkey` | `""` / `""` | Empty = local `$USER` + autodetected `~/.ssh` key; admin created before SSH hardening. |
-| `ssh_admin_extra_pubkeys` | `[]` | Extra authorized keys for the admin user (additional operators). |
+| `baseline_sudo_users` | `[]` | The one operator list (`{name, keys, passwordless?}`); the auto-detected runner head (`$USER` + `~/.ssh` key) is prepended, all created before SSH hardening. |
+| `baseline_sudo_autodetect_runner` / `baseline_sudo_passwordless` | `true` / `true` | Prepend the runner as head (`false` = explicit list only); key-only NOPASSWD + locked-password default. |
 | `baseline_extra_inbound` | `[]` | public inbound ports; `decdn_nodes` opens udp/4433. |
 | `baseline_preserve_ipv6_autoconf` | `true` | Keep IPv6 RA/autoconf under hardening; set `false` for static-IPv6 hosts. |
 | `baseline_rp_filter_loose` | `false` | `true` loosens reverse-path filtering (`rp_filter=2`) for multi-homed nodes. |

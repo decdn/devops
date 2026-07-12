@@ -3,7 +3,7 @@
 # skipped project-wide (removing the skip surfaces ~60 violations):
 #   - decdn_node uses a `decdn_` prefix, not the rule-expected `decdn_node_`
 #     (decdn_rpc_url, decdn_bind_port, decdn_user, …) — the bulk of the skip.
-#   - baseline surfaces a few global knobs in group_vars (ssh_admin_*, ssh_allow_cidrs).
+#   - baseline surfaces a global knob in group_vars (ssh_allow_cidrs).
 # Conventional names read better for a public ops repo than role-prefixed ones;
 # everything else is held to the 'production' profile.
 skip_list:

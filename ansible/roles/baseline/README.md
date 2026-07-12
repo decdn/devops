@@ -9,20 +9,22 @@ In order — the ordering matters:
 
 1. **Base packages** — `curl`, `git`, `jq`, `openssl`, `nftables`, `fail2ban`,
    `unattended-upgrades`, `chrony`, … (override `baseline_packages`).
-2. **Admin sudo user** — creates `ssh_admin_user` and installs its key(s)
-   **before** SSH is hardened, so you keep a way in. Both resolve from the control
-   machine when left empty: the user falls back to the local `$USER`, and the key is
-   autodetected from `~/.ssh` (`id_ed25519` > `id_ecdsa` > `id_rsa`). Extra operator keys
-   come from `ssh_admin_extra_pubkeys`. Explicit values always win. By default the
-   account is **key-only**: it gets a NOPASSWD sudoers drop-in and its password is
-   locked (`ssh_admin_passwordless_sudo`), so sudo / `make deploy` needs no become
-   password and no password can authenticate. Set the knob `false` for classic
-   password sudo (you must then set a password on the account yourself).
-   Additional **named** operator accounts come from `baseline_sudo_users` — each a
-   distinct login (own username, home, and key), created key-only exactly like the
-   admin (member of `sudo`, NOPASSWD drop-in, locked password). Use this to give
-   teammates their own accounts rather than sharing keys on the admin via
-   `ssh_admin_extra_pubkeys`.
+2. **Sudo operators** — one list, `baseline_sudo_users`, installed **before** SSH is
+   hardened so you keep a way in. There is no separate admin knob: the **runner** (this
+   control box's `$USER` + its `~/.ssh` key, autodetected `id_ed25519` > `id_ecdsa` >
+   `id_rsa`) is prepended as the lockout-critical **head**, so the person running
+   `make deploy` is provisioned without being committed anywhere. Set
+   `baseline_sudo_autodetect_runner: false` to skip that and provision only the explicit
+   list (e.g. CI). Add other admins to `baseline_sudo_users` — each a distinct login (own
+   username, home, key(s)); listing yourself there (same name) **overrides** the
+   auto-detected head with explicit keys. Every operator is created **key-only**: member
+   of `sudo`, a NOPASSWD sudoers drop-in, and a locked password, so sudo / `make deploy`
+   needs no become password and no password can authenticate. `baseline_sudo_passwordless`
+   (default `true`) is the role-wide default; set it (or a per-entry `passwordless: false`)
+   `false` for classic password sudo (you must then set a password on the account
+   yourself). The head and every listed operator are rendered by a single primitive
+   (`tasks/sudo_account.yml`), so the sudoers.d sanitize / password-lock / check-mode
+   logic lives in exactly one place.
 3. **Firewall** — nftables **default-deny inbound**; SSH is the only universally-open
    port. Extra public listeners are declared explicitly via `baseline_extra_inbound`.
 4. **Auto-patching** — `unattended-upgrades` for security updates.
@@ -42,33 +44,30 @@ In order — the ordering matters:
 ## Lockout guard
 
 `ssh_hardening` disables root and password auth. The role runs an **unconditional
-assert** before any account creation or hardening that aborts the play unless a
-**non-root** admin user *and* at least one key resolve. By default these come from
-the control machine (local `$USER` + `~/.ssh` key), so a stock interactive run "just
-works". The assert fires — by design, so you can fix it rather than lock yourself
-out — when any of these hold:
+assert** before any account creation or hardening that aborts the play unless the
+resolved operator set (auto-detected runner head + `baseline_sudo_users`) contains at
+least one **non-root** account **with a key**. By default the head comes from the
+control machine (local `$USER` + `~/.ssh` key), so a stock interactive run "just works".
+The assert fires — by design, so you can fix it rather than lock yourself out — when
+the whole set has no viable admin, e.g.:
 
-- **No key resolves**: no `~/.ssh/id_ed25519|ecdsa|rsa.pub` and no explicit
-  `ssh_admin_pubkey`/`ssh_admin_extra_pubkeys` (the most common real-world trigger).
-- **The user is unresolvable**: `ssh_admin_user` empty *and* `$USER` unset (cron, CI,
-  or `sudo` with `env_reset`).
-- **The user resolves to `root`**: hardening forbids root login, so this would be a
-  guaranteed lockout — set `ssh_admin_user` to a non-root account.
+- **No runner head resolves** (no `~/.ssh/id_ed25519|ecdsa|rsa.pub`, `$USER` unset/`root`
+  under cron/CI/`sudo`, or `baseline_sudo_autodetect_runner: false`) **and**
+  `baseline_sudo_users` is empty — nothing to log in as.
+- The only entries resolve to **`root`** (hardening forbids root login) or are
+  **keyless** — add a non-root, keyed entry to `baseline_sudo_users`.
 
-Because resolution reads the **control node's** `$USER`/`$HOME` of whoever invokes
-`ansible-playbook`, a `sudo`/CI run can autodetect a different user/key than you
-expect — set both explicitly in that case.
+Because the head reads the **control node's** `$USER`/`$HOME` of whoever invokes
+`ansible-playbook`, a `sudo`/CI run can autodetect a different user/key than you expect —
+set `baseline_sudo_autodetect_runner: false` and list admins explicitly in that case.
 
 ## Key variables
 
 | Var | Default | Notes |
 |-----|---------|-------|
-| `ssh_admin_user` | `""` | Admin sudo account; created before SSH hardening. Empty = the control machine's local `$USER`. |
-| `ssh_admin_pubkey` | `""` | Admin key. Empty = autodetected from `~/.ssh` (`id_ed25519`/`ecdsa`/`rsa`). Set to override. |
-| `ssh_admin_pubkey_autodetect` | `true` | When `ssh_admin_pubkey` is empty, read the operator's default local public key. |
-| `ssh_admin_extra_pubkeys` | `[]` | Additional authorized keys (full pubkey strings) on the **shared** admin account — e.g. other operators. |
-| `baseline_sudo_users` | `[]` | **Distinct** named sudo accounts, created key-only like the admin. Each item `{name, keys: [...]}` (pubkeys only). |
-| `ssh_admin_passwordless_sudo` | `true` | Give the admin user NOPASSWD sudo and lock its password (key-only). Set `false` for classic password sudo. |
+| `baseline_sudo_users` | `[]` | The one operator list. Each item `{name, keys: [...], passwordless?}` (pubkeys only), created key-only. The auto-detected runner head is prepended; a same-name entry here overrides it. |
+| `baseline_sudo_autodetect_runner` | `true` | Auto-detect the runner (`$USER` + `~/.ssh` `id_ed25519`/`ecdsa`/`rsa`) and prepend it as the head. `false` = provision only the explicit list (e.g. CI). |
+| `baseline_sudo_passwordless` | `true` | Role-wide default sudo mode: NOPASSWD drop-in + locked password (key-only). Per-entry `passwordless: false` overrides; `false` = classic password sudo. |
 | `ssh_allow_cidrs` | `[]` | Optional inbound-SSH source allowlist (CIDRs). Empty = any source. |
 | `baseline_extra_inbound` | `[]` | Extra public inbound ports. Each item `{proto, port, comment}`. Loopback services need nothing here; the deCDN node opens udp/4433. |
 | `baseline_preserve_ipv6_autoconf` | `true` | Re-enable IPv6 RA/autoconf under `os_hardening` (which disables it, breaking SLAAC addresses). Set `false` for statically-addressed IPv6 hosts to keep full CIS IPv6 hardening. |

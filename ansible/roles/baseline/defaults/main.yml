@@ -1,33 +1,33 @@
 ---
 # baseline role defaults. Override in inventory/group_vars for a real deployment.
 
-# Admin sudo account, created + keyed BEFORE ssh_hardening disables root login.
-# "Deploy as yourself" by default — both knobs resolve from the control machine
-# when left empty, and explicit values always win:
-#   ssh_admin_user   ""  -> the control-machine local $USER (of whoever runs
-#                           ansible-playbook; under sudo/CI this may not be you)
-#   ssh_admin_pubkey ""  -> autodetected from that same ~/.ssh (id_ed25519 > ecdsa > rsa)
-# The lockout-guard assert in tasks/main.yml aborts the run (before any hardening)
-# unless a NON-ROOT admin user and >=1 key resolve — so hardening never runs keyless.
-ssh_admin_user: ""
-ssh_admin_pubkey: ""
-# When ssh_admin_pubkey is empty, read the operator's default local public key.
-ssh_admin_pubkey_autodetect: true
-# Additional authorized keys for the admin user (full pubkey strings, e.g. teammates).
-ssh_admin_extra_pubkeys: []
-# Additional named sudo users — DISTINCT accounts, not extra keys on the shared admin
-# (that is ssh_admin_extra_pubkeys above). Each entry gets its OWN username, home, and
-# key(s), created key-only exactly like the admin: member of `sudo`, a NOPASSWD
-# sudoers.d drop-in, and a locked password (login by key only). Pubkeys only — no
-# passwords. Shape: [{name: <login>, keys: ["<full pubkey string>", ...]}, ...].
+# Sudo operators (admin accounts), created + keyed BEFORE ssh_hardening disables root
+# login. ONE list — no separate admin knobs. "Deploy as yourself" by default: the runner
+# (the control-machine $USER of whoever runs ansible-playbook, plus its ~/.ssh key) is
+# auto-detected and prepended as the lockout-critical head, so the operator running
+# `make deploy` is provisioned WITHOUT appearing in any committed file. Add any other
+# admins to baseline_sudo_users; list yourself there (same name) to OVERRIDE the
+# auto-detected head with explicit key(s)/settings. Each operator is created key-only:
+# member of `sudo`, a NOPASSWD sudoers.d drop-in, and a locked password (login by key
+# only). Pubkeys only — no passwords.
+# Shape: [{name: <login>, keys: ["<full pubkey string>", ...], passwordless: <bool>}, ...]
+# (`passwordless` is optional per entry; it defaults to baseline_sudo_passwordless below.)
+# The lockout-guard assert in tasks/main.yml aborts the run (before any hardening) unless
+# the resolved set has a NON-ROOT account with a key — so hardening never runs keyless.
 baseline_sudo_users: []
-# Passwordless, key-only admin account. ssh_hardening disables SSH password auth, so
-# the admin user logs in by key only; with this on (default) the account gets a
-# NOPASSWD sudoers drop-in AND its password is locked — non-interactive sudo / `make
-# deploy` works with no become password, and no password can authenticate at all.
-# Set false to keep the classic password-sudo model (you must then set a password on
-# the account yourself, e.g. `passwd <user>`, to be able to sudo).
-ssh_admin_passwordless_sudo: true
+# Auto-detect the runner ($USER + ~/.ssh id_ed25519 > ecdsa > rsa) and prepend it as the
+# operator-set head. On (default) = zero-config deploy-as-yourself. Set false to provision
+# ONLY the explicit baseline_sudo_users (e.g. CI/cron, where $USER may be root/unset or a
+# shared automation user you don't want to grant a permanent sudo account).
+# NOTE: under `sudo ansible-playbook`, cron, or CI the $USER/$HOME — and thus the
+# autodetected key — may not be yours; turn this off and list admins explicitly there.
+baseline_sudo_autodetect_runner: true
+# Default sudo mode for operators without a per-entry `passwordless`. true (default) =
+# key-only: a NOPASSWD sudoers drop-in AND a locked password, so non-interactive sudo /
+# `make deploy` works with no become password and no password can authenticate. false =
+# classic password sudo (you must then set a password on the account yourself, e.g.
+# `passwd <user>`, to be able to sudo once ssh_hardening disables root login).
+baseline_sudo_passwordless: true
 # Optional inbound-SSH source allowlist (CIDRs). Empty = accept from any source.
 ssh_allow_cidrs: []
 
