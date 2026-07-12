@@ -4,17 +4,18 @@
 # it local. (Just never push real host IPs to the upstream template.)
 #
 # First run: connect as a user that can sudo (often root) to bootstrap the box.
-# After the baseline role creates {{ ssh_admin_user }} and ssh_hardening disables
-# root login, switch ansible_user to that admin account.
+# After the baseline role creates your admin account (the auto-detected runner, or an
+# entry in baseline_sudo_users) and ssh_hardening disables root login, switch
+# ansible_user to that admin account.
 #
 # Ubuntu sudo-rs workaround: 25.10 (Questing) and 26.04 ship sudo-rs as the default
 # /usr/bin/sudo. Ansible's sudo become plugin passes a custom `-p` prompt sentinel and
 # waits for it before sending the become password; sudo-rs does not honor that custom
 # `-p`, so `--ask-become-pass` / -K hangs with "Timeout waiting for privilege
 # escalation prompt". This only bites when a become PASSWORD is actually sent: with the
-# default `ssh_admin_passwordless_sudo: true` the admin user has NOPASSWD sudo, so
+# default `baseline_sudo_passwordless: true` the admin user has NOPASSWD sudo, so
 # Ansible sends no become password and the hang never occurs. It resurfaces only if you
-# set `ssh_admin_passwordless_sudo: false` (classic password sudo). Fix: classic sudo is
+# set `baseline_sudo_passwordless: false` (classic password sudo). Fix: classic sudo is
 # still installed at /usr/bin/sudo.ws and honors the -p prompt Ansible expects — point
 # become at it with the per-host `ansible_become_exe` line below. Only uncomment on an
 # affected host: `sudo --version` reports "sudo-rs" and/or /usr/bin/sudo.ws exists. Leave

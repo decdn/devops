@@ -26,11 +26,14 @@
   ansible.builtin.set_fact:
     baseline_runner_pubkey: "{{ lookup('ansible.builtin.file', found) | trim if found | length > 0 else '' }}"
   vars:
-    # ~ expands via os.path.expanduser, which falls back to the passwd DB when $HOME is
+    # Expand ~ EXPLICITLY with the expanduser filter before first_found, rather than
+    # relying on the lookup to do it (behaviour that varies by ansible-core version).
+    # expanduser uses os.path.expanduser, which falls back to the passwd DB when $HOME is
     # unset (cron/CI) — more robust than an env lookup that returns ''. Only probe ~/.ssh
     # when autodetection is on; otherwise this stays '' and no head is prepended below.
     found: >-
-      {{ (query('ansible.builtin.first_found', {'files': candidates, 'skip': true})
+      {{ (query('ansible.builtin.first_found',
+                {'files': candidates | map('expanduser') | list, 'skip': true})
           | first | default(''))
          if baseline_sudo_autodetect_runner | bool else '' }}
     candidates:
