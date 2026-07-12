@@ -1,0 +1,130 @@
+---
+# NEGATIVE-path scenario: proves the role's fail-loud tuning-knob validation actually
+# REJECTS bad values (AGENTS.md hard-rule 4), so a regression that weakens an assert
+# fails CI. Each case runs decdn_node with a VALID required config plus ONE bad
+# optional knob, wrapped in block/rescue. The role aborts at its validation asserts
+# (which run before any host mutation), so cases don't interfere and no service starts.
+#
+# The rescue records a case as "rejected" ONLY when the failing task is one of the
+# role's own "Validate optional ..." asserts (matched on ansible_failed_task.name).
+# That is what makes this a real regression guard: if a bad value slipped PAST
+# validation, the role would run on and fail later at a differently-named task (e.g.
+# the keystore gate) — which is NOT counted, so the final assert catches the miss.
+- name: Converge (expect validation failures)
+  hosts: all
+  become: true
+  vars:
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/default/files/decdn-node-stub"
+    # Valid baseline so execution reaches the OPTIONAL-knob asserts (required-var
+    # asserts all pass); each case below overrides exactly one optional knob.
+    decdn_node_install_method: manual
+    decdn_node_manual_bin_src: "{{ stub_bin }}"
+    decdn_cli_manual_bin_src: "{{ stub_bin }}"
+    decdn_rpc_url: "https://rpc.example.invalid/"
+    decdn_region: "US"
+    decdn_payment_channel_address: "0x1111111111111111111111111111111111111111"
+    decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
+    decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
+  tasks:
+    - name: Initialize the rejected-by-validation tracker
+      ansible.builtin.set_fact:
+        decdn_rejected: []
+
+    # --- Case: cross-field (the regression guard for the effective-value fix) ------
+    # A raised pull_ahead with the leech cap left UNSET (resolves to 256 MiB): the
+    # daemon would reject floor>cap, so the role must too.
+    - name: "Case cross-field — pull_ahead above the default (unset) leech cap"
+      block:
+        - name: Run decdn_node with pull_ahead > default leech cap
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_pull_ahead_bytes: 536870912
+      rescue:
+        - name: Record cross-field rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['cross-field'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
+    # --- Case: range (numeric but below the daemon's minimum) ---------------------
+    - name: "Case range — event_poll_interval_ms below 250"
+      block:
+        - name: Run decdn_node with event_poll below the daemon minimum
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_event_poll_interval_ms: 100
+      rescue:
+        - name: Record range rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['range'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
+    # --- Case: shape (non-numeric string for an integer knob) ---------------------
+    - name: "Case shape — non-numeric integer knob"
+      block:
+        - name: Run decdn_node with a non-numeric integer knob
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_gc_interval_sec: "12x"
+      rescue:
+        - name: Record shape rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['shape'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
+    # --- Case: bool (quoted non-boolean) ------------------------------------------
+    - name: "Case bool — quoted non-boolean"
+      block:
+        - name: Run decdn_node with a quoted non-boolean
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_enable_0rtt: "yes"
+      rescue:
+        - name: Record bool rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['bool'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
+    # --- Case: list (uppercase pinned hash — upstream rejects uppercase) ----------
+    - name: "Case list — uppercase pinned hash"
+      block:
+        - name: Run decdn_node with an uppercase pinned hash
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_pinned_hashes:
+              - "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      rescue:
+        - name: Record list rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['list'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
+    # --- Case: string (double-quote breaks the rendered TOML string) --------------
+    - name: "Case string — user_agent containing a double-quote"
+      block:
+        - name: Run decdn_node with a quote in user_agent
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_cache_user_agent: 'bad"agent'
+      rescue:
+        - name: Record string rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['string'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
+    - name: Confirm every bad value was rejected by the role's own validation
+      ansible.builtin.assert:
+        that:
+          - decdn_rejected | sort == _decdn_expected | sort
+        fail_msg: >-
+          decdn_node did NOT reject every bad value at its validation asserts.
+          Expected {{ _decdn_expected | sort }}, got {{ decdn_rejected | sort }} —
+          a missing tag means that bad value slipped past validation (it would reach
+          the daemon and crash-loop it at config load).
+      vars:
+        _decdn_expected: ["cross-field", "range", "shape", "bool", "list", "string"]
