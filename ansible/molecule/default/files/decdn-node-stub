@@ -10,6 +10,12 @@ can be exercised end-to-end without a published release or a live chain:
                      the role's `/metrics` readiness probe succeeds, and block
                      forever under systemd (Type=simple). CLI args (`--config`,
                      `--keystore-password-file`) are accepted and ignored.
+                     If the marker file NO_METRICS_MARKER exists, it instead
+                     blocks forever WITHOUT binding metrics — standing in for a
+                     healthy node whose metrics listener binds late (behind the
+                     startup PaymentChannel bootstrap). The `slow-readiness`
+                     scenario uses this to prove the role's advisory probe warns
+                     (not fails) on timeout while the unit stays `running`.
   * `key-gen ...` -> stand in for the CLI's wallet generator (exercised by the
                      `generate-keystore` scenario). Enforces the contract the ROLE
                      ASSUMES (not a verified real-CLI fact): the --password-file is
@@ -25,11 +31,16 @@ prep, config/unit rendering, hardening, and loopback binding, not node logic.
 """
 import os
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 METRICS_ADDR = ("127.0.0.1", 9090)  # matches the role's default metrics_bind/port
 # Must match decdn_node_version in converge.yml (the version-match backstop).
 VERSION = "decdn-node 0.0.0-molecule-stub"
+# When this file exists, `run` blocks WITHOUT binding metrics — simulating a
+# healthy node whose metrics listener binds late. The slow-readiness scenario
+# stages it (see that scenario's prepare.yml) to exercise the advisory-timeout path.
+NO_METRICS_MARKER = "/etc/decdn/stub-no-metrics"
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -92,6 +103,11 @@ def main():
     if args and args[0] == "key-gen":
         return key_gen(args[1:])
     if args and args[0] == "run":
+        # Late-bind simulation: stay alive (Type=simple => unit stays `running`)
+        # but never bind metrics, so the role's advisory probe times out.
+        if os.path.isfile(NO_METRICS_MARKER):
+            while True:
+                time.sleep(3600)
         try:
             HTTPServer(METRICS_ADDR, _Handler).serve_forever()
         except OSError as exc:

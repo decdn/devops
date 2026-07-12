@@ -1,0 +1,48 @@
+---
+# Same operator-keystore staging as the default scenario (the role's pre-start
+# gate needs keystore + node.secret + password to exist), PLUS the marker that
+# puts the stub daemon into "late bind" mode so it never binds /metrics — which
+# is what makes the role's advisory readiness probe time out.
+- name: Prepare
+  hosts: all
+  become: true
+  vars:
+    decdn_home: /var/lib/decdn
+    decdn_etc: /etc/decdn
+  tasks:
+    - name: Ensure data + config directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ decdn_home }}"
+        - "{{ decdn_etc }}"
+
+    # Staged at 0644 (looser than target); the role locks them to 0600.
+    - name: Stage a placeholder eth keystore
+      ansible.builtin.copy:
+        dest: "{{ decdn_home }}/keystore.json"
+        content: "{{ '{}' }}\n"
+        mode: "0644"
+
+    - name: Stage a placeholder keystore password file
+      ansible.builtin.copy:
+        dest: "{{ decdn_etc }}/keystore.password"
+        content: "molecule-placeholder\n"
+        mode: "0644"
+
+    - name: Stage a placeholder node identity
+      ansible.builtin.copy:
+        dest: "{{ decdn_home }}/node.secret"
+        content: "molecule-placeholder-node-secret\n"
+        mode: "0644"
+
+    # The stub reads this marker (NO_METRICS_MARKER in decdn-node-stub) and, when
+    # present, blocks forever WITHOUT binding metrics — simulating a healthy node
+    # whose metrics listener binds late. That drives the advisory-timeout path.
+    - name: Put the stub daemon into late-bind (no-metrics) mode
+      ansible.builtin.copy:
+        dest: "{{ decdn_etc }}/stub-no-metrics"
+        content: "1\n"
+        mode: "0644"

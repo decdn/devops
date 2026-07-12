@@ -36,6 +36,7 @@ jobs:
       - name: Install Galaxy collections
         run: make deps
       - name: molecule test
-        # --all runs both scenarios: default (operator-provisioned keystore) and
-        # generate-keystore (opt-in host-side wallet generation).
+        # --all runs every scenario under ansible/molecule/: default
+        # (operator-provisioned keystore), generate-keystore (opt-in host-side
+        # wallet generation), and slow-readiness (advisory /metrics probe timeout).
         run: molecule test --all

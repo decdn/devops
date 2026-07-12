@@ -1,0 +1,43 @@
+---
+# The core assertion of this scenario is IMPLICIT: molecule only reaches `verify`
+# if `converge` (and the idempotence re-run) succeeded — i.e. the advisory
+# /metrics probe timed out WITHOUT failing the deploy. This play nails down the
+# rest of that end state: the unit is running (the hard service-state gate still
+# passed) even though metrics never bound (proving the timeout path was actually
+# taken, not silently short-circuited by a metrics socket that came up anyway).
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+    - name: Confirm the stub really ran in late-bind (no-metrics) mode
+      ansible.builtin.stat:
+        path: /etc/decdn/stub-no-metrics
+      register: no_metrics_marker
+
+    - name: Collect listening TCP sockets
+      ansible.builtin.command:
+        cmd: ss -ltn
+      register: listeners
+      changed_when: false
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert the deploy survived a metrics-probe timeout with the unit running
+      ansible.builtin.assert:
+        that:
+          # The marker is present => the stub was in late-bind mode, so the probe
+          # genuinely timed out rather than passing against a bound socket.
+          - no_metrics_marker.stat.exists
+          # Metrics never bound — the timeout path is what we exercised.
+          - "'127.0.0.1:9090' not in listeners.stdout"
+          - "'0.0.0.0:9090' not in listeners.stdout"
+          - "'[::]:9090' not in listeners.stdout"
+          - "'*:9090' not in listeners.stdout"
+          # The load-bearing liveness gate still holds: the unit is running.
+          - >-
+            'decdn-node.service' in ansible_facts.services
+            and ansible_facts.services['decdn-node.service'].state == 'running'
+        fail_msg: >-
+          Expected a running decdn-node with NO metrics socket (advisory-timeout
+          path). Sockets: {{ listeners.stdout }}

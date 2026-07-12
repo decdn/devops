@@ -13,7 +13,8 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
 
 - **Ansible (this role): Phase 1 host prep + Phase 3 startup** — install binaries,
   create the `decdn` user + dirs, render `node.toml` + a hardened unit, open the
-  public QUIC port, start the daemon, wait for `/metrics`.
+  public QUIC port, start the daemon, and run a best-effort `/metrics` readiness
+  probe (see [Readiness](#readiness)).
 - **Operator (manual, NOT automated here):** Phase 1 **key material** (generate the
   node + eth keys) and Phase 2 **on-chain** (fund + stake the wallet, register the
   node). See "register the node" below — there is no turnkey CLI for it yet.
@@ -112,6 +113,10 @@ Optional (omitted from `node.toml` unless set):
   (funding + on-chain staking/registration stay manual — see the eth-wallet step above).
   Leave `false` to keep the operator-provisioned posture (the fail-loud gate then requires
   you to provision the keystore, `node.secret`, and password yourself).
+- `decdn_readiness_retries` (default `30`) + `decdn_readiness_delay` (default `2`, seconds)
+  — bound the `/metrics` readiness probe window (`retries × delay`, so ~60 s at these
+  defaults). A **timeout** only warns; it never fails the deploy — but a non-200 *answer*
+  does. See [Readiness](#readiness).
 
 Source contract addresses / chain-id from the deCDN contract deployment for your target
 chain, or the relevant ADR — never guess. See `roles/decdn_node/defaults/main.yml` for the
@@ -124,6 +129,42 @@ full knob list and defaults.
 | `decdn_bind_port` (4433) | QUIC/UDP | 0.0.0.0 | **yes** — opened via `baseline_extra_inbound` |
 | metrics (9090) | TCP | 127.0.0.1 | no |
 | admin RPC (9191) | TCP | 127.0.0.1 | no |
+
+## Readiness
+
+After starting the daemon the role runs a bounded probe against
+`http://127.0.0.1:<metrics_port>/metrics`, then a hard assert that the systemd
+unit is in the `running` state.
+
+The probe is **advisory** on timeout: exhausting the window logs a warning but
+does **not** fail the deploy. The daemon can bind its loopback metrics/admin
+listeners well after process start on an otherwise-healthy node — they come up
+behind the startup PaymentChannel buyer bootstrap (an upstream startup-ordering
+issue tracked in `decdn/decdn`, not here), which can take many minutes. A short
+probe that hard-failed would therefore false-fail a healthy deploy, and
+stretching it to cover the worst case would hang every deploy for that whole
+window — neither is acceptable, so a timeout warns and moves on. A metrics
+endpoint that *answers* with a non-200 error is treated differently: that is a
+fault, not slow startup, so it **fails** the deploy loudly.
+
+The follow-on assert that the `decdn-node.service` unit is `running` (via
+`service_facts`) is a **backstop, not a full health check**. It catches a daemon
+that exited/failed or a fast crash-loop that tripped systemd's start limit — but
+the unit is `Type=simple`, so a wedged-but-alive or slow-crash-looping process
+still reports `running`. A *persistent* probe timeout is therefore **not provably
+benign**: confirm the node out-of-band before trusting it. Tune the probe window
+with `decdn_readiness_retries` × `decdn_readiness_delay` (see
+`defaults/main.yml`). When the probe times out, confirm readiness once the node
+has settled:
+
+```bash
+curl -s http://127.0.0.1:9090/metrics     # loopback metrics (once bound)
+journalctl -u decdn-node -e               # look for "node runtime ready"
+```
+
+Note that neither check proves the node is serving **paid** traffic — that
+additionally requires on-chain stake + registration (ADR 019 Phase 2, manual);
+verify with `decdn node health`.
 
 ## Files on the host
 

@@ -1,0 +1,32 @@
+---
+# Converge the decdn_node role against the stub in late-bind mode with a tiny
+# readiness window. The advisory /metrics probe MUST time out and WARN without
+# failing — so this play reaching the end (and the idempotence re-run) is itself
+# the core assertion of the fix. verify.yml then confirms the running-but-no-
+# metrics end state. Chain/contract knobs mirror the default scenario's
+# well-formed placeholders (the role's fail-loud asserts still run against them).
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    # Reuse the default scenario's stub binary rather than duplicating it.
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/default/files/decdn-node-stub"
+    decdn_node_install_method: manual
+    decdn_node_manual_bin_src: "{{ stub_bin }}"
+    decdn_cli_manual_bin_src: "{{ stub_bin }}"
+    decdn_node_version: "0.0.0-molecule-stub"
+    decdn_rpc_url: "https://rpc.example.invalid/"
+    decdn_chain_id: 421614
+    decdn_region: "US"
+    decdn_payment_channel_address: "0x1111111111111111111111111111111111111111"
+    decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
+    decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
+    decdn_cache_origin_kind: "http"
+    decdn_cache_origin_url: "https://origin.example.invalid/"
+    # Tiny probe window (~2s) so the advisory timeout is exercised fast. The stub
+    # never binds metrics in this scenario, so any window times out — this just
+    # keeps the scenario quick.
+    decdn_readiness_retries: 2
+    decdn_readiness_delay: 1
+  roles:
+    - role: decdn_node
