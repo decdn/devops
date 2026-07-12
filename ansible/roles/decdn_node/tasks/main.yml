@@ -404,29 +404,38 @@
   retries: "{{ decdn_readiness_retries }}"
   delay: "{{ decdn_readiness_delay }}"
   # default(-1): on connection-refused the uri module returns status -1 (and may
-  # omit the key), so until stays false and keeps retrying rather than erroring.
-  until: decdn_metrics_probe.status | default(-1) == 200
+  # omit the key). Retry only while the endpoint has NOT answered (status -1) —
+  # stop the moment it answers (any other status), so a real fault (e.g. a 500)
+  # surfaces immediately via failed_when rather than after the whole window.
+  until: decdn_metrics_probe.status | default(-1) != -1
   changed_when: false
   # Scope the suppression, don't blanket it: -1 (not bound yet) stays advisory and
   # 200 is ready, but a bound endpoint answering any other status (e.g. a 500 from
   # a broken /metrics handler) is a genuine fault — fail loud on it instead of
   # masking it as slow startup (AGENTS.md hard-rule 4).
   failed_when: decdn_metrics_probe.status | default(-1) not in [-1, 200]
+  # `--check` never starts the service, so the probe would be meaningless (and
+  # uri skips in check mode anyway, leaving no status for the warn below).
+  when: not ansible_check_mode
 
 - name: Warn if the metrics endpoint was not ready within the probe window
   ansible.builtin.debug:
-    msg: >-
+    # Literal block so the curl/journalctl hints print on their own lines,
+    # copy-pasteable, rather than folded onto one.
+    msg: |-
       decdn-node /metrics did not answer 200 within
-      ~{{ decdn_readiness_retries | int * decdn_readiness_delay | int }}s
-      ({{ decdn_readiness_retries }}×{{ decdn_readiness_delay }}s), so readiness
+      ~{{ (decdn_readiness_retries | int) * (decdn_readiness_delay | int) }}s
+      ({{ decdn_readiness_retries }}×{{ decdn_readiness_delay }}), so readiness
       could NOT be confirmed. This is OFTEN benign — a healthy node binds
       metrics/admin late (behind the startup PaymentChannel bootstrap) and logs
       "node runtime ready" once bound — but a PERSISTENT timeout can also mean a
       wedged or mis-started daemon (a Type=simple unit still reports `running`
       even when wedged). Verify before trusting the node:
-      curl -s http://127.0.0.1:{{ decdn_metrics_port }}/metrics  and
-      journalctl -u decdn-node -e   (look for "node runtime ready")
-  when: decdn_metrics_probe.status | default(-1) != 200
+        curl -s http://127.0.0.1:{{ decdn_metrics_port }}/metrics
+        journalctl -u decdn-node -e   (look for "node runtime ready")
+  when:
+    - not ansible_check_mode
+    - decdn_metrics_probe.status | default(-1) != 200
 
 # A stale process can still answer /metrics, so also confirm THIS unit exists and
 # is running. This is a backstop, not a full health check: it catches a daemon
