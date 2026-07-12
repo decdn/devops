@@ -83,6 +83,23 @@ decdn_metrics_port: 9090
 decdn_metrics_bind: "127.0.0.1"   # keep loopback — Prometheus scrape is a follow-up
 decdn_admin_port: 9191
 
+# --- Readiness probe (advisory) -----------------------------------------------
+# After start, the role probes http://127.0.0.1:<metrics_port>/metrics as a
+# best-effort readiness signal. A probe TIMEOUT only WARNS (it does NOT fail the
+# deploy): the daemon can bind its metrics/admin listeners well after process
+# start on an otherwise-healthy node (they come up behind the startup
+# PaymentChannel buyer bootstrap — an upstream startup-ordering issue tracked in
+# decdn/decdn, not here), so a bounded probe would otherwise false-fail a healthy
+# deploy. A metrics endpoint that ANSWERS with a non-200 error, however, fails
+# loud — that's a fault, not slow startup. The systemd service-state assert
+# backstops this but is not a full health check: a Type=simple unit reports
+# `running` even for a wedged-but-alive daemon, so it catches an exited/failed or
+# fast-crash-looping unit, not a hung one. These two knobs bound the probe window
+# (retries × delay; ≈60s at the values below) — enough for a node that binds
+# promptly, without hanging the play on a slow-but-healthy startup.
+decdn_readiness_retries: 30       # probe attempts before giving up (advisory)
+decdn_readiness_delay: 2          # seconds between attempts
+
 # --- Fixed on-host identity/paths ---------------------------------------------
 decdn_user: decdn
 decdn_group: decdn
