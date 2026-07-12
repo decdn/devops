@@ -90,11 +90,38 @@
           if bad:
               print("node.toml content mismatch (got, want):", bad, file=sys.stderr)
               sys.exit(1)
+          # [cache.origin] is a nested table (3 levels), so check it separately from
+          # the flat two-level `want` lookups above. Mirrors converge.yml's fs origin.
+          origin = d.get("cache", {}).get("origin", {})
+          if origin.get("kind") != "fs" or origin.get("path") != "/var/lib/decdn/origin":
+              print("node.toml [cache.origin] mismatch (got):", origin, file=sys.stderr)
+              sys.exit(1)
 
     - name: Assert node.toml is valid TOML and renders the expected content
       ansible.builtin.command:
         cmd: python3 /root/molecule-assert-node-toml.py
       changed_when: false
+
+    # The role must CREATE the fs origin base dir (converge sets kind: fs) — the
+    # daemon's FilesystemOrigin::new crash-loops if it is missing (#28). This dir
+    # does not pre-exist, so its presence + ownership proves the role's task ran.
+    - name: Stat the fs cache-origin base directory
+      ansible.builtin.stat:
+        path: /var/lib/decdn/origin
+      register: decdn_origin_dir
+
+    - name: Assert the fs cache-origin dir exists (decdn:decdn, 0755, directory)
+      ansible.builtin.assert:
+        that:
+          # Single short-circuiting expression (file convention — cf. lines 39-40,
+          # 59-61): a missing dir stops at `stat.exists` and routes to fail_msg
+          # instead of raising AnsibleUndefinedVariable on the absent pw_name/mode.
+          - >-
+            decdn_origin_dir.stat.exists and decdn_origin_dir.stat.isdir
+            and decdn_origin_dir.stat.pw_name == 'decdn'
+            and decdn_origin_dir.stat.gr_name == 'decdn'
+            and decdn_origin_dir.stat.mode == '0755'
+        fail_msg: "fs cache-origin dir missing / not a dir / wrong owner / wrong mode"
 
     - name: Validate the systemd unit
       ansible.builtin.command:
