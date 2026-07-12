@@ -17,181 +17,109 @@
 - name: Probe which service units already exist on the target
   ansible.builtin.service_facts:
 
-# --- Admin account (must exist + have a key BEFORE ssh_hardening locks root) ---
-# Resolve the user and key set from the control machine when left empty; explicit
-# values always win. Lookups run on the control node — that's the operator's box.
-- name: Resolve the admin sudo username (local $USER if unset)
+# --- Sudo operators: ONE list, admin head auto-detected (all created + keyed BEFORE
+# ssh_hardening locks root) --------------------------------------------------------
+# There is no separate admin config: the operator set is the auto-detected runner head
+# (this control box's $USER + its ~/.ssh key — "deploy as yourself", never committed) with
+# `baseline_sudo_users` appended. Lookups run on the control node — that's the operator's box.
+- name: Autodetect the runner's local SSH public key (control machine)
   ansible.builtin.set_fact:
-    ssh_admin_user_effective: >-
-      {{ ssh_admin_user if ssh_admin_user | length > 0
-         else lookup('ansible.builtin.env', 'USER') }}
-
-- name: Autodetect the operator's local SSH public key (control machine)
-  ansible.builtin.set_fact:
-    ssh_admin_detected_pubkey: "{{ lookup('ansible.builtin.file', found) | trim }}"
+    baseline_runner_pubkey: "{{ lookup('ansible.builtin.file', found) | trim if found | length > 0 else '' }}"
   vars:
+    # ~ expands via os.path.expanduser, which falls back to the passwd DB when $HOME is
+    # unset (cron/CI) — more robust than an env lookup that returns ''. Only probe ~/.ssh
+    # when autodetection is on; otherwise this stays '' and no head is prepended below.
     found: >-
-      {{ query('ansible.builtin.first_found',
-               {'files': candidates, 'skip': true}) | first | default('') }}
-    # ~ expands via os.path.expanduser, which falls back to the passwd DB when
-    # $HOME is unset (cron/CI) — more robust than an env lookup that returns ''.
+      {{ (query('ansible.builtin.first_found', {'files': candidates, 'skip': true})
+          | first | default(''))
+         if baseline_sudo_autodetect_runner | bool else '' }}
     candidates:
       - "~/.ssh/id_ed25519.pub"
       - "~/.ssh/id_ecdsa.pub"
       - "~/.ssh/id_rsa.pub"
-  when:
-    - ssh_admin_pubkey | length == 0
-    - ssh_admin_pubkey_autodetect | bool
-    - found | length > 0
 
-- name: Resolve the set of admin authorized keys
+# Prepend the runner as the operator-set head ONLY when it is a usable admin: autodetect
+# on, a non-empty non-root $USER, a key found, AND the runner isn't already named in
+# baseline_sudo_users (an explicit entry with the same name OVERRIDES the auto head, so you
+# can pin your own keys/settings without a duplicate sudoers.d drop-in collision). Yields a
+# 0-or-1-element list so the assembly and the lockout guard below are pure list logic.
+- name: Resolve the auto-detected runner head (0 or 1 operator)
   ansible.builtin.set_fact:
-    ssh_admin_keys: >-
-      {{ (([ssh_admin_pubkey] if ssh_admin_pubkey | length > 0
-           else [ssh_admin_detected_pubkey | default('')])
-          + ssh_admin_extra_pubkeys)
-         | map('trim') | reject('equalto', '') | unique | list }}
+    baseline_runner_head: >-
+      {{ [{'name': runner_name, 'keys': [baseline_runner_pubkey]}] if prepend else [] }}
+  vars:
+    runner_name: "{{ lookup('ansible.builtin.env', 'USER') }}"
+    prepend: >-
+      {{ baseline_sudo_autodetect_runner | bool
+         and runner_name | length > 0
+         and runner_name != 'root'
+         and baseline_runner_pubkey | length > 0
+         and runner_name not in (baseline_sudo_users | map(attribute='name', default='') | list) }}
 
-# UNCONDITIONAL lockout guard — runs BEFORE the account is created and hardening
-# applied. It is the single gate that makes a keyless/root-only harden impossible;
-# downstream tasks therefore need no `when`. ssh_hardening disables root login, so a
-# resolved admin user of "root" (or an empty one, e.g. $USER unset under cron/CI)
-# would lock the host out — both are refused here rather than skipped silently.
-- name: Refuse to harden SSH without a non-root admin user and a key (lockout guard)
+- name: Assemble the operator set (runner head + committed admins)
+  ansible.builtin.set_fact:
+    baseline_operators: "{{ baseline_runner_head + baseline_sudo_users }}"
+
+# UNCONDITIONAL lockout guard — runs BEFORE any account is created and hardening applied.
+# It is the single gate that makes a keyless/root-only harden impossible; downstream tasks
+# therefore need no `when`. ssh_hardening disables root login, so the merged operator set
+# must contain at least one NON-ROOT account that carries a key — otherwise nothing could
+# log back in afterwards. An empty set (autodetect off/unresolved AND no committed admins)
+# and a root-only/keyless set are both refused here rather than discovered post-hardening.
+- name: Refuse to harden SSH without a non-root, keyed admin account (lockout guard)
   ansible.builtin.assert:
     that:
-      - ssh_admin_user_effective | length > 0
-      - ssh_admin_user_effective != 'root'
-      - ssh_admin_keys | length > 0
+      - usable_admin_keys | length > 0
     fail_msg: >-
-      Cannot establish a working admin login before devsec.hardening.ssh_hardening
-      disables root + password auth. Resolved user='{{ ssh_admin_user_effective }}',
-      keys={{ ssh_admin_keys | length }}. Causes: ssh_admin_user is empty and the
-      control-machine $USER is unset (cron/CI/sudo with env_reset) -> set
-      ssh_admin_user; the resolved user is 'root' (hardening forbids root login) ->
-      set ssh_admin_user to a non-root account; or no key was found -> set
-      ssh_admin_pubkey, add ssh_admin_extra_pubkeys, or place a default key
-      (~/.ssh/id_ed25519.pub, id_ecdsa.pub, or id_rsa.pub) on the control machine.
+      No usable admin login exists before devsec.hardening.ssh_hardening disables root +
+      password auth: the operator set has {{ baseline_operators | length }} entr{{ 'y'
+      if baseline_operators | length == 1 else 'ies' }}, but none is a non-root account
+      with a real key. Causes: baseline_sudo_autodetect_runner is off (or $USER is
+      unset/root, or no ~/.ssh/id_ed25519|ecdsa|rsa.pub was found) AND baseline_sudo_users
+      is empty or lists only root/keyless entries (a `keys: []`, `keys: [""]`, or blank
+      key counts as keyless here). Fix: add an admin to baseline_sudo_users as
+      {name: <non-root login>, keys: ["ssh-..."]}, or run where $USER + a ~/.ssh key
+      resolve on the control machine.
+  vars:
+    # Non-root, truthy-named operators. (name has no dict-method collision, so attribute
+    # access is safe here — unlike `keys` below.)
+    nonroot_named: >-
+      {{ baseline_operators | selectattr('name', 'defined') | selectattr('name', 'truthy')
+         | rejectattr('name', 'equalto', 'root') | list }}
+    # Their actual key MATERIAL — the guard requires a usable key, not merely a declared
+    # field. Collision-safe: map('list') yields each dict's KEY NAMES, so superset(['keys'])
+    # selects entries that declare a `keys` key (attribute='keys' would hit the dict .keys()
+    # METHOD); map(attribute='keys') is then safe on that subset. flatten + trim + drop
+    # empties so a keyless entry, `keys: []`, `keys: [""]`, or a whitespace-only key
+    # contributes nothing — otherwise a password-locked account with no installable key
+    # would pass the guard and brick the host once hardening disables root/password login.
+    usable_admin_keys: >-
+      {{ nonroot_named | zip(nonroot_named | map('list'))
+         | selectattr('1', 'superset', ['keys']) | map(attribute='0')
+         | rejectattr('keys', 'string') | map(attribute='keys') | flatten
+         | map('trim') | reject('equalto', '') | list }}
 
-# Surface WHAT will be trusted: autodetect installs whatever key sits in the
-# control box's ~/.ssh, so echo the resolved user + key count (a silently dropped
-# malformed entry, or a wrong control machine, shows up as an unexpected count).
-- name: Report the resolved admin user and key count
+# Surface WHAT will be provisioned: autodetect trusts whatever key sits in the control
+# box's ~/.ssh, so echo the resolved operator names and whether the runner head was added
+# (a wrong control machine, or an unexpectedly-overridden head, shows up here).
+- name: Report the resolved operator set
   ansible.builtin.debug:
     msg: >-
-      Admin user '{{ ssh_admin_user_effective }}' will be authorized with
-      {{ ssh_admin_keys | length }} key(s); primary source =
-      {{ 'explicit ssh_admin_pubkey' if ssh_admin_pubkey | length > 0
-         else ('autodetected ~/.ssh key'
-               if (ssh_admin_detected_pubkey | default('')) | length > 0
-               else 'none (extra keys only)') }},
-      plus {{ ssh_admin_extra_pubkeys | length }} extra.
+      Provisioning {{ baseline_operators | length }} sudo operator(s):
+      {{ baseline_operators | map(attribute='name', default='?') | list | join(', ') }}.
+      {{ ('Runner head auto-detected from $USER + ~/.ssh: '
+          + (baseline_runner_head | map(attribute='name') | first) + '.')
+         if baseline_runner_head | length > 0
+         else ('No auto-detected runner head (autodetect off, $USER/key unresolved,'
+               + ' or overridden by an explicit entry); admins from baseline_sudo_users.') }}
 
-- name: Create admin sudo user
-  ansible.builtin.user:
-    name: "{{ ssh_admin_user_effective }}"
-    groups: [sudo]
-    append: true
-    shell: /bin/bash
-    create_home: true
-
-# --- Passwordless, key-only admin (ssh_hardening disables SSH password auth) -----
-# The account logs in by key only, so it needs no password at all: grant NOPASSWD
-# sudo (so non-interactive sudo / `make deploy` works with no become password) and
-# lock the password (so nothing can authenticate by password). Both are gated on the
-# same knob; turning it off removes the grant and falls back to classic sudo-group
-# password sudo — which needs a real password, so we must NOT lock it in that case
-# (and the operator must set one — see the disabled-path warning below).
-
-# sudo's #includedir SKIPS any file in sudoers.d whose name contains a '.' or ends
-# in '~'. A username like `deploy.bot` would produce a valid-but-ignored drop-in, so
-# NOPASSWD would silently not apply — and with the password locked below that is a
-# sudo lockout. `visudo -cf` validates content, not the filename, so it can't catch
-# this. Sanitize the name to sudo's accepted charset; the rule inside still names the
-# real user, so the grant is unaffected.
-- name: Resolve the admin sudoers.d drop-in path (sudo ignores '.'/'~' in filenames)
-  ansible.builtin.set_fact:
-    ssh_admin_sudoers_file: >-
-      /etc/sudoers.d/{{ ssh_admin_user_effective | regex_replace('[^A-Za-z0-9_-]', '_') }}
-
-- name: Grant the admin user passwordless sudo
-  ansible.builtin.copy:
-    dest: "{{ ssh_admin_sudoers_file }}"
-    owner: root
-    group: root
-    mode: "0440"
-    content: "{{ ssh_admin_user_effective }} ALL=(ALL) NOPASSWD:ALL\n"
-    validate: "visudo -cf %s"
-  when: ssh_admin_passwordless_sudo | bool
-
-- name: Lock the admin user's password (key-only login; NOPASSWD sudo)
-  ansible.builtin.user:
-    name: "{{ ssh_admin_user_effective }}"
-    password_lock: true
-  when: ssh_admin_passwordless_sudo | bool
-
-# Reverse the NOPASSWD grant if the knob is later turned off. The password lock is
-# intentionally NOT auto-reverted: unlocking a never-set password is unsafe/undefined
-# — older shadow-utils blank it (passwordless account), newer ones (Debian bookworm /
-# current Ubuntu) refuse. Regaining password sudo is a manual `passwd <user>` step.
-# The `length > 0` guard is defence-in-depth: the lockout-guard assert above already
-# aborts on an empty user, but if it were ever bypassed the path would collapse to the
-# bare `/etc/sudoers.d/` directory and state:absent would recursively delete it,
-# breaking sudo host-wide. Never run this destructive task on an empty username.
-- name: Remove the passwordless-sudo drop-in when disabled
-  ansible.builtin.file:
-    path: "{{ ssh_admin_sudoers_file }}"
-    state: absent
-  when:
-    - not (ssh_admin_passwordless_sudo | bool)
-    - ssh_admin_user_effective | length > 0
-
-# Loud fallback warning: with the knob off there is no NOPASSWD grant, and a fresh
-# account (or one locked by a prior passwordless run) has no usable password — so it
-# cannot sudo after ssh_hardening unless the operator sets one on the host. Flipping
-# this true->false on an ALREADY-hardened host while connected as that admin user also
-# breaks the current run once the drop-in is removed (later tasks can no longer
-# `sudo -n`) — set a password first and re-run with `--ask-become-pass`.
-- name: Warn that classic password sudo needs a password set on the host
-  ansible.builtin.debug:
-    msg: >-
-      ssh_admin_passwordless_sudo is false: admin user '{{ ssh_admin_user_effective }}'
-      uses classic sudo-group password sudo. If its password is unset or locked (fresh
-      account, or a prior passwordless run), run `passwd {{ ssh_admin_user_effective }}`
-      on the host or it will be unable to sudo once SSH hardening disables root login.
-      Switching from passwordless to password sudo on a live hardened host needs that
-      password set first, then a re-run with `--ask-become-pass`.
-  when: not (ssh_admin_passwordless_sudo | bool)
-
-# authorized_key resolves the user's ~/.ssh to write the key, so the account must
-# already exist. Under --check the create task above is a no-op, so on a not-yet-
-# provisioned host the user is absent and the module hard-fails ("Either user must
-# exist or you must provide full path to key file in check mode"). Probe real
-# on-host state (read-only, runs in check mode) and skip the key install only when
-# check mode meets a missing user; real runs and check runs on a provisioned host
-# (where drift is worth previewing) always proceed.
-- name: Probe whether the admin user already exists on the target
-  ansible.builtin.getent:
-    database: passwd
-    key: "{{ ssh_admin_user_effective }}"
-    fail_key: false
-
-- name: Install admin authorized keys
-  ansible.posix.authorized_key:
-    user: "{{ ssh_admin_user_effective }}"
-    key: "{{ item }}"
-    state: present
-  loop: "{{ ssh_admin_keys }}"
-  # fail_key:false stores a missing user as {user: None}, so test the value, not `in`.
-  when: not ansible_check_mode or (getent_passwd | default({})).get(ssh_admin_user_effective)
-
-# --- Additional named sudo users (own account+home+key, key-only NOPASSWD) -----
-# Separate from the admin above: these are DISTINCT teammate accounts, not extra
-# keys on the shared admin account. Kept in their own file so molecule can exercise
-# this container-safe block on its own (the rest of baseline is real-host-only).
-- name: Create the additional named sudo users
+# Runs unconditionally — the lockout guard above has proven a usable admin exists.
+# sudo_users.yml validates the whole set (well-formed, keyed, unique sudoers.d filenames)
+# and routes every operator through the shared sudo_account.yml primitive, provisioning
+# them BEFORE ssh_hardening locks root. Kept in its own file so molecule can exercise the
+# named-users subset standalone (`tasks_from: sudo_users`).
+- name: Provision every sudo operator via one primitive
   ansible.builtin.include_tasks: sudo_users.yml
-  when: baseline_sudo_users | length > 0
 
 # --- Firewall: default-deny inbound, SSH only ---------------------------------
 - name: Install nftables ruleset

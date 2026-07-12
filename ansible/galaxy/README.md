@@ -42,8 +42,10 @@ hardening), then the node:
   roles:
     - role: decdn.node.baseline
       vars:
-        ssh_admin_user: deploy
-        ssh_admin_pubkey: "ssh-ed25519 AAAA... you@host"   # REQUIRED — lockout guard
+        baseline_sudo_users:                               # REQUIRED — lockout guard
+          - name: deploy
+            keys: ["ssh-ed25519 AAAA... you@host"]
+        baseline_sudo_autodetect_runner: false             # provision only the explicit admin above
         baseline_extra_inbound:
           - { proto: udp, port: 4433, comment: "deCDN QUIC" }
     - role: decdn.node.decdn_node
