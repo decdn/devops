@@ -19,9 +19,11 @@
     decdn_rpc_url: "https://rpc.example.invalid/"
     decdn_chain_id: 421614
     decdn_region: "US"
-    decdn_payment_channel_address: "0x1111111111111111111111111111111111111111"
+    decdn_payment_pool_address: "0x1111111111111111111111111111111111111111"
     decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
     decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
+    # REQUIRED upstream (ADR 011/031) — the role asserts it with the other three.
+    decdn_content_blacklist_address: "0x4444444444444444444444444444444444444444"
     decdn_cache_origin_kind: "http"
     decdn_cache_origin_url: "https://origin.example.invalid/"
   roles:

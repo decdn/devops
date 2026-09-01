@@ -23,9 +23,3 @@ updates:
     groups:
       actions:
         patterns: ["*"]
-    ignore:
-      # Pinned to the post-remediation hardened HEAD (see ci.yml). The newest
-      # RELEASE tag (v2.1.20) points at an older commit that predates the April
-      # 2026 base-image digest-pinning, so an automated bump would DOWNGRADE
-      # security. Re-pin manually only after verifying a newer clean commit/tag.
-      - dependency-name: "Checkmarx/kics-github-action"

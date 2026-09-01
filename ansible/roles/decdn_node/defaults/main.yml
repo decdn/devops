@@ -7,104 +7,214 @@
 # "release" (default): download the pinned GitHub Release tarballs (a v<version>
 # release must exist). "manual": copy locally-built binaries from the Ansible
 # control machine — for pre-release / dev deploys where no release exists yet.
-decdn_node_install_method: release   # "release" | "manual"
+# Upstream has cut NO release tag yet (release.yml fires on a v[0-9]* tag push and
+# `git ls-remote --tags decdn/decdn` is empty), so "release" mode currently has
+# nothing to fetch. The default is therefore "manual"; flip it to "release" and pin
+# decdn_node_version once an upstream release exists.
+decdn_node_install_method: manual   # "release" | "manual"
 decdn_node_manual_bin_src: ""        # manual: control-machine path to the decdn-node daemon binary
 decdn_cli_manual_bin_src: ""         # manual: control-machine path to the decdn CLI binary
 
 # --- Release to install (REQUIRED in "release" mode — a v<version> GitHub Release must exist) ---
-decdn_node_version: ""            # e.g. "0.1.0" (asserted non-empty in "release" mode)
+decdn_node_version: ""            # e.g. "0.1.1" (asserted non-empty in "release" mode)
 decdn_node_target: x86_64-unknown-linux-gnu
-decdn_node_sha256: ""            # optional "abc123..." to pin the daemon tarball
-decdn_cli_sha256: ""            # optional, for the decdn CLI tarball
 decdn_node_release_base: "https://github.com/decdn/decdn/releases/download"
+# Release integrity. Upstream publishes a SHA256SUMS manifest covering every
+# archive, GPG-signed by a maintainer key from decdn/decdn's root KEYS file
+# (SHA256SUMS.asc). The role verifies the signature, then checks the tarballs
+# against the manifest — this replaces the old hand-pasted per-tarball sha256
+# pins. Set to false only for an air-gapped mirror that strips the signature.
+decdn_verify_release_signature: true
+# Keyring used for that check. Defaults to the copy vendored with this role;
+# point it at your own export of the upstream KEYS file to pin a narrower set.
+decdn_release_keyring: decdn-release-KEYS.asc
 
 # --- Identity / on-chain -----------------------------------------------------
-# rpc_url, the three contract addresses and region are REQUIRED with no usable
+# rpc_url, the FOUR contract addresses and region are REQUIRED with no usable
 # default (empty → the asserts in tasks/main.yml fail loud). Supply via host_vars.
 # chain_id is the one exception: it defaults to the upstream binary's own default
 # (Arbitrum Sepolia) rather than being a deployment-specific fact to source.
 decdn_rpc_url: ""               # SENSITIVE; may embed an API key
-decdn_payment_channel_address: ""
+decdn_payment_pool_address: ""
 decdn_capacity_bond_address: ""
 decdn_slash_judge_address: ""
+# REQUIRED (ADR 011/031). ContentBlacklist watcher — evicts blacklisted blobs in
+# your region scope. Upstream now refuses to resolve a config without it: an
+# absent or zero address is a fail-open compliance trap, and serving a
+# blacklisted hash past its compliance window is slashable.
+decdn_content_blacklist_address: ""
 # Optional (ADR 028). SlashAppeal contract — only needed to file appeals with
 # `decdn appeal slash`; the daemon ignores it. Empty => key omitted from node.toml.
-decdn_slash_appeal_address: ""
-# Optional. SlashJudge deploy block: the slash-detection watcher rescans from
-# here on EVERY daemon start, so 0 (the upstream default) re-scans the full chain
-# each restart — RPC-heavy on an established L2. Set to bound restart cost.
-decdn_slash_judge_from_block: 0
-# Optional (ADR 022). Chain-backed origin directory that gates DHT prefetch. Set
-# BOTH or NEITHER — either alone fails the deploy-time assert. Empty => both keys
-# omitted and the directory is deny-all (prefetch finds no authorized origins).
+decdn_slash_appeal_address: ""   # accepted but never read by the daemon; `decdn appeal slash` uses it
+# Optional (ADR 022). Chain-backed origin directory. These are INDEPENDENTLY
+# optional upstream — the old "both or neither" rule is gone. The daemon reads
+# origin_assignment_address for cache-miss pull-through fallback; it only
+# validates publisher_registry_address, which `decdn publish` consumes.
+# Empty origin_assignment_address => the directory is empty (no authorized origins).
 decdn_origin_assignment_address: ""
 decdn_publisher_registry_address: ""
-# Optional. PublisherRegistry deploy block: bounds the origin-directory log replay
-# on restart (absent/0 => scans the whole chain — RPC-heavy on an established L2).
-# Only emitted when the pair above is set AND this is > 0.
-decdn_origin_directory_from_block: 0
-# Optional (ADR 011/031). ContentBlacklist watcher — evicts blacklisted blobs in
-# your region scope. Empty => no watcher (serving a blacklisted hash past its
-# compliance window is then slashable with no local protection).
-decdn_content_blacklist_address: ""
-# Optional. ContentBlacklist deploy block; bounds the blacklist log replay on
-# restart. Only emitted when decdn_content_blacklist_address is set AND this is > 0.
-decdn_content_blacklist_from_block: 0
+# Origin-directory lookup cache ("" => daemon default).
+decdn_origin_directory_positive_ttl_sec: ""   # daemon dflt 300
+decdn_origin_directory_negative_ttl_sec: ""   # daemon dflt 30
+decdn_origin_directory_cache_capacity: ""     # daemon dflt 4096
 decdn_region: ""                # ISO 3166-1 alpha-2
 decdn_chain_id: 421614          # Arbitrum Sepolia (matches decdn-node's --chain-id default)
 
 # --- Network ------------------------------------------------------------------
 decdn_bind_port: 4433           # public QUIC (udp); opened in the baseline firewall
-decdn_relay_url: ""             # optional iroh relay for NAT traversal (deprecated single alias)
-# iroh relay URLs; [] => n0 default relays. When this list is non-empty the template
-# emits it and omits decdn_relay_url (this list supersedes the singular alias).
+# iroh relay URLs; [] => n0 default relays. Reachability is probed at bring-up and
+# logged but never fatal. The [network] table no longer has a singular `relay_url`
+# scalar — only this list. (The --relay-url CLI flag / DECDN_RELAY_URL env var do
+# still exist, and `relay_url` is still a key INSIDE each discovery peer below.)
 # e.g. ["https://relay1.example:443", "https://relay2.example:443"]
 decdn_relay_urls: []
 # The optional knobs below default to "" (or []) => "omit the key, use the daemon's
 # own default". Set a value only to override; an explicit 0/false IS emitted.
-decdn_enable_0rtt: ""           # bool; daemon dflt true — QUIC 0-RTT for cdn/probe/v1 (ADR 015)
+#
+# Operator-run address discovery. Absent => the n0-hosted pkarr/DNS discovery.
+# pkarr_url (publish this node's record) requires dns_origin (resolve peers);
+# dns_origin alone is legal — a resolve-only node that does not publish. Static
+# peers are an independent, combinable mechanism: a map of 64-char lowercase-hex
+# NodeId => {relay_url, addrs}. Setting either mechanism drops the n0 leg.
+decdn_discovery_pkarr_url: ""
+decdn_discovery_dns_origin: ""
+decdn_discovery_peers: {}
 
 # --- Economics ----------------------------------------------------------------
 decdn_rate_per_mb: 10           # USDC base units (6 decimals)
-# Delivery-rate clamps + voucher cadence (µUSDC; "" => daemon default).
-decdn_delivery_floor: ""        # daemon dflt 0 — rate clamp floor before signing ProbeResponse
-decdn_delivery_ceiling: ""      # daemon dflt 1_000_000_000_000 (protocol MAX) — rate clamp ceiling
-decdn_voucher_interval_mb: ""   # daemon dflt 1; range 1..=1024 — voucher cadence (ADR 003)
+# PRE-CHAIN SEED ONLY: the daemon reads PaymentPool.getRateBounds() at startup and
+# overwrites this before it serves anything, then tracks RateBoundsUpdated. It only
+# governs the window before that read completes (a failed read refuses startup), so
+# the on-chain value is authoritative. There is no companion ceiling knob any more —
+# `delivery_ceiling` was removed and DECDN_DELIVERY_CEILING is a retired env var.
+decdn_delivery_floor: ""        # daemon dflt 0
+# Per-stream credit window (ADR 003 credit slow-start). credit_max is a bare
+# integer of bytes on the wire; ramp_divisor 0 opens the full ceiling immediately.
+decdn_credit_max: ""                  # daemon dflt 67108864 (64 MiB)
+decdn_credit_ramp_divisor: ""         # daemon dflt 2
+# Sender-chosen ChunkData frame size (#1804). Range 1..=1048576.
+decdn_frame_target_bytes: ""          # daemon dflt 1048576 (1 MiB)
+decdn_voucher_commit_interval_ms: ""  # daemon dflt 5000; must be > 0
 
-# --- Settlement / channels (all µUSDC; "" => daemon default) ------------------
-decdn_redeem_threshold_micro_usdc: ""    # daemon dflt 1_000_000 (1 USDC) — accrued µUSDC to trigger withdraw
-decdn_buyer_deposit_micro_usdc: ""       # daemon dflt 10_000_000 (10 USDC) — escrow on a buyer-channel open
-decdn_buyer_max_approve: ""              # bool; daemon dflt true — one-time max USDC approval to PaymentChannel
-# Auto-closeChannel triggers (OR'd). "" => off (disabled upstream); a configured 0 is rejected.
-decdn_settlement_auto_threshold_micro_usdc: ""    # un-redeemed µUSDC threshold
-decdn_settlement_auto_by_voucher_nonce_span: ""   # nonce-span companion trigger
+# --- Settlement / payment pool (all µUSDC unless noted; "" => daemon default) ---
+# ADR 003 shared payment pool: capped delegated signers + node-addressed cumulative
+# vouchers. The old pairwise-channel knobs (auto-closeChannel triggers, the split
+# initial/working buyer deposits, voucher_interval_mb negotiation) no longer exist.
+decdn_redeem_threshold_micro_usdc: ""    # daemon dflt 1_000_000 (1 USDC) — accrued µUSDC to trigger redeem
+decdn_redeem_max_vouchers_per_tx: ""     # daemon dflt 300; > 0 — gas-bounded redeemMany chunking
+decdn_redeem_interval_secs: ""           # daemon dflt 300; range 1..=21600 — redeemer self-tick
+decdn_buyer_working_deposit_micro_usdc: ""  # daemon dflt 10_000_000 (10 USDC); > 0
+# bool; profile-dependent upstream — true for the daemon, false for the `decdn`
+# client (fetch / bundle pull). node.toml is deliberately shared with the CLI, so
+# pinning it here changes client behaviour too. One-time max USDC approval to PaymentPool.
+decdn_buyer_max_approve: ""
+decdn_pool_min_remaining_deposit_micro_usdc: ""  # daemon dflt 1_000_000 — solvency floor before a pool drains
+# Per-signer floor isolation under the per-pool solvency ceiling (#1841).
+decdn_pool_floor_signer_share_bps: ""    # daemon dflt 2500; range 1..=10000
+decdn_pool_floor_signer_max_windows: ""  # daemon dflt 0 (off)
 
 # --- Blockchain watcher tuning ("" => daemon default) -------------------------
 decdn_rpc_watchdog_interval_sec: ""    # daemon dflt 30; 0 disables, else >= 10 — RPC watchdog
-decdn_event_poll_interval_ms: ""       # daemon dflt 7000; >= 250 — eth_getFilterChanges poll
+decdn_event_poll_interval_ms: ""       # daemon dflt 7000; >= 250 — multiplexed getLogs poll
 decdn_content_blacklist_poll_interval_sec: ""    # daemon dflt 600; >= 1 — blacklist re-scope cadence
+decdn_rate_bounds_poll_interval_sec: ""  # daemon dflt 3600; > 0 — PaymentPool.getRateBounds refresh
+decdn_fee_shares_poll_interval_sec: ""   # daemon dflt 3600; > 0 — FeeRouter share refresh
+
+# --- CLI-only [blockchain] keys ----------------------------------------------
+# The daemon ACCEPTS these (they are declared so a config that also drives the CLI
+# still passes [blockchain]'s deny_unknown_fields) but never parses or reads them —
+# only `decdn setup` does. So nothing downstream catches a malformed value, which
+# is exactly why the role asserts their shape itself.
+decdn_usdc_address: ""
+decdn_swap_venue: ""              # "uniswap-v3" | "balancer-v3"
+decdn_swap_router_address: ""
+decdn_swap_quoter_address: ""
+decdn_swap_fee_tier: ""           # e.g. 3000
+decdn_swap_balancer_pool: ""
+decdn_swap_pool_address: ""
 
 # --- Cache --------------------------------------------------------------------
 decdn_cache_size_mb: 10240      # 10 GB
+# NOTE: this is a deliberate OVERRIDE, not the daemon default. Upstream defaults
+# max_blob_size_mb to cache_size_mb; 1 GB caps any single blob at a tenth of the
+# cache so one large object cannot evict everything else. Must be <= cache_size_mb.
+# DO NOT set 0: despite what upstream's own `config init` template says, there is
+# no zero special-case in the cache engine — the admit gate is a plain
+# `advertised > max_blob_bytes`, so 0 rejects every blob with a size hint.
 decdn_max_blob_size_mb: 1024    # 1 GB
+# Buyer-side ABSOLUTE per-MB rate ceiling for paid pulls (#1375) — what this node
+# will accept a provider to quote on a cache-miss pull, on top of the always-applied
+# probe-relative bound. Distinct from payment.delivery_floor, which raises this
+# node's own SELLER quote. "" / 0 => unlimited.
+decdn_max_rate_per_mb: ""
 # Cache tuning ("" / [] => omit + use the daemon default; an explicit 0 IS emitted —
 # 0 is meaningful here, e.g. gc_interval_sec = 0 disables the sweep and
 # max_unrecouped_leech_bytes = 0 turns the cap off).
-decdn_max_probe_holds: ""             # daemon dflt 256 — eviction-exempt holds (ADR 005); 0 = has_blob answers false
+# daemon dflt 256 — eviction-exempt holds (ADR 005). 0 => has_blob answers false for
+# STORE-BACKED content only; origin-servable content takes no hold and is still advertised.
+decdn_max_probe_holds: ""
 decdn_stake_lane_reserved_holds: ""   # daemon dflt 0 — holds reserved for node-to-node probes (#757)
 decdn_gc_interval_sec: ""             # daemon dflt 300 — iroh-blobs GC sweep; 0 = off
-decdn_pinned_hashes: []               # eviction-exempt pins; each a 64-char lowercase-hex BLAKE3 hash
+decdn_fs_rescan_interval_sec: ""      # daemon dflt 60 — fs-origin rescan; 0 = off
+# eviction-exempt pins; each a 64-char BLAKE3 hash. Upstream accepts mixed case;
+# this role requires lowercase, matching the canonical output form.
+decdn_pinned_hashes: []
 decdn_cache_user_agent: ""            # daemon dflt decdn-node/<version> — HTTP origin User-Agent
+# Origin-probe memo TTLs. Upstream requires negative <= fault <= positive.
+decdn_origin_probe_ttl_sec: ""          # daemon dflt 15 (positive)
+decdn_origin_probe_negative_ttl_sec: ""  # daemon dflt 2
+decdn_origin_probe_fault_ttl_sec: ""     # daemon dflt 5
+decdn_origin_probe_timeout_ms: ""        # daemon dflt 2000
+decdn_origin_probe_memo_capacity: ""     # daemon dflt 4096
+# Eviction driver (#1173). The hysteresis gap is STRUCTURAL: target_pct must be
+# <= high_water_pct - 5, not merely less than it.
+decdn_eviction_high_water_pct: ""     # daemon dflt 90; range 60..=95
+decdn_eviction_target_pct: ""         # daemon dflt 80; range 40..=90
+decdn_eviction_per_sweep_budget: ""   # daemon dflt 16; range 1..=256
+decdn_eviction_tick_secs: ""          # daemon dflt 1; range 1..=60
+# Pluggable admission & eviction policies (ADR 040).
+decdn_eviction_policy: ""             # daemon dflt "lru"; "lru" | "tinylfu"
+decdn_admission_policy: ""            # daemon dflt "always"; "always" | "tinylfu"
+# TinyLFU sketch. sketch_bytes has a HARD FLOOR of 16384 — and the floor bites even
+# on the stock lru/always policies, because the default serve_economics policy
+# ("margin") builds the same sketch (#1803 review).
+decdn_tinylfu_sketch_bytes: ""        # daemon dflt 262144; >= 16384
+decdn_tinylfu_promotion_threshold: ""  # daemon dflt 2
+decdn_tinylfu_probation_target_pct: ""  # daemon dflt 10; range 1..=50
+decdn_tinylfu_aging_halflife_sec: ""   # daemon dflt 600 (resolved but not yet consulted)
+# Refuse-to-serve economics (ADR 041) — when serving a miss is worth the egress.
+decdn_serve_economics_policy: ""          # daemon dflt "margin"; "off" | "margin"
+decdn_serve_economics_discount: ""        # daemon dflt 0.5 — a FLOAT in (0.0, 1.0], not bps
+decdn_serve_economics_n_max: ""           # daemon dflt 64
+decdn_serve_economics_warming_budget: ""  # daemon dflt 5000000
+decdn_serve_economics_warming_refill: ""  # daemon dflt 58
+# Origin fetch retry + circuit breaker ("" => daemon default).
+decdn_origin_retry_max_retries: ""         # daemon dflt 3
+decdn_origin_retry_initial_backoff_ms: ""  # daemon dflt 100
+decdn_origin_retry_max_backoff_ms: ""      # daemon dflt 10000
+decdn_origin_retry_jitter_ratio: ""        # daemon dflt 0.1 (float)
+decdn_origin_retry_buffered_max_bytes: ""  # daemon dflt 4194304 (4 MiB); max 67108864
+decdn_circuit_breaker_enabled: ""             # bool; daemon dflt true
+decdn_circuit_breaker_failure_threshold: ""   # daemon dflt 5
+decdn_circuit_breaker_cooldown_ms: ""         # daemon dflt 30000
+decdn_circuit_breaker_half_open_max_calls: ""  # daemon dflt 1
 # Node-to-node pull-through (#29). The toggle gates all serve-time origin pull from
 # upstream nodes; the knobs below only take effect when it is true. *_bytes / *_percent
 # are BARE INTEGERS on the wire (bytes; percent at scale 100, so 400 = 4.0x).
 decdn_node_to_node_pull_through_enabled: ""      # bool; daemon dflt false — enable pull from upstream nodes (#29)
-decdn_node_pull_probe_fanout: ""                 # daemon dflt 5 — providers probed per miss; 0 disables pull
+# daemon dflt 5 — providers probed per miss. 0 disables pull in practice (the
+# candidate list is `.take(fanout)`), but that is a consequence, not a validated
+# upstream contract — do not rely on it as an off switch.
+decdn_node_pull_probe_fanout: ""
 decdn_node_pull_timeout_sec: ""                  # daemon dflt 20 — per-upstream pull timeout
-decdn_pull_ahead_bytes: ""                       # daemon dflt 1048576 (1 MiB) — speculative pull window (ADR 037)
-decdn_max_unrecouped_leech_bytes: ""             # daemon dflt 268435456 (256 MiB) — speculative-spend cap; 0 = off
-decdn_pull_share_ratio_percent: ""               # daemon dflt 400 (=4.0x) — per-peer speculative ceiling
-decdn_pull_through_require_authorized_origin: "" # bool; daemon dflt false — gate pulls on the ADR 022 directory
+# Byte-progress stall detection (#1797) — replaced the old single stall timeout.
+# A leg is abandoned when it delivers under min_throughput_bps across the window.
+decdn_node_pull_stall_window_sec: ""             # daemon dflt 20
+decdn_node_pull_min_throughput_bps: ""           # daemon dflt 4096
+# Origin-only node policy (#1759): whether to relay namespaces this node is not an
+# authorized origin for. Daemon default is ROLE-DERIVED — false when an origin
+# backend is configured, true when none — so leave "" unless you mean to pin it.
+decdn_relay_foreign_namespaces: ""               # bool
 # Pull-through origin (#437): what the node fetches on a cache miss. Empty kind =>
 # the [cache.origin] table is omitted and misses fail NoOrigin — a serving node
 # needs an origin. Pick ONE kind and set that kind's fields; the others are ignored.
@@ -117,6 +227,17 @@ decdn_cache_origin_s3_region: ""        # s3: AWS region (used for SigV4 even wi
 decdn_cache_origin_s3_endpoint_url: ""  # s3, optional: custom endpoint for R2/B2/MinIO (omit for AWS)
 decdn_cache_origin_s3_path_style: false # s3, optional: path-style addressing (MinIO & many self-hosted)
 decdn_cache_origin_s3_prefix: ""        # s3, optional: key prefix prepended to every object
+# s3, optional: emit [cache.origin.credentials] source = "default-chain". Static
+# access keys are deliberately NOT templated — node.toml is 0640 and diffable.
+# Supply them as AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN via
+# decdn_extra_env instead; the default chain reads exactly those.
+decdn_cache_origin_s3_use_default_chain: false
+decdn_cache_origin_s3_profile: ""       # s3, optional: ~/.aws/credentials profile override
+# Ordered multi-origin fallback (#284). A list of dicts using the same per-kind keys
+# as the scalars above (kind/url/decompress, kind/path, kind/bucket/region/...).
+# Mutually exclusive with decdn_cache_origin_kind: when this is non-empty the role
+# emits [[cache.origins]] and ignores the scalar form. Empty list => scalar form.
+decdn_cache_origins: []
 
 # --- Observability (loopback only) --------------------------------------------
 decdn_log_level: info
@@ -126,14 +247,41 @@ decdn_metrics_bind: "127.0.0.1"   # keep loopback — Prometheus scrape is a fol
 decdn_admin_port: 9191
 # Optional ("" => omit + use the daemon default).
 decdn_otlp_endpoint: ""    # OTLP span export; http(s)://; needs the node built --features otlp
-decdn_region_accounting_interval_sec: ""    # daemon dflt 3600 — per-region bandwidth log; 0 = off
+
+# --- Abuse limits, load shedding, receipts, local denylist --------------------
+# [security] and [load_shed] and [content] are HOT-RELOADABLE: change them and run
+# `decdn node reload` (or systemctl reload decdn-node) instead of restarting.
+decdn_security_max_concurrent_handlers: ""   # daemon dflt 256; 0 disables the cap
+decdn_security_per_source_rate_per_sec: ""   # daemon dflt 100.0 (float); 0.0 disables
+decdn_security_per_source_burst: ""          # daemon dflt 200; > 0 when the rate is > 0
+decdn_security_max_tracked_sources: ""       # daemon dflt 4096; 0 = unbounded
+# Load shedding under resource pressure (#1756).
+decdn_load_shed_policy: ""                     # daemon dflt "resource-pressure"; also "always-admit"
+decdn_load_shed_egress_budget_mbps: ""         # daemon dflt 0 (no budget)
+decdn_load_shed_max_concurrent_serves_high: ""  # daemon dflt 256
+decdn_load_shed_max_concurrent_serves_low: ""   # daemon dflt 192; must be <= the high mark
+decdn_load_shed_per_client_serve_cap: ""        # daemon dflt 32
+# DHT / probe rate limits. Dicts so the two identically-shaped tables share one
+# schema; any subset of the eight keys may be set. Rate keys are floats, the rest
+# integers: per_peer_rate_per_sec, per_ip_rate_per_sec, global_rate_per_sec,
+# per_peer_burst, per_ip_burst, global_burst, max_tracked_per_ip, max_tracked_per_peer.
+# Daemon defaults — dht: 20.0/40, 100.0/200, 1000.0/2000, 4096, 4096
+#                 probe:  5.0/5,  50.0/200, 1000.0/2000, 4096, 4096
+decdn_dht_rate_limit: {}
+decdn_probe_rate_limit: {}
+# Download-receipt log at <data_dir>/download_receipts.jsonl (path not configurable).
+decdn_receipts_max_file_bytes: ""   # daemon dflt 134217728 (128 MiB); floor 1 MiB, ceiling 1 GiB
+decdn_receipts_retained_files: ""   # daemon dflt 4; cap 100
+# Node-local denylist, independent of the on-chain ContentBlacklist. Hot-reloadable.
+decdn_content_denied_hashes: []     # 64-char lowercase-hex BLAKE3 hashes
+decdn_content_denied_origins: []    # 0x publisher addresses (checksum-agnostic; zero address rejected)
 
 # --- Readiness probe (advisory) -----------------------------------------------
 # After start, the role probes http://127.0.0.1:<metrics_port>/metrics as a
 # best-effort readiness signal. A probe TIMEOUT only WARNS (it does NOT fail the
 # deploy): the daemon can bind its metrics/admin listeners well after process
 # start on an otherwise-healthy node (they come up behind the startup
-# PaymentChannel buyer bootstrap — an upstream startup-ordering issue tracked in
+# PaymentPool buyer bootstrap — an upstream startup-ordering issue tracked in
 # decdn/decdn, not here), so a bounded probe would otherwise false-fail a healthy
 # deploy. A metrics endpoint that ANSWERS with a non-200 error, however, fails
 # loud — that's a fault, not slow startup. The systemd service-state assert
@@ -152,6 +300,12 @@ decdn_home: /var/lib/decdn               # data dir: node.secret + keystore.json
 decdn_etc: /etc/decdn
 decdn_config_file: /etc/decdn/node.toml
 decdn_env_file: /etc/decdn/decdn.env     # DECDN_RPC_URL (sensitive) — 0600
+# Extra KEY: value pairs appended to the 0600 env file. This is the supported home
+# for secrets the daemon reads from the environment rather than node.toml — most
+# notably AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN backing an
+# S3 cache origin with source = "default-chain". Keep it out of committed vars:
+# set it in the git-ignored secret.yml alongside decdn_rpc_url.
+decdn_extra_env: {}
 # Eth keystore lives in the data dir (matches `decdn key-gen --output-dir`).
 decdn_keystore_file: /var/lib/decdn/keystore.json          # operator-provisioned (0600)
 decdn_keystore_password_file: /etc/decdn/keystore.password  # operator-provisioned (0600)

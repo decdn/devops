@@ -1,11 +1,12 @@
 ---
 # Install the decdn-node daemon + decdn CLI. Two methods, selected by
 # decdn_node_install_method:
-#   "release" (default): download the pinned GitHub Release tarballs. Idempotent
-#     and upgrade-aware via a version stamp; re-extracts only on change. NOTE:
-#     requires a published v<version> release (see role README).
-#   "manual": copy locally-built binaries from the Ansible control machine (for
-#     pre-release / dev deploys). copy's checksum idempotency replaces the stamp.
+#   "release": download the pinned GitHub Release tarballs, verify them against the
+#     GPG-signed SHA256SUMS manifest upstream publishes, then extract. Idempotent
+#     and upgrade-aware via a version stamp; re-extracts only on change. NOTE: as
+#     of decdn/decdn @ d306cc5c no release tag exists yet — see tasks/main.yml.
+#   "manual" (default today): copy locally-built binaries from the Ansible control
+#     machine. copy's checksum idempotency replaces the stamp.
 # A --version backstop runs in both modes.
 
 - name: Install from pinned GitHub Release tarballs
@@ -13,9 +14,11 @@
   block:
     - name: Build the release tarball list
       ansible.builtin.set_fact:
+        # Each archive holds exactly ONE flat binary (no directory prefix) — the
+        # unarchive below extracts straight into /usr/local/bin on that contract.
         decdn_release_tarballs:
-          - {archive: decdn-node, sha: "{{ decdn_node_sha256 }}"}
-          - {archive: decdn, sha: "{{ decdn_cli_sha256 }}"}
+          - decdn-node
+          - decdn
 
     - name: Read the installed-version stamp
       ansible.builtin.slurp:
@@ -30,31 +33,193 @@
           {{ (decdn_stamp.content is not defined)
              or ((decdn_stamp.content | b64decode | trim) != decdn_node_version) }}
 
+    # `ansible.builtin.tempfile` does not declare supports_check_mode, so under
+    # `make check` it is skipped and registers WITHOUT a `.path`; the tasks below
+    # (file/get_url do support check mode) would then fail on an undefined
+    # attribute rather than reporting anything useful. Nothing here is inspectable
+    # in check mode anyway — it downloads and verifies — so skip it as a unit.
+    - name: Report that the release download is not simulated in check mode
+      ansible.builtin.debug:
+        msg: >-
+          check mode: skipping the download + signature verification of
+          decdn {{ decdn_node_version }}. The binaries on the target are NOT
+          verified by this run; the config and unit below still diff normally.
+      when:
+        - decdn_need_install
+        - ansible_check_mode
+
     - name: Install decdn-node + decdn CLI {{ decdn_node_version }}
-      when: decdn_need_install
+      when:
+        - decdn_need_install
+        - not ansible_check_mode
       block:
+        # A private staging directory, not fixed /tmp/<name>.tar.gz paths. These
+        # bytes are about to be trusted on the strength of a signature, and a
+        # predictable name in a world-writable /tmp is pre-seedable by any local
+        # user between the download and the checksum check.
+        - name: Create a private download staging directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: decdn-install-
+          register: decdn_stage
+          changed_when: false
+
+        - name: Restrict the staging directory to root
+          ansible.builtin.file:
+            path: "{{ decdn_stage.path }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: WARN that release signature verification is DISABLED
+          ansible.builtin.debug:
+            msg: |-
+              decdn_verify_release_signature is false. SHA256SUMS is being fetched
+              UNAUTHENTICATED from {{ decdn_node_release_base }}, so the checksum
+              check below proves only that the download was not corrupted — NOT
+              that these binaries came from deCDN. Anyone able to serve you the
+              tarball can serve a matching manifest. Re-enable it before this host
+              serves paid traffic.
+          when: not decdn_verify_release_signature
+
+        - name: Ensure gnupg is available for signature verification
+          ansible.builtin.package:
+            name: gnupg
+            state: present
+          when: decdn_verify_release_signature
+
         - name: Download release tarballs
           ansible.builtin.get_url:
             url: "{{ decdn_node_release_base }}/v{{ decdn_node_version }}/\
-                  {{ item.archive }}-{{ decdn_node_version }}-{{ decdn_node_target }}.tar.gz"
-            dest: "/tmp/{{ item.archive }}-{{ decdn_node_version }}.tar.gz"
-            mode: "0644"
-            checksum: "{{ ('sha256:' + item.sha) if (item.sha | length > 0) else omit }}"
+                  {{ item }}-{{ decdn_node_version }}-{{ decdn_node_target }}.tar.gz"
+            dest: "{{ decdn_stage.path }}/{{ item }}-{{ decdn_node_version }}-{{ decdn_node_target }}.tar.gz"
+            owner: root
+            group: root
+            mode: "0600"
           loop: "{{ decdn_release_tarballs }}"
-          loop_control:
-            label: "{{ item.archive }}"
+
+        # One manifest covers every archive in the release, so it replaces the old
+        # per-tarball hand-pasted sha256 pins.
+        - name: Download the SHA256SUMS manifest
+          ansible.builtin.get_url:
+            url: "{{ decdn_node_release_base }}/v{{ decdn_node_version }}/SHA256SUMS"
+            dest: "{{ decdn_stage.path }}/SHA256SUMS"
+            owner: root
+            group: root
+            mode: "0600"
+
+        - name: Download the SHA256SUMS signature
+          ansible.builtin.get_url:
+            url: "{{ decdn_node_release_base }}/v{{ decdn_node_version }}/SHA256SUMS.asc"
+            dest: "{{ decdn_stage.path }}/SHA256SUMS.asc"
+            owner: root
+            group: root
+            mode: "0600"
+          when: decdn_verify_release_signature
+
+        - name: Create the keyring staging directory
+          ansible.builtin.file:
+            path: "{{ decdn_stage.path }}/keyring"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+          when: decdn_verify_release_signature
+
+        # Deliberately NOT beside the archives: `sha256sum --check` runs in the
+        # archive directory, and upstream publishes its KEYS file as a release
+        # asset — a same-named manifest entry would checksum this vendored copy
+        # against theirs and fail for a reason unrelated to the binaries.
+        - name: Stage the release signing keyring
+          ansible.builtin.copy:
+            src: "{{ decdn_release_keyring }}"
+            dest: "{{ decdn_stage.path }}/keyring/KEYS.asc"
+            owner: root
+            group: root
+            mode: "0600"
+          when: decdn_verify_release_signature
+
+        # An isolated GNUPGHOME inside the staging dir, never root's own keyring:
+        # verification must answer "is this signed by a key from the shipped KEYS
+        # file", not "by any key this host happens to trust". Upstream's contract is
+        # that a good signature from ANY key in KEYS is authentic.
+        # Status-parsed, not exit-code-parsed. `gpg --verify` exits 0 for a good
+        # signature made by an EXPIRED or REVOKED key — it only warns on stderr,
+        # which `changed_when: false` then hides from the operator entirely. The
+        # two cases that actually matter operationally (the release key was
+        # revoked because a maintainer was compromised, or it quietly aged out —
+        # the vendored key expires 2029-08-08) would both install the tarball.
+        # VALIDSIG is emitted only for a good signature from a still-valid key.
+        - name: Verify the SHA256SUMS signature against the release keyring
+          ansible.builtin.shell:
+            chdir: "{{ decdn_stage.path }}"
+            # /bin/sh is dash on Debian and has no `pipefail`; this needs bash.
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              export GNUPGHOME="{{ decdn_stage.path }}/gnupg"
+              mkdir -p "$GNUPGHOME"
+              chmod 700 "$GNUPGHOME"
+              gpg --batch --quiet --import keyring/KEYS.asc
+              gpg --batch --status-fd 3 --verify SHA256SUMS.asc SHA256SUMS \
+                3>gpg-status.txt
+              if grep -qE '^\[GNUPG:\] (EXPKEYSIG|REVKEYSIG|EXPSIG)' gpg-status.txt; then
+                echo "SHA256SUMS carries a good signature from an EXPIRED or REVOKED" >&2
+                echo "deCDN release key. Refusing to install. Re-sync" >&2
+                echo "roles/decdn_node/files/decdn-release-KEYS.asc from upstream KEYS," >&2
+                echo "or verify this release out of band." >&2
+                exit 1
+              fi
+              grep -q '^\[GNUPG:\] VALIDSIG ' gpg-status.txt
+          register: decdn_sig_check
+          changed_when: false
+          failed_when: decdn_sig_check.rc != 0
+          when: decdn_verify_release_signature
+
+        # Each archive is checked by NAME against exactly one manifest entry,
+        # rather than running `sha256sum --check --ignore-missing` over the whole
+        # manifest and counting ': OK' lines. Two reasons the count was not enough:
+        # it counts OK lines rather than distinct files (a manifest listing one
+        # file twice satisfies a count of two while the other goes unverified),
+        # and with zero matches `grep -c` exits 1, which under `set -e` aborts the
+        # assignment before the diagnostic can say what was missing.
+        - name: Verify the tarballs against SHA256SUMS
+          ansible.builtin.shell:
+            chdir: "{{ decdn_stage.path }}"
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              {% for archive in decdn_release_tarballs %}
+              f={{ (archive ~ '-' ~ decdn_node_version ~ '-' ~ decdn_node_target ~ '.tar.gz') | quote }}
+              # Match the filename FIELD exactly, not a substring. `grep -F "  $f"`
+              # collides with any sibling entry that merely STARTS with $f (a
+              # "$f.sig"/"$f.sha256" line makes the count 2 and aborts a perfectly
+              # good manifest) and misses the `hash *name` binary-mode form outright
+              # (count 0). index($0," ")+2 skips the hash and the two-character
+              # " " / " *" separator, leaving the name — spaces in it included.
+              entry=$(awk -v f="$f" 'substr($0, index($0, " ") + 2) == f' SHA256SUMS)
+              n=$(printf '%s\n' "$entry" | grep -c . || true)
+              if [ "$n" -ne 1 ]; then
+                echo "SHA256SUMS has $n entries for $f (expected exactly 1)." >&2
+                echo "The manifest does not cover this archive, or covers it twice." >&2
+                exit 1
+              fi
+              printf '%s\n' "$entry" | sha256sum --check --strict -
+              {% endfor %}
+          register: decdn_sum_check
+          changed_when: false
+          failed_when: decdn_sum_check.rc != 0
 
         - name: Extract binaries into /usr/local/bin
           ansible.builtin.unarchive:
-            src: "/tmp/{{ item.archive }}-{{ decdn_node_version }}.tar.gz"
+            src: "{{ decdn_stage.path }}/{{ item }}-{{ decdn_node_version }}-{{ decdn_node_target }}.tar.gz"
             dest: /usr/local/bin
             remote_src: true
             owner: root
             group: root
             mode: "0755"
           loop: "{{ decdn_release_tarballs }}"
-          loop_control:
-            label: "{{ item.archive }}"
           notify: Restart decdn-node
 
         - name: Ensure the stamp directory exists
@@ -72,6 +237,27 @@
             owner: root
             group: root
             mode: "0644"
+      always:
+        # Kept on failure: the tarballs, manifest, signature and gpg status file
+        # are the only evidence for "why did verification fail", and deleting them
+        # forces a re-run with cleanup disabled to find out.
+        - name: Report the retained staging directory after a failure
+          ansible.builtin.debug:
+            msg: >-
+              Verification failed; leaving {{ decdn_stage.path }} in place for
+              inspection (gpg-status.txt, SHA256SUMS, SHA256SUMS.asc, the archives).
+              Remove it by hand once done.
+          when:
+            - decdn_stage.path is defined
+            - decdn_sig_check.failed | default(false) or decdn_sum_check.failed | default(false)
+
+        - name: Remove the download staging directory
+          ansible.builtin.file:
+            path: "{{ decdn_stage.path }}"
+            state: absent
+          when:
+            - decdn_stage.path is defined
+            - not (decdn_sig_check.failed | default(false) or decdn_sum_check.failed | default(false))
 
 - name: Install locally-built binaries from the control machine
   when: decdn_node_install_method == "manual"
@@ -114,3 +300,15 @@
     decdn_installed_version.rc != 0
     or (decdn_node_version | length > 0
         and decdn_node_version not in decdn_installed_version.stdout)
+
+# The `decdn` CLI is what runs `config validate`, `key-gen` and every day-2 command,
+# so a half-installed pair (daemon present, CLI missing) must fail here rather than
+# at the config gate further down.
+- name: Verify the installed decdn CLI runs (version backstop)
+  ansible.builtin.command: "{{ decdn_cli_bin }} --version"
+  register: decdn_installed_cli_version
+  changed_when: false
+  failed_when: >-
+    decdn_installed_cli_version.rc != 0
+    or (decdn_node_version | length > 0
+        and decdn_node_version not in decdn_installed_cli_version.stdout)

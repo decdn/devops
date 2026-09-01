@@ -24,6 +24,16 @@ ExecStart={{ decdn_bin }} run \
     --config {{ decdn_config_file }} \
     --keystore-password-file {{ decdn_keystore_password_file }}
 
+# SIGHUP re-reads the config file and applies the hot-reloadable sections only:
+# observability.log_level, cache.pinned_hashes, all of [security], all of [content]
+# and all of [load_shed]. Every other field logs "requires restart" and keeps its
+# running value — notably payment.rate_per_mb, which upstream demoted to
+# restart-required. `decdn node reload` drives the same path over the loopback
+# admin RPC and shares its mutex, so the two queue rather than race. The role's
+# node.toml handler still notifies a RESTART: it cannot tell which sections a given
+# diff touched, so reload is an operator's deliberate call.
+ExecReload=/bin/kill -HUP $MAINPID
+
 # Graceful stop so the node can drain/flush. SIGTERM is its shutdown signal.
 KillSignal=SIGTERM
 TimeoutStopSec=30

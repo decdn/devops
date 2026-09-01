@@ -78,9 +78,10 @@
               ("observability", "metrics_bind"): "127.0.0.1",
               ("observability", "metrics_port"): 9090,
               ("blockchain", "chain_id"): 421614,
-              ("blockchain", "payment_channel_address"): "0x1111111111111111111111111111111111111111",
+              ("blockchain", "payment_pool_address"): "0x1111111111111111111111111111111111111111",
               ("blockchain", "capacity_bond_address"): "0x2222222222222222222222222222222222222222",
               ("blockchain", "slash_judge_address"): "0x3333333333333333333333333333333333333333",
+              ("blockchain", "content_blacklist_address"): "0x4444444444444444444444444444444444444444",
           }
           bad = {
               ".".join(k): (d.get(k[0], {}).get(k[1]), v)
@@ -102,32 +103,83 @@
           # `0 == False` and `1 == True`, so isinstance guards are load-bearing here).
           def _is_int(x):
               return isinstance(x, int) and not isinstance(x, bool)
+          def _is_float(x):
+              return isinstance(x, float)
           cache, net, pay, bc = (d.get(s, {}) for s in ("cache", "network", "payment", "blockchain"))
+          sec, shed = d.get("security", {}), d.get("load_shed", {})
+          dht = d.get("dht", {}).get("rate_limit", {})
+          probe = d.get("probe", {}).get("rate_limit", {})
           knob_checks = [
               ("cache.node_to_node_pull_through_enabled",
                cache.get("node_to_node_pull_through_enabled") is True),
               ("cache.gc_interval_sec (explicit 0 must emit)",
                _is_int(cache.get("gc_interval_sec")) and cache.get("gc_interval_sec") == 0),
-              ("cache.pull_ahead_bytes (bare-int Bytes)",
-               _is_int(cache.get("pull_ahead_bytes")) and cache.get("pull_ahead_bytes") == 2097152),
-              ("cache.pull_share_ratio_percent (bare-int Percent)",
-               _is_int(cache.get("pull_share_ratio_percent")) and cache.get("pull_share_ratio_percent") == 400),
+              ("cache.relay_foreign_namespaces (explicit false must emit)",
+               cache.get("relay_foreign_namespaces") is False),
+              ("payment.credit_max (bare-int Bytes)",
+               _is_int(pay.get("credit_max")) and pay.get("credit_max") == 2097152),
               # Two-element lists in exact order — exercises the comma-join branch.
               ("cache.pinned_hashes", cache.get("pinned_hashes") == ["a" * 64, "b" * 64]),
               ("network.relay_urls",
                net.get("relay_urls") == ["https://relay1.example.invalid:443",
                                          "https://relay2.example.invalid:443"]),
-              ("network.enable_0rtt", net.get("enable_0rtt") is False),
               ("payment.delivery_floor (explicit 0 must emit)",
                _is_int(pay.get("delivery_floor")) and pay.get("delivery_floor") == 0),
-              ("blockchain.settlement_auto_threshold_micro_usdc",
-               _is_int(bc.get("settlement_auto_threshold_micro_usdc"))
-               and bc.get("settlement_auto_threshold_micro_usdc") == 50000000),
+              ("blockchain.redeem_threshold_micro_usdc",
+               _is_int(bc.get("redeem_threshold_micro_usdc"))
+               and bc.get("redeem_threshold_micro_usdc") == 50000000),
+              # Floats must render as TOML floats, not ints or strings.
+              ("security.per_source_rate_per_sec (bare float)",
+               _is_float(sec.get("per_source_rate_per_sec"))
+               and sec.get("per_source_rate_per_sec") == 50.5),
+              ("cache.serve_economics.discount (bare float)",
+               _is_float(cache.get("serve_economics", {}).get("discount"))
+               and cache.get("serve_economics", {}).get("discount") == 0.25),
+              # One assertion per NEW sub-table: proves each header was emitted and
+              # that the value landed inside it.
+              ("cache.tinylfu", cache.get("tinylfu", {}).get("sketch_bytes") == 524288),
+              ("cache.serve_economics", cache.get("serve_economics", {}).get("n_max") == 32),
+              ("cache.origin_retry", cache.get("origin_retry", {}).get("max_retries") == 5),
+              ("cache.circuit_breaker", cache.get("circuit_breaker", {}).get("enabled") is False),
+              ("load_shed", shed.get("per_client_serve_cap") == 16),
+              ("receipts", d.get("receipts", {}).get("retained_files") == 8),
+              ("content.denied_hashes", d.get("content", {}).get("denied_hashes") == ["c" * 64]),
+              # Rate-limit tables render from a fixed key list: the keys converge set
+              # must be present with the right types, and the ones it did NOT set must
+              # be ABSENT (rendering a default would silently pin it).
+              ("dht.rate_limit set keys",
+               _is_float(dht.get("per_peer_rate_per_sec")) and dht.get("per_peer_rate_per_sec") == 10.0
+               and _is_int(dht.get("per_peer_burst")) and dht.get("per_peer_burst") == 20),
+              ("dht.rate_limit unset keys stay absent", set(dht) == {"per_peer_rate_per_sec", "per_peer_burst"}),
+              ("probe.rate_limit unset keys stay absent", set(probe) == {"max_tracked_per_ip"}),
           ]
+          # The TOML sub-table hazard: every scalar [cache] key must be emitted BEFORE
+          # the first [cache.*] header, or it silently nests into that sub-table
+          # instead. The knobs at risk are the ones the template emits LAST among the
+          # scalars — relay_foreign_namespaces and the node_pull_* family sit directly
+          # above the first sub-table header, so they are the canaries. Assert they
+          # are top-level in [cache] AND that no sub-table has swallowed one.
+          _cache_scalars = {k for k, v in cache.items() if not isinstance(v, dict)}
+          _subtables = {k: v for k, v in cache.items() if isinstance(v, dict)}
+          _leaked = {
+              f"{tbl}.{key}"
+              for tbl, body in _subtables.items()
+              for key in body
+              if key in ("relay_foreign_namespaces", "node_to_node_pull_through_enabled",
+                         "eviction_policy", "admission_policy", "cache_size_mb", "cache_dir")
+          }
+          knob_checks.append(
+              ("cache scalars did not fall into a sub-table",
+               not _leaked
+               and {"cache_dir", "cache_size_mb", "relay_foreign_namespaces",
+                    "node_to_node_pull_through_enabled"} <= _cache_scalars),
+          )
           knob_bad = [name for name, ok in knob_checks if not ok]
           if knob_bad:
               print("node.toml tuning-knob mismatch:", knob_bad, file=sys.stderr)
               print("  cache=", cache, "\n  network=", net, "\n  payment=", pay, file=sys.stderr)
+              print("  security=", sec, "\n  load_shed=", shed, file=sys.stderr)
+              print("  leaked-into-subtable=", _leaked, file=sys.stderr)
               sys.exit(1)
 
     - name: Assert node.toml is valid TOML and renders the expected content

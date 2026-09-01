@@ -96,17 +96,23 @@ jobs:
           path: ansible/build/decdn-node-*.tar.gz
           if-no-files-found: ignore
 
-  # Dedicated IaC security scan of the Ansible tree via the official KICS action.
-  # KICS severities are HIGH/MEDIUM/LOW/INFO (no "critical"); we gate on HIGH.
+  # Dedicated IaC security scan of the Ansible tree, driven straight from the
+  # digest-pinned KICS *engine* image by `make security` — the exact command
+  # developers run locally, so CI and local results cannot drift. KICS severities
+  # are CRITICAL/HIGH/MEDIUM/LOW/INFO; the engine's own `--fail-on high` exit
+  # code is the gate.
   #
-  # SUPPLY-CHAIN NOTE: this action's git tags were hijacked in the March 2026
-  # TeamPCP attack (CISA KEV). It has since been remediated — tags restored to
-  # their legitimate pre-hijack commits and explicit hardening applied (base
-  # images digest-pinned, workflows SHA-pinned, StepSecurity best practices). We
-  # pin to the post-remediation hardened HEAD by SHA; the `v2.1.20` *tag* points
-  # at the older Mar-04 commit that predates the April base-image digest-pinning,
-  # so we deliberately do NOT use the tag (and Dependabot is told not to bump it
-  # — see .github/dependabot.yml). Re-verify the SHA before any change.
+  # SUPPLY-CHAIN NOTE: we deliberately do NOT use Checkmarx/kics-github-action.
+  # Its git tags were hijacked in the March 2026 TeamPCP attack (CISA KEV), and
+  # beyond that history its entrypoint `apk add`s nodejs/npm at *run* time inside
+  # its digest-pinned base image and then executes the result — an unpinned fetch
+  # that defeats the pinning it advertises. That fetch also breaks the action
+  # outright today: Chainguard's current nodejs wants a newer glibc than the
+  # pinned base ships, so `node dist/index.js` dies and the step exits non-zero
+  # no matter what the scan found. Driving the engine image ourselves drops the
+  # Node layer entirely and leaves one pinned artifact — `KICS_IMAGE` in the
+  # Makefile, pinned by Docker Hub digest (a different artifact from the
+  # hijacked action). See CONTRIBUTING.md.
   kics:
     needs: changes
     if: needs.changes.outputs.ansible == 'true'
@@ -114,16 +120,29 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: KICS Ansible security scan (fail on HIGH)
-        # master @ 2026-05-22 "[StepSecurity] Apply security best practices (#157)"
-        uses: Checkmarx/kics-github-action@7117906d8779ecaf5180f34c4931a774f10d7625
-        with:
-          path: ansible
-          platform_type: Ansible
-          exclude_paths: ansible/collections
-          fail_on: high
-          output_formats: json,sarif
-          output_path: kics-results
-          enable_jobs_summary: true
+        run: make security
+      # Replaces the action's `enable_jobs_summary`.
+      - name: Summarise KICS findings
+        if: always()
+        run: |
+          results=kics-results/results.json
+          {
+            echo "### KICS IaC scan"
+            echo
+            if [ -f "$results" ]; then
+              jq -r '.severity_counters
+                     | "| CRITICAL | HIGH | MEDIUM | LOW | INFO |",
+                       "|---|---|---|---|---|",
+                       "| \(.CRITICAL) | \(.HIGH) | \(.MEDIUM) | \(.LOW) | \(.INFO) |"' "$results"
+              echo
+              jq -r 'if (.total_counter // 0) == 0 then "No findings."
+                     else (.queries[] | .query_name as $q | .severity as $s
+                           | .files[] | "- **\($s)** \($q) — `\(.file_name):\(.line)`")
+                     end' "$results"
+            else
+              echo "No results file — the scan did not complete."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload KICS results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -31,11 +31,14 @@ baseline   host hardening — DevSec os/ssh, nftables default-deny inbound,
            fail2ban, unattended-upgrades, chrony, an admin sudo user
    │
    └─ site.yml  → decdn-node      public QUIC udp/4433; metrics+admin loopback;
-                                  release-tarball install; hardened systemd unit
+                                  signed-tarball or local-build install;
+                                  hardened systemd unit
 ```
 
 On-chain node stake + registration (ADR 019 Phase 2) is an **operator step**, not
 automated here — the node serves paid traffic only after it is staked and registered.
+Upstream's `decdn setup` walks that phase end to end (with `--dry-run`); this repo
+stops at host prep and startup.
 
 ## Repository layout
 

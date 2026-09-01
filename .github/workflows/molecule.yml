@@ -37,6 +37,9 @@ jobs:
         run: make deps
       - name: molecule test
         # --all runs every scenario under ansible/molecule/: default
-        # (operator-provisioned keystore), generate-keystore (opt-in host-side
-        # wallet generation), and slow-readiness (advisory /metrics probe timeout).
+        # (operator-provisioned keystore + rendered-value assertions), schema
+        # (config key-set drift against the upstream field list), validation
+        # (bad knobs must be rejected by the role's own asserts), generate-keystore
+        # (opt-in host-side wallet generation), and slow-readiness (advisory
+        # /metrics probe timeout).
         run: molecule test --all

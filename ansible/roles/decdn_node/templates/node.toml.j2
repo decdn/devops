@@ -1,6 +1,15 @@
 # MANAGED BY the decdn-node role — do not edit by hand.
-# Field names match decdn/crates/common/src/config/types.rs. The [cache] table
-# uses deny_unknown_fields upstream, so only documented keys are emitted.
+#
+# Field names track decdn/crates/common/src/config/types.rs. EVERY section there
+# carries #[serde(deny_unknown_fields)] and the config crate defines NO serde
+# aliases, so a stale or misspelled key is a hard startup failure, not a warning.
+# The reference rendering is the DEFAULT_CONFIG template `decdn config init`
+# writes (decdn/crates/cli/src/commands/config.rs) — upstream CI asserts it covers
+# every wired field, so it is the thing to diff against when re-syncing.
+#
+# TOML ordering hazard: every scalar [cache] key MUST be emitted before the first
+# [cache.*] sub-table header, or it silently nests into that sub-table instead.
+#
 # Note: rpc_url is NOT here — it's the one sensitive value and is supplied via
 # DECDN_RPC_URL from the 0600 env file, so this file stays non-secret/diffable.
 
@@ -12,37 +21,57 @@ region = "{{ decdn_region }}"
 bind_port = {{ decdn_bind_port }}
 {% if decdn_relay_urls is not none and decdn_relay_urls | length > 0 %}
 relay_urls = [{% for u in decdn_relay_urls %}"{{ u }}"{% if not loop.last %}, {% endif %}{% endfor %}]
-{% elif decdn_relay_url not in ["", none] %}
-relay_url = "{{ decdn_relay_url }}"
 {% endif %}
-{% if decdn_enable_0rtt not in ["", none] %}
-enable_0rtt = {{ decdn_enable_0rtt | lower }}
+{% if decdn_discovery_pkarr_url not in ["", none] or decdn_discovery_dns_origin not in ["", none] or (decdn_discovery_peers is not none and decdn_discovery_peers | length > 0) %}
+
+[network.discovery]
+{# pkarr_url PUBLISHES, dns_origin RESOLVES. They are emitted independently: the
+   assert in tasks/main.yml requires dns_origin whenever pkarr_url is set, but
+   dns_origin ALONE is legal (a resolve-only node), so it must not be nested in
+   the pkarr branch or that mode renders to nothing. #}
+{% if decdn_discovery_pkarr_url not in ["", none] %}
+pkarr_url = "{{ decdn_discovery_pkarr_url }}"
+{% endif %}
+{% if decdn_discovery_dns_origin not in ["", none] %}
+dns_origin = "{{ decdn_discovery_dns_origin }}"
+{% endif %}
+{% for node_id, peer in (decdn_discovery_peers | default({}, true)).items() %}
+
+[network.discovery.peers.{{ node_id }}]
+{% if peer.relay_url is defined and peer.relay_url not in ["", none] %}
+relay_url = "{{ peer.relay_url }}"
+{% endif %}
+addrs = [{% for a in peer.addrs %}"{{ a }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+{% endfor %}
 {% endif %}
 
 [blockchain]
 chain_id = {{ decdn_chain_id }}
 eth_keystore = "{{ decdn_keystore_file }}"
-payment_channel_address = "{{ decdn_payment_channel_address }}"
+payment_pool_address = "{{ decdn_payment_pool_address }}"
 capacity_bond_address = "{{ decdn_capacity_bond_address }}"
 slash_judge_address = "{{ decdn_slash_judge_address }}"
+content_blacklist_address = "{{ decdn_content_blacklist_address }}"
+{% if decdn_origin_assignment_address | length > 0 %}
+origin_assignment_address = "{{ decdn_origin_assignment_address }}"
+{% endif %}
+{% if decdn_publisher_registry_address | length > 0 %}
+publisher_registry_address = "{{ decdn_publisher_registry_address }}"
+{% endif %}
 {% if decdn_slash_appeal_address | length > 0 %}
 slash_appeal_address = "{{ decdn_slash_appeal_address }}"
 {% endif %}
-{% if decdn_slash_judge_from_block | int > 0 %}
-slash_judge_from_block = {{ decdn_slash_judge_from_block | int }}
+{% if decdn_origin_directory_positive_ttl_sec not in ["", none] %}
+origin_directory_positive_ttl_sec = {{ decdn_origin_directory_positive_ttl_sec | int }}
 {% endif %}
-{% if decdn_origin_assignment_address | length > 0 %}
-origin_assignment_address = "{{ decdn_origin_assignment_address }}"
-publisher_registry_address = "{{ decdn_publisher_registry_address }}"
-{% if decdn_origin_directory_from_block | int > 0 %}
-origin_directory_from_block = {{ decdn_origin_directory_from_block | int }}
+{% if decdn_origin_directory_negative_ttl_sec not in ["", none] %}
+origin_directory_negative_ttl_sec = {{ decdn_origin_directory_negative_ttl_sec | int }}
 {% endif %}
+{% if decdn_origin_directory_cache_capacity not in ["", none] %}
+origin_directory_cache_capacity = {{ decdn_origin_directory_cache_capacity | int }}
 {% endif %}
-{% if decdn_content_blacklist_address | length > 0 %}
-content_blacklist_address = "{{ decdn_content_blacklist_address }}"
-{% if decdn_content_blacklist_from_block | int > 0 %}
-content_blacklist_from_block = {{ decdn_content_blacklist_from_block | int }}
-{% endif %}
+{% if decdn_content_blacklist_poll_interval_sec not in ["", none] %}
+content_blacklist_poll_interval_sec = {{ decdn_content_blacklist_poll_interval_sec | int }}
 {% endif %}
 {% if decdn_rpc_watchdog_interval_sec not in ["", none] %}
 rpc_watchdog_interval_sec = {{ decdn_rpc_watchdog_interval_sec | int }}
@@ -50,23 +79,56 @@ rpc_watchdog_interval_sec = {{ decdn_rpc_watchdog_interval_sec | int }}
 {% if decdn_event_poll_interval_ms not in ["", none] %}
 event_poll_interval_ms = {{ decdn_event_poll_interval_ms | int }}
 {% endif %}
-{% if decdn_content_blacklist_poll_interval_sec not in ["", none] %}
-content_blacklist_poll_interval_sec = {{ decdn_content_blacklist_poll_interval_sec | int }}
+{% if decdn_rate_bounds_poll_interval_sec not in ["", none] %}
+rate_bounds_poll_interval_sec = {{ decdn_rate_bounds_poll_interval_sec | int }}
+{% endif %}
+{% if decdn_fee_shares_poll_interval_sec not in ["", none] %}
+fee_shares_poll_interval_sec = {{ decdn_fee_shares_poll_interval_sec | int }}
 {% endif %}
 {% if decdn_redeem_threshold_micro_usdc not in ["", none] %}
 redeem_threshold_micro_usdc = {{ decdn_redeem_threshold_micro_usdc | int }}
 {% endif %}
-{% if decdn_buyer_deposit_micro_usdc not in ["", none] %}
-buyer_deposit_micro_usdc = {{ decdn_buyer_deposit_micro_usdc | int }}
+{% if decdn_redeem_max_vouchers_per_tx not in ["", none] %}
+redeem_max_vouchers_per_tx = {{ decdn_redeem_max_vouchers_per_tx | int }}
+{% endif %}
+{% if decdn_redeem_interval_secs not in ["", none] %}
+redeem_interval_secs = {{ decdn_redeem_interval_secs | int }}
+{% endif %}
+{% if decdn_buyer_working_deposit_micro_usdc not in ["", none] %}
+buyer_working_deposit_micro_usdc = {{ decdn_buyer_working_deposit_micro_usdc | int }}
 {% endif %}
 {% if decdn_buyer_max_approve not in ["", none] %}
-buyer_max_approve = {{ decdn_buyer_max_approve | lower }}
+buyer_max_approve = {{ decdn_buyer_max_approve | bool | lower }}
 {% endif %}
-{% if decdn_settlement_auto_threshold_micro_usdc not in ["", none] %}
-settlement_auto_threshold_micro_usdc = {{ decdn_settlement_auto_threshold_micro_usdc | int }}
+{% if decdn_pool_min_remaining_deposit_micro_usdc not in ["", none] %}
+pool_min_remaining_deposit_micro_usdc = {{ decdn_pool_min_remaining_deposit_micro_usdc | int }}
 {% endif %}
-{% if decdn_settlement_auto_by_voucher_nonce_span not in ["", none] %}
-settlement_auto_by_voucher_nonce_span = {{ decdn_settlement_auto_by_voucher_nonce_span | int }}
+{% if decdn_pool_floor_signer_share_bps not in ["", none] %}
+pool_floor_signer_share_bps = {{ decdn_pool_floor_signer_share_bps | int }}
+{% endif %}
+{% if decdn_pool_floor_signer_max_windows not in ["", none] %}
+pool_floor_signer_max_windows = {{ decdn_pool_floor_signer_max_windows | int }}
+{% endif %}
+{% if decdn_usdc_address | length > 0 %}
+usdc_address = "{{ decdn_usdc_address }}"
+{% endif %}
+{% if decdn_swap_venue not in ["", none] %}
+swap_venue = "{{ decdn_swap_venue }}"
+{% endif %}
+{% if decdn_swap_router_address | length > 0 %}
+swap_router_address = "{{ decdn_swap_router_address }}"
+{% endif %}
+{% if decdn_swap_quoter_address | length > 0 %}
+swap_quoter_address = "{{ decdn_swap_quoter_address }}"
+{% endif %}
+{% if decdn_swap_fee_tier not in ["", none] %}
+swap_fee_tier = {{ decdn_swap_fee_tier | int }}
+{% endif %}
+{% if decdn_swap_balancer_pool | length > 0 %}
+swap_balancer_pool = "{{ decdn_swap_balancer_pool }}"
+{% endif %}
+{% if decdn_swap_pool_address | length > 0 %}
+swap_pool_address = "{{ decdn_swap_pool_address }}"
 {% endif %}
 
 [payment]
@@ -74,25 +136,29 @@ rate_per_mb = {{ decdn_rate_per_mb }}
 {% if decdn_delivery_floor not in ["", none] %}
 delivery_floor = {{ decdn_delivery_floor | int }}
 {% endif %}
-{% if decdn_delivery_ceiling not in ["", none] %}
-delivery_ceiling = {{ decdn_delivery_ceiling | int }}
+{% if decdn_credit_max not in ["", none] %}
+credit_max = {{ decdn_credit_max | int }}
 {% endif %}
-{% if decdn_voucher_interval_mb not in ["", none] %}
-voucher_interval_mb = {{ decdn_voucher_interval_mb | int }}
+{% if decdn_credit_ramp_divisor not in ["", none] %}
+credit_ramp_divisor = {{ decdn_credit_ramp_divisor | int }}
+{% endif %}
+{% if decdn_frame_target_bytes not in ["", none] %}
+frame_target_bytes = {{ decdn_frame_target_bytes | int }}
+{% endif %}
+{% if decdn_voucher_commit_interval_ms not in ["", none] %}
+voucher_commit_interval_ms = {{ decdn_voucher_commit_interval_ms | int }}
 {% endif %}
 
+# --- [cache] --------------------------------------------------------------
+# Every scalar below MUST stay above the first [cache.*] sub-table header.
 [cache]
 cache_dir = "{{ decdn_cache_dir }}"
 cache_size_mb = {{ decdn_cache_size_mb }}
-max_blob_size_mb = {{ decdn_max_blob_size_mb }}
-{% if decdn_max_probe_holds not in ["", none] %}
-max_probe_holds = {{ decdn_max_probe_holds | int }}
+{% if decdn_max_blob_size_mb not in ["", none] %}
+max_blob_size_mb = {{ decdn_max_blob_size_mb | int }}
 {% endif %}
-{% if decdn_stake_lane_reserved_holds not in ["", none] %}
-stake_lane_reserved_holds = {{ decdn_stake_lane_reserved_holds | int }}
-{% endif %}
-{% if decdn_gc_interval_sec not in ["", none] %}
-gc_interval_sec = {{ decdn_gc_interval_sec | int }}
+{% if decdn_max_rate_per_mb not in ["", none] %}
+max_rate_per_mb = {{ decdn_max_rate_per_mb | int }}
 {% endif %}
 {% if decdn_pinned_hashes is not none and decdn_pinned_hashes | length > 0 %}
 pinned_hashes = [{% for h in decdn_pinned_hashes %}"{{ h }}"{% if not loop.last %}, {% endif %}{% endfor %}]
@@ -100,8 +166,50 @@ pinned_hashes = [{% for h in decdn_pinned_hashes %}"{{ h }}"{% if not loop.last 
 {% if decdn_cache_user_agent not in ["", none] %}
 user_agent = "{{ decdn_cache_user_agent }}"
 {% endif %}
+{% if decdn_gc_interval_sec not in ["", none] %}
+gc_interval_sec = {{ decdn_gc_interval_sec | int }}
+{% endif %}
+{% if decdn_fs_rescan_interval_sec not in ["", none] %}
+fs_rescan_interval_sec = {{ decdn_fs_rescan_interval_sec | int }}
+{% endif %}
+{% if decdn_origin_probe_ttl_sec not in ["", none] %}
+origin_probe_ttl_sec = {{ decdn_origin_probe_ttl_sec | int }}
+{% endif %}
+{% if decdn_origin_probe_negative_ttl_sec not in ["", none] %}
+origin_probe_negative_ttl_sec = {{ decdn_origin_probe_negative_ttl_sec | int }}
+{% endif %}
+{% if decdn_origin_probe_fault_ttl_sec not in ["", none] %}
+origin_probe_fault_ttl_sec = {{ decdn_origin_probe_fault_ttl_sec | int }}
+{% endif %}
+{% if decdn_origin_probe_timeout_ms not in ["", none] %}
+origin_probe_timeout_ms = {{ decdn_origin_probe_timeout_ms | int }}
+{% endif %}
+{% if decdn_origin_probe_memo_capacity not in ["", none] %}
+origin_probe_memo_capacity = {{ decdn_origin_probe_memo_capacity | int }}
+{% endif %}
+{% if decdn_eviction_high_water_pct not in ["", none] %}
+eviction_high_water_pct = {{ decdn_eviction_high_water_pct | int }}
+{% endif %}
+{% if decdn_eviction_target_pct not in ["", none] %}
+eviction_target_pct = {{ decdn_eviction_target_pct | int }}
+{% endif %}
+{% if decdn_eviction_per_sweep_budget not in ["", none] %}
+eviction_per_sweep_budget = {{ decdn_eviction_per_sweep_budget | int }}
+{% endif %}
+{% if decdn_eviction_tick_secs not in ["", none] %}
+eviction_tick_secs = {{ decdn_eviction_tick_secs | int }}
+{% endif %}
+{% if decdn_max_probe_holds not in ["", none] %}
+max_probe_holds = {{ decdn_max_probe_holds | int }}
+{% endif %}
+{% if decdn_stake_lane_reserved_holds not in ["", none] %}
+stake_lane_reserved_holds = {{ decdn_stake_lane_reserved_holds | int }}
+{% endif %}
 {% if decdn_node_to_node_pull_through_enabled not in ["", none] %}
-node_to_node_pull_through_enabled = {{ decdn_node_to_node_pull_through_enabled | lower }}
+node_to_node_pull_through_enabled = {{ decdn_node_to_node_pull_through_enabled | bool | lower }}
+{% endif %}
+{% if decdn_relay_foreign_namespaces not in ["", none] %}
+relay_foreign_namespaces = {{ decdn_relay_foreign_namespaces | bool | lower }}
 {% endif %}
 {% if decdn_node_pull_probe_fanout not in ["", none] %}
 node_pull_probe_fanout = {{ decdn_node_pull_probe_fanout | int }}
@@ -109,41 +217,152 @@ node_pull_probe_fanout = {{ decdn_node_pull_probe_fanout | int }}
 {% if decdn_node_pull_timeout_sec not in ["", none] %}
 node_pull_timeout_sec = {{ decdn_node_pull_timeout_sec | int }}
 {% endif %}
-{% if decdn_pull_ahead_bytes not in ["", none] %}
-pull_ahead_bytes = {{ decdn_pull_ahead_bytes | int }}
+{% if decdn_node_pull_stall_window_sec not in ["", none] %}
+node_pull_stall_window_sec = {{ decdn_node_pull_stall_window_sec | int }}
 {% endif %}
-{% if decdn_max_unrecouped_leech_bytes not in ["", none] %}
-max_unrecouped_leech_bytes = {{ decdn_max_unrecouped_leech_bytes | int }}
+{% if decdn_node_pull_min_throughput_bps not in ["", none] %}
+node_pull_min_throughput_bps = {{ decdn_node_pull_min_throughput_bps | int }}
 {% endif %}
-{% if decdn_pull_share_ratio_percent not in ["", none] %}
-pull_share_ratio_percent = {{ decdn_pull_share_ratio_percent | int }}
+{% if decdn_eviction_policy not in ["", none] %}
+eviction_policy = "{{ decdn_eviction_policy }}"
 {% endif %}
-{% if decdn_pull_through_require_authorized_origin not in ["", none] %}
-pull_through_require_authorized_origin = {{ decdn_pull_through_require_authorized_origin | lower }}
+{% if decdn_admission_policy not in ["", none] %}
+admission_policy = "{{ decdn_admission_policy }}"
 {% endif %}
-{% if decdn_cache_origin_kind | length > 0 %}
+{% if decdn_tinylfu_sketch_bytes not in ["", none] or decdn_tinylfu_promotion_threshold not in ["", none] or decdn_tinylfu_probation_target_pct not in ["", none] or decdn_tinylfu_aging_halflife_sec not in ["", none] %}
 
-[cache.origin]
-kind = "{{ decdn_cache_origin_kind }}"
-{% if decdn_cache_origin_kind == "http" %}
-url = "{{ decdn_cache_origin_url }}"
-{% if decdn_cache_origin_decompress | length > 0 %}
-decompress = "{{ decdn_cache_origin_decompress }}"
+[cache.tinylfu]
+{% if decdn_tinylfu_sketch_bytes not in ["", none] %}
+sketch_bytes = {{ decdn_tinylfu_sketch_bytes | int }}
 {% endif %}
-{% elif decdn_cache_origin_kind == "fs" %}
-path = "{{ decdn_cache_origin_path }}"
-{% elif decdn_cache_origin_kind == "s3" %}
-bucket = "{{ decdn_cache_origin_s3_bucket }}"
-region = "{{ decdn_cache_origin_s3_region }}"
-{% if decdn_cache_origin_s3_endpoint_url | length > 0 %}
-endpoint_url = "{{ decdn_cache_origin_s3_endpoint_url }}"
+{% if decdn_tinylfu_promotion_threshold not in ["", none] %}
+promotion_threshold = {{ decdn_tinylfu_promotion_threshold | int }}
 {% endif %}
-{% if decdn_cache_origin_s3_path_style | bool %}
+{% if decdn_tinylfu_probation_target_pct not in ["", none] %}
+probation_target_pct = {{ decdn_tinylfu_probation_target_pct | int }}
+{% endif %}
+{% if decdn_tinylfu_aging_halflife_sec not in ["", none] %}
+aging_halflife_sec = {{ decdn_tinylfu_aging_halflife_sec | int }}
+{% endif %}
+{% endif %}
+{% if decdn_serve_economics_policy not in ["", none] or decdn_serve_economics_discount not in ["", none] or decdn_serve_economics_n_max not in ["", none] or decdn_serve_economics_warming_budget not in ["", none] or decdn_serve_economics_warming_refill not in ["", none] %}
+
+[cache.serve_economics]
+{% if decdn_serve_economics_policy not in ["", none] %}
+policy = "{{ decdn_serve_economics_policy }}"
+{% endif %}
+{% if decdn_serve_economics_discount not in ["", none] %}
+discount = {{ decdn_serve_economics_discount | float }}
+{% endif %}
+{% if decdn_serve_economics_n_max not in ["", none] %}
+n_max = {{ decdn_serve_economics_n_max | int }}
+{% endif %}
+{% if decdn_serve_economics_warming_budget not in ["", none] %}
+warming_budget = {{ decdn_serve_economics_warming_budget | int }}
+{% endif %}
+{% if decdn_serve_economics_warming_refill not in ["", none] %}
+warming_refill = {{ decdn_serve_economics_warming_refill | int }}
+{% endif %}
+{% endif %}
+{% if decdn_origin_retry_max_retries not in ["", none] or decdn_origin_retry_initial_backoff_ms not in ["", none] or decdn_origin_retry_max_backoff_ms not in ["", none] or decdn_origin_retry_jitter_ratio not in ["", none] or decdn_origin_retry_buffered_max_bytes not in ["", none] %}
+
+[cache.origin_retry]
+{% if decdn_origin_retry_max_retries not in ["", none] %}
+max_retries = {{ decdn_origin_retry_max_retries | int }}
+{% endif %}
+{% if decdn_origin_retry_initial_backoff_ms not in ["", none] %}
+initial_backoff_ms = {{ decdn_origin_retry_initial_backoff_ms | int }}
+{% endif %}
+{% if decdn_origin_retry_max_backoff_ms not in ["", none] %}
+max_backoff_ms = {{ decdn_origin_retry_max_backoff_ms | int }}
+{% endif %}
+{% if decdn_origin_retry_jitter_ratio not in ["", none] %}
+jitter_ratio = {{ decdn_origin_retry_jitter_ratio | float }}
+{% endif %}
+{% if decdn_origin_retry_buffered_max_bytes not in ["", none] %}
+buffered_max_bytes = {{ decdn_origin_retry_buffered_max_bytes | int }}
+{% endif %}
+{% endif %}
+{% if decdn_circuit_breaker_enabled not in ["", none] or decdn_circuit_breaker_failure_threshold not in ["", none] or decdn_circuit_breaker_cooldown_ms not in ["", none] or decdn_circuit_breaker_half_open_max_calls not in ["", none] %}
+
+[cache.circuit_breaker]
+{% if decdn_circuit_breaker_enabled not in ["", none] %}
+enabled = {{ decdn_circuit_breaker_enabled | bool | lower }}
+{% endif %}
+{% if decdn_circuit_breaker_failure_threshold not in ["", none] %}
+failure_threshold = {{ decdn_circuit_breaker_failure_threshold | int }}
+{% endif %}
+{% if decdn_circuit_breaker_cooldown_ms not in ["", none] %}
+cooldown_ms = {{ decdn_circuit_breaker_cooldown_ms | int }}
+{% endif %}
+{% if decdn_circuit_breaker_half_open_max_calls not in ["", none] %}
+half_open_max_calls = {{ decdn_circuit_breaker_half_open_max_calls | int }}
+{% endif %}
+{% endif %}
+{#
+  Pull-through origin. `cache.origin` (single) and `cache.origins` (ordered
+  fallback list) are mutually exclusive upstream and an empty `origins` array is
+  rejected, so exactly one form is ever emitted. decdn_cache_origins wins when
+  set; the scalar decdn_cache_origin_* vars render the single-table form.
+#}
+{% set _multi = decdn_cache_origins is not none and decdn_cache_origins | length > 0 %}
+{% if _multi %}
+{% set _origins = decdn_cache_origins %}
+{% elif decdn_cache_origin_kind | length > 0 %}
+{% set _origins = [{
+     "kind": decdn_cache_origin_kind,
+     "url": decdn_cache_origin_url,
+     "decompress": decdn_cache_origin_decompress,
+     "path": decdn_cache_origin_path,
+     "bucket": decdn_cache_origin_s3_bucket,
+     "region": decdn_cache_origin_s3_region,
+     "endpoint_url": decdn_cache_origin_s3_endpoint_url,
+     "path_style": decdn_cache_origin_s3_path_style,
+     "prefix": decdn_cache_origin_s3_prefix,
+   }] %}
+{% else %}
+{% set _origins = [] %}
+{% endif %}
+{% for o in _origins %}
+
+{{ '[[cache.origins]]' if _multi else '[cache.origin]' }}
+kind = "{{ o.kind }}"
+{% if o.kind == 'http' %}
+url = "{{ o.url }}"
+{% if o.decompress | default('', true) | length > 0 %}
+decompress = "{{ o.decompress }}"
+{% endif %}
+{% elif o.kind == 'fs' %}
+path = "{{ o.path }}"
+{% elif o.kind == 's3' %}
+bucket = "{{ o.bucket }}"
+region = "{{ o.region }}"
+{% if o.endpoint_url | default('', true) | length > 0 %}
+endpoint_url = "{{ o.endpoint_url }}"
+{% endif %}
+{% if o.path_style | default(false, true) | bool %}
 path_style = true
 {% endif %}
-{% if decdn_cache_origin_s3_prefix | length > 0 %}
-prefix = "{{ decdn_cache_origin_s3_prefix }}"
+{% if o.prefix | default('', true) | length > 0 %}
+prefix = "{{ o.prefix }}"
 {% endif %}
+{% if o.decompress | default('', true) | length > 0 %}
+decompress = "{{ o.decompress }}"
+{% endif %}
+{% endif %}
+{% endfor %}
+{#
+  S3 credentials. Only the `default-chain` source is templated: `static` would put
+  an access key into this 0640, diffable file. Supply static keys as
+  AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN in the 0600
+  {{ decdn_env_file }} instead — the default chain reads exactly those.
+#}
+{% if not _multi and decdn_cache_origin_kind == 's3' and decdn_cache_origin_s3_use_default_chain | bool %}
+
+[cache.origin.credentials]
+source = "default-chain"
+{% if decdn_cache_origin_s3_profile not in ["", none] %}
+profile = "{{ decdn_cache_origin_s3_profile }}"
 {% endif %}
 {% endif %}
 
@@ -156,6 +375,74 @@ admin_port = {{ decdn_admin_port }}
 {% if decdn_otlp_endpoint not in ["", none] %}
 otlp_endpoint = "{{ decdn_otlp_endpoint }}"
 {% endif %}
-{% if decdn_region_accounting_interval_sec not in ["", none] %}
-region_accounting_interval_sec = {{ decdn_region_accounting_interval_sec | int }}
+{% if decdn_security_max_concurrent_handlers not in ["", none] or decdn_security_per_source_rate_per_sec not in ["", none] or decdn_security_per_source_burst not in ["", none] or decdn_security_max_tracked_sources not in ["", none] %}
+
+[security]
+{% if decdn_security_max_concurrent_handlers not in ["", none] %}
+max_concurrent_handlers = {{ decdn_security_max_concurrent_handlers | int }}
+{% endif %}
+{% if decdn_security_per_source_rate_per_sec not in ["", none] %}
+per_source_rate_per_sec = {{ decdn_security_per_source_rate_per_sec | float }}
+{% endif %}
+{% if decdn_security_per_source_burst not in ["", none] %}
+per_source_burst = {{ decdn_security_per_source_burst | int }}
+{% endif %}
+{% if decdn_security_max_tracked_sources not in ["", none] %}
+max_tracked_sources = {{ decdn_security_max_tracked_sources | int }}
+{% endif %}
+{% endif %}
+{% if decdn_load_shed_policy not in ["", none] or decdn_load_shed_egress_budget_mbps not in ["", none] or decdn_load_shed_max_concurrent_serves_high not in ["", none] or decdn_load_shed_max_concurrent_serves_low not in ["", none] or decdn_load_shed_per_client_serve_cap not in ["", none] %}
+
+[load_shed]
+{% if decdn_load_shed_policy not in ["", none] %}
+policy = "{{ decdn_load_shed_policy }}"
+{% endif %}
+{% if decdn_load_shed_egress_budget_mbps not in ["", none] %}
+egress_budget_mbps = {{ decdn_load_shed_egress_budget_mbps | int }}
+{% endif %}
+{% if decdn_load_shed_max_concurrent_serves_high not in ["", none] %}
+max_concurrent_serves_high = {{ decdn_load_shed_max_concurrent_serves_high | int }}
+{% endif %}
+{% if decdn_load_shed_max_concurrent_serves_low not in ["", none] %}
+max_concurrent_serves_low = {{ decdn_load_shed_max_concurrent_serves_low | int }}
+{% endif %}
+{% if decdn_load_shed_per_client_serve_cap not in ["", none] %}
+per_client_serve_cap = {{ decdn_load_shed_per_client_serve_cap | int }}
+{% endif %}
+{% endif %}
+{% for _sec, _rl in [("dht", decdn_dht_rate_limit), ("probe", decdn_probe_rate_limit)] %}
+{% if _rl is not none and _rl | length > 0 %}
+
+[{{ _sec }}.rate_limit]
+{% for _k in ["per_peer_rate_per_sec", "per_ip_rate_per_sec", "global_rate_per_sec"] %}
+{% if _k in _rl %}
+{{ _k }} = {{ _rl[_k] | float }}
+{% endif %}
+{% endfor %}
+{% for _k in ["per_peer_burst", "per_ip_burst", "global_burst", "max_tracked_per_ip", "max_tracked_per_peer"] %}
+{% if _k in _rl %}
+{{ _k }} = {{ _rl[_k] | int }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% if decdn_receipts_max_file_bytes not in ["", none] or decdn_receipts_retained_files not in ["", none] %}
+
+[receipts]
+{% if decdn_receipts_max_file_bytes not in ["", none] %}
+max_file_bytes = {{ decdn_receipts_max_file_bytes | int }}
+{% endif %}
+{% if decdn_receipts_retained_files not in ["", none] %}
+retained_files = {{ decdn_receipts_retained_files | int }}
+{% endif %}
+{% endif %}
+{% if (decdn_content_denied_hashes is not none and decdn_content_denied_hashes | length > 0) or (decdn_content_denied_origins is not none and decdn_content_denied_origins | length > 0) %}
+
+[content]
+{% if decdn_content_denied_hashes is not none and decdn_content_denied_hashes | length > 0 %}
+denied_hashes = [{% for h in decdn_content_denied_hashes %}"{{ h }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+{% endif %}
+{% if decdn_content_denied_origins is not none and decdn_content_denied_origins | length > 0 %}
+denied_origins = [{% for a in decdn_content_denied_origins %}"{{ a }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+{% endif %}
 {% endif %}

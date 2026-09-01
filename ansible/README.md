@@ -85,12 +85,13 @@ unless you listed one).
    all, use the **`manual`** install method (`decdn_node_install_method: manual` +
    `decdn_node_manual_bin_src` / `decdn_cli_manual_bin_src`).
 2. Per-node config in `inventory/host_vars/<node>/main.yml` (committed) —
-   `decdn_node_version`, the three contract addresses, `decdn_region`, cache origin, … — plus
-   the one secret, `decdn_rpc_url`, in a sibling git-ignored `secret.yml` (copy the shipped
-   `host_vars/decdn-node-1/secret.yml.example`). The committed `main.yml` already carries the
-   Arbitrum Sepolia genesis contract addresses; edit `decdn_region` + cache origin for your
-   node. Contract addresses are protocol facts — source them from the deCDN contract
-   deployment / an ADR, never guess.
+   the install method + binary sources, the **four** required contract addresses,
+   `decdn_region`, cache origin, … — plus the one secret, `decdn_rpc_url`, in a sibling
+   git-ignored `secret.yml` (copy the shipped `host_vars/decdn-node-1/secret.yml.example`).
+   The committed `main.yml` already carries the current Arbitrum Sepolia addresses; edit
+   `decdn_region`, the binary paths and the cache origin for your node. Contract addresses
+   are protocol facts — copy them from the upstream deployment manifest
+   `decdn/contracts/deployments/<chainId>.json`, never guess.
 3. The **eth keystore + password file** provisioned on the host (operator step — the wallet
    must be funded + staked per the deCDN node-onboarding ADR, 019). As the `decdn` user,
    create the password file FIRST (`key-gen` reads it, never creates it), then generate the
@@ -113,11 +114,14 @@ ss -lun | grep 4433            # public QUIC listener
 ss -ltn | grep -E '9090|9191'  # metrics + admin — 127.0.0.1 ONLY
 curl -s 127.0.0.1:9090/metrics # 200 once up
 decdn node health              # admin RPC; full readiness needs on-chain registration
+decdn config validate --config /etc/decdn/node.toml   # the role runs this too, on every deploy
 ```
 
-The node serves paid traffic only **after** on-chain stake + registration (the
-`CapacityBond` txns of ADR 019 §2.2–2.3) — an operator action, not automated here, and
-with no turnkey CLI yet (see `roles/decdn_node/README.md`).
+The node serves paid traffic only **after** on-chain stake + registration (ADR 019
+§2.2–2.3) — an operator action, not automated here, but no longer a raw contract call:
+`decdn setup` walks the whole of Phase 2, and `decdn node bond` / `register` are the
+primitives underneath it. All take `--dry-run`. See
+[`roles/decdn_node/README.md`](roles/decdn_node/README.md#on-chain-onboarding).
 
 ---
 

@@ -7,3 +7,13 @@
   ansible.builtin.systemd:
     name: decdn-node
     state: restarted
+
+# Applies the five hot-reloadable config sections without dropping connections.
+# Nothing in this role notifies it — the node.toml handler restarts, because a
+# template diff carries no information about which sections changed. It exists so
+# an operator (or a playbook that knows it only touched [content] or [load_shed])
+# can `- meta: flush_handlers` a reload instead of a restart.
+- name: Reload decdn-node
+  ansible.builtin.systemd_service:
+    name: decdn-node
+    state: reloaded

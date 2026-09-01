@@ -19,9 +19,12 @@
     decdn_rpc_url: "https://rpc.example.invalid/"
     decdn_chain_id: 421614
     decdn_region: "US"
-    decdn_payment_channel_address: "0x1111111111111111111111111111111111111111"
+    decdn_payment_pool_address: "0x1111111111111111111111111111111111111111"
     decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
     decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
+    # REQUIRED upstream since ADR 011/031 — the role asserts it alongside the other
+    # three, so every scenario has to carry it.
+    decdn_content_blacklist_address: "0x4444444444444444444444444444444444444444"
     # fs origin: exercises the role's "create the fs cache-origin base dir" task
     # (#28) — /var/lib/decdn/origin does not pre-exist, so the run genuinely creates
     # it (verify.yml asserts owner/group/mode). Keep in sync with verify.yml.
@@ -34,11 +37,32 @@
     # verify.yml asserts each renders with the exact value AND type. Keep in sync.
     decdn_node_to_node_pull_through_enabled: true
     decdn_gc_interval_sec: 0
-    decdn_pull_ahead_bytes: 2097152
-    decdn_pull_share_ratio_percent: 400
-    decdn_enable_0rtt: false
+    decdn_credit_max: 2097152
+    decdn_relay_foreign_namespaces: false
     decdn_delivery_floor: 0
-    decdn_settlement_auto_threshold_micro_usdc: 50000000
+    decdn_redeem_threshold_micro_usdc: 50000000
+    # A float knob: `| float` must render a bare TOML float, and verify.yml's type
+    # guards have to accept float (not just int) for these. Covers the one rendering
+    # form the old scenario had no example of.
+    decdn_security_per_source_rate_per_sec: 50.5
+    decdn_serve_economics_discount: 0.25
+    # One knob per NEW sub-table, so each table's header actually gets emitted and
+    # verify.yml can prove the scalar [cache] keys did not fall into it.
+    decdn_tinylfu_sketch_bytes: 524288
+    decdn_serve_economics_n_max: 32
+    decdn_origin_retry_max_retries: 5
+    decdn_circuit_breaker_enabled: false
+    decdn_load_shed_per_client_serve_cap: 16
+    decdn_receipts_retained_files: 8
+    # Dict-shaped knobs: only a subset of the eight keys is set, which is the case
+    # the template's key loop has to get right (absent keys must not render).
+    decdn_dht_rate_limit:
+      per_peer_rate_per_sec: 10.0
+      per_peer_burst: 20
+    decdn_probe_rate_limit:
+      max_tracked_per_ip: 1024
+    decdn_content_denied_hashes:
+      - "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     # Two entries each so the {% for %} comma-join branch (loop.last) is exercised —
     # a single-element list never renders the separator. verify.yml asserts order.
     decdn_relay_urls:

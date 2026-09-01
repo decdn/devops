@@ -1,0 +1,47 @@
+---
+# Schema-drift guard: render node.toml with EVERY knob set, then assert that every
+# key it emits exists in the upstream config schema. See README.md in this dir.
+#
+# This is the regression that would have caught the d306cc5c sync: the role had
+# been rendering 18 keys the daemon no longer accepts, and nothing failed until a
+# real binary tried to load the file. Every config section upstream is
+# deny_unknown_fields with no serde aliases, so one stale key is a startup
+# crash-loop -- and the stub daemon cannot catch that, because a stub has no schema.
+# Hence the committed key inventory in files/schema-keys.txt.
+#
+# `baseline` is NOT exercised here, for the same reasons as the `default` scenario.
+# There is no idempotence step: this scenario asserts on rendered content, and
+# `default` already covers idempotence.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ../../requirements.yml
+driver:
+  name: docker
+platforms:
+  - name: decdn-node-molecule-schema
+    # Pinned by digest for reproducible CI (repo convention — cf. the SHA-pinned
+    # actions/images in .github/workflows/ci.yml). Tag: :latest as of 2026-07-11
+    # (this image publishes only :latest). Re-resolve the digest to bump.
+    image: geerlingguy/docker-debian12-ansible@sha256:4553092be2c00b1ffe580927b9ff03f3c3a0df32b7dd693a3eb02efb6c2b77b7
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    - dependency
+    - create
+    - prepare
+    - converge
+    - verify
+    - destroy

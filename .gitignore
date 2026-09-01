@@ -28,6 +28,11 @@ ansible/build/
 *.tar.gz
 ansible/importer_result.json
 
+# ansible-compat scaffolding (a .lock plus empty modules/collections/roles dirs),
+# created in the project root by ansible-lint and molecule — so `make lint-ansible`
+# and `make molecule` both leave one behind. Regenerated on every run.
+.ansible/
+
 # Python bytecode (e.g. from the molecule stub daemon or any local tooling)
 __pycache__/
 *.pyc

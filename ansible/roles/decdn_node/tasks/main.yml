@@ -12,13 +12,32 @@
       decdn_node_install_method must be "release" (pinned GitHub Release tarballs)
       or "manual" (copy locally-built binaries from the control machine).
 
+# NOTE (2026-09): upstream decdn/decdn has NO release tags yet — `git ls-remote
+# --tags` is empty and .github/workflows/release.yml only fires on a v[0-9]* tag
+# push. Until the first tag is cut, "release" mode has nothing to download and
+# "manual" is the only working method; that is why the role default is "manual".
+# This assert stays so the failure names the cause instead of surfacing a bare 404
+# from the first get_url.
 - name: Require a pinned release version
   ansible.builtin.assert:
     that:
       - decdn_node_version | length > 0
     fail_msg: >-
-      decdn_node_version must be set to a published release (e.g. "0.1.0"). A
-      matching v<version> GitHub Release must exist. Set it in host_vars.
+      decdn_node_install_method "release" requires decdn_node_version (e.g. "0.1.1")
+      and a matching v<version> GitHub Release. As of decdn/decdn @ d306cc5c no
+      release tag has been cut, so there is nothing to download — build the two
+      binaries from a checkout and use decdn_node_install_method "manual" until an
+      upstream release exists. Set the version in host_vars once one does.
+  when: decdn_node_install_method == "release"
+
+- name: Validate decdn_verify_release_signature is a real boolean
+  ansible.builtin.assert:
+    that:
+      - decdn_verify_release_signature is boolean
+    fail_msg: >-
+      decdn_verify_release_signature must be a boolean (true/false). Leave it true
+      unless you are installing from a mirror that strips SHA256SUMS.asc — turning
+      it off means the tarballs are taken on trust.
   when: decdn_node_install_method == "release"
 
 - name: Require manual binary sources when install method is manual
@@ -45,25 +64,31 @@
     that:
       - decdn_rpc_url | length > 0
       - decdn_chain_id | int > 0
-      - decdn_payment_channel_address is match('^0x[0-9a-fA-F]{40}$')
+      - decdn_payment_pool_address is match('^0x[0-9a-fA-F]{40}$')
       - decdn_capacity_bond_address is match('^0x[0-9a-fA-F]{40}$')
       - decdn_slash_judge_address is match('^0x[0-9a-fA-F]{40}$')
-      - decdn_payment_channel_address != decdn_zero_address
+      - decdn_content_blacklist_address is match('^0x[0-9a-fA-F]{40}$')
+      - decdn_payment_pool_address != decdn_zero_address
       - decdn_capacity_bond_address != decdn_zero_address
       - decdn_slash_judge_address != decdn_zero_address
+      - decdn_content_blacklist_address != decdn_zero_address
       - decdn_region is match('^[A-Z]{2}$')
     fail_msg: >-
-      decdn_rpc_url, a positive decdn_chain_id, the three contract addresses
+      decdn_rpc_url, a positive decdn_chain_id, the FOUR contract addresses
       (0x + 40 hex, none the zero address), and an uppercase ISO-3166 2-letter
-      decdn_region are required. Source chain-id + contract addresses from the deCDN
-      contract deployment / the relevant ADR — never guess. Set them in host_vars.
+      decdn_region are required. decdn_content_blacklist_address joined this list
+      upstream (ADR 011/031): the daemon now refuses to resolve a config without a
+      ContentBlacklist, because an absent or zero address is a fail-open compliance
+      trap — serving a blacklisted hash past its window is slashable. Source
+      chain-id + contract addresses from the deCDN contract deployment manifest
+      (decdn/contracts/deployments/<chainId>.json) — never guess. Set them in host_vars.
   vars:
     decdn_zero_address: "0x0000000000000000000000000000000000000000"
 
 # slash_appeal_address is optional (only `decdn appeal slash` uses it — the daemon
-# ignores the key), so it is not in the hard assert above. But if an operator sets
-# it, a half-filled/zero value would silently render a bad node.toml, so validate
-# it the same fail-loud way as the required addresses when present.
+# validates but ignores the key), so it is not in the hard assert above. But if an
+# operator sets it, a half-filled/zero value would silently render a bad node.toml,
+# so validate it the same fail-loud way as the required addresses when present.
 - name: Validate the optional SlashAppeal address when set
   ansible.builtin.assert:
     that:
@@ -77,73 +102,52 @@
     decdn_zero_address: "0x0000000000000000000000000000000000000000"
   when: decdn_slash_appeal_address | length > 0
 
-# slash_judge_from_block feeds a `| int > 0` gate in node.toml.j2, and Jinja's int
-# filter silently coerces any unparseable value to 0 — which drops the key and
-# reverts the daemon to a full-chain rescan on every restart, discarding the
-# operator's input with no trace in the rendered config. Assert integer shape so a
-# typo fails loud at deploy time instead. Runs unconditionally: the default 0
-# passes, so a malformed value can never slip through the coercion silently.
-- name: Validate the SlashJudge scan-floor block is a non-negative integer
+# The ADR 022 origin-directory contracts are INDEPENDENTLY optional upstream — the
+# old "both or neither" rule went away when the daemon stopped mirroring the whole
+# directory (#1737). origin_assignment_address feeds the daemon's cache-miss
+# pull-through fallback; publisher_registry_address is validate-only on the daemon
+# and consumed by `decdn publish`. Validate each on its own when set, so a typo
+# still fails loud without forcing an operator to set a contract they don't use.
+- name: Validate the optional origin-directory contract addresses (ADR 022)
   ansible.builtin.assert:
     that:
-      - decdn_slash_judge_from_block | string is match('^[0-9]+$')
+      - item.value is match('^0x[0-9a-fA-F]{40}$')
+      - item.value != decdn_zero_address
     fail_msg: >-
-      decdn_slash_judge_from_block must be a non-negative integer (the SlashJudge
-      deploy block). Got "{{ decdn_slash_judge_from_block }}". Leave it 0 to scan
-      from genesis, or set the deploy block to bound per-restart rescan cost.
-
-# The ADR 022 origin directory needs BOTH OriginAssignment + PublisherRegistry (it
-# gates prefetch on the pair); the template emits them together, so reject a
-# one-sided config here. Runs when EITHER is set — an empty counterpart then fails
-# the address regex, turning "both or neither" into a loud, specific failure.
-- name: Validate the optional origin-directory contract pair (ADR 022)
-  ansible.builtin.assert:
-    that:
-      - decdn_origin_assignment_address is match('^0x[0-9a-fA-F]{40}$')
-      - decdn_publisher_registry_address is match('^0x[0-9a-fA-F]{40}$')
-      - decdn_origin_assignment_address != decdn_zero_address
-      - decdn_publisher_registry_address != decdn_zero_address
-    fail_msg: >-
-      The origin directory (ADR 022) needs BOTH decdn_origin_assignment_address and
-      decdn_publisher_registry_address set to valid contract addresses (0x + 40 hex,
-      not the zero address) — or BOTH empty to omit it. Source them from the deCDN
-      contract deployment for your target chain / ADR 022.
+      {{ item.name }} is set but is not a valid contract address (0x + 40 hex, not
+      the zero address). Leave it empty to omit it, or source the deployed address
+      from the deCDN contract deployment manifest for your chain / ADR 022.
   vars:
     decdn_zero_address: "0x0000000000000000000000000000000000000000"
-  when: >-
-    (decdn_origin_assignment_address | length > 0)
-    or (decdn_publisher_registry_address | length > 0)
+  loop:
+    - {name: decdn_origin_assignment_address, value: "{{ decdn_origin_assignment_address }}"}
+    - {name: decdn_publisher_registry_address, value: "{{ decdn_publisher_registry_address }}"}
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.value | length > 0
 
-# content_blacklist_address is optional (ADR 011/031); a half-filled/zero value
-# would silently render a bad node.toml, so validate it fail-loud when present —
-# same posture as the SlashAppeal address.
-- name: Validate the optional ContentBlacklist address when set
+# The CLI-only [blockchain] address keys (usdc + swap venue). The daemon validates
+# them under deny_unknown_fields even though only `decdn setup` / `decdn pool` read
+# them, so a malformed value fails the daemon's own startup — catch it here first.
+- name: Validate the optional CLI-only contract addresses when set
   ansible.builtin.assert:
     that:
-      - decdn_content_blacklist_address is match('^0x[0-9a-fA-F]{40}$')
-      - decdn_content_blacklist_address != decdn_zero_address
+      - item.value is match('^0x[0-9a-fA-F]{40}$')
+      - item.value != decdn_zero_address
     fail_msg: >-
-      decdn_content_blacklist_address is set but is not a valid contract address
-      (0x + 40 hex, not the zero address). Leave it empty to omit it, or set the
-      deployed ContentBlacklist address (source it from the deployment / ADR 011).
+      {{ item.name }} is set but is not a valid contract address (0x + 40 hex, not
+      the zero address). Leave it empty to omit it.
   vars:
     decdn_zero_address: "0x0000000000000000000000000000000000000000"
-  when: decdn_content_blacklist_address | length > 0
-
-# The *_from_block knobs feed `| int > 0` gates in node.toml.j2, and Jinja's int
-# filter silently coerces an unparseable value to 0 — dropping the key and
-# reverting to a full-chain rescan with no trace. Assert integer shape (like
-# slash_judge_from_block) so a typo fails loud. Unconditional: the default 0 passes.
-- name: Validate the origin-directory and blacklist scan-floor blocks are integers
-  ansible.builtin.assert:
-    that:
-      - decdn_origin_directory_from_block | string is match('^[0-9]+$')
-      - decdn_content_blacklist_from_block | string is match('^[0-9]+$')
-    fail_msg: >-
-      decdn_origin_directory_from_block and decdn_content_blacklist_from_block must
-      be non-negative integers (the respective contract deploy blocks). Got
-      "{{ decdn_origin_directory_from_block }}" / "{{ decdn_content_blacklist_from_block }}".
-      Leave them 0 to scan from genesis, or set the deploy block to bound rescan cost.
+  loop:
+    - {name: decdn_usdc_address, value: "{{ decdn_usdc_address }}"}
+    - {name: decdn_swap_router_address, value: "{{ decdn_swap_router_address }}"}
+    - {name: decdn_swap_quoter_address, value: "{{ decdn_swap_quoter_address }}"}
+    - {name: decdn_swap_balancer_pool, value: "{{ decdn_swap_balancer_pool }}"}
+    - {name: decdn_swap_pool_address, value: "{{ decdn_swap_pool_address }}"}
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.value | length > 0
 
 # The cache pull-through origin is a tagged [cache.origin] table: node.toml.j2
 # emits only the chosen kind's fields, and the daemon denies unknown fields. Reject
@@ -163,7 +167,9 @@
       # leftover value for a non-selected kind is never rendered, so it must not
       # fail an unrelated deploy. http: DecompressMode accepts only auto|strict (a
       # typo would render TOML the daemon rejects at load — an opaque crash-loop).
-      - (decdn_cache_origin_kind != "http") or (decdn_cache_origin_decompress in ["", "auto", "strict"])
+      # DecompressMode is a field on BOTH the http variant and S3OriginConfig, and
+      # the template emits it for both — so guard both, not just http.
+      - decdn_cache_origin_kind not in ["http", "s3"] or decdn_cache_origin_decompress in ["", "auto", "strict"]
       # s3: path_style feeds a `| bool` gate in node.toml.j2; require a REAL boolean
       # so a quoted "false" is rejected here, not silently coerced to path_style = true.
       - (decdn_cache_origin_kind != "s3") or (decdn_cache_origin_s3_path_style is boolean)
@@ -176,6 +182,102 @@
       kind empty to omit [cache.origin] (cache misses then fail NoOrigin).
   when: decdn_cache_origin_kind | length > 0
 
+# The inverse gate. Every decdn_cache_origin_* default is "", and the validator
+# above is skipped when the kind is empty — so setting a payload and forgetting the
+# kind renders NO [cache.origin] table, produces no assert, no diff line and a
+# green deploy, and every cache miss then fails NoOrigin at runtime on a node that
+# looks healthy to systemd and to the readiness probe. Fail loud instead.
+- name: Require a cache origin kind when any origin field is set
+  ansible.builtin.assert:
+    that:
+      - decdn_cache_origin_kind | length > 0
+    fail_msg: >-
+      One or more decdn_cache_origin_* values are set but decdn_cache_origin_kind is
+      empty, so NO [cache.origin] table is rendered and every cache miss would fail
+      NoOrigin. Set decdn_cache_origin_kind to http|fs|s3, or clear the leftover
+      fields (or use decdn_cache_origins for the multi-origin form).
+  when: >-
+    (decdn_cache_origins | length == 0)
+    and ((decdn_cache_origin_url | length > 0) or (decdn_cache_origin_path | length > 0)
+         or (decdn_cache_origin_s3_bucket | length > 0) or (decdn_cache_origin_s3_region | length > 0)
+         or (decdn_cache_origin_s3_endpoint_url | length > 0)
+         or (decdn_cache_origin_s3_prefix | length > 0)
+         or (decdn_cache_origin_decompress | length > 0)
+         or (decdn_cache_origin_s3_profile | length > 0)
+         or decdn_cache_origin_s3_use_default_chain | bool)
+
+# Same per-kind contract for the [[cache.origins]] list form. Entries are dicts, so
+# the checks read from item.* rather than the scalar vars, and a missing key must be
+# caught here: the template renders `o.url` unguarded for kind http, which would
+# raise an undefined-variable error mid-template rather than a useful message.
+- name: Validate each cache origin in the multi-origin list
+  ansible.builtin.assert:
+    that:
+      - item.kind | default('') in ["http", "fs", "s3"]
+      - (item.kind != "http") or (item.url | default('') | length > 0)
+      - (item.kind != "fs") or (item.path | default('') | length > 0)
+      - >-
+        (item.kind != "s3")
+        or (item.bucket | default('') | length > 0 and item.region | default('') | length > 0)
+      - item.decompress | default('') in ["", "auto", "strict"]
+      - item.path_style is not defined or item.path_style is boolean
+      # The template renders a FIXED field list per kind, so any other key is
+      # silently dropped — `path_stile: true` would leave the node talking to
+      # MinIO in virtual-host mode with nothing in the diff to show for it.
+      # Mirror the rate-limit tables' subset check.
+      - item.keys() | list | difference(decdn_origin_keys[item.kind]) | length == 0
+    fail_msg: >-
+      decdn_cache_origins[{{ ansible_loop.index0 }}] is not a valid origin: each entry
+      needs kind http|fs|s3 plus that kind's required fields — http: url;
+      fs: path; s3: bucket + region. Optional decompress must be auto|strict and
+      path_style must be a real boolean, and no key outside
+      {{ decdn_origin_keys[item.kind | default('http')] | join(', ') }} (unknown keys
+      are silently dropped by the template). Got {{ item }}.
+  vars:
+    # Per-kind field lists, matching what node.toml.j2 actually emits. `credentials`
+    # is absent on purpose: the template only renders the credentials sub-table for
+    # the single-origin form, so accepting it here would silently drop it.
+    decdn_origin_keys:
+      http: [kind, url, decompress]
+      fs: [kind, path]
+      s3: [kind, bucket, region, endpoint_url, path_style, prefix, decompress]
+  loop: "{{ decdn_cache_origins }}"
+  loop_control:
+    label: "{{ item.kind | default('?') }}"
+    extended: true
+  when: decdn_cache_origins | length > 0
+
+# The S3 default-chain credential toggle. Static access keys are deliberately NOT
+# templated (node.toml is 0640 and diffable) — they belong in the 0600 env file via
+# decdn_extra_env, which is where the AWS default chain reads them from.
+- name: Validate the S3 credential-source knobs
+  ansible.builtin.assert:
+    that:
+      - decdn_cache_origin_s3_use_default_chain is boolean
+      - >-
+        decdn_cache_origin_s3_profile in ["", none]
+        or decdn_cache_origin_s3_profile is match('^[^\"\\s\\\\]+$')
+    fail_msg: >-
+      decdn_cache_origin_s3_use_default_chain must be a real boolean, and
+      decdn_cache_origin_s3_profile (when set) must contain no quote, whitespace or
+      backslash. Static AWS keys are never written to node.toml — put
+      AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN in
+      decdn_extra_env (git-ignored secret.yml) and leave the default chain to read them.
+
+- name: Reject S3 credential knobs alongside the multi-origin form
+  ansible.builtin.assert:
+    that:
+      - not (decdn_cache_origin_s3_use_default_chain | bool
+             or decdn_cache_origin_s3_profile | length > 0)
+    fail_msg: >-
+      decdn_cache_origin_s3_use_default_chain / decdn_cache_origin_s3_profile apply
+      only to the single [cache.origin] table — the template does not render a
+      credentials sub-table for [[cache.origins]] entries, so setting them with
+      decdn_cache_origins would SILENTLY drop them. Omit the credentials block (the
+      AWS default chain is used anyway when it is absent) and supply keys via
+      decdn_extra_env, or switch to the single-origin form.
+  when: decdn_cache_origins | length > 0
+
 # --- Optional tuning knobs ("" => omit + use the daemon default) --------------
 # These template with a `!= ""` gate (NOT `| int > 0`) because 0/false are
 # meaningful values here. A bad value would render TOML the daemon rejects at
@@ -186,18 +288,19 @@
 - name: Validate optional boolean tuning knobs
   ansible.builtin.assert:
     that:
-      - decdn_enable_0rtt in ["", none] or decdn_enable_0rtt is boolean
-      - decdn_buyer_max_approve in ["", none] or decdn_buyer_max_approve is boolean
-      - decdn_node_to_node_pull_through_enabled in ["", none] or decdn_node_to_node_pull_through_enabled is boolean
-      - >-
-        decdn_pull_through_require_authorized_origin in ["", none]
-        or decdn_pull_through_require_authorized_origin is boolean
+      - item.value in ["", none] or item.value is boolean
+    quiet: true
     fail_msg: >-
-      decdn_enable_0rtt, decdn_buyer_max_approve,
-      decdn_node_to_node_pull_through_enabled and
-      decdn_pull_through_require_authorized_origin must each be a real boolean
-      (true/false), not a quoted string — they template through `| lower` into a
-      bare TOML bool. Leave a knob "" (or null) to omit it (daemon default applies).
+      {{ item.name }} must be a real boolean (true/false), not a quoted string — it
+      templates through `| bool | lower` into a bare TOML bool. Leave it "" (or
+      null) to omit the key and take the daemon default.
+  loop:
+    - {name: decdn_buyer_max_approve, value: "{{ decdn_buyer_max_approve }}"}
+    - {name: decdn_node_to_node_pull_through_enabled, value: "{{ decdn_node_to_node_pull_through_enabled }}"}
+    - {name: decdn_relay_foreign_namespaces, value: "{{ decdn_relay_foreign_namespaces }}"}
+    - {name: decdn_circuit_breaker_enabled, value: "{{ decdn_circuit_breaker_enabled }}"}
+  loop_control:
+    label: "{{ item.name }}"
 
 # Integer shape first (a separate task): if a value is non-numeric this fails loud
 # BEFORE the range task below runs its `| int` comparisons, so `| int` there never
@@ -213,30 +316,136 @@
     quiet: true
     fail_msg: >-
       "{{ item }}" is not a non-negative integer <= i64::MAX (9223372036854775807).
-      Every optional numeric knob (delivery/settlement/watcher/cache-tuning/
-      pull-through) must be a bare u64 in that range, or "" / null to omit it. See
-      roles/decdn_node/defaults/main.yml for the full list.
+      Every optional numeric knob (payment/settlement/watcher/cache-tuning/
+      pull-through/limits) must be a bare u64 in that range, or "" / null to omit
+      it. See roles/decdn_node/defaults/main.yml for the full list.
   # A list EXPRESSION (not a list of "{{ }}" strings) so each item keeps its type —
   # a null stays None (caught by the `in [..., none]` guard) instead of becoming the
   # string "None", which would fail the shape regex.
   loop: >-
-    {{ [decdn_delivery_floor, decdn_delivery_ceiling, decdn_voucher_interval_mb,
-        decdn_redeem_threshold_micro_usdc, decdn_buyer_deposit_micro_usdc,
-        decdn_settlement_auto_threshold_micro_usdc, decdn_settlement_auto_by_voucher_nonce_span,
-        decdn_rpc_watchdog_interval_sec, decdn_event_poll_interval_ms,
-        decdn_content_blacklist_poll_interval_sec, decdn_max_probe_holds,
-        decdn_stake_lane_reserved_holds, decdn_gc_interval_sec, decdn_node_pull_probe_fanout,
-        decdn_node_pull_timeout_sec, decdn_pull_ahead_bytes, decdn_max_unrecouped_leech_bytes,
-        decdn_pull_share_ratio_percent, decdn_region_accounting_interval_sec] }}
+    {{ [decdn_delivery_floor, decdn_credit_max, decdn_credit_ramp_divisor,
+        decdn_frame_target_bytes, decdn_voucher_commit_interval_ms,
+        decdn_redeem_threshold_micro_usdc, decdn_redeem_max_vouchers_per_tx,
+        decdn_redeem_interval_secs, decdn_buyer_working_deposit_micro_usdc,
+        decdn_pool_min_remaining_deposit_micro_usdc, decdn_pool_floor_signer_share_bps,
+        decdn_pool_floor_signer_max_windows, decdn_rpc_watchdog_interval_sec,
+        decdn_event_poll_interval_ms, decdn_content_blacklist_poll_interval_sec,
+        decdn_rate_bounds_poll_interval_sec, decdn_fee_shares_poll_interval_sec,
+        decdn_origin_directory_positive_ttl_sec, decdn_origin_directory_negative_ttl_sec,
+        decdn_origin_directory_cache_capacity, decdn_swap_fee_tier,
+        decdn_max_blob_size_mb, decdn_max_rate_per_mb, decdn_max_probe_holds,
+        decdn_stake_lane_reserved_holds, decdn_gc_interval_sec,
+        decdn_fs_rescan_interval_sec, decdn_origin_probe_ttl_sec,
+        decdn_origin_probe_negative_ttl_sec, decdn_origin_probe_fault_ttl_sec,
+        decdn_origin_probe_timeout_ms, decdn_origin_probe_memo_capacity,
+        decdn_eviction_high_water_pct, decdn_eviction_target_pct,
+        decdn_eviction_per_sweep_budget, decdn_eviction_tick_secs,
+        decdn_node_pull_probe_fanout, decdn_node_pull_timeout_sec,
+        decdn_node_pull_stall_window_sec, decdn_node_pull_min_throughput_bps,
+        decdn_tinylfu_sketch_bytes, decdn_tinylfu_promotion_threshold,
+        decdn_tinylfu_probation_target_pct, decdn_tinylfu_aging_halflife_sec,
+        decdn_serve_economics_n_max, decdn_serve_economics_warming_budget,
+        decdn_serve_economics_warming_refill, decdn_origin_retry_max_retries,
+        decdn_origin_retry_initial_backoff_ms, decdn_origin_retry_max_backoff_ms,
+        decdn_origin_retry_buffered_max_bytes, decdn_circuit_breaker_failure_threshold,
+        decdn_circuit_breaker_cooldown_ms, decdn_circuit_breaker_half_open_max_calls,
+        decdn_security_max_concurrent_handlers, decdn_security_per_source_burst,
+        decdn_security_max_tracked_sources, decdn_load_shed_egress_budget_mbps,
+        decdn_load_shed_max_concurrent_serves_high, decdn_load_shed_max_concurrent_serves_low,
+        decdn_load_shed_per_client_serve_cap, decdn_receipts_max_file_bytes,
+        decdn_receipts_retained_files] }}
+
+# Float-shaped knobs render through `| float` into a bare TOML float. A non-numeric
+# value would make `| float` coerce to 0.0 and silently disable a rate limit, so
+# assert the shape (accepting ints, which Jinja widens) before that happens.
+- name: Validate optional float tuning knobs are non-negative numbers
+  ansible.builtin.assert:
+    that:
+      - item.value in ["", none] or (item.value is number and item.value | float >= 0.0)
+    quiet: true
+    fail_msg: >-
+      {{ item.name }} must be a non-negative number (it templates through `| float`
+      into a bare TOML float). Got "{{ item.value }}". Leave it "" to omit the key.
+  loop:
+    - {name: decdn_serve_economics_discount, value: "{{ decdn_serve_economics_discount }}"}
+    - {name: decdn_origin_retry_jitter_ratio, value: "{{ decdn_origin_retry_jitter_ratio }}"}
+    - {name: decdn_security_per_source_rate_per_sec, value: "{{ decdn_security_per_source_rate_per_sec }}"}
+  loop_control:
+    label: "{{ item.name }}"
+
+# The two rate-limit tables share one shape. Reject unknown keys here rather than
+# letting them render: [dht.rate_limit] / [probe.rate_limit] are deny_unknown_fields
+# upstream, and the template's key loop would silently DROP anything not on its
+# list — so a typo'd knob would leave the limit at its default with no trace.
+- name: Validate optional DHT + probe rate-limit tables
+  ansible.builtin.assert:
+    that:
+      - item.value | type_debug in ["dict", "AnsibleMapping"]
+      - item.value.keys() | difference(decdn_rate_limit_keys) | length == 0
+      - item.value.values() | select('string') | list | length == 0
+      - item.value.values() | reject('number') | list | length == 0
+      # Jinja's `number` test is isinstance(v, numbers.Number) and Python's bool
+      # subclasses int, so `true` passes it and renders as `1` — a burst of one
+      # rather than a config error. Reject booleans explicitly.
+      - item.value.values() | select('boolean') | list | length == 0
+      - item.value.values() | select('lt', 0) | list | length == 0
+    fail_msg: >-
+      {{ item.name }} must be a mapping whose keys are a subset of
+      {{ decdn_rate_limit_keys | join(', ') }}, with non-negative, non-boolean,
+      unquoted numeric values.
+      Got {{ item.value }}. Unknown keys are silently dropped by the template and
+      rejected by the daemon, so they fail here instead.
+  vars:
+    decdn_rate_limit_keys:
+      - per_peer_rate_per_sec
+      - per_peer_burst
+      - per_ip_rate_per_sec
+      - per_ip_burst
+      - global_rate_per_sec
+      - global_burst
+      - max_tracked_per_ip
+      - max_tracked_per_peer
+  loop:
+    - {name: decdn_dht_rate_limit, value: "{{ decdn_dht_rate_limit }}"}
+    - {name: decdn_probe_rate_limit, value: "{{ decdn_probe_rate_limit }}"}
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.value | length > 0
+
+# Enum-valued knobs. The daemon matches these against a closed set and refuses to
+# start on anything else, so a typo is a crash-loop rather than a fallback.
+- name: Validate optional enum knobs
+  ansible.builtin.assert:
+    that:
+      - item.value in ["", none] or item.value in item.allowed
+    quiet: true
+    fail_msg: >-
+      {{ item.name }} must be one of {{ item.allowed | join(' | ') }}
+      (got "{{ item.value }}"), or "" to take the daemon default.
+  # Every allowed value is QUOTED. YAML 1.1 parses a bare `off` (and `on`, `no`,
+  # `yes`) as a boolean, so `allowed: [off, margin]` would become [False, "margin"]
+  # and the string "off" could never match — silently rejecting a valid policy.
+  loop:
+    - {name: decdn_eviction_policy, value: "{{ decdn_eviction_policy }}", allowed: ["lru", "tinylfu"]}
+    - {name: decdn_admission_policy, value: "{{ decdn_admission_policy }}", allowed: ["always", "tinylfu"]}
+    - {name: decdn_serve_economics_policy, value: "{{ decdn_serve_economics_policy }}",
+       allowed: ["off", "margin"]}
+    - {name: decdn_load_shed_policy, value: "{{ decdn_load_shed_policy }}",
+       allowed: ["resource-pressure", "always-admit"]}
+    - {name: decdn_swap_venue, value: "{{ decdn_swap_venue }}", allowed: ["uniswap-v3", "balancer-v3"]}
+    - {name: decdn_log_format, value: "{{ decdn_log_format }}", allowed: ["pretty", "json"]}
+    - {name: decdn_log_level, value: "{{ decdn_log_level }}",
+       allowed: ["trace", "debug", "info", "warn", "error"]}
+  loop_control:
+    label: "{{ item.name }}"
 
 # Range / nonzero constraints the daemon enforces at load (out-of-range => the node
 # refuses to start). Values are integer-shaped by the task above, so `| int` is safe.
+# ("" and null both mean "unset" and skip the check.)
 - name: Validate optional knob ranges the daemon rejects out-of-range
   ansible.builtin.assert:
     that:
       # rpc_watchdog: 0 disables, otherwise must be >= 10 (1..9 rejected upstream).
-      # ("" and null both mean "unset" and skip the check — the shape task above
-      # already rejected any non-numeric, non-null value.)
       - >-
         decdn_rpc_watchdog_interval_sec in ["", none]
         or (decdn_rpc_watchdog_interval_sec | int == 0 or decdn_rpc_watchdog_interval_sec | int >= 10)
@@ -244,58 +453,113 @@
       - >-
         decdn_content_blacklist_poll_interval_sec in ["", none]
         or (decdn_content_blacklist_poll_interval_sec | int >= 1)
-      - decdn_redeem_threshold_micro_usdc in ["", none] or (decdn_redeem_threshold_micro_usdc | int >= 1)
-      - decdn_buyer_deposit_micro_usdc in ["", none] or (decdn_buyer_deposit_micro_usdc | int >= 1)
-      # settlement auto-close: 0 is rejected (omit to disable), so require >= 1.
-      - >-
-        decdn_settlement_auto_threshold_micro_usdc in ["", none]
-        or (decdn_settlement_auto_threshold_micro_usdc | int >= 1)
-      - >-
-        decdn_settlement_auto_by_voucher_nonce_span in ["", none]
-        or (decdn_settlement_auto_by_voucher_nonce_span | int >= 1)
-      - >-
-        decdn_delivery_ceiling in ["", none]
-        or (decdn_delivery_ceiling | int >= 1 and decdn_delivery_ceiling | int <= 1000000000000)
-      - >-
-        decdn_voucher_interval_mb in ["", none]
-        or (decdn_voucher_interval_mb | int >= 1 and decdn_voucher_interval_mb | int <= 1024)
+      # Knobs the daemon requires strictly positive (a configured 0 is rejected —
+      # omit the knob instead to take the default).
+      - item in ["", none] or (item | int >= 1)
+    quiet: true
     fail_msg: >-
       An optional knob is out of the range the daemon accepts:
       decdn_rpc_watchdog_interval_sec (0 or >= 10),
       decdn_event_poll_interval_ms (>= 250),
-      decdn_content_blacklist_poll_interval_sec (>= 1),
-      decdn_redeem_threshold_micro_usdc / decdn_buyer_deposit_micro_usdc (>= 1),
-      decdn_settlement_auto_threshold_micro_usdc /
-      decdn_settlement_auto_by_voucher_nonce_span (>= 1 — leave "" to disable, 0 is
-      rejected), decdn_delivery_ceiling (1..=1_000_000_000_000),
-      decdn_voucher_interval_mb (1..=1024).
+      decdn_content_blacklist_poll_interval_sec (>= 1); and each of
+      decdn_redeem_threshold_micro_usdc, decdn_redeem_max_vouchers_per_tx,
+      decdn_redeem_interval_secs, decdn_buyer_working_deposit_micro_usdc,
+      decdn_rate_bounds_poll_interval_sec, decdn_fee_shares_poll_interval_sec,
+      decdn_voucher_commit_interval_ms must be >= 1 when set ("{{ item }}" is not).
+  loop: >-
+    {{ [decdn_redeem_threshold_micro_usdc, decdn_redeem_max_vouchers_per_tx,
+        decdn_redeem_interval_secs, decdn_buyer_working_deposit_micro_usdc,
+        decdn_rate_bounds_poll_interval_sec, decdn_fee_shares_poll_interval_sec,
+        decdn_voucher_commit_interval_ms] }}
+
+# Bounded ranges. Each is a closed interval the daemon range-checks at load, so an
+# out-of-range value is a startup refusal rather than a clamp.
+- name: Validate optional bounded-range knobs
+  ansible.builtin.assert:
+    that:
+      - item.value in ["", none] or (item.value | int >= item.min and item.value | int <= item.max)
+    quiet: true
+    fail_msg: >-
+      {{ item.name }} must be in {{ item.min }}..={{ item.max }} when set
+      (got "{{ item.value }}"). Leave it "" to take the daemon default.
+  loop:
+    - {name: decdn_eviction_high_water_pct, value: "{{ decdn_eviction_high_water_pct }}", min: 60, max: 95}
+    - {name: decdn_eviction_target_pct, value: "{{ decdn_eviction_target_pct }}", min: 40, max: 90}
+    - {name: decdn_eviction_per_sweep_budget, value: "{{ decdn_eviction_per_sweep_budget }}", min: 1, max: 256}
+    - {name: decdn_eviction_tick_secs, value: "{{ decdn_eviction_tick_secs }}", min: 1, max: 60}
+    - {name: decdn_frame_target_bytes, value: "{{ decdn_frame_target_bytes }}", min: 1, max: 1048576}
+    - {name: decdn_pool_floor_signer_share_bps, value: "{{ decdn_pool_floor_signer_share_bps }}",
+       min: 1, max: 10000}
+    - {name: decdn_tinylfu_probation_target_pct, value: "{{ decdn_tinylfu_probation_target_pct }}",
+       min: 1, max: 50}
+    # sketch_bytes has a HARD FLOOR: below it the daemon errors out at config load.
+    # The floor bites on the stock lru/always policies too, because the default
+    # serve_economics policy ("margin") builds the same sketch (#1803 review).
+    - {name: decdn_tinylfu_sketch_bytes, value: "{{ decdn_tinylfu_sketch_bytes }}",
+       min: 16384, max: 9223372036854775807}
+    - {name: decdn_origin_retry_buffered_max_bytes, value: "{{ decdn_origin_retry_buffered_max_bytes }}",
+       min: 1, max: 67108864}
+    - {name: decdn_receipts_max_file_bytes, value: "{{ decdn_receipts_max_file_bytes }}",
+       min: 1048576, max: 1073741824}
+    - {name: decdn_receipts_retained_files, value: "{{ decdn_receipts_retained_files }}", min: 1, max: 100}
+    - {name: decdn_redeem_interval_secs, value: "{{ decdn_redeem_interval_secs }}", min: 1, max: 21600}
+  loop_control:
+    label: "{{ item.name }}"
 
 - name: Validate optional cross-field knob constraints
   ansible.builtin.assert:
     that:
       # The daemon fills each UNSET side with its own default and THEN enforces the
       # constraint, so compare effective (default-substituted) values — NOT "skip if
-      # either side is unset". Skipping would let a raised pull_ahead with an unset
-      # leech cap (which resolves to 256 MiB), or a floor above the default ceiling,
-      # slip through here and crash-loop the daemon at config load.
-      - _eff_dfloor | int <= _eff_dceil | int
-      # leech cap: a RESOLVED 0 disables it; otherwise pull_ahead <= leech.
-      - _eff_leech | int == 0 or (_eff_pull | int <= _eff_leech | int)
+      # either side is unset". Skipping would let a lowered high-water mark with an
+      # unset target (which resolves to 80) slip through here and crash-loop the
+      # daemon at config load.
+      #
+      # The eviction hysteresis gap is STRUCTURAL: target must sit at least 5 points
+      # below high-water, not merely below it.
+      - _eff_evict_target | int <= (_eff_evict_high | int - 5)
+      # Origin-probe memo TTLs must be ordered negative <= fault <= positive.
+      - _eff_probe_neg | int <= _eff_probe_fault | int
+      - _eff_probe_fault | int <= _eff_probe_pos | int
+      # A single blob may not exceed the whole cache (0 = unlimited, so exempt).
+      - _eff_max_blob | int == 0 or (_eff_max_blob | int <= decdn_cache_size_mb | int)
+      # Load-shed low-water mark may not exceed the high-water mark.
+      - _eff_shed_low | int <= _eff_shed_high | int
     fail_msg: >-
       Cross-field constraint violated (unset sides compared against the daemon
-      default): decdn_delivery_floor must be <= decdn_delivery_ceiling (default
-      1_000_000_000_000), and decdn_pull_ahead_bytes must be <=
-      decdn_max_unrecouped_leech_bytes (default 268435456) unless that cap is 0 (off).
+      default): decdn_eviction_target_pct (dflt 80) must be <=
+      decdn_eviction_high_water_pct (dflt 90) MINUS 5 — the gap is structural;
+      decdn_origin_probe_negative_ttl_sec (dflt 2) <= decdn_origin_probe_fault_ttl_sec
+      (dflt 5) <= decdn_origin_probe_ttl_sec (dflt 15);
+      decdn_max_blob_size_mb must be <= decdn_cache_size_mb (0 = unlimited);
+      decdn_load_shed_max_concurrent_serves_low (dflt 192) must be <=
+      decdn_load_shed_max_concurrent_serves_high (dflt 256).
   vars:
     # "" and null both mean "unset" => substitute the daemon default.
-    _eff_dfloor: "{{ decdn_delivery_floor if decdn_delivery_floor not in ['', none] else 0 }}"
-    _eff_dceil: "{{ decdn_delivery_ceiling if decdn_delivery_ceiling not in ['', none] else 1000000000000 }}"
-    _eff_pull: "{{ decdn_pull_ahead_bytes if decdn_pull_ahead_bytes not in ['', none] else 1048576 }}"
-    _eff_leech: >-
-      {{ decdn_max_unrecouped_leech_bytes if decdn_max_unrecouped_leech_bytes not in ['', none]
-         else 268435456 }}
+    _eff_evict_high: >-
+      {{ decdn_eviction_high_water_pct if decdn_eviction_high_water_pct not in ['', none] else 90 }}
+    _eff_evict_target: >-
+      {{ decdn_eviction_target_pct if decdn_eviction_target_pct not in ['', none] else 80 }}
+    _eff_probe_pos: >-
+      {{ decdn_origin_probe_ttl_sec if decdn_origin_probe_ttl_sec not in ['', none] else 15 }}
+    _eff_probe_neg: >-
+      {{ decdn_origin_probe_negative_ttl_sec
+         if decdn_origin_probe_negative_ttl_sec not in ['', none] else 2 }}
+    _eff_probe_fault: >-
+      {{ decdn_origin_probe_fault_ttl_sec
+         if decdn_origin_probe_fault_ttl_sec not in ['', none] else 5 }}
+    # max_blob_size_mb defaults to cache_size_mb upstream (#1685), so an unset side
+    # trivially satisfies the constraint.
+    _eff_max_blob: >-
+      {{ decdn_max_blob_size_mb if decdn_max_blob_size_mb not in ['', none] else decdn_cache_size_mb }}
+    _eff_shed_high: >-
+      {{ decdn_load_shed_max_concurrent_serves_high
+         if decdn_load_shed_max_concurrent_serves_high not in ['', none] else 256 }}
+    _eff_shed_low: >-
+      {{ decdn_load_shed_max_concurrent_serves_low
+         if decdn_load_shed_max_concurrent_serves_low not in ['', none] else 192 }}
 
-- name: Validate optional list + singular-relay knobs
+- name: Validate optional list knobs
   ansible.builtin.assert:
     that:
       # Fully anchored (^...$) with [^"\s\\]: a start-anchored '^https?://' prefix
@@ -304,15 +568,80 @@
       # in a TOML basic string it starts an escape, and a trailing '\' escapes the
       # closing quote. A null list is treated as unset (is none => pass).
       - decdn_relay_urls is none or decdn_relay_urls | reject('match', '^https?://[^\"\\s\\\\]+$') | list | length == 0
-      # The singular relay_url is templated too (when relay_urls is empty), so guard it
-      # with the same rule — a bad value there breaks node.toml just the same.
-      - decdn_relay_url in ["", none] or (decdn_relay_url is match('^https?://[^\"\\s\\\\]+$'))
       - decdn_pinned_hashes is none or decdn_pinned_hashes | reject('match', '^[0-9a-f]{64}$') | list | length == 0
+      # The node-local [content] denylist (hot-reloadable). Hashes are bare 64-char
+      # lowercase hex; denied origins are 0x publisher addresses, checksum-agnostic
+      # upstream but never the zero address.
+      - >-
+        decdn_content_denied_hashes is none
+        or decdn_content_denied_hashes | reject('match', '^[0-9a-f]{64}$') | list | length == 0
+      - >-
+        decdn_content_denied_origins is none
+        or decdn_content_denied_origins | reject('match', '^0x[0-9a-fA-F]{40}$') | list | length == 0
+      - >-
+        decdn_content_denied_origins is none
+        or '0x0000000000000000000000000000000000000000' not in decdn_content_denied_origins
     fail_msg: >-
-      decdn_relay_urls / decdn_relay_url entries must each be an http(s):// URL with
-      no quote, whitespace or backslash, and decdn_pinned_hashes entries must each be
-      a 64-char lowercase-hex BLAKE3 hash (uppercase is rejected upstream). Leave a
-      list empty ([]) or a scalar "" to omit it.
+      decdn_relay_urls entries must each be an http(s):// URL with no quote,
+      whitespace or backslash; decdn_pinned_hashes and decdn_content_denied_hashes
+      entries must each be a 64-char lowercase-hex BLAKE3 hash (uppercase is
+      rejected upstream); decdn_content_denied_origins entries must each be a
+      0x + 40 hex address and none may be the zero address. Leave a list empty ([]).
+
+# Address discovery (#818): pkarr_url and dns_origin are a PAIR upstream — a custom
+# pkarr relay with no DNS origin cannot resolve peers. Static peers are independent
+# and combinable, so they are validated separately.
+- name: Validate the optional address-discovery configuration
+  ansible.builtin.assert:
+    that:
+      # pkarr_url PUBLISHES this node's record; dns_origin RESOLVES peers. A
+      # publish-only config cannot find anyone, so pkarr requires dns. The reverse
+      # is legal upstream — dns_origin alone is a resolve-only node that does not
+      # publish — so it is deliberately NOT required to carry a pkarr_url.
+      - decdn_discovery_pkarr_url | length == 0 or decdn_discovery_dns_origin | length > 0
+      - >-
+        decdn_discovery_pkarr_url | length == 0
+        or decdn_discovery_pkarr_url is match('^https?://[^\"\\s\\\\]+$')
+      - >-
+        decdn_discovery_dns_origin | length == 0
+        or decdn_discovery_dns_origin is match('^[A-Za-z0-9.-]+$')
+    fail_msg: >-
+      decdn_discovery_pkarr_url requires decdn_discovery_dns_origin (a custom pkarr
+      relay with no DNS origin publishes this node's address but cannot resolve
+      anyone else's). dns_origin alone is fine — that is a resolve-only node. The
+      pkarr URL must be http(s):// with no quote/whitespace/backslash and the DNS
+      origin a bare domain. Setting either drops the n0 discovery leg entirely.
+
+- name: Validate the optional static discovery peers
+  ansible.builtin.assert:
+    that:
+      - item.key is match('^[0-9a-f]{64}$')
+      - item.value.addrs is defined and item.value.addrs | length > 0
+      - item.value.addrs | reject('match', '^[^\"\\s\\\\]+:[0-9]+$') | list | length == 0
+      - >-
+        item.value.relay_url is not defined or item.value.relay_url in ["", none]
+        or item.value.relay_url is match('^https?://[^\"\\s\\\\]+$')
+    fail_msg: >-
+      Each decdn_discovery_peers key must be a 64-char lowercase-hex NodeId, and its
+      value a mapping with a non-empty `addrs` list of host:port entries plus an
+      optional http(s) `relay_url`. Offending entry: {{ item.key }}.
+  loop: "{{ decdn_discovery_peers | default({}, true) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+# cache.origin and cache.origins are mutually exclusive upstream, and an empty
+# `origins` array is rejected outright. The template already prefers the list form
+# and never emits both, but that would silently IGNORE a scalar origin an operator
+# thought was in effect — so make the ambiguity fail loud instead.
+- name: Validate the cache origin forms are not both configured
+  ansible.builtin.assert:
+    that:
+      - not (decdn_cache_origins | length > 0 and decdn_cache_origin_kind | length > 0)
+    fail_msg: >-
+      decdn_cache_origins (the ordered [[cache.origins]] fallback list) and
+      decdn_cache_origin_kind (the single [cache.origin] table) are mutually
+      exclusive — upstream rejects a config carrying both. Clear
+      decdn_cache_origin_kind to use the list, or empty the list to use the scalars.
 
 # user_agent + otlp_endpoint interpolate into TOML basic strings ("..."). An
 # unescaped '"', backslash or newline breaks the rendered node.toml (a daemon
@@ -330,6 +659,69 @@
       decdn_cache_user_agent must contain no double-quote, backslash or newline, and
       decdn_otlp_endpoint must be an http(s):// URL with no quote, whitespace or
       backslash (both are interpolated verbatim into node.toml). Leave either "" to omit.
+
+# The REQUIRED scalars render raw (no `not in ["", none]` guard), so unlike every
+# optional knob they reach node.toml unchecked. `decdn_cache_size_mb: "20 GB"`
+# renders `cache_size_mb = 20 GB` — invalid TOML — and also slips the cross-field
+# check above, because Jinja's `| int` coerces it to 0 and the `== 0` exemption
+# then short-circuits. Same shape guard the optional knobs already get.
+- name: Validate the required numeric knobs are integers in range
+  ansible.builtin.assert:
+    that:
+      - item.value | string is match('^[0-9]+$')
+      - item.value | int >= item.min
+      - item.value | int <= item.max
+    quiet: true
+    fail_msg: >-
+      {{ item.name }} must be an integer in {{ item.min }}..={{ item.max }}
+      (got "{{ item.value }}"). It is rendered into node.toml unquoted, so a
+      non-numeric value produces invalid TOML and a daemon crash-loop.
+  loop:
+    - {name: decdn_bind_port, value: "{{ decdn_bind_port }}", min: 1, max: 65535}
+    - {name: decdn_metrics_port, value: "{{ decdn_metrics_port }}", min: 1, max: 65535}
+    # 0 is meaningful: it disables the admin server entirely.
+    - {name: decdn_admin_port, value: "{{ decdn_admin_port }}", min: 0, max: 65535}
+    - {name: decdn_cache_size_mb, value: "{{ decdn_cache_size_mb }}", min: 1, max: 9223372036854775807}
+    - {name: decdn_rate_per_mb, value: "{{ decdn_rate_per_mb }}", min: 0, max: 9223372036854775807}
+  loop_control:
+    label: "{{ item.name }}"
+
+# AGENTS.md hard rule 2 is specifically about this knob: service daemons bind
+# loopback, and only the QUIC port gets a firewall hole. Nothing else enforced it —
+# `decdn_metrics_bind: "0.0.0.0"` was a clean deploy and a publicly-bound metrics
+# endpoint with only the baseline firewall behind it.
+- name: Require the metrics listener to stay on loopback
+  ansible.builtin.assert:
+    that:
+      - decdn_metrics_bind is match('^(127\.[0-9.]+|::1|localhost)$')
+    fail_msg: >-
+      decdn_metrics_bind must be a loopback address (got "{{ decdn_metrics_bind }}").
+      Metrics carry operational detail and the endpoint has no auth; exposing it is
+      a deliberate architecture change, not a config tweak. Front it with a reverse
+      proxy that terminates auth + TLS instead (AGENTS.md hard rule 2). The admin
+      RPC is hardcoded to 127.0.0.1 upstream and cannot be moved at all.
+
+# The one knob with no shape validation, and the one documented as the home for
+# secrets. systemd's EnvironmentFile parser is shell-like: it applies POSIX-ish
+# unquoting and SILENTLY SKIPS a line it cannot parse, so a secret containing a
+# quote or backslash would simply be absent at runtime — surfacing hours later as
+# an S3 403, with no_log guaranteeing nothing in the deploy output shows why.
+- name: Validate decdn_extra_env keys and values
+  ansible.builtin.assert:
+    that:
+      - item.key is match('^[A-Za-z_][A-Za-z0-9_]*$')
+      - item.value | string is match('^[^\r\n]*$')
+      - item.key != 'DECDN_RPC_URL'
+    fail_msg: >-
+      decdn_extra_env keys must be POSIX environment-variable names and values must
+      contain no newline (systemd silently DROPS an unparseable EnvironmentFile
+      line, so the variable would be absent at runtime rather than wrong).
+      DECDN_RPC_URL is set from decdn_rpc_url and must not be overridden here.
+      Offending entry: {{ item.key }}.
+  loop: "{{ decdn_extra_env | default({}, true) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: true                     # values are secrets by design
 
 # --- User & directories -------------------------------------------------------
 - name: Create decdn system group
@@ -526,7 +918,11 @@
     owner: "{{ decdn_user }}"
     group: "{{ decdn_group }}"
     mode: "0600"
-    content: "DECDN_RPC_URL={{ decdn_rpc_url }}\n"
+    content: |
+      DECDN_RPC_URL={{ decdn_rpc_url }}
+      {% for k, v in (decdn_extra_env | default({}, true)) | dictsort %}
+      {{ k }}="{{ v | string | replace('\\', '\\\\') | replace('"', '\\"') }}"
+      {% endfor %}
   no_log: true                     # the RPC URL may embed an API key
   notify: Restart decdn-node
 
@@ -538,6 +934,73 @@
     group: "{{ decdn_group }}"
     mode: "0640"
   notify: Restart decdn-node
+
+# The role's own asserts mirror upstream constraints by hand and will drift again;
+# this is the authoritative check. `decdn config validate` resolves the config the
+# same way `decdn-node run` does — every section is deny_unknown_fields with no
+# serde aliases, so a key this role renders but the installed binary does not know
+# is a startup crash-loop. Validating here turns that into a failed deploy with the
+# daemon's own error message, and it neither binds ports nor dials the RPC endpoint.
+#
+# Runs as decdn_user because it reads the 0600 keystore password; DECDN_RPC_URL is
+# supplied from the same value systemd will hand the daemon. Skipped in check mode
+# (node.toml has not been written yet) — the asserts above are the check-mode gate.
+# The RPC URL is sourced from the 0600 env file rather than passed via Ansible's
+# `environment:`. `environment:` is implemented as a shell prefix on the module
+# command (`ENV=val /usr/bin/python3 ...`), so it lands in the target host's
+# process table and any local user can read the embedded API key out of `ps` for
+# the duration of the task — `no_log` hides it from Ansible's output, not from
+# /proc. Sourcing the file systemd already reads keeps the secret on disk at 0600.
+- name: Validate the rendered node.toml with the installed binary
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      set -a
+      . {{ decdn_env_file | quote }}
+      set +a
+      {{ decdn_cli_bin | quote }} config validate \
+        --config {{ decdn_config_file | quote }} \
+        --keystore-password-file {{ decdn_keystore_password_file | quote }}
+  become_user: "{{ decdn_user }}"
+  become: true
+  register: decdn_config_validate
+  changed_when: false
+  # Deliberately non-fatal: the next task turns a failure into an actionable
+  # message. `failed_when: rc != 0` here would abort the play first and leave the
+  # operator with a bare "non-zero return code".
+  failed_when: false
+  when: not ansible_check_mode
+
+# `failed_when: false` above suppresses EVERY failure verdict, including ones that
+# never produce an `rc` at all — a become_user failure (Debian without `acl`), a
+# privilege-escalation timeout, a missing interpreter. Defaulting a missing rc to 0
+# would treat "the gate could not run" as "the gate passed" and start the daemon on
+# an unvalidated config, so an absent rc defaults to 1 and is reported distinctly.
+- name: Report the config-validation failure
+  ansible.builtin.fail:
+    msg: >-
+      {% if decdn_config_validate.rc is not defined %}
+      `decdn config validate` could not be RUN
+      ({{ decdn_config_validate.msg | default('no rc and no msg — re-run with -vvv', true) }}).
+      {{ decdn_config_file }} is therefore UNVALIDATED and the daemon must not be
+      started on it. A common cause is that becoming the unprivileged
+      {{ decdn_user }} user needs the `acl` package on this host.
+      {% else %}
+      `decdn config validate` rejected the rendered {{ decdn_config_file }}:
+      {{ decdn_config_validate.stderr | default('', true)
+         or decdn_config_validate.stdout | default('', true)
+         or decdn_config_validate.msg | default('(no output)', true) }}
+      — this role renders a key the installed decdn
+      {{ decdn_node_version | default('(manual)', true) }} does not accept, or a
+      value outside its range. Config sections are deny_unknown_fields with no
+      aliases upstream, so re-sync roles/decdn_node/templates/node.toml.j2 against
+      the binary's schema.
+      {% endif %}
+  when:
+    - not ansible_check_mode
+    - decdn_config_validate is defined
+    - decdn_config_validate.rc | default(1) != 0
 
 - name: Install decdn-node systemd unit
   ansible.builtin.template:
@@ -572,6 +1035,15 @@
 # still report `running` (see that task) — a persistent timeout here is therefore
 # not provably benign. Tune the window with
 # decdn_readiness_retries × decdn_readiness_delay (≈60s at the defaults).
+# KICS reports this task under "Communication Over HTTP" (MEDIUM). It is a false
+# positive and is left unsuppressed deliberately — KICS's inline ignore directives
+# have no effect on this query in the pinned engine version, and a no-op directive
+# that reads like a suppression is worse than none. The target is the loopback
+# interface: the daemon serves metrics over plain HTTP and upstream binds that
+# listener to 127.0.0.1 (the admin listener is hardcoded there), so there is no TLS
+# to require. "Require the metrics listener to stay on loopback" above enforces that
+# the address cannot be moved off loopback. `make security` gates on --fail-on high,
+# so this does not fail the build.
 - name: Wait for the node metrics endpoint (advisory)
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ decdn_metrics_port }}/metrics"

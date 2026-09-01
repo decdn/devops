@@ -25,6 +25,10 @@ deploy:
 # --- Tests -------------------------------------------------------------------
 # Containerised converge + idempotence + verify of the decdn_node role against a
 # stub daemon (needs Docker; a privileged systemd container). See molecule/.
+# Scenarios: default (rendered values + idempotence), schema (config key-set drift
+# against the upstream field list), validation (bad knobs must be rejected by the
+# role's own asserts), generate-keystore (opt-in host-side wallet), slow-readiness
+# (advisory /metrics probe timeout).
 # `--all` runs every scenario: `default` (operator-provisioned keystore) and
 # `generate-keystore` (opt-in host-side wallet generation).
 molecule:

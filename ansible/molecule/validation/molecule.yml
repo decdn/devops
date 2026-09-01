@@ -33,5 +33,6 @@ scenario:
   test_sequence:
     - dependency
     - create
+    - prepare
     - converge
     - destroy
