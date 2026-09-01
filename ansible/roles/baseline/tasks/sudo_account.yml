@@ -102,5 +102,11 @@
     key: "{{ item }}"
     state: present
   loop: "{{ sudo_account['keys'] }}"
-  # fail_key:false stores a missing user as {user: None}, so test the value, not `in`.
-  when: not ansible_check_mode or (getent_passwd | default({})).get(sudo_account['name'])
+  # fail_key:false stores a missing user as {user: None}, so test the value, not `in`
+  # — and compare it explicitly: the hit is the passwd field LIST, and ansible-core
+  # 2.19+ rejects a non-boolean conditional outright. Only check mode reaches this
+  # operand (a real run short-circuits on the left), which is why it fails solely
+  # under --check.
+  when: >-
+    not ansible_check_mode
+    or (getent_passwd | default({})).get(sudo_account['name']) is not none
