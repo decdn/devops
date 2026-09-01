@@ -192,13 +192,20 @@
               set -euo pipefail
               {% for archive in decdn_release_tarballs %}
               f={{ (archive ~ '-' ~ decdn_node_version ~ '-' ~ decdn_node_target ~ '.tar.gz') | quote }}
-              n=$(grep -cF -- "  $f" SHA256SUMS || true)
+              # Match the filename FIELD exactly, not a substring. `grep -F "  $f"`
+              # collides with any sibling entry that merely STARTS with $f (a
+              # "$f.sig"/"$f.sha256" line makes the count 2 and aborts a perfectly
+              # good manifest) and misses the `hash *name` binary-mode form outright
+              # (count 0). index($0," ")+2 skips the hash and the two-character
+              # " " / " *" separator, leaving the name — spaces in it included.
+              entry=$(awk -v f="$f" 'substr($0, index($0, " ") + 2) == f' SHA256SUMS)
+              n=$(printf '%s\n' "$entry" | grep -c . || true)
               if [ "$n" -ne 1 ]; then
                 echo "SHA256SUMS has $n entries for $f (expected exactly 1)." >&2
                 echo "The manifest does not cover this archive, or covers it twice." >&2
                 exit 1
               fi
-              grep -F -- "  $f" SHA256SUMS | sha256sum --check --strict -
+              printf '%s\n' "$entry" | sha256sum --check --strict -
               {% endfor %}
           register: decdn_sum_check
           changed_when: false

@@ -210,8 +210,10 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
   and the `decdn_origin_directory_*` cache knobs.
 - **Network** — `decdn_relay_urls` (list; the singular `relay_url` config key no
   longer exists). Operator-run address discovery (#818) via
-  `decdn_discovery_pkarr_url` + `decdn_discovery_dns_origin` (**set together or not
-  at all**) and/or `decdn_discovery_peers` (a map of 64-char lowercase-hex NodeId to
+  `decdn_discovery_pkarr_url` (publishes this node's record — **requires**
+  `decdn_discovery_dns_origin`, which resolves peers) and/or `decdn_discovery_dns_origin`
+  **on its own**, a resolve-only node that never publishes; and/or
+  `decdn_discovery_peers` (a map of 64-char lowercase-hex NodeId to
   `{relay_url, addrs}`). Setting either mechanism drops the n0 discovery leg.
 - **Abuse limits + load shedding** — the `decdn_security_*` family,
   `decdn_load_shed_*` (`policy` is `resource-pressure`|`always-admit`; the low-water

@@ -22,11 +22,17 @@ bind_port = {{ decdn_bind_port }}
 {% if decdn_relay_urls is not none and decdn_relay_urls | length > 0 %}
 relay_urls = [{% for u in decdn_relay_urls %}"{{ u }}"{% if not loop.last %}, {% endif %}{% endfor %}]
 {% endif %}
-{% if decdn_discovery_pkarr_url not in ["", none] or (decdn_discovery_peers is not none and decdn_discovery_peers | length > 0) %}
+{% if decdn_discovery_pkarr_url not in ["", none] or decdn_discovery_dns_origin not in ["", none] or (decdn_discovery_peers is not none and decdn_discovery_peers | length > 0) %}
 
 [network.discovery]
+{# pkarr_url PUBLISHES, dns_origin RESOLVES. They are emitted independently: the
+   assert in tasks/main.yml requires dns_origin whenever pkarr_url is set, but
+   dns_origin ALONE is legal (a resolve-only node), so it must not be nested in
+   the pkarr branch or that mode renders to nothing. #}
 {% if decdn_discovery_pkarr_url not in ["", none] %}
 pkarr_url = "{{ decdn_discovery_pkarr_url }}"
+{% endif %}
+{% if decdn_discovery_dns_origin not in ["", none] %}
 dns_origin = "{{ decdn_discovery_dns_origin }}"
 {% endif %}
 {% for node_id, peer in (decdn_discovery_peers | default({}, true)).items() %}

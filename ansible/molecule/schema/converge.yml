@@ -206,3 +206,32 @@
          endpoint_url: "https://acct.b2.example.invalid", prefix: "blobs/"}
   roles:
     - role: decdn_node
+
+# Resolve-only discovery: dns_origin WITHOUT pkarr_url. The role's own assert calls
+# this legal (pkarr publishes, dns resolves; a node may resolve without publishing),
+# but the maximal play above sets both, so the dns-only path is invisible to it.
+# It rendered to nothing until this guard existed — dns_origin used to live inside
+# the pkarr branch, so the documented resolve-only mode silently produced no
+# [network.discovery] table at all. Separate render, separate file.
+- name: Converge (resolve-only discovery variant)
+  hosts: all
+  become: true
+  vars:
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/../default/files/decdn-node-stub"
+    decdn_node_install_method: manual
+    decdn_node_manual_bin_src: "{{ stub_bin }}"
+    decdn_cli_manual_bin_src: "{{ stub_bin }}"
+    decdn_node_version: "0.0.0-molecule-stub"
+    decdn_config_file: /etc/decdn/node-resolve-only.toml
+    decdn_rpc_url: "https://rpc.example.invalid/"
+    decdn_chain_id: 421614
+    decdn_region: "DE"
+    decdn_payment_pool_address: "0x1111111111111111111111111111111111111111"
+    decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
+    decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
+    decdn_content_blacklist_address: "0x4444444444444444444444444444444444444444"
+    # The point of this play: dns_origin set, pkarr_url deliberately left empty.
+    decdn_discovery_pkarr_url: ""
+    decdn_discovery_dns_origin: "resolve-only.example.invalid"
+  roles:
+    - role: decdn_node

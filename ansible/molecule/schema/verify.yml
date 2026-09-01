@@ -116,6 +116,34 @@
         cmd: python3 /root/molecule-assert-schema.py /etc/decdn/node-origins.toml
       changed_when: false
 
+    - name: Assert the resolve-only render emits no key outside the schema
+      ansible.builtin.command:
+        cmd: python3 /root/molecule-assert-schema.py /etc/decdn/node-resolve-only.toml
+      changed_when: false
+
+    # The schema checker above only proves every emitted key is LEGAL. It cannot
+    # see a key that was never emitted, which is exactly how the resolve-only mode
+    # broke: dns_origin sat inside the pkarr_url branch, so setting dns_origin
+    # alone rendered no [network.discovery] table and the daemon silently fell
+    # back to n0 discovery. Assert presence and absence explicitly.
+    - name: Read the resolve-only render
+      ansible.builtin.slurp:
+        src: /etc/decdn/node-resolve-only.toml
+      register: decdn_resolve_only_toml
+
+    - name: Assert dns_origin renders without pkarr_url
+      vars:
+        rendered: "{{ decdn_resolve_only_toml.content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - "'[network.discovery]' in rendered"
+          - "'dns_origin = \"resolve-only.example.invalid\"' in rendered"
+          - "'pkarr_url' not in rendered"
+        fail_msg: >-
+          The resolve-only discovery render is wrong. dns_origin alone is legal
+          (the role's own assert says so) and must produce a [network.discovery]
+          table carrying dns_origin and no pkarr_url.
+
     # A path check cannot catch this one: `rpc_url` is a legitimate [blockchain]
     # field, so a template regression that emitted it would be a VALID path and
     # sail through the checker above. node.toml is 0640 and diffable by design
