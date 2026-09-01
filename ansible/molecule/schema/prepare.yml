@@ -1,0 +1,44 @@
+---
+# The decdn_node role requires an operator-provisioned eth keystore + password
+# file to already exist before it starts the daemon (it never generates them).
+# Stage placeholder files here so the role's keystore gate passes in CI. The
+# stub daemon ignores them; this scenario does not exercise real wallet logic.
+- name: Prepare
+  hosts: all
+  become: true
+  vars:
+    decdn_home: /var/lib/decdn
+    decdn_etc: /etc/decdn
+  tasks:
+    - name: Ensure data + config directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ decdn_home }}"
+        - "{{ decdn_etc }}"
+
+    # Stage these at 0644 (deliberately looser than the target). The role locks
+    # them to 0600; verify.yml asserts 0600, so the assertion actually attributes
+    # the mode to the role rather than to what prepare pre-set.
+    - name: Stage a placeholder eth keystore
+      ansible.builtin.copy:
+        dest: "{{ decdn_home }}/keystore.json"
+        content: "{{ '{}' }}\n"
+        mode: "0644"
+
+    - name: Stage a placeholder keystore password file
+      ansible.builtin.copy:
+        dest: "{{ decdn_etc }}/keystore.password"
+        content: "molecule-placeholder\n"
+        mode: "0644"
+
+    # The role's pre-start gate also requires the node identity (node.secret), a
+    # co-equal key-gen output. Stage it at 0644 so verify.yml can attribute the
+    # 0600 lock-down to the role.
+    - name: Stage a placeholder node identity
+      ansible.builtin.copy:
+        dest: "{{ decdn_home }}/node.secret"
+        content: "molecule-placeholder-node-secret\n"
+        mode: "0644"

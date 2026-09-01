@@ -19,11 +19,74 @@ Not yet published to Galaxy (pre-1.0; the published shape may still change).
 - `decdn.node.decdn_node` — the `decdn-node` daemon, installed from a pinned GitHub
   Release tarball under a hardened systemd unit; public QUIC udp/4433, loopback
   metrics + admin RPC.
+- Release-integrity verification: `release` mode fetches the release's `SHA256SUMS`
+  and `SHA256SUMS.asc`, verifies the detached signature against the maintainer
+  keyring vendored at `roles/decdn_node/files/decdn-release-KEYS.asc`, then checks
+  the tarballs against the manifest. Replaces the hand-pasted `decdn_node_sha256` /
+  `decdn_cli_sha256` pins, which are removed. `decdn_verify_release_signature`
+  (default `true`) and `decdn_release_keyring` control it.
+- `decdn config validate` now runs against the installed binary after `node.toml` is
+  templated, so a config-schema mismatch fails the deploy with the daemon's own
+  error rather than crash-looping the service.
+- `decdn_extra_env` — extra `KEY: value` pairs appended to the `0600` env file. The
+  supported home for environment-borne secrets, notably the AWS credentials behind
+  an S3 cache origin (which are deliberately never written to the `0640` `node.toml`).
+- `ExecReload` on the unit plus a `Reload decdn-node` handler, for the five
+  hot-reloadable config sections.
+- Full config-schema parity with `decdn/decdn` @ `d306cc5c`: `[network.discovery]`,
+  `[cache.tinylfu]`, `[cache.serve_economics]`, `[cache.origin_retry]`,
+  `[cache.circuit_breaker]`, `[[cache.origins]]`, `[security]`, `[load_shed]`,
+  `[dht.rate_limit]`, `[probe.rate_limit]`, `[receipts]` and `[content]` are now
+  rendered, along with the new `[blockchain]` and `[cache]` scalars.
+
 - `decdn_node_generate_keystore` (default `false`) — opt-in host-side wallet
   generation: when `true` the `decdn_node` role runs `decdn key-gen` only if the
   keystore is absent (minting a random `0600` password file first, but only when the
   keystore is also absent), never overwriting an existing wallet. Funding + on-chain
   staking/registration remain a manual step.
+
+### Changed (BREAKING)
+
+The collection has never been published, so this is not a break against any
+released version — but it *is* a break against the shape earlier commits on `main`
+had, and against any inventory written for it.
+
+- `decdn_payment_channel_address` → **`decdn_payment_pool_address`**. Upstream
+  replaced pairwise payment channels with a shared payment pool.
+- `decdn_buyer_deposit_micro_usdc` → **`decdn_buyer_working_deposit_micro_usdc`**.
+  The split initial/working buyer deposits were merged into one.
+- `decdn_content_blacklist_address` is now **REQUIRED**, not optional. Upstream
+  refuses to resolve a config without it (ADR 011/031): an absent or zero address is
+  a fail-open compliance trap.
+- `decdn_origin_assignment_address` and `decdn_publisher_registry_address` are now
+  **independently** optional; the old "set both or neither" assert is gone.
+- The `arbitrum-sepolia` contract addresses in `host_vars/decdn-node-1/main.yml` are
+  re-synced to deployBlock 11613778. Upstream redeployed all fourteen contracts, so
+  every previous address is dead.
+- The default `decdn_node_install_method` is now `manual`, because upstream has cut
+  no release tag yet and `release` mode has nothing to download.
+
+### Removed
+
+Config keys upstream deleted. Every config section is `deny_unknown_fields` with no
+serde aliases, so leaving any of these set would refuse the daemon's startup:
+
+- `decdn_relay_url` (singular — use the `decdn_relay_urls` list) and
+  `decdn_enable_0rtt`.
+- `decdn_slash_judge_from_block`, `decdn_origin_directory_from_block`,
+  `decdn_content_blacklist_from_block` — the watchers no longer take a scan floor.
+- `decdn_delivery_ceiling` (on-chain `PaymentPool.getRateBounds()` is authoritative;
+  `DECDN_DELIVERY_CEILING` is a retired env var upstream) and
+  `decdn_voucher_interval_mb` (voucher-interval negotiation was deleted).
+- `decdn_settlement_auto_threshold_micro_usdc` and
+  `decdn_settlement_auto_by_voucher_nonce_span` — auto-`closeChannel` went away with
+  the channels.
+- `decdn_pull_ahead_bytes`, `decdn_max_unrecouped_leech_bytes`,
+  `decdn_pull_share_ratio_percent`, `decdn_pull_through_require_authorized_origin` —
+  the speculative-pull accounting was replaced by
+  `decdn_node_pull_stall_window_sec` + `decdn_node_pull_min_throughput_bps`.
+- `decdn_region_accounting_interval_sec`.
+- `decdn_node_sha256` / `decdn_cli_sha256` — superseded by signed `SHA256SUMS`.
 
 <!-- No release tags exist yet; these resolve today. Switch to compare/tag links
      (compare/v0.1.0...HEAD and releases/tag/v0.1.0) once v0.1.0 is cut. -->

@@ -1,0 +1,208 @@
+---
+# Render node.toml with EVERY operator-facing knob set to a non-default value, so
+# the verify step sees the maximal key set the role is capable of emitting. Values
+# are chosen to be individually VALID (the role's own asserts still run and must
+# pass) — this scenario is about key names, not range checking; `validation` covers
+# the reject path.
+#
+# When you add a knob to the role, add it here too. A knob that is never set is a
+# knob this guard cannot see.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/../default/files/decdn-node-stub"
+    decdn_node_install_method: manual
+    decdn_node_manual_bin_src: "{{ stub_bin }}"
+    decdn_cli_manual_bin_src: "{{ stub_bin }}"
+    decdn_node_version: "0.0.0-molecule-stub"
+
+    # --- required ---
+    decdn_rpc_url: "https://rpc.example.invalid/"
+    decdn_chain_id: 421614
+    decdn_region: "DE"
+    decdn_payment_pool_address: "0x1111111111111111111111111111111111111111"
+    decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
+    decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
+    decdn_content_blacklist_address: "0x4444444444444444444444444444444444444444"
+
+    # --- [network] + [network.discovery] ---
+    decdn_relay_urls: ["https://relay1.example.invalid:443", "https://relay2.example.invalid:443"]
+    decdn_discovery_pkarr_url: "https://pkarr.example.invalid/"
+    decdn_discovery_dns_origin: "discovery.example.invalid"
+    # A REAL ed25519 public key, not 64 arbitrary hex chars: upstream parses this as
+    # an iroh NodeId and rejects a non-curve-point, so a placeholder would pass the
+    # role's shape regex and still fail `decdn config validate` against a real binary.
+    decdn_discovery_peers:
+      "253bad481e6371866c9f6276b2a7b3a10ca16255668e740e6fc01da1cacc4350":
+        relay_url: "https://relay.example.invalid/"
+        addrs: ["203.0.113.4:4433", "203.0.113.5:4433"]
+
+    # --- [blockchain] optional + CLI-only ---
+    decdn_slash_appeal_address: "0x5555555555555555555555555555555555555555"
+    decdn_origin_assignment_address: "0x6666666666666666666666666666666666666666"
+    decdn_publisher_registry_address: "0x7777777777777777777777777777777777777777"
+    decdn_usdc_address: "0x8888888888888888888888888888888888888888"
+    decdn_swap_venue: "uniswap-v3"
+    decdn_swap_router_address: "0x9999999999999999999999999999999999999999"
+    decdn_swap_quoter_address: "0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA"
+    decdn_swap_fee_tier: 3000
+    decdn_swap_balancer_pool: "0xbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbB"
+    decdn_swap_pool_address: "0xcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcC"
+    decdn_origin_directory_positive_ttl_sec: 600
+    decdn_origin_directory_negative_ttl_sec: 60
+    decdn_origin_directory_cache_capacity: 8192
+    decdn_content_blacklist_poll_interval_sec: 300
+    decdn_rpc_watchdog_interval_sec: 15
+    decdn_event_poll_interval_ms: 5000
+    decdn_rate_bounds_poll_interval_sec: 1800
+    decdn_fee_shares_poll_interval_sec: 1800
+    decdn_redeem_threshold_micro_usdc: 2000000
+    decdn_redeem_max_vouchers_per_tx: 250
+    decdn_redeem_interval_secs: 120
+    decdn_buyer_working_deposit_micro_usdc: 20000000
+    decdn_buyer_max_approve: false
+    decdn_pool_min_remaining_deposit_micro_usdc: 500000
+    decdn_pool_floor_signer_share_bps: 3000
+    decdn_pool_floor_signer_max_windows: 4
+
+    # --- [payment] ---
+    decdn_rate_per_mb: 12
+    decdn_delivery_floor: 0
+    decdn_credit_max: 33554432
+    decdn_credit_ramp_divisor: 4
+    decdn_frame_target_bytes: 262144
+    decdn_voucher_commit_interval_ms: 2500
+
+    # --- [cache] scalars ---
+    decdn_cache_size_mb: 20480
+    decdn_max_blob_size_mb: 2048
+    decdn_max_rate_per_mb: 50
+    decdn_pinned_hashes: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    decdn_cache_user_agent: "decdn-node/molecule"
+    decdn_gc_interval_sec: 0
+    decdn_fs_rescan_interval_sec: 30
+    decdn_origin_probe_ttl_sec: 30
+    decdn_origin_probe_negative_ttl_sec: 4
+    decdn_origin_probe_fault_ttl_sec: 8
+    decdn_origin_probe_timeout_ms: 1500
+    decdn_origin_probe_memo_capacity: 2048
+    decdn_eviction_high_water_pct: 85
+    decdn_eviction_target_pct: 70
+    decdn_eviction_per_sweep_budget: 32
+    decdn_eviction_tick_secs: 2
+    decdn_max_probe_holds: 512
+    decdn_stake_lane_reserved_holds: 16
+    decdn_node_to_node_pull_through_enabled: true
+    decdn_relay_foreign_namespaces: false
+    decdn_node_pull_probe_fanout: 8
+    decdn_node_pull_timeout_sec: 30
+    decdn_node_pull_stall_window_sec: 15
+    decdn_node_pull_min_throughput_bps: 8192
+    decdn_eviction_policy: "tinylfu"
+    decdn_admission_policy: "tinylfu"
+
+    # --- [cache.*] sub-tables ---
+    decdn_tinylfu_sketch_bytes: 524288
+    decdn_tinylfu_promotion_threshold: 3
+    decdn_tinylfu_probation_target_pct: 20
+    decdn_tinylfu_aging_halflife_sec: 900
+    decdn_serve_economics_policy: "margin"
+    decdn_serve_economics_discount: 0.25
+    decdn_serve_economics_n_max: 32
+    decdn_serve_economics_warming_budget: 1000000
+    decdn_serve_economics_warming_refill: 100
+    decdn_origin_retry_max_retries: 5
+    decdn_origin_retry_initial_backoff_ms: 200
+    decdn_origin_retry_max_backoff_ms: 20000
+    decdn_origin_retry_jitter_ratio: 0.2
+    decdn_origin_retry_buffered_max_bytes: 8388608
+    decdn_circuit_breaker_enabled: false
+    decdn_circuit_breaker_failure_threshold: 10
+    decdn_circuit_breaker_cooldown_ms: 60000
+    decdn_circuit_breaker_half_open_max_calls: 2
+
+    # s3 origin: the widest [cache.origin] variant, plus the default-chain
+    # credential sub-table. The mutually-exclusive [[cache.origins]] form is
+    # covered by the second play below, which re-renders to a different path.
+    decdn_cache_origin_kind: "s3"
+    decdn_cache_origin_s3_bucket: "decdn-blobs"
+    decdn_cache_origin_s3_region: "us-east-1"
+    decdn_cache_origin_s3_endpoint_url: "https://acct.r2.cloudflarestorage.invalid"
+    decdn_cache_origin_s3_path_style: true
+    decdn_cache_origin_s3_prefix: "blobs/"
+    decdn_cache_origin_decompress: "strict"
+    decdn_cache_origin_s3_use_default_chain: true
+    decdn_cache_origin_s3_profile: "decdn"
+
+    # --- [observability] / [security] / [load_shed] / [dht] / [probe] ---
+    decdn_otlp_endpoint: "http://localhost:4317"
+    decdn_security_max_concurrent_handlers: 128
+    decdn_security_per_source_rate_per_sec: 50.5
+    decdn_security_per_source_burst: 100
+    decdn_security_max_tracked_sources: 2048
+    decdn_load_shed_policy: "always-admit"
+    decdn_load_shed_egress_budget_mbps: 500
+    decdn_load_shed_max_concurrent_serves_high: 128
+    decdn_load_shed_max_concurrent_serves_low: 96
+    decdn_load_shed_per_client_serve_cap: 16
+    # All eight keys on both tables, so the guard sees the complete rate-limit shape.
+    decdn_dht_rate_limit:
+      per_peer_rate_per_sec: 10.0
+      per_peer_burst: 20
+      per_ip_rate_per_sec: 50.0
+      per_ip_burst: 100
+      global_rate_per_sec: 500.0
+      global_burst: 1000
+      max_tracked_per_ip: 2048
+      max_tracked_per_peer: 2048
+    decdn_probe_rate_limit:
+      per_peer_rate_per_sec: 2.5
+      per_peer_burst: 5
+      per_ip_rate_per_sec: 25.0
+      per_ip_burst: 100
+      global_rate_per_sec: 500.0
+      global_burst: 1000
+      max_tracked_per_ip: 1024
+      max_tracked_per_peer: 1024
+
+    # --- [receipts] / [content] ---
+    decdn_receipts_max_file_bytes: 67108864
+    decdn_receipts_retained_files: 8
+    decdn_content_denied_hashes: ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
+    decdn_content_denied_origins: ["0x000000000000000000000000000000000000dEaD"]
+  roles:
+    - role: decdn_node
+
+# The [[cache.origins]] array-of-tables form cannot coexist with [cache.origin] in
+# one render — the role asserts they are mutually exclusive, because upstream
+# rejects a config carrying both. So it gets its own render, to a separate path,
+# covering the http and fs variants the play above (s3) does not. Without this the
+# template's `_multi` branch and the role's per-entry origin validation would ship
+# untested, and verify.yml's array-of-tables walk would be dead code.
+- name: Converge (multi-origin variant)
+  hosts: all
+  become: true
+  vars:
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/../default/files/decdn-node-stub"
+    decdn_node_install_method: manual
+    decdn_node_manual_bin_src: "{{ stub_bin }}"
+    decdn_cli_manual_bin_src: "{{ stub_bin }}"
+    decdn_node_version: "0.0.0-molecule-stub"
+    decdn_config_file: /etc/decdn/node-origins.toml
+    decdn_rpc_url: "https://rpc.example.invalid/"
+    decdn_chain_id: 421614
+    decdn_region: "DE"
+    decdn_payment_pool_address: "0x1111111111111111111111111111111111111111"
+    decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
+    decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
+    decdn_content_blacklist_address: "0x4444444444444444444444444444444444444444"
+    # Empty, so the scalar form is suppressed and the list form renders.
+    decdn_cache_origin_kind: ""
+    decdn_cache_origins:
+      - {kind: "http", url: "https://primary.example.invalid/", decompress: "strict"}
+      - {kind: "fs", path: "/var/lib/decdn/origin"}
+      - {kind: "s3", bucket: "mirror-blobs", region: "eu-west-1", path_style: false,
+         endpoint_url: "https://acct.b2.example.invalid", prefix: "blobs/"}
+  roles:
+    - role: decdn_node

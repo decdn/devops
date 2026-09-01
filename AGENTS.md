@@ -48,10 +48,20 @@ ansible/                # the deployment project (DevSec-hardened, lean roles)
 
 - **`ansible/`** — the declarative deployment project. **The public deCDN node**
   (`playbooks/site.yml` → baseline + `decdn-node`), installed from a pinned GitHub release
-  tarball under a hardened systemd unit; public QUIC udp/4433, loopback metrics/admin,
-  operator-provisioned eth keystore, required chain knobs (no baked protocol facts — sourced
-  from ADRs), over a shared DevSec-hardened `baseline`. See `ansible/README.md`. (On-chain
-  node stake/registration, ADR 019 Phase 2, is an operator step, not automated.)
+  tarball — verified against the release's GPG-signed `SHA256SUMS` — or, while upstream
+  has no release tag cut (the current default), from locally-built binaries; under a hardened
+  systemd unit; public QUIC udp/4433, loopback metrics/admin, operator-provisioned eth
+  keystore, required chain knobs (no baked protocol facts — sourced from ADRs), over a
+  shared DevSec-hardened `baseline`. See `ansible/README.md`. (On-chain node
+  stake/registration, ADR 019 Phase 2, is a manual operator step, driven by `decdn setup`.)
+
+  **Config-schema coupling.** `roles/decdn_node/templates/node.toml.j2` renders against
+  `decdn/crates/common/src/config/types.rs`, where every section is
+  `#[serde(deny_unknown_fields)]` with **no** serde aliases — a key the role emits that
+  the installed binary does not know is a startup crash-loop. Two guards: the role runs
+  `decdn config validate` against the real binary after templating, and the
+  `molecule/schema` scenario checks the rendered key set against a committed inventory of
+  upstream field names. Re-sync both when bumping the pinned decdn version.
 
 ## Commands
 

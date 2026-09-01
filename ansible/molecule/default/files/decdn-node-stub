@@ -13,9 +13,13 @@ can be exercised end-to-end without a published release or a live chain:
                      If the marker file NO_METRICS_MARKER exists, it instead
                      blocks forever WITHOUT binding metrics — standing in for a
                      healthy node whose metrics listener binds late (behind the
-                     startup PaymentChannel bootstrap). The `slow-readiness`
+                     startup PaymentPool bootstrap). The `slow-readiness`
                      scenario uses this to prove the role's advisory probe warns
                      (not fails) on timeout while the unit stays `running`.
+  * `config validate ...`
+                  -> parse the rendered node.toml as TOML and exit 0. A stub has no
+                     schema, so this checks syntax only; `molecule/schema` is what
+                     covers key-level drift against the real upstream field list.
   * `key-gen ...` -> stand in for the CLI's wallet generator (exercised by the
                      `generate-keystore` scenario). Enforces the contract the ROLE
                      ASSUMES (not a verified real-CLI fact): the --password-file is
@@ -30,6 +34,7 @@ It intentionally implements no protocol behaviour — the scenario verifies host
 prep, config/unit rendering, hardening, and loopback binding, not node logic.
 """
 import os
+import tomllib
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -41,6 +46,9 @@ VERSION = "decdn-node 0.0.0-molecule-stub"
 # healthy node whose metrics listener binds late. The slow-readiness scenario
 # stages it (see that scenario's prepare.yml) to exercise the advisory-timeout path.
 NO_METRICS_MARKER = "/etc/decdn/stub-no-metrics"
+# Forces `config validate` to exit 1, so a scenario can prove the role's config
+# gate still fails the deploy (the gate itself runs with failed_when: false).
+BAD_CONFIG_MARKER = "/etc/decdn/stub-bad-config"
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -95,6 +103,41 @@ def key_gen(args):
     return 0
 
 
+def config_validate(args):
+    """Stub `decdn config validate`: parse the rendered node.toml and exit 0.
+
+    The real CLI resolves the config through the daemon's own serde types, which is
+    what makes it the authoritative schema gate. A stub cannot do that -- it has no
+    schema -- so it does the one check it CAN do honestly: the file exists and is
+    syntactically valid TOML. Anything stronger here would be a lie that lets a
+    schema regression pass molecule. The `molecule/schema` scenario is what covers
+    key-level drift; see its README.
+    """
+    config = _opt(args, "--config")
+    # Forced-failure marker, mirroring NO_METRICS_MARKER. The role's config gate
+    # deliberately runs with `failed_when: false` and defers to a following `fail`
+    # task, so a regression in THAT task's `when:` would silently no-op the whole
+    # gate. This lets a scenario prove the gate still fires.
+    if os.path.isfile(BAD_CONFIG_MARKER):
+        print(f"stub config validate: refusing {config} (forced by "
+              f"{BAD_CONFIG_MARKER})", file=sys.stderr)
+        return 1
+    if not config:
+        print("stub config validate: --config is required", file=sys.stderr)
+        return 2
+    if not os.path.isfile(config):
+        print(f"stub config validate: no such config file: {config}", file=sys.stderr)
+        return 1
+    try:
+        with open(config, "rb") as fh:
+            tomllib.load(fh)
+    except tomllib.TOMLDecodeError as exc:
+        print(f"stub config validate: {config} is not valid TOML: {exc}", file=sys.stderr)
+        return 1
+    print(f"stub config validate: {config} parsed")
+    return 0
+
+
 def main():
     args = sys.argv[1:]
     if "--version" in args:
@@ -102,6 +145,8 @@ def main():
         return 0
     if args and args[0] == "key-gen":
         return key_gen(args[1:])
+    if args[:2] == ["config", "validate"]:
+        return config_validate(args[2:])
     if args and args[0] == "run":
         # Late-bind simulation: stay alive (Type=simple => unit stays `running`)
         # but never bind metrics, so the role's advisory probe times out.

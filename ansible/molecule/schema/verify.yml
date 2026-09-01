@@ -1,0 +1,191 @@
+---
+# Assert that every key the role rendered into node.toml exists in the upstream
+# config schema, and that the file is valid TOML.
+#
+# The `default` scenario checks VALUES; this one checks the KEY SET. They fail on
+# different regressions: default catches a knob rendered with the wrong type or
+# dropped entirely, schema catches a knob rendered under a name the daemon will
+# reject at load. Only the second would have caught the d306cc5c drift.
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+    - name: Stage the upstream schema key inventory
+      ansible.builtin.copy:
+        src: schema-keys.txt
+        dest: /root/schema-keys.txt
+        mode: "0644"
+
+    - name: Stage the schema-drift checker
+      ansible.builtin.copy:
+        dest: /root/molecule-assert-schema.py
+        mode: "0755"
+        content: |
+          """Flag any config PATH in the rendered node.toml that upstream rejects."""
+          import sys, tomllib
+
+          config_path = sys.argv[1] if len(sys.argv) > 1 else "/etc/decdn/node.toml"
+          with open(config_path, "rb") as fh:
+              config = tomllib.load(fh)
+          with open("/root/schema-keys.txt", encoding="utf-8") as fh:
+              known = {
+                  line.strip() for line in fh
+                  if line.strip() and not line.startswith("#")
+              }
+
+          def _lookup(root, dotted):
+              """Resolve a dotted path back to its value, for leaf/table triage."""
+              node = root
+              for part in dotted.split("."):
+                  if isinstance(node, list):
+                      node = node[0] if node else {}
+                  if not isinstance(node, dict) or part not in node:
+                      return None
+                  node = node[part]
+              return node
+
+          def walk(node, path=""):
+              """Yield the dotted path of every key in every table."""
+              if isinstance(node, dict):
+                  for key, value in node.items():
+                      here = f"{path}.{key}" if path else key
+                      yield here
+                      yield from walk(value, here)
+              elif isinstance(node, list):
+                  # [[cache.origins]] is an array of tables. Every element shares one
+                  # schema, so they collapse onto the same path -- an index would make
+                  # the inventory depend on how many origins an operator configured.
+                  for item in node:
+                      if isinstance(item, dict):
+                          yield from walk(item, path)
+
+          def normalize(dotted):
+              """Collapse the one path hop that is data rather than a schema field.
+
+              [network.discovery.peers.<NodeId>] is keyed by a 64-char NodeId, so the
+              hop itself is never in the inventory; the DiscoveryPeer fields BELOW it
+              are (as network.discovery.peers.*). Only that single hop is rewritten,
+              so a bogus key beside relay_url/addrs is still caught.
+              """
+              prefix = "network.discovery.peers."
+              if dotted.startswith(prefix):
+                  rest = dotted[len(prefix):].split(".", 1)
+                  return prefix + "*" + ("." + rest[1] if len(rest) > 1 else "")
+              return dotted
+
+          # A table header is itself a path (`cache.tinylfu`), and intermediate tables
+          # are not fields of anything -- they are the sections the inventory is keyed
+          # BY. Only leaf paths are checked; a bogus TABLE surfaces as its children
+          # being unknown, or (if empty) as the section-set assertion below.
+          unknown = sorted({
+              normalize(dotted) for dotted in walk(config)
+              if not isinstance(_lookup(config, dotted), (dict, list))
+              and normalize(dotted) not in known
+          })
+
+          if unknown:
+              print("node.toml emits paths absent from the upstream config schema:",
+                    file=sys.stderr)
+              for path in unknown:
+                  print(f"  {path}", file=sys.stderr)
+              print(
+                  "\nEvery config section upstream is deny_unknown_fields with no "
+                  "serde aliases, so each of these is a daemon startup failure. Note "
+                  "a path can be wrong because the KEY is unknown or because a known "
+                  "key landed in the wrong TABLE -- a scalar [cache] key emitted below "
+                  "a [cache.*] header nests into it silently. Re-sync "
+                  "roles/decdn_node/templates/node.toml.j2, then regenerate "
+                  "molecule/schema/files/schema-keys.txt (see gen-schema-keys.py).",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print(f"schema OK ({config_path}): {len(known)} known paths, "
+                f"{sum(1 for _ in walk(config))} emitted, all recognised")
+
+    - name: Assert node.toml emits no key outside the upstream schema
+      ansible.builtin.command:
+        cmd: python3 /root/molecule-assert-schema.py
+      changed_when: false
+
+    # The second converge play renders the mutually-exclusive [[cache.origins]]
+    # form here. Same checker, different file: this is what exercises the walker's
+    # array-of-tables branch and the http/fs origin variants.
+    - name: Assert the multi-origin render emits no key outside the schema
+      ansible.builtin.command:
+        cmd: python3 /root/molecule-assert-schema.py /etc/decdn/node-origins.toml
+      changed_when: false
+
+    # A path check cannot catch this one: `rpc_url` is a legitimate [blockchain]
+    # field, so a template regression that emitted it would be a VALID path and
+    # sail through the checker above. node.toml is 0640 and diffable by design
+    # (AGENTS.md hard rule 1) — the RPC URL may embed an API key and belongs only
+    # in the 0600 env file. Assert the absence explicitly.
+    - name: Assert no secret leaked into the world-diffable node.toml
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          leaked=0
+          for pattern in '^rpc_url' '^[a-z_]*password' '^[a-z_]*secret' \
+                         '^access_key_id' '^secret_access_key' '^session_token'; do
+            if grep -qE "$pattern" /etc/decdn/node.toml; then
+              echo "node.toml contains a secret-bearing key matching $pattern" >&2
+              leaked=1
+            fi
+          done
+          exit "$leaked"
+      changed_when: false
+
+    # A guard on the guard: if the converge stopped setting most knobs (someone
+    # trimmed it, or a rename silently dropped a block), the checks above would
+    # pass trivially on a nearly-empty file.
+    #
+    # The SECTION SET is asserted exactly, not counted: sections are stable (a new
+    # knob adds a key, not a table), so an exact set catches a whole vanished
+    # section — e.g. the ~27-key optional [blockchain] block, which is the shape
+    # the original drift actually took and which a loose count would tolerate.
+    - name: Assert the rendered config is as wide as this scenario intends
+      ansible.builtin.shell:
+        # /bin/sh is dash on Debian and has no `pipefail`; this needs bash.
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          # `|| true`: grep -c exits 1 on zero matches, which under `set -e` would
+          # abort before the diagnostic below could name what was missing.
+          keys=$(grep -cE '^[a-z_0-9]+ = ' /etc/decdn/node.toml || true)
+          tables=$(grep -oE '^\[+[a-z_0-9.]+' /etc/decdn/node.toml | tr -d '[' | sort -u)
+          expected='blockchain
+          cache
+          cache.circuit_breaker
+          cache.origin
+          cache.origin.credentials
+          cache.origin_retry
+          cache.serve_economics
+          cache.tinylfu
+          content
+          dht.rate_limit
+          identity
+          load_shed
+          network
+          network.discovery
+          network.discovery.peers.253bad481e6371866c9f6276b2a7b3a10ca16255668e740e6fc01da1cacc4350
+          observability
+          payment
+          probe.rate_limit
+          receipts
+          security'
+          if [ "$tables" != "$(echo "$expected" | sed 's/^ *//')" ]; then
+            echo "rendered table set changed. got:" >&2; echo "$tables" >&2
+            echo "expected:" >&2; echo "$expected" | sed 's/^ *//' >&2
+            exit 1
+          fi
+          # Key floor stays a count: knobs are added upstream routinely, so an exact
+          # number would need editing on every sync. 125 is ~10 below today's render.
+          if [ "$keys" -lt 125 ]; then
+            echo "only $keys scalar keys rendered (expected >= 125) — the converge" >&2
+            echo "has collapsed, so the schema check above proved little." >&2
+            exit 1
+          fi
+          echo "breadth OK: $keys keys, $(echo "$tables" | grep -c '') tables"
+      changed_when: false

@@ -1,52 +1,80 @@
 ---
 # Per-node deployment values for decdn-node-1 (COMMITTED — non-secret config only).
-# Ansible merges every *.yml in this directory for host decdn-node-1. The one
-# sensitive value, decdn_rpc_url, lives in the sibling secret.yml (git-ignored) —
-# copy secret.yml.example to secret.yml and fill it in. The node refuses to start
-# until both this file and secret.yml are set.
+# Ansible merges every *.yml in this directory for host decdn-node-1. The sensitive
+# values (decdn_rpc_url, and any decdn_extra_env secrets) live in the sibling
+# secret.yml (git-ignored) — copy secret.yml.example to secret.yml and fill it in.
+# The node refuses to start until both this file and secret.yml are set.
 #
-# The contract addresses below are the canonical Arbitrum Sepolia (chain 421614)
-# v0.1.0 genesis deploy (deployBlock 11418331) — public on-chain facts from the deCDN
-# contract deployment, not invented here. If you target a different deployment, replace
-# them (and chain_id) with that deployment's values.
-# MUST-EDIT lines are yours to fill; the rest match the genesis deploy.
+# CONTRACT ADDRESSES ARE NOT INVENTED HERE. They are a verbatim copy of the
+# upstream deployment manifest decdn/contracts/deployments/421614.json (mirrored
+# byte-identically at decdn/crates/cli/deployments/421614.json — a
+# deployment-manifest-mirror pre-commit hook and a CI `cmp` keep the two in step).
+# That manifest is what `decdn config init --chain arbitrum-sepolia` bakes in, so
+# diffing this file against a fresh `config init` is the cross-check after any
+# redeploy. If you target a different deployment, replace these (and chain_id) with
+# that deployment's manifest values.
+#
+# Synced from deployBlock 11613778 (decdn/decdn @ d306cc5c, 2026-09-01). Upstream
+# has redeployed three times; addresses change wholesale each time, so re-sync
+# rather than patching individual lines.
+# MUST-EDIT lines are yours to fill; the rest match the manifest.
 
-# Pinned release to install (a v<version> GitHub Release must exist).
-decdn_node_version: "0.1.0"
-# Recommended: pin the tarball's sha256 (no checksums file is published upstream).
-decdn_node_sha256: ""
+# --- Which binaries to install ------------------------------------------------
+# Upstream has cut NO release tag yet (`git ls-remote --tags decdn/decdn` is empty
+# and release.yml only fires on a v[0-9]* tag push), so there is no tarball to
+# download and "release" mode cannot work. Build both binaries from a decdn/decdn
+# checkout and point the role at them:
+#     cargo build --release -p decdn-node -p decdn-cli
+# Once upstream cuts a release, switch to:
+#     decdn_node_install_method: release
+#     decdn_node_version: "0.1.1"
+# and the role verifies the tarballs against the GPG-signed SHA256SUMS manifest.
+decdn_node_install_method: manual
+decdn_node_manual_bin_src: ""   # MUST-EDIT — control-machine path to decdn-node
+decdn_cli_manual_bin_src: ""    # MUST-EDIT — control-machine path to decdn
 
 # --- Chain (Arbitrum Sepolia, chain 421614) -----------------------------------
 # The RPC endpoint (decdn_rpc_url) is the one sensitive value — set it in secret.yml.
 decdn_chain_id: 421614                                   # Arbitrum Sepolia
-# Required contracts (from the chain-421614 deployment).
-decdn_payment_channel_address: "0x62B911B7CdEA5eedFB7dC0E2343440516fB8cb43"   # PaymentChannel
-decdn_capacity_bond_address: "0x2F08aE39B0127C92d56F9E5eAd20692b217dDc58"     # CapacityBond
-decdn_slash_judge_address: "0xa9feAb7c1a82e32a2A52c40aD545C0111eC3A2b4"       # SlashJudge
+# Required contracts. All four are mandatory upstream — a node will not resolve its
+# config without them.
+decdn_payment_pool_address: "0x64140155a931C01c5ff008c0667F0C3657a6d357"      # PaymentPool
+decdn_capacity_bond_address: "0xb6262F55bf20935d22F95A1aEc5b6101A5D98B5e"     # CapacityBond
+decdn_slash_judge_address: "0x63Bc91195baDfc1c65a9A2cf0556Bbfd18E94A55"       # SlashJudge
+# ContentBlacklist became REQUIRED (ADR 011/031): an absent or zero address is a
+# fail-open compliance trap, and serving a blacklisted hash past its compliance
+# window is slashable.
+decdn_content_blacklist_address: "0x1971CeD7Ac2c37e87a1b8Cf25f4611B0D3F2b9B0"  # ContentBlacklist
 
 # --- Slash appeals (optional; ADR 028) ----------------------------------------
-decdn_slash_appeal_address: "0x4CA50D80bFcBA877eAC4cFa36FF95D7f803c6590"       # SlashAppeal
-decdn_slash_judge_from_block: 11418331   # SlashJudge deploy block — bounds per-restart rescan
+# Only `decdn appeal slash` uses this; the daemon validates but ignores it.
+decdn_slash_appeal_address: "0x2C56029cD21E5eaa325C01f3Cd22c46C6E34040D"       # SlashAppeal
 
-# --- Origin directory (optional; ADR 022 — set both or neither) ---------------
-decdn_origin_assignment_address: "0x632F49B3447810eF20eee884fF6e7EAB5560b19e"  # OriginAssignment
-decdn_publisher_registry_address: "0xa9D014d24924E7A5BCaB9E49A68119B1e92EBCD7" # PublisherRegistry
-decdn_origin_directory_from_block: 11418331   # PublisherRegistry deploy block
+# --- Origin directory (optional; ADR 022) -------------------------------------
+# Independently optional since #1737 dropped the whole-directory mirror.
+# OriginAssignment feeds the daemon's cache-miss pull-through fallback;
+# PublisherRegistry is validate-only on the daemon and consumed by `decdn publish`.
+decdn_origin_assignment_address: "0x25C872456E8BC7c1a8c698CEB3FF7Ea6667d9cd2"  # OriginAssignment
+decdn_publisher_registry_address: "0x5C99fAF051c1684f1b481982c7D730883b60e339" # PublisherRegistry
 
-# --- Content blacklist compliance (optional; ADR 011/031) ---------------------
-decdn_content_blacklist_address: "0x7e903dd1674EDe0596629205E55e5fe1B670dBD3"  # ContentBlacklist
-decdn_content_blacklist_from_block: 11418331  # ContentBlacklist deploy block
+# --- CLI-only (optional) ------------------------------------------------------
+# externalDeps.usdc from the same manifest. The daemon validates but never reads
+# it; `decdn setup` uses it to bond with USDC instead of the native token.
+decdn_usdc_address: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d"
 
 # --- Cache pull-through origin (what the node fetches on a cache miss) ---------
 # MUST-EDIT — operator-specific backing origin (NOT a chain fact). A serving node
 # needs one, else cache misses fail NoOrigin. http shown; see defaults/main.yml for
-# fs / s3 fields.
+# fs / s3 fields, and decdn_cache_origins for an ordered fallback list.
 decdn_cache_origin_kind: "http"
 decdn_cache_origin_url: "https://your-origin.example/"
 
 # --- Node identity / locale ---------------------------------------------------
 decdn_region: "US"            # MUST-EDIT — ISO 3166-1 alpha-2 of the node's physical location
-# decdn_relay_url: ""         # optional iroh relay for NAT traversal
+# decdn_relay_urls: []        # optional iroh relays for NAT traversal ([] => n0 defaults)
 
 # --- Economics ----------------------------------------------------------------
+# Seller-side quote. The on-chain PaymentPool rate bounds are authoritative at
+# runtime — the daemon overwrites payment.delivery_floor from getRateBounds() at
+# startup — so this is the node's own asking price, not a clamp.
 decdn_rate_per_mb: 10         # USDC base units (6 decimals); 10 = $0.00001/MB

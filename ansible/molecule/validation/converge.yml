@@ -10,6 +10,12 @@
 # That is what makes this a real regression guard: if a bad value slipped PAST
 # validation, the role would run on and fail later at a differently-named task (e.g.
 # the keystore gate) — which is NOT counted, so the final assert catches the miss.
+#
+# ONE case is deliberately different: the final "config-gate" case has a valid
+# config and has to reach the END of the role, because what it proves is that the
+# post-template `decdn config validate` gate still fails the deploy. It therefore
+# mutates the host, which is why this scenario has a prepare.yml staging wallet
+# material. It runs last so it cannot interfere with the assert-only cases above.
 - name: Converge (expect validation failures)
   hosts: all
   become: true
@@ -22,24 +28,28 @@
     decdn_cli_manual_bin_src: "{{ stub_bin }}"
     decdn_rpc_url: "https://rpc.example.invalid/"
     decdn_region: "US"
-    decdn_payment_channel_address: "0x1111111111111111111111111111111111111111"
+    decdn_payment_pool_address: "0x1111111111111111111111111111111111111111"
     decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
     decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
+    # REQUIRED upstream (ADR 011/031) — the role asserts it with the other three.
+    decdn_content_blacklist_address: "0x4444444444444444444444444444444444444444"
   tasks:
     - name: Initialize the rejected-by-validation tracker
       ansible.builtin.set_fact:
         decdn_rejected: []
 
     # --- Case: cross-field (the regression guard for the effective-value fix) ------
-    # A raised pull_ahead with the leech cap left UNSET (resolves to 256 MiB): the
-    # daemon would reject floor>cap, so the role must too.
-    - name: "Case cross-field — pull_ahead above the default (unset) leech cap"
+    # A raised eviction target with high-water left UNSET (resolves to 90). The
+    # eviction hysteresis gap is STRUCTURAL upstream — target must be <= high-water
+    # MINUS 5 — so 88 is rejected even though it is plainly less than 90. That
+    # margin is exactly what a naive `<` comparison would let through.
+    - name: "Case cross-field — eviction target inside the structural hysteresis gap"
       block:
-        - name: Run decdn_node with pull_ahead > default leech cap
+        - name: Run decdn_node with eviction_target_pct within 5 of the default high-water
           ansible.builtin.include_role:
             name: decdn_node
           vars:
-            decdn_pull_ahead_bytes: 536870912
+            decdn_eviction_target_pct: 88
       rescue:
         - name: Record cross-field rejection (only if a validation assert failed)
           ansible.builtin.set_fact:
@@ -81,7 +91,7 @@
           ansible.builtin.include_role:
             name: decdn_node
           vars:
-            decdn_enable_0rtt: "yes"
+            decdn_relay_foreign_namespaces: "yes"
       rescue:
         - name: Record bool rejection (only if a validation assert failed)
           ansible.builtin.set_fact:
@@ -103,6 +113,70 @@
             decdn_rejected: "{{ decdn_rejected + ['list'] }}"
           when: ansible_failed_task.name is match('^Validate optional')
 
+    # --- Case: enum (a policy value outside the daemon's closed set) --------------
+    - name: "Case enum — unknown eviction policy"
+      block:
+        - name: Run decdn_node with an unknown eviction policy
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_eviction_policy: "lfu"
+      rescue:
+        - name: Record enum rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['enum'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
+    # --- Case: dict (unknown key in a rate-limit table) ---------------------------
+    # The template renders these tables from a fixed key list, so an unknown key is
+    # SILENTLY DROPPED rather than rendered — the limit would stay at its default
+    # with nothing in the diff to show for it. Only the assert catches this.
+    - name: "Case dict — unknown key in a rate-limit table"
+      block:
+        - name: Run decdn_node with an unknown DHT rate-limit key
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_dht_rate_limit:
+              per_peer_rate_per_second: 10.0
+      rescue:
+        - name: Record dict rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['dict'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
+    # --- Case: bounded-range (below a HARD floor the daemon errors on) ------------
+    # tinylfu sketch_bytes has a 16384 floor, and it bites on the stock lru/always
+    # policies too because the default serve_economics policy builds the same
+    # sketch — so a below-floor value is a startup crash-loop on a config that
+    # otherwise looks fine.
+    - name: "Case bounded-range — tinylfu sketch below the hard floor"
+      block:
+        - name: Run decdn_node with an undersized tinylfu sketch
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_tinylfu_sketch_bytes: 8192
+      rescue:
+        - name: Record bounded-range rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['bounded-range'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
+    # --- Case: float (a non-numeric would `| float` to 0.0, disabling a limit) -----
+    - name: "Case float — non-numeric rate limit"
+      block:
+        - name: Run decdn_node with a non-numeric float knob
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_security_per_source_rate_per_sec: "fast"
+      rescue:
+        - name: Record float rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['float'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
     # --- Case: string (double-quote breaks the rendered TOML string) --------------
     - name: "Case string — user_agent containing a double-quote"
       block:
@@ -117,6 +191,63 @@
             decdn_rejected: "{{ decdn_rejected + ['string'] }}"
           when: ansible_failed_task.name is match('^Validate optional')
 
+    # --- Case: the config gate itself ---------------------------------------------
+    # Every case above trips an Ansible assert BEFORE the host is touched. This one
+    # proves the last line of defence still works: `decdn config validate` runs
+    # with `failed_when: false` and hands off to a separate `fail` task, so a
+    # regression in that task's `when:` would silently turn the authoritative gate
+    # into a no-op and start the daemon on an unvalidated config. The stub honours
+    # a marker file to force a non-zero validate.
+    - name: "Case config-gate — a rejected config must fail the deploy"
+      block:
+        # The role notifies `Restart decdn-node` when it writes the env file and
+        # node.toml — both of which happen BEFORE the config gate. In production
+        # the gate's failure aborts the play, so those handlers never flush. Here
+        # the rescue below lets the play complete, so they do — and they would
+        # fail on a unit that the aborted role never got as far as installing.
+        # Pre-install it so the play can flush them, keeping this case about the
+        # gate rather than about handler ordering.
+        # A placeholder, not the role's own template: that template interpolates
+        # role variables which are not in scope in this play. All the handler
+        # needs is a unit it can restart.
+        - name: Pre-install a placeholder unit so the pending handler can flush
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/decdn-node.service
+            mode: "0644"
+            content: |
+              [Unit]
+              Description=placeholder for the molecule validation scenario
+              [Service]
+              Type=oneshot
+              RemainAfterExit=yes
+              ExecStart=/bin/true
+              [Install]
+              WantedBy=multi-user.target
+
+        - name: Reload systemd so the placeholder unit is visible
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+
+        - name: Force the stub's config validate to refuse
+          ansible.builtin.copy:
+            dest: /etc/decdn/stub-bad-config
+            content: "molecule\n"
+            mode: "0644"
+
+        - name: Run decdn_node against a config the binary rejects
+          ansible.builtin.include_role:
+            name: decdn_node
+      rescue:
+        - name: Record config-gate rejection (only if the gate task failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['config-gate'] }}"
+          when: ansible_failed_task.name is match('^Report the config-validation failure')
+      always:
+        - name: Clear the forced-failure marker
+          ansible.builtin.file:
+            path: /etc/decdn/stub-bad-config
+            state: absent
+
     - name: Confirm every bad value was rejected by the role's own validation
       ansible.builtin.assert:
         that:
@@ -127,4 +258,6 @@
           a missing tag means that bad value slipped past validation (it would reach
           the daemon and crash-loop it at config load).
       vars:
-        _decdn_expected: ["cross-field", "range", "shape", "bool", "list", "string"]
+        _decdn_expected:
+          ["cross-field", "range", "bounded-range", "shape", "bool", "enum", "dict",
+           "float", "list", "string", "config-gate"]
