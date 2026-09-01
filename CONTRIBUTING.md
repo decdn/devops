@@ -23,7 +23,7 @@ tree), and `markdownlint`.
 |--------|--------------|
 | `make lint` | run all pre-commit hooks on every file (the full local hygiene gate) |
 | `make lint-ansible` | install Galaxy collections + run `ansible-lint` (its production profile includes the Ansible security rules) |
-| `make security` | KICS IaC security scan of `ansible/` (engine image; CI uses the official KICS action) |
+| `make security` | KICS IaC security scan of `ansible/` (digest-pinned engine image — CI runs this same target) |
 
 `ansible-lint` is **not** a per-commit hook (it needs the collections installed).
 Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hook-stage manual`.
@@ -41,14 +41,16 @@ Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hoo
 
 - **Third-party actions are pinned to a full commit SHA** with a version comment
   — a mutable tag can be re-pointed to malicious code.
-- **`Checkmarx/kics-github-action`** was hijacked in the March 2026 TeamPCP attack
-  (CISA KEV) and has since been remediated. It is pinned to the **post-remediation
-  hardened HEAD** by SHA — *not* a release tag, because the newest tag (`v2.1.20`)
-  predates the April hardening. Dependabot is told **not** to bump it
-  (`.github/dependabot.yml`); re-pin manually only after verifying a newer clean
-  commit. The KICS engine image used locally (`make security`) is the **Docker Hub**
-  engine (a different artifact than the hijacked action) and is pinned by a
-  digest verified against Docker Hub — currently `v2.1.20`.
+- **`Checkmarx/kics-github-action` is deliberately not used.** Its git tags were
+  hijacked in the March 2026 TeamPCP attack (CISA KEV), and even post-remediation
+  its entrypoint `apk add`s `nodejs`/`npm` at *run* time inside its digest-pinned
+  base image and executes the result — an unpinned fetch that defeats the pinning.
+  (That fetch also breaks it outright today: Chainguard's current nodejs needs a
+  newer glibc than the pinned base ships, so the action's Node reporter dies and
+  the step fails regardless of findings.) CI instead runs `make security`, which
+  drives the **Docker Hub** KICS engine image — a different artifact from the
+  hijacked action — pinned by a digest verified against Docker Hub, currently
+  `v2.1.20`. The engine's `--fail-on high` exit code is the gate.
 - **Dependabot** (`.github/dependabot.yml`) bumps the other action SHAs weekly.
 - **Bump manually** (Dependabot can't): the `KICS_IMAGE` digest in the `Makefile`,
   and the pre-commit hook revs via `pre-commit autoupdate`.
