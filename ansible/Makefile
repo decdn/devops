@@ -38,8 +38,11 @@ limit_arg = $(if $(LIMIT),--limit '$(LIMIT)')
 # does not catch an argument that is well-formed but selects nothing — `--tags` with a
 # typo (decdn-node vs decdn_node) runs zero tasks and still exits 0. See ansible/README.md.
 ifneq ($(filter check deploy,$(MAKECMDGOALS)),)
+  # Echo back the goal the operator actually typed, so the hint never nudges a
+  # `make check` dry-run toward the mutating `make deploy`.
+  scoped_goal := $(firstword $(filter check deploy,$(MAKECMDGOALS)))
   ifeq ($(origin LIMIT),environment)
-    $(error LIMIT is set in your environment ($(LIMIT)) and would silently scope this run. Unset it or pass it on the command line: make deploy LIMIT=<host>)
+    $(error LIMIT is set in your environment ($(LIMIT)) and would silently scope this run. Unset it or pass it on the command line: make $(scoped_goal) LIMIT=<host>)
   endif
   ifeq ($(origin ANSIBLE_ARGS),environment)
     $(error ANSIBLE_ARGS is set in your environment and would silently alter this run. Unset it or pass it on the command line)
