@@ -80,6 +80,7 @@ make molecule         # containerised converge/verify of the decdn_node role (ne
 cd ansible
 make deps             # vendor pinned Galaxy collections into ./collections
 make check / deploy   # deCDN node (site.yml): dry-run / provision
+                      # fleet-wide by default; LIMIT=<host> scopes, ANSIBLE_ARGS='…' passes through
 make build / galaxy-check       # stage + build the decdn.node collection, then validate it
 ```
 

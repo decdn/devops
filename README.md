@@ -99,6 +99,7 @@ make security         # KICS IaC scan of ansible/ (pinned engine image)
 cd ansible
 make deps                         # vendor pinned Galaxy collections into ./collections
 make check / deploy               # deCDN node (site.yml): dry-run / provision
+                                  # fleet-wide by default; LIMIT=<host> scopes, ANSIBLE_ARGS='…' passes through
 ```
 
 **Gotcha — pre-commit is local-only.** Hygiene/shellcheck/yamllint/markdown run via

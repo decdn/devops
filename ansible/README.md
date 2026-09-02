@@ -106,6 +106,45 @@ make check          # dry run (--check --diff); asserts fire if required knobs a
 make deploy         # provision + start the node
 ```
 
+Both targets are **fleet-wide by default** — every host in `decdn_nodes`. Scope a run with
+`LIMIT`:
+
+```bash
+make check  LIMIT=decdn-node-1                    # dry-run one host
+make deploy LIMIT=decdn-node-1                    # converge one host
+make deploy LIMIT='decdn-node-1,decdn-node-2'     # a list
+make deploy LIMIT='!decdn-node-2'                 # any ansible host pattern
+```
+
+Quote the pattern at your own prompt — your shell runs before make does, and eats a bare
+`!decdn-node-2` (history expansion) or `decdn-node-*` (globbing).
+
+Use `LIMIT` when **bringing up a new node**: that host's first converge creates the
+operator account and then lets `ssh_hardening` disable root + password login — after which
+you switch its `ansible_user` by hand (see [Setup](#setup) above; the converge does not
+edit your inventory). You do not want that play re-converging nodes already serving
+paid traffic. Same when re-running a single node after a config change, a failed play, or a
+binary bump.
+
+`make check`/`make deploy` refuse to run if `LIMIT` or `ANSIBLE_ARGS` reaches them from an
+exported shell variable, or if `LIMIT` expands empty — both are ways a run looks scoped but
+is silently fleet-wide.
+
+`ANSIBLE_ARGS` passes anything else straight through. Quote the whole value at your prompt,
+or make will read the extra words as its own goals and flags (a bare `-vv` is make's `-v`);
+the recipe's shell then splits it back into separate flags, so inner quoting works. Write a
+literal `$` as `$$`:
+
+```bash
+make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='--tags decdn_node -vv'
+make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='--start-at-task="Install the decdn binaries"'
+```
+
+> **Watch the PLAY RECAP.** A *well-formed* argument that selects nothing is not an error:
+> `--tags decdn-node` (hyphen, vs the real `decdn_node`) runs zero tasks and still exits 0,
+> as does a `--limit` matching a host outside `decdn_nodes`. A malformed flag fails loudly;
+> these do not. Confirm the recap lists the hosts you expected.
+
 Then confirm:
 
 ```bash
