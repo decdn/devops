@@ -42,8 +42,8 @@ Not yet published to Galaxy (pre-1.0; the published shape may still change).
   it. A template for the host file ships at
   `roles/decdn_node/files/decdn.env.example`.
 - `decdn_env_checksum_file` (default `/etc/decdn/.decdn.env.sha256`, `0600 root`) —
-  a role-managed record of the env file's hash, written on both authoring paths
-  after the daemon is running. It restarts the unit when an **out-of-band** edit of
+  a role-managed `<source> <sha256>` record for the env file, written on both
+  authoring paths after the daemon is running. It restarts the unit when an **out-of-band** edit of
   a host-provisioned `decdn.env` is detected (instead of leaving the daemon on stale
   values behind a green deploy), and doubles as the file's provenance marker: an
   empty `decdn_rpc_url` against a file the role itself wrote fails loud (a missing
@@ -66,6 +66,24 @@ Not yet published to Galaxy (pre-1.0; the published shape may still change).
   keystore is absent (minting a random `0600` password file first, but only when the
   keystore is also absent), never overwriting an existing wallet. Funding + on-chain
   staking/registration remain a manual step.
+
+### Fixed
+
+- **`decdn_extra_env` values were escaped incorrectly** in the `0600` env file, and
+  `DECDN_RPC_URL` was not escaped at all. Inside a YAML literal block Jinja reads
+  `'\\'` as *two* literal backslashes, so the role's hand-rolled
+  `replace('\\', '\\\\') | replace('"', '\\"')` chain never matched a lone backslash
+  and rendered a double quote as `\\"` — an escaped backslash followed by a
+  *closing* quote. Any value containing a quote was truncated there and any
+  backslash was passed through unescaped; systemd then skipped the line it could
+  not parse and the variable was simply **absent** at runtime (an S3 origin whose
+  secret key contained a quote or backslash would 403 with nothing to show why).
+  Both are now rendered with `to_json(ensure_ascii=false)`, which emits exactly the
+  double-quoted, C-escaped form `EnvironmentFile=` expects. Values containing a
+  space, `#`, quote, backslash or non-ASCII character now survive intact.
+  **Upgrade note:** this changes the rendered file (`DECDN_RPC_URL` gains quotes),
+  so the first converge on the inventory path rewrites it and restarts the daemon
+  once.
 
 ### Changed (BREAKING)
 

@@ -95,13 +95,23 @@
         src: "{{ decdn_etc }}/.decdn.env.sha256"
       register: decdn_env_recorded
 
-    - name: Assert the recorded checksum matches the env file on disk
+    - name: Assert the record names the HOST path and the file's real hash
       ansible.builtin.assert:
         that:
-          - (decdn_env_recorded.content | b64decode | trim) == decdn_env_hash.stat.checksum
+          - record_fields | length == 2
+          # Must say "host": recorded as "inventory" here, the next converge would
+          # read an empty decdn_rpc_url plus a matching hash as "the value went
+          # missing from inventory" and fail a perfectly good node.
+          - record_fields[0] == 'host'
+          - record_fields[1] == decdn_env_hash.stat.checksum
         fail_msg: >-
-          The recorded env-file checksum does not match {{ decdn_etc }}/decdn.env,
-          so the restart-on-out-of-band-edit signal is wrong in both directions.
+          Expected "host <sha256 of decdn.env>" in
+          {{ decdn_etc }}/.decdn.env.sha256, got
+          "{{ decdn_env_recorded.content | b64decode | trim }}". A wrong hash makes
+          the restart-on-out-of-band-edit signal wrong in both directions; a wrong
+          source token makes the next converge fail this node.
+      vars:
+        record_fields: "{{ (decdn_env_recorded.content | b64decode | trim).split() }}"
 
     # node.toml must carry the S3 origin with source = "default-chain" and NO
     # static keys: the credentials live only in the 0600 env file.

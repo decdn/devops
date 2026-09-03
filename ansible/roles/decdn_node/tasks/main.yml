@@ -68,13 +68,17 @@
 #
 # `stat.exists` alone cannot tell those apart — a file the role itself wrote on a
 # previous converge exists just as much as an operator-provisioned one. That
-# ambiguity is dangerous in BOTH directions, so the checksum this role records
-# after every successful converge is used as a provenance marker:
-#   record == file  -> this role authored the file
-#   record missing  -> provenance unknown (pre-#39 host, or first converge)
-#   record != file  -> the file was changed by someone other than this role
-# get_checksum is what makes that comparison possible; the value is a sha256 of a
-# secret-bearing file, not the secret, and it never leaves the 0600 record.
+# ambiguity is dangerous in BOTH directions, so after every converge that gets the
+# daemon running the role records WHICH PATH wrote the file and what its contents
+# hashed to, as "<source> <sha256>" in decdn_env_checksum_file. The source token is
+# load-bearing and not derivable from the hash: the record is written on both
+# paths, so a matching hash means only "unchanged since the last converge".
+#   source=host      -> the operator owns this file
+#   source=inventory -> this role rendered it from decdn_rpc_url
+#   no record        -> provenance unknown (a host predating this mechanism)
+#   hash mismatch    -> the file changed since that converge
+# get_checksum is what makes the hash comparison possible; the value is a sha256 of
+# a secret-bearing file, not the secret.
 - name: Check for a host-provisioned secret environment file
   ansible.builtin.stat:
     path: "{{ decdn_env_file }}"
@@ -93,14 +97,16 @@
   failed_when: false
   changed_when: false
 
+# Both fields default to "" — treated exactly like "no record", which is also the
+# right answer for a truncated or older single-field record: warn, do not fail.
 - name: Resolve the env file's provenance
   ansible.builtin.set_fact:
-    # "" when no record exists — provenance unknown.
-    decdn_env_recorded_sum: "{{ decdn_env_recorded.content | default('') | b64decode | trim }}"
-    decdn_env_role_authored: >-
-      {{ (decdn_env_pre_stat.stat.checksum | default('') | length > 0)
-         and ((decdn_env_recorded.content | default('') | b64decode | trim)
-              == (decdn_env_pre_stat.stat.checksum | default(''))) }}
+    decdn_env_record_source: >-
+      {{ ((decdn_env_recorded.content | default('') | b64decode | trim).split() | length == 2)
+         | ternary((decdn_env_recorded.content | default('') | b64decode | trim).split()[0], '') }}
+    decdn_env_recorded_sum: >-
+      {{ ((decdn_env_recorded.content | default('') | b64decode | trim).split() | length == 2)
+         | ternary((decdn_env_recorded.content | default('') | b64decode | trim).split()[1], '') }}
 
 - name: Require chain + contract configuration
   ansible.builtin.assert:
@@ -189,7 +195,8 @@
 - name: Refuse to adopt a role-authored env file as host-provisioned
   ansible.builtin.assert:
     that:
-      - not decdn_env_role_authored | bool
+      - decdn_env_record_source != 'inventory'
+        or decdn_env_recorded_sum != (decdn_env_pre_stat.stat.checksum | default(''))
     fail_msg: >-
       decdn_rpc_url is empty, but {{ decdn_env_file }} is byte-for-byte the file
       THIS ROLE last wrote from inventory — so the value has gone missing from the
@@ -215,9 +222,11 @@
     that:
       - decdn_env_overwrite_host_file | bool
     fail_msg: >-
-      decdn_rpc_url is set, but {{ decdn_env_file }} on this host does not match
-      the checksum this role last recorded — it was written or edited by someone
-      else. Rendering it from inventory would DISCARD those lines (any
+      decdn_rpc_url is set, but {{ decdn_env_file }} on this host is not a file
+      this role authored — the provenance record reads
+      "{{ decdn_env_record_source | default('', true) }}" and/or its checksum no
+      longer matches, so it was written or edited by someone else. Rendering it
+      from inventory would DISCARD those lines (any
       AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY behind an S3 origin included), and
       because this role never reads the file it cannot tell you what would be
       lost. Clear decdn_rpc_url to keep the host's copy, fold the host's extra
@@ -227,7 +236,9 @@
     - decdn_rpc_url | length > 0
     - decdn_env_pre_stat.stat.exists
     - decdn_env_recorded_sum | length > 0
-    - not decdn_env_role_authored | bool
+    - >-
+      decdn_env_record_source != 'inventory'
+      or decdn_env_recorded_sum != (decdn_env_pre_stat.stat.checksum | default(''))
 
 # The env file is authored ALL-OR-NOTHING from inventory: the copy below renders
 # DECDN_RPC_URL *and* decdn_extra_env in one go, and it is skipped entirely when
@@ -1092,10 +1103,20 @@
     owner: "{{ decdn_user }}"
     group: "{{ decdn_group }}"
     mode: "0600"
+    # to_json, NOT hand-rolled replace() chains. Inside a YAML literal block Jinja
+    # takes '\\' as TWO literal backslashes, so the obvious
+    # `replace('\\', '\\\\') | replace('"', '\\"')` silently escapes the wrong
+    # thing: it never matches a lone backslash, and it renders a quote as \\" —
+    # an escaped backslash followed by a CLOSING quote, truncating the value.
+    # to_json emits exactly the double-quoted, C-escaped form systemd's
+    # EnvironmentFile parser expects, and ensure_ascii=false keeps UTF-8 literal
+    # (systemd understands \xNN, not \uNNNN). It supplies the quotes itself, so a
+    # value with a space, '#', quote or backslash survives intact — the RPC URL
+    # included, which used to be interpolated raw.
     content: |
-      DECDN_RPC_URL={{ decdn_rpc_url }}
+      DECDN_RPC_URL={{ decdn_rpc_url | string | to_json(ensure_ascii=false) }}
       {% for k, v in (decdn_extra_env | default({}, true)) | dictsort %}
-      {{ k }}="{{ v | string | replace('\\', '\\\\') | replace('"', '\\"') }}"
+      {{ k }}={{ v | string | to_json(ensure_ascii=false) }}
       {% endfor %}
   no_log: true                     # the RPC URL may embed an API key
   register: decdn_env_copy
@@ -1341,7 +1362,14 @@
     owner: root
     group: root
     mode: "0600"
-    content: "{{ decdn_env_post_stat.stat.checksum }}\n"
+    # "<source> <sha256>" — the source token is what a later converge uses to tell
+    # "the operator owns this file" from "I rendered this from inventory".
+    # Parenthesised: filters bind tighter than comparisons, so an unbracketed
+    # `decdn_rpc_url | length > 0 | ternary(...)` parses as
+    # (decdn_rpc_url | length) > (0 | ternary(...)).
+    content: >
+      {{ (decdn_rpc_url | length > 0) | ternary('inventory', 'host') }}
+      {{ decdn_env_post_stat.stat.checksum }}
   # Under `--check` on an unprovisioned host the env-file copy only SIMULATES the
   # write, so there is nothing to hash and stat.checksum is undefined. Requiring
   # the checksum itself (not merely stat.exists) also keeps a non-regular file —

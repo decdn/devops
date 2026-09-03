@@ -310,12 +310,12 @@ decdn_home: /var/lib/decdn               # data dir: node.secret + keystore.json
 decdn_etc: /etc/decdn
 decdn_config_file: /etc/decdn/node.toml
 decdn_env_file: /etc/decdn/decdn.env     # DECDN_RPC_URL (sensitive) — 0600
-# Role-managed record of the env file's sha256 as of the last converge that got
-# the daemon running. NOT a secret store (it holds one hash, 0600 root:root). It
-# does two jobs: it lets an OUT-OF-BAND edit of a host-provisioned decdn.env
-# notify the restart handler, and it is the file's provenance marker — matching
-# means this role authored it, differing means someone else did, and absent means
-# the host predates this mechanism. Written on BOTH authoring paths.
+# Role-managed "<source> <sha256>" record for the env file, as of the last
+# converge that got the daemon running. NOT a secret store (0600 root:root, one
+# hash and one word). It does two jobs: it lets an OUT-OF-BAND edit of a
+# host-provisioned decdn.env notify the restart handler, and it records WHICH PATH
+# wrote the file. Written on BOTH paths, which is why the source token exists — a
+# matching hash alone only proves the file is unchanged, not who authored it.
 decdn_env_checksum_file: /etc/decdn/.decdn.env.sha256
 # Confirm that rendering the env file from inventory may DISCARD a host-side edit.
 # Only consulted when the recorded checksum proves the file on the host is not the

@@ -64,16 +64,19 @@
     - name: Assert the env file renders the RPC URL and an escaped decdn_extra_env
       ansible.builtin.assert:
         that:
-          - "'DECDN_RPC_URL=https://rpc.example.invalid/' in env_body"
-          # Exact escaped form: the template wraps extra_env values in double
-          # quotes and escapes backslash-then-quote. A regression here is silent —
-          # systemd drops the unparseable line and the variable is simply absent.
+          - env_rpc_expected in env_body
+          # Exact escaped form. This caught a real inversion in the original
+          # hand-rolled replace() chain, which rendered a quote as \\" — an escaped
+          # backslash plus a CLOSING quote — truncating the value at the first
+          # quote and leaving backslashes unescaped. The failure is silent:
+          # systemd drops the line it cannot parse and the variable is absent.
           - env_expected in env_body
         fail_msg: >-
           {{ decdn_etc }}/decdn.env is missing the RPC URL or did not escape the
           decdn_extra_env value correctly. Got: {{ env_body }}
       vars:
         env_body: "{{ decdn_env_body.content | b64decode }}"
+        env_rpc_expected: 'DECDN_RPC_URL="https://rpc.example.invalid/"'
         env_expected: 'DECDN_MOLECULE_EXTRA="a \"quoted\" \\ value"'
 
     - name: Compute the env file's current sha256
@@ -88,14 +91,23 @@
         src: "{{ decdn_etc }}/.decdn.env.sha256"
       register: decdn_env_recorded
 
-    - name: Assert the recorded checksum describes the env file the role wrote
+    - name: Assert the record names the inventory path and the file's real hash
       ansible.builtin.assert:
         that:
-          - (decdn_env_recorded.content | b64decode | trim) == decdn_env_hash.stat.checksum
+          - record_fields | length == 2
+          # The source token is not derivable from the hash and is what stops a
+          # later converge with an empty decdn_rpc_url from adopting this
+          # role-authored file as though the operator owned it.
+          - record_fields[0] == 'inventory'
+          - record_fields[1] == decdn_env_hash.stat.checksum
         fail_msg: >-
-          The recorded env-file checksum does not match {{ decdn_etc }}/decdn.env on
-          the inventory-authored path, so the next converge would either restart the
-          daemon for no reason or miss a real change."
+          Expected "inventory <sha256 of decdn.env>" in
+          {{ decdn_etc }}/.decdn.env.sha256, got
+          "{{ decdn_env_recorded.content | b64decode | trim }}". A wrong hash makes
+          the next converge restart for no reason or miss a real change; a wrong
+          source token breaks the provenance guards.
+      vars:
+        record_fields: "{{ (decdn_env_recorded.content | b64decode | trim).split() }}"
 
     # prepare.yml stages the keystore + password at 0644; the role is responsible
     # for locking them to 0600. Asserting 0600 here therefore verifies the role's

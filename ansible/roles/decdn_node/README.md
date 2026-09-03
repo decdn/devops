@@ -281,24 +281,35 @@ but **not** to `decdn_rpc_url` itself, which is rendered raw.
 
 ### The provenance record
 
-`/etc/decdn/.decdn.env.sha256` (`0600 root`, `decdn_env_checksum_file`) holds the
-env file's sha256 as of the last converge that got the daemon running. It is
-written on **both** paths, and it is what lets the role tell the two apart — a
-bare `stat` cannot, since a file the role wrote last week exists exactly as much
-as an operator-provisioned one. From it the role gets three behaviours:
+`/etc/decdn/.decdn.env.sha256` (`0600 root`, `decdn_env_checksum_file`) holds
+`<source> <sha256>` — which path wrote the file, and what its contents hashed to —
+as of the last converge that got the daemon running:
+
+```text
+host 3b1f…c7    # the operator owns /etc/decdn/decdn.env
+inventory 9a4e…21    # this role rendered it from decdn_rpc_url
+```
+
+It is written on **both** paths, which is exactly why the `source` token is needed
+and cannot be inferred from the hash: a matching hash only means "unchanged since
+the last converge". A bare `stat` tells you even less — a file the role wrote last
+week exists exactly as much as an operator-provisioned one. From this the role gets
+three behaviours:
 
 - **Restart on an out-of-band edit.** Record ≠ file on the host path ⇒ the unit is
   restarted so the daemon picks up the new values. The record is written *after*
   the restart, so a run that aborts in between leaves the old value in place and
   the next converge re-detects — the signal is never burned by a failed deploy.
 - **"`secret.yml` went missing" ≠ "the host owns this now."** An empty
-  `decdn_rpc_url` against a file the role itself wrote is treated as a lost
-  inventory value and fails loud, instead of silently deploying a stale endpoint.
-  To migrate a node to the host path deliberately, `sudo rm` the record once.
-- **No silent clobbering.** An inventory `decdn_rpc_url` against a file the record
-  says someone else wrote fails loud rather than discarding those lines; set
-  `decdn_env_overwrite_host_file: true` to confirm. With **no** record (a host
-  that predates this) the role cannot tell, so it warns and starts tracking.
+  `decdn_rpc_url` against a file recorded as `inventory` *and* unchanged since is
+  treated as a lost inventory value and fails loud, instead of silently deploying a
+  stale endpoint. To migrate a node to the host path deliberately, `sudo rm` the
+  record once — that is the explicit hand-over.
+- **No silent clobbering.** An inventory `decdn_rpc_url` against a file recorded as
+  `host`, or one whose hash no longer matches, fails loud rather than discarding
+  those lines; set `decdn_env_overwrite_host_file: true` to confirm. With **no**
+  record (a host that predates this) the role cannot tell, so it warns and starts
+  tracking.
 
 If neither authoring path is satisfied the role fails before touching the host,
 with the provisioning commands above in the failure message.
@@ -441,7 +452,7 @@ additionally requires on-chain stake + registration (see
 - `/usr/local/bin/decdn-node`, `/usr/local/bin/decdn` — daemon + CLI
 - `/etc/decdn/node.toml` (`0640 decdn`) — rendered config; non-secret (no `rpc_url`), so it stays `--check`-diffable
 - `/etc/decdn/decdn.env` (`0600 decdn`) — the one operator-supplied secret, `DECDN_RPC_URL` (+ any extra env vars), read by the unit via `EnvironmentFile`; role-authored or host-provisioned ([Secrets](#secrets))
-- `/etc/decdn/.decdn.env.sha256` (`0600 root`) — role-managed hash of the above: provenance marker, and the trigger for a restart after an out-of-band edit. Not a secret store
+- `/etc/decdn/.decdn.env.sha256` (`0600 root`) — role-managed `<source> <sha256>` record of the above: provenance marker, and the trigger for a restart after an out-of-band edit. Not a secret store
 - `/etc/decdn/keystore.password` (`0600 decdn`) — operator-provisioned
 - `/var/lib/decdn/` (`0700 decdn`) — `node.secret`, `keystore.json`, `cache/`, state
 - `/etc/systemd/system/decdn-node.service` — hardened unit
