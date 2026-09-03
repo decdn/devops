@@ -355,7 +355,9 @@ decompress = "{{ o.decompress }}"
   S3 credentials. Only the `default-chain` source is templated: `static` would put
   an access key into this 0640, diffable file. Supply static keys as
   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN in the 0600
-  {{ decdn_env_file }} instead — the default chain reads exactly those.
+  {{ decdn_env_file }} instead — the default chain reads exactly those. Either
+  write them there on the host, or (when the role authors that file, i.e.
+  decdn_rpc_url is set) pass them as decdn_extra_env.
 #}
 {% if not _multi and decdn_cache_origin_kind == 's3' and decdn_cache_origin_s3_use_default_chain | bool %}
 

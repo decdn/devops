@@ -25,9 +25,11 @@ baseline   host hardening — DevSec os/ssh, nftables default-deny inbound,
   operators must not install or enable ufw, which would replace the nftables ruleset and
   drop QUIC/SSH.
 - **No secrets in the repo.** The node's eth keystore is **operator-provisioned** and never
-  generated here; its `rpc_url` (which may embed an API key) lives in a git-ignored
-  `host_vars/<node>/secret.yml` (the rest of `host_vars` is committed, non-secret config) and
-  is rendered to a `0600` config.
+  generated here; its `rpc_url` (which may embed an API key) is provisioned the same way —
+  a `0600 /etc/decdn/decdn.env` written on the target host, which the role gates on but
+  never reads back — or, if you prefer, carried in a git-ignored
+  `host_vars/<node>/secret.yml` (the rest of `host_vars` is committed, non-secret config)
+  and rendered to that same `0600` file.
 - **Host hardening via DevSec** (`os_hardening` + `ssh_hardening`): key-only SSH, no root
   login, kernel/sysctl/PAM hardening — applied last, after the admin key is in place.
   baseline overrides a few `os_hardening` sysctls so hardening can't sever node
@@ -54,10 +56,28 @@ make deps                                    # vendor pinned collections into ./
 cp inventory/hosts.yml.example inventory/hosts.yml
 $EDITOR inventory/hosts.yml                   # set hosts for decdn_nodes
 $EDITOR inventory/group_vars/all.yml          # optional: override admin user/keys, allowlists
-# Per-node RPC secret (the rest of host_vars/<node>/main.yml is committed config):
+```
+
+The per-node **secret** (`decdn_rpc_url`, which may embed a provider API key, plus any
+environment-borne secrets like AWS keys for an S3 origin) has two homes — pick one.
+**Preferred:** provision a `0600 /etc/decdn/decdn.env` on the target host and leave
+`decdn_rpc_url` empty, so nothing sensitive is stored on or transits this machine. The role
+then leaves that file's contents alone, enforcing only `0600 decdn:decdn`. Full commands and
+the file format are in
+[`roles/decdn_node/README.md` § Secrets](roles/decdn_node/README.md#secrets) — the single
+canonical copy; don't duplicate them here.
+
+**Or** carry it in inventory, and the role authors `decdn.env` from those values on every run:
+
+```bash
 cp inventory/host_vars/decdn-node-1/secret.yml.example inventory/host_vars/decdn-node-1/secret.yml
 $EDITOR inventory/host_vars/decdn-node-1/secret.yml   # set decdn_rpc_url
 ```
+
+The role fails loud when neither exists, and — once it has recorded a checksum for the file —
+when the two would collide: an inventory value that would discard a host-side edit, or an
+empty `decdn_rpc_url` that turns out to mean "`secret.yml` went missing" rather than "the host
+owns this file".
 
 Your `hosts.yml` is no longer force-ignored — commit it in your fork if you want, or keep
 it local.
@@ -86,8 +106,10 @@ unless you listed one).
    `decdn_node_manual_bin_src` / `decdn_cli_manual_bin_src`).
 2. Per-node config in `inventory/host_vars/<node>/main.yml` (committed) —
    the install method + binary sources, the **four** required contract addresses,
-   `decdn_region`, cache origin, … — plus the one secret, `decdn_rpc_url`, in a sibling
-   git-ignored `secret.yml` (copy the shipped `host_vars/decdn-node-1/secret.yml.example`).
+   `decdn_region`, cache origin, … — plus the one secret, `decdn_rpc_url`, either
+   provisioned as `/etc/decdn/decdn.env` on the host (preferred — see
+   [Setup](#setup)) or in a sibling git-ignored `secret.yml` (copy the shipped
+   `host_vars/decdn-node-1/secret.yml.example`).
    The committed `main.yml` already carries the current Arbitrum Sepolia addresses; edit
    `decdn_region`, the binary paths and the cache origin for your node. Contract addresses
    are protocol facts — copy them from the upstream deployment manifest
@@ -188,7 +210,7 @@ a non-mutating dry run.
 
 Defaults live in each role (`roles/*/defaults/main.yml`); override in `group_vars`
 (shared) or `host_vars` (per node; `main.yml` committed config, `secret.yml` git-ignored for
-the RPC URL). Highlights:
+the RPC URL when it is not provisioned on the host instead). Highlights:
 
 | Var | Default | Notes |
 |-----|---------|-------|
@@ -198,8 +220,9 @@ the RPC URL). Highlights:
 | `baseline_preserve_ipv6_autoconf` | `true` | Keep IPv6 RA/autoconf under hardening; set `false` for static-IPv6 hosts. |
 | `baseline_rp_filter_loose` | `false` | `true` loosens reverse-path filtering (`rp_filter=2`) for multi-homed nodes. |
 | `decdn_node_version` | `""` | **required**; a `v<version>` release must exist. |
-| `decdn_rpc_url` + 3 contract addresses | `""` | **required** per node — `rpc_url` in `host_vars/<node>/secret.yml`, addresses in `main.yml`; sourced from an ADR/deployment. |
+| `decdn_rpc_url` + 3 contract addresses | `""` | **required** per node — `rpc_url` from a host-provisioned `0600 /etc/decdn/decdn.env` (preferred) *or* `host_vars/<node>/secret.yml`, addresses in `main.yml`; sourced from an ADR/deployment. |
 | `decdn_region` / `decdn_bind_port` / `decdn_rate_per_mb` | `""` / `4433` / `10` | node identity, QUIC port, USDC base units/MB. |
+| `decdn_env_checksum_file` / `decdn_env_overwrite_host_file` | `/etc/decdn/.decdn.env.sha256` / `false` | Provenance record for the secret env file (`0600 root`), and the opt-in that lets an inventory `decdn_rpc_url` overwrite a host-edited one. |
 
 ---
 

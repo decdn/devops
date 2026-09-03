@@ -3,13 +3,20 @@
 # REJECTS bad values (AGENTS.md hard-rule 4), so a regression that weakens an assert
 # fails CI. Each case runs decdn_node with a VALID required config plus ONE bad
 # optional knob, wrapped in block/rescue. The role aborts at its validation asserts
-# (which run before any host mutation), so cases don't interfere and no service starts.
+# (which for the tuning-knob cases run before any host mutation), so those cases
+# don't interfere and no service starts. The env-file cases below are the
+# exception — see the ordering note.
 #
-# The rescue records a case as "rejected" ONLY when the failing task is one of the
-# role's own "Validate optional ..." asserts (matched on ansible_failed_task.name).
-# That is what makes this a real regression guard: if a bad value slipped PAST
-# validation, the role would run on and fail later at a differently-named task (e.g.
-# the keystore gate) — which is NOT counted, so the final assert catches the miss.
+# The rescue records a case as "rejected" ONLY when the failing task is the SPECIFIC
+# assert that case targets (matched on ansible_failed_task.name — mostly the role's
+# "Validate optional ..." family, plus the two secret-source gates). That is what
+# makes this a real regression guard: if a bad value slipped PAST validation, the
+# role would run on and fail later at a differently-named task (e.g. the keystore
+# gate) — which is NOT counted, so the final assert catches the miss.
+#
+# Two cases touch host state on purpose: "env-extra" stages a host-provisioned
+# /etc/decdn/decdn.env (it has to exist for that gate to fire), so it must run
+# AFTER "env-gate", which proves the absent-file case still fails.
 #
 # ONE case is deliberately different: the final "config-gate" case has a valid
 # config and has to reach the END of the role, because what it proves is that the
@@ -191,8 +198,96 @@
             decdn_rejected: "{{ decdn_rejected + ['string'] }}"
           when: ansible_failed_task.name is match('^Validate optional')
 
+    # --- Case: no RPC endpoint anywhere (#39) -------------------------------------
+    # decdn_rpc_url may now be empty — but ONLY when the operator has provisioned
+    # /etc/decdn/decdn.env on the host. Nothing has staged that file yet at this
+    # point in the play, so "empty and absent" must still fail loud. A regression
+    # that relaxed the gate to "always optional" would start a daemon with no chain
+    # endpoint. This case must run BEFORE the one below, which stages the file.
+    - name: "Case env-gate — no rpc_url and no host-provisioned env file"
+      block:
+        - name: Run decdn_node with neither an inventory rpc_url nor a host env file
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_rpc_url: ""
+      rescue:
+        - name: Record env-gate rejection (only if the RPC gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['env-gate'] }}"
+          when: ansible_failed_task.name is match('^Require an RPC endpoint')
+
+    # --- Case: decdn_extra_env against a host-provisioned env file (#39) ----------
+    # The role writes the env file ALL-OR-NOTHING from inventory, so extra_env with
+    # an empty rpc_url would be silently dropped — the S3 origin would 403 hours
+    # later with nothing in the deploy output to explain it. Must fail loud instead.
+    - name: "Case env-extra — decdn_extra_env alongside a host-provisioned env file"
+      block:
+        - name: Stage a host-provisioned env file so the role takes the host path
+          ansible.builtin.copy:
+            dest: /etc/decdn/decdn.env
+            content: "DECDN_RPC_URL=https://rpc.example.invalid/\n"
+            mode: "0600"
+
+        - name: Run decdn_node with extra_env but no rpc_url
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_rpc_url: ""
+            decdn_extra_env:
+              DECDN_MOLECULE_EXTRA: "would-be-silently-dropped"
+      rescue:
+        - name: Record env-extra rejection (only if the extra_env assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['env-extra'] }}"
+          when: ansible_failed_task.name is match('^Reject decdn_extra_env')
+      always:
+        # Each env-file case owns its fixture end to end rather than relying on the
+        # next case to tolerate what it left behind — the ordering dependency was
+        # already implicit and a third case made it fragile.
+        - name: Remove the staged env file so later cases start clean
+          ansible.builtin.file:
+            path: /etc/decdn/decdn.env
+            state: absent
+
+    # --- Case: a host env file with no usable DECDN_RPC_URL (#39) -----------------
+    # The RPC gate accepts the host path on stat.exists ALONE, so this grep is the
+    # only thing standing between a file that merely exists and a daemon started
+    # with no chain endpoint. Without a case here, weakening the pattern (dropping
+    # the value match, un-anchoring it) or neutering the report task's `when:`
+    # would be an invisible regression — exactly what the config-gate case below
+    # exists to prevent for its own gate. The staged file is commented out, which
+    # is the realistic operator error (and `DECDN_RPC_URL= ` with only whitespace
+    # must fail too — that is what the [^[:space:]] in the pattern buys).
+    - name: "Case env-content — host env file carrying no usable DECDN_RPC_URL"
+      block:
+        - name: Stage a host env file whose DECDN_RPC_URL is commented out
+          ansible.builtin.copy:
+            dest: /etc/decdn/decdn.env
+            content: |
+              #DECDN_RPC_URL=https://rpc.example.invalid/
+              DECDN_MOLECULE_OTHER=present
+            mode: "0600"
+
+        - name: Run decdn_node against an env file with no usable endpoint
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_rpc_url: ""
+      rescue:
+        - name: Record env-content rejection (only if the content gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['env-content'] }}"
+          when: ansible_failed_task.name is match('^Report a host-provisioned env file')
+      always:
+        - name: Remove the staged env file so later cases start clean
+          ansible.builtin.file:
+            path: /etc/decdn/decdn.env
+            state: absent
+
     # --- Case: the config gate itself ---------------------------------------------
-    # Every case above trips an Ansible assert BEFORE the host is touched. This one
+    # Every tuning-knob case above trips an Ansible assert before the host is
+    # touched (env-extra is the exception — it stages a file first). This one
     # proves the last line of defence still works: `decdn config validate` runs
     # with `failed_when: false` and hands off to a separate `fail` task, so a
     # regression in that task's `when:` would silently turn the authoritative gate
@@ -260,4 +355,5 @@
       vars:
         _decdn_expected:
           ["cross-field", "range", "bounded-range", "shape", "bool", "enum", "dict",
-           "float", "list", "string", "config-gate"]
+           "float", "list", "string", "env-gate", "env-extra", "env-content",
+           "config-gate"]

@@ -1,0 +1,52 @@
+---
+# Edit the host-provisioned env file OUT OF BAND, exactly as an operator rotating
+# an RPC key would, and record the daemon's current MainPID. molecule.yml runs a
+# SECOND converge after this, and verify.yml then asserts the PID changed.
+#
+# This is the only test of the feature's headline behaviour. Every other assertion
+# about /etc/decdn/.decdn.env.sha256 checks a precondition (it exists, it is 0600
+# root, it matches the file) — all of which stay true if the restart signal is
+# removed entirely. `idempotence` proves the converse (an UNCHANGED file must not
+# restart), so the two together pin the behaviour from both sides.
+- name: Side effect — rotate the secret out of band
+  hosts: all
+  become: true
+  vars:
+    decdn_etc: /etc/decdn
+  tasks:
+    # pgrep, not `systemctl show --property=MainPID`: ansible-lint's
+    # command-instead-of-module rule rejects any `systemctl` invocation, and there
+    # is no module that returns a unit's PID. This queries the process table
+    # instead, which is a different job from managing the service.
+    - name: Record the daemon's PID before the edit
+      ansible.builtin.command:
+        cmd: pgrep -f '/usr/local/bin/decdn-node run'
+      register: decdn_pid_before
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the daemon was actually running before the edit
+      ansible.builtin.assert:
+        that:
+          - decdn_pid_before.stdout_lines | length == 1
+          - decdn_pid_before.stdout | trim | int > 0
+        fail_msg: >-
+          Expected exactly one running decdn-node before the out-of-band edit
+          (got {{ decdn_pid_before.stdout_lines | default([]) }}), so a PID change
+          after it would prove nothing.
+
+    - name: Save the pre-edit MainPID for verify.yml
+      ansible.builtin.copy:
+        dest: "{{ decdn_etc }}/molecule-pid-before"
+        content: "{{ decdn_pid_before.stdout | trim }}\n"
+        mode: "0644"
+
+    # Append/replace in place rather than rewriting the file: this must look like
+    # an operator edit, and it also proves the role preserves the line it did not
+    # write (DECDN_MOLECULE_HOST_LINE) across the restart path.
+    - name: Rotate the secret out of band (operator edits the file directly)
+      ansible.builtin.lineinfile:
+        path: "{{ decdn_etc }}/decdn.env"
+        regexp: '^DECDN_RPC_URL='
+        line: "DECDN_RPC_URL=https://rotated.example.invalid/"
+        mode: "0600"

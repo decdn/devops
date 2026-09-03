@@ -51,8 +51,10 @@ ansible/                # the deployment project (DevSec-hardened, lean roles)
   tarball — verified against the release's GPG-signed `SHA256SUMS` — or, while upstream
   has no release tag cut (the current default), from locally-built binaries; under a hardened
   systemd unit; public QUIC udp/4433, loopback metrics/admin, operator-provisioned eth
-  keystore, required chain knobs (no baked protocol facts — sourced from ADRs), over a
-  shared DevSec-hardened `baseline`. See `ansible/README.md`. (On-chain node
+  keystore, operator-provisionable secret env file, and required chain knobs (no baked
+  protocol facts — sourced from ADRs), over a shared DevSec-hardened `baseline`.
+  Leaving `decdn_rpc_url` empty means the operator wrote `0600 /etc/decdn/decdn.env`
+  on the host and the role only gates on it, so no secret transits the control machine. See `ansible/README.md`. (On-chain node
   stake/registration, ADR 019 Phase 2, is a manual operator step, driven by `decdn setup`.)
 
   **Config-schema coupling.** `roles/decdn_node/templates/node.toml.j2` renders against

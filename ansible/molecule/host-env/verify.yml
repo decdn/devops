@@ -1,0 +1,182 @@
+---
+# Verify the host-provisioned secret path (#39): the role must have left the
+# operator's /etc/decdn/decdn.env byte-for-byte intact, locked it to 0600
+# decdn:decdn, recorded its checksum, and started the daemon on it.
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    decdn_etc: /etc/decdn
+    # What the host file holds by the time verify runs: prepare.yml's content with
+    # side_effect.yml's rotated DECDN_RPC_URL line. Comparing against a literal
+    # (rather than re-reading and trusting whatever is there) is what makes this an
+    # assertion about the ROLE's behaviour and not a tautology — and the untouched
+    # DECDN_MOLECULE_HOST_LINE is a key the role has no inventory var for, so a
+    # role that rewrote the file could not have reproduced it.
+    expected_env: |
+      DECDN_RPC_URL=https://rotated.example.invalid/
+      DECDN_MOLECULE_HOST_LINE=written-by-the-operator
+  tasks:
+    - name: Read back the host-provisioned env file
+      ansible.builtin.slurp:
+        src: "{{ decdn_etc }}/decdn.env"
+      register: decdn_env_content
+
+    - name: Assert the role did not rewrite the operator's env file
+      ansible.builtin.assert:
+        that:
+          - (decdn_env_content.content | b64decode) == expected_env
+        fail_msg: >-
+          {{ decdn_etc }}/decdn.env does not hold the operator's content. With
+          decdn_rpc_url unset the role must leave it byte-for-byte alone — a
+          rewrite would have dropped DECDN_MOLECULE_HOST_LINE (converge passes no
+          decdn_extra_env), which in production is the AWS credential line behind
+          the S3 origin: silently broken at runtime, green at deploy time. It must
+          also have survived the out-of-band rotation in side_effect.yml.
+          Got: {{ decdn_env_content.content | b64decode }}
+
+    # prepare.yml stages the env file (and the wallet material) at 0644; the role
+    # is responsible for locking them to 0600. Asserting 0600 here therefore
+    # verifies the role's lock-down ran, not a mode prepare pre-set.
+    - name: Stat the env file, its checksum record, and the wallet material
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: decdn_files
+      loop:
+        - "{{ decdn_etc }}/decdn.env"
+        - "{{ decdn_etc }}/.decdn.env.sha256"
+        - /var/lib/decdn/keystore.json
+        - /var/lib/decdn/node.secret
+        - "{{ decdn_etc }}/keystore.password"
+
+    - name: Assert the role locked the host-provisioned env file to 0600 decdn:decdn
+      ansible.builtin.assert:
+        that:
+          # exists-and-mode-and-owner in one expression: a missing file
+          # short-circuits to the fail_msg instead of raising on the absent stat.
+          - >-
+            decdn_files.results[0].stat.exists
+            and decdn_files.results[0].stat.mode == '0600'
+            and decdn_files.results[0].stat.pw_name == 'decdn'
+            and decdn_files.results[0].stat.gr_name == 'decdn'
+        fail_msg: "decdn.env missing, not 0600, or not owned by decdn (role lock-down did not run)"
+
+    - name: Assert the env-file checksum record exists at 0600 root:root
+      ansible.builtin.assert:
+        that:
+          - >-
+            decdn_files.results[1].stat.exists
+            and decdn_files.results[1].stat.mode == '0600'
+            and decdn_files.results[1].stat.pw_name == 'root'
+        fail_msg: >-
+          {{ decdn_etc }}/.decdn.env.sha256 missing or not 0600 root:root — without
+          it an out-of-band edit of decdn.env would never notify a restart.
+
+    - name: Assert the wallet material is locked to 0600
+      ansible.builtin.assert:
+        that:
+          - decdn_files.results[2].stat.exists and decdn_files.results[2].stat.mode == '0600'
+          - decdn_files.results[3].stat.exists and decdn_files.results[3].stat.mode == '0600'
+          - decdn_files.results[4].stat.exists and decdn_files.results[4].stat.mode == '0600'
+        fail_msg: "keystore / node.secret / password file missing or not 0600"
+
+    # The recorded hash must be the hash of the file as it stands, or the next
+    # converge would restart the daemon for no reason (or, worse, not restart it
+    # after a genuine edit).
+    - name: Compute the env file's current sha256
+      ansible.builtin.stat:
+        path: "{{ decdn_etc }}/decdn.env"
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: decdn_env_hash
+
+    - name: Read the recorded checksum
+      ansible.builtin.slurp:
+        src: "{{ decdn_etc }}/.decdn.env.sha256"
+      register: decdn_env_recorded
+
+    - name: Assert the recorded checksum matches the env file on disk
+      ansible.builtin.assert:
+        that:
+          - (decdn_env_recorded.content | b64decode | trim) == decdn_env_hash.stat.checksum
+        fail_msg: >-
+          The recorded env-file checksum does not match {{ decdn_etc }}/decdn.env,
+          so the restart-on-out-of-band-edit signal is wrong in both directions.
+
+    # node.toml must carry the S3 origin with source = "default-chain" and NO
+    # static keys: the credentials live only in the 0600 env file.
+    - name: Read the rendered node.toml
+      ansible.builtin.slurp:
+        src: "{{ decdn_etc }}/node.toml"
+      register: decdn_node_toml
+
+    - name: Assert node.toml delegates S3 credentials to the env file
+      ansible.builtin.assert:
+        that:
+          - "'source = \"default-chain\"' in node_toml"
+          # No VALUE from the 0600 env file may appear in this 0640, diffable file.
+          # (The template's header comment names DECDN_RPC_URL to explain where the
+          # endpoint lives, so match on the values, not the variable names.)
+          - "'written-by-the-operator' not in node_toml"
+          - "'rpc.example.invalid' not in node_toml"
+        fail_msg: "node.toml is missing the default-chain credential source, or leaked an env-file value"
+      vars:
+        node_toml: "{{ decdn_node_toml.content | b64decode }}"
+
+    # THE headline behaviour: side_effect.yml rotated DECDN_RPC_URL out of band and
+    # molecule.yml re-converged. The daemon must have been restarted, or it is
+    # still serving with the old endpoint behind a green deploy. Comparing MainPID
+    # is what makes this behavioural — the checksum assertions above all remain
+    # true even if the restart signal is deleted outright.
+    - name: Read the pre-edit MainPID recorded by side_effect
+      ansible.builtin.slurp:
+        src: "{{ decdn_etc }}/molecule-pid-before"
+      register: decdn_pid_before
+
+    # pgrep rather than `systemctl show` — see the note in side_effect.yml.
+    - name: Read the daemon's PID after the re-converge
+      ansible.builtin.command:
+        cmd: pgrep -f '/usr/local/bin/decdn-node run'
+      register: decdn_pid_after
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the out-of-band edit restarted decdn-node
+      ansible.builtin.assert:
+        that:
+          - decdn_pid_after.stdout_lines | length == 1
+          - decdn_pid_after.stdout | trim | int > 0
+          - (decdn_pid_after.stdout | trim) != (decdn_pid_before.content | b64decode | trim)
+        fail_msg: >-
+          decdn-node still runs as PID {{ decdn_pid_after.stdout | trim }} after
+          {{ decdn_etc }}/decdn.env was edited out of band and the role re-converged
+          — the daemon is on the PRE-rotation secret behind a green deploy. The
+          env-file checksum record did not drive the restart handler.
+
+    # Without EnvironmentFile the daemon never receives the host-provisioned
+    # secret at all, and every other assertion in this scenario would still pass.
+    - name: Read the rendered systemd unit
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/decdn-node.service
+      register: decdn_unit
+
+    - name: Assert the unit actually loads the secret env file
+      ansible.builtin.assert:
+        that:
+          - "'EnvironmentFile=' ~ decdn_etc ~ '/decdn.env' in (decdn_unit.content | b64decode)"
+        fail_msg: >-
+          decdn-node.service does not carry EnvironmentFile={{ decdn_etc }}/decdn.env,
+          so the host-provisioned secret never reaches the daemon.
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert decdn-node is running on the host-provisioned secrets
+      ansible.builtin.assert:
+        that:
+          # Membership-and-state in one expression so an absent service
+          # short-circuits to the fail_msg instead of raising on .state.
+          - >-
+            'decdn-node.service' in ansible_facts.services
+            and ansible_facts.services['decdn-node.service'].state == 'running'
+        fail_msg: "decdn-node is not running — check: journalctl -u decdn-node -e"

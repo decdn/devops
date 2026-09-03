@@ -1,7 +1,10 @@
 ---
 # decdn-node role defaults. Per-node deployment values belong in host_vars/<node>/:
-# non-secret config (contract addresses, region, version) in the committed main.yml,
-# and the sensitive rpc_url in a git-ignored secret.yml (see secret.yml.example).
+# non-secret config (contract addresses, region, version) in the committed main.yml.
+# The sensitive rpc_url does NOT have to live on the control machine at all —
+# provision /etc/decdn/decdn.env on the target (files/decdn.env.example) and leave
+# decdn_rpc_url empty; set it in a git-ignored secret.yml only if you want the role
+# to author that file for you.
 
 # --- Install method -----------------------------------------------------------
 # "release" (default): download the pinned GitHub Release tarballs (a v<version>
@@ -30,11 +33,18 @@ decdn_verify_release_signature: true
 decdn_release_keyring: decdn-release-KEYS.asc
 
 # --- Identity / on-chain -----------------------------------------------------
-# rpc_url, the FOUR contract addresses and region are REQUIRED with no usable
-# default (empty → the asserts in tasks/main.yml fail loud). Supply via host_vars.
+# The FOUR contract addresses and region are REQUIRED with no usable default
+# (empty → the asserts in tasks/main.yml fail loud). Supply via host_vars.
 # chain_id is the one exception: it defaults to the upstream binary's own default
 # (Arbitrum Sepolia) rather than being a deployment-specific fact to source.
-decdn_rpc_url: ""               # SENSITIVE; may embed an API key
+#
+# rpc_url is required too, but has TWO sources. Leave it empty here and provision
+# a 0600 /etc/decdn/decdn.env on the target host instead (the preferred posture —
+# the secret then never touches the control machine); set it here only to have the
+# role author that file for you, in which case it OVERWRITES any host-provisioned
+# one. The role fails loud when NEITHER is present. See roles/decdn_node/README.md
+# ("Secrets") and roles/decdn_node/files/decdn.env.example.
+decdn_rpc_url: ""               # SENSITIVE; may embed an API key — or provision decdn.env on the host
 decdn_payment_pool_address: ""
 decdn_capacity_bond_address: ""
 decdn_slash_judge_address: ""
@@ -300,11 +310,28 @@ decdn_home: /var/lib/decdn               # data dir: node.secret + keystore.json
 decdn_etc: /etc/decdn
 decdn_config_file: /etc/decdn/node.toml
 decdn_env_file: /etc/decdn/decdn.env     # DECDN_RPC_URL (sensitive) — 0600
+# Role-managed record of the env file's sha256 as of the last converge that got
+# the daemon running. NOT a secret store (it holds one hash, 0600 root:root). It
+# does two jobs: it lets an OUT-OF-BAND edit of a host-provisioned decdn.env
+# notify the restart handler, and it is the file's provenance marker — matching
+# means this role authored it, differing means someone else did, and absent means
+# the host predates this mechanism. Written on BOTH authoring paths.
+decdn_env_checksum_file: /etc/decdn/.decdn.env.sha256
+# Confirm that rendering the env file from inventory may DISCARD a host-side edit.
+# Only consulted when the recorded checksum proves the file on the host is not the
+# one this role last wrote; with no record (a pre-#39 host) the role cannot tell
+# and warns instead. Leave false so an operator-written AWS credential line cannot
+# be silently overwritten by a converge that carries decdn_rpc_url.
+decdn_env_overwrite_host_file: false
 # Extra KEY: value pairs appended to the 0600 env file. This is the supported home
 # for secrets the daemon reads from the environment rather than node.toml — most
 # notably AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN backing an
 # S3 cache origin with source = "default-chain". Keep it out of committed vars:
-# set it in the git-ignored secret.yml alongside decdn_rpc_url.
+# set it in the git-ignored secret.yml alongside decdn_rpc_url — or, better, skip
+# the control machine entirely and write them straight into the host's decdn.env
+# (see decdn_rpc_url above). The two forms are mutually exclusive: the role writes
+# the env file ALL-OR-NOTHING from inventory, so decdn_extra_env alongside a
+# host-provisioned file is rejected rather than silently dropped.
 decdn_extra_env: {}
 # Eth keystore lives in the data dir (matches `decdn key-gen --output-dir`).
 decdn_keystore_file: /var/lib/decdn/keystore.json          # operator-provisioned (0600)

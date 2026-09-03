@@ -102,10 +102,10 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
 ## Required variables (set in `host_vars/<node>/`)
 
 `decdn_node_version` (`release` mode only) **or** `decdn_node_manual_bin_src` +
-`decdn_cli_manual_bin_src` (`manual` mode), `decdn_rpc_url` (sensitive — may embed an
-API key; goes in the git-ignored `secret.yml`, everything else in the committed
-`main.yml`), `decdn_region` (ISO 3166-1 alpha-2), and **four** contract addresses
-(all `0x`+40-hex, none the zero address):
+`decdn_cli_manual_bin_src` (`manual` mode), an RPC endpoint (sensitive — may embed an
+API key; provision it on the host or set `decdn_rpc_url` in the git-ignored
+`secret.yml` — see [Secrets](#secrets)), `decdn_region` (ISO 3166-1 alpha-2), and
+**four** contract addresses (all `0x`+40-hex, none the zero address):
 
 | Variable | Contract | Why required |
 |---|---|---|
@@ -141,8 +141,10 @@ Optional (omitted from `node.toml` unless set):
   dicts) instead — the two forms are mutually exclusive upstream and the role
   fails loud if both are set.
 - `decdn_extra_env` — extra `KEY: value` pairs appended to the 0600
-  `/etc/decdn/decdn.env`. This is where environment-borne secrets belong; see
-  [S3 credentials](#s3-credentials).
+  `/etc/decdn/decdn.env` **when the role authors that file** (i.e. `decdn_rpc_url`
+  is set). With a host-provisioned env file the role rejects it rather than
+  silently dropping it — put those lines in the host file instead. See
+  [Secrets](#secrets) and [S3 credentials](#s3-credentials).
 - `decdn_node_generate_keystore` (default `false`) — opt-in turnkey wallet. When `true`
   the role runs `decdn key-gen` on the host **only if the keystore is absent** (minting a
   random `0600` password file first, but only when the keystore is *also* absent) — it
@@ -227,13 +229,97 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
 - **Observability** — `decdn_otlp_endpoint` (OTLP span export; needs the node built
   `--features otlp`).
 
+## Secrets
+
+Every secret this role needs ends up in exactly one place on the host: `0600`
+files under `/etc/decdn` and `/var/lib/decdn`, owned by the `decdn` user. The
+wallet material (`keystore.json`, `node.secret`, `keystore.password`) is
+provisioned — or, with `decdn_node_generate_keystore`, minted — **on the host**,
+and never touches the control machine. The one
+operator-supplied secret — the chain RPC URL, which may embed a provider API key,
+plus anything else the daemon reads from its environment — has two authoring
+paths:
+
+| | Host-provisioned (preferred) | Inventory-carried |
+|---|---|---|
+| Set | `decdn_rpc_url: ""` (the default) | `decdn_rpc_url` in `host_vars/<node>/secret.yml` |
+| Who writes `/etc/decdn/decdn.env` | you, on the target | the role, on every converge |
+| Secret on the control machine | never | plaintext, git-ignored |
+| Extra env vars | further `KEY=value` lines in that file | `decdn_extra_env` |
+
+On the host path the role never reads the file's contents back — that would put
+the secret on the control machine, defeating the point. It reads only a **sha256**
+of the file (which does cross to the control machine, to be compared and written
+back as the record below), and on that path it confines itself to:
+
+- enforcing `0600 decdn:decdn` on the file, content untouched, after refusing to
+  touch it at all unless it is a regular file (a symlink would have root apply
+  that ownership to whatever it points at);
+- grepping for a `DECDN_RPC_URL=` line with a non-whitespace value, failing loud
+  if there is none.
+
+**Provisioning it.** Do this on the target as **root** — on a host that has never
+been converged the `decdn` account does not exist yet (this role creates it, and
+chowns the file on the next run), so `install -o decdn` / `chown decdn:decdn`
+would fail. The full template, including the S3 credential block, is
+[`files/decdn.env.example`](files/decdn.env.example):
+
+```bash
+(umask 077; sudo mkdir -p /etc/decdn)
+echo 'DECDN_RPC_URL=https://your-endpoint.example/rpc' | sudo tee /etc/decdn/decdn.env >/dev/null
+sudo chmod 600 /etc/decdn/decdn.env
+```
+
+systemd's `EnvironmentFile` parser is shell-*like* but not a shell: one `KEY=value`
+per line, no `export`, no expansion — and it **skips** a line it cannot parse,
+logging a warning to `journalctl -u decdn-node` that is easy to miss, so the
+variable is simply absent at runtime. Single-quote any value containing a space,
+quote, backslash, `$` or backtick. (`decdn config validate` sources this file with
+bash, which *would* expand `$VAR` and execute `$(…)`; quoting avoids both.) On the
+inventory path the role applies that escaping to `decdn_extra_env` values for you —
+but **not** to `decdn_rpc_url` itself, which is rendered raw.
+
+### The provenance record
+
+`/etc/decdn/.decdn.env.sha256` (`0600 root`, `decdn_env_checksum_file`) holds the
+env file's sha256 as of the last converge that got the daemon running. It is
+written on **both** paths, and it is what lets the role tell the two apart — a
+bare `stat` cannot, since a file the role wrote last week exists exactly as much
+as an operator-provisioned one. From it the role gets three behaviours:
+
+- **Restart on an out-of-band edit.** Record ≠ file on the host path ⇒ the unit is
+  restarted so the daemon picks up the new values. The record is written *after*
+  the restart, so a run that aborts in between leaves the old value in place and
+  the next converge re-detects — the signal is never burned by a failed deploy.
+- **"`secret.yml` went missing" ≠ "the host owns this now."** An empty
+  `decdn_rpc_url` against a file the role itself wrote is treated as a lost
+  inventory value and fails loud, instead of silently deploying a stale endpoint.
+  To migrate a node to the host path deliberately, `sudo rm` the record once.
+- **No silent clobbering.** An inventory `decdn_rpc_url` against a file the record
+  says someone else wrote fails loud rather than discarding those lines; set
+  `decdn_env_overwrite_host_file: true` to confirm. With **no** record (a host
+  that predates this) the role cannot tell, so it warns and starts tracking.
+
+If neither authoring path is satisfied the role fails before touching the host,
+with the provisioning commands above in the failure message.
+
 ### S3 credentials
 
 The role deliberately **never** writes static AWS keys into `node.toml`: that file
 is `0640` and diffable, and committing credentials to it would break this repo's
 no-secrets rule. Only `source = "default-chain"` is templated. Set
 `decdn_cache_origin_s3_use_default_chain: true` (plus an optional
-`decdn_cache_origin_s3_profile`) and supply the keys through the `0600` env file:
+`decdn_cache_origin_s3_profile`) and supply the keys through the `0600` env file.
+On the host, as further lines in `/etc/decdn/decdn.env`:
+
+```ini
+AWS_ACCESS_KEY_ID=AKIA...
+AWS_SECRET_ACCESS_KEY=...
+AWS_SESSION_TOKEN=...          # assume-role / SSO only
+```
+
+…or, if you are carrying the RPC URL in inventory anyway, through `decdn_extra_env`
+(the role then renders both into the same file):
 
 ```yaml
 # host_vars/<node>/secret.yml (git-ignored)
@@ -250,7 +336,7 @@ instance profile needs no credentials at all, just the toggle. Note the region i
 **not** taken from `AWS_REGION`: it comes from `[cache.origin].region`
 (`decdn_cache_origin_s3_region`).
 
-### Config reload
+## Config reload
 
 SIGHUP (and `decdn node reload`, which shares its mutex) re-reads the config file
 and applies **five** sections: `observability.log_level`, `cache.pinned_hashes`,
@@ -354,7 +440,8 @@ additionally requires on-chain stake + registration (see
 
 - `/usr/local/bin/decdn-node`, `/usr/local/bin/decdn` — daemon + CLI
 - `/etc/decdn/node.toml` (`0640 decdn`) — rendered config; non-secret (no `rpc_url`), so it stays `--check`-diffable
-- `/etc/decdn/decdn.env` (`0600 decdn`) — the one sensitive value, `DECDN_RPC_URL`, read by the unit via `EnvironmentFile`
+- `/etc/decdn/decdn.env` (`0600 decdn`) — the one operator-supplied secret, `DECDN_RPC_URL` (+ any extra env vars), read by the unit via `EnvironmentFile`; role-authored or host-provisioned ([Secrets](#secrets))
+- `/etc/decdn/.decdn.env.sha256` (`0600 root`) — role-managed hash of the above: provenance marker, and the trigger for a restart after an out-of-band edit. Not a secret store
 - `/etc/decdn/keystore.password` (`0600 decdn`) — operator-provisioned
 - `/var/lib/decdn/` (`0700 decdn`) — `node.secret`, `keystore.json`, `cache/`, state
 - `/etc/systemd/system/decdn-node.service` — hardened unit
