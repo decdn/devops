@@ -40,6 +40,7 @@ jobs:
         # (operator-provisioned keystore + rendered-value assertions), schema
         # (config key-set drift against the upstream field list), validation
         # (bad knobs must be rejected by the role's own asserts), generate-keystore
-        # (opt-in host-side wallet generation), and slow-readiness (advisory
-        # /metrics probe timeout).
+        # (opt-in host-side wallet generation), host-env (host-provisioned
+        # /etc/decdn/decdn.env — no secret on the control machine), and
+        # slow-readiness (advisory /metrics probe timeout).
         run: molecule test --all

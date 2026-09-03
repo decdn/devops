@@ -38,5 +38,9 @@ repository: https://github.com/decdn/devops
 documentation: https://github.com/decdn/devops/tree/main/ansible
 homepage: https://decdn.org
 issues: https://github.com/decdn/devops/issues
-build_ignore:
-  - "*.example"
+# No build_ignore. It used to carry "*.example" as a guard against shipping an
+# inventory secret template, but build.sh stages ONLY roles/ + this overlay — the
+# inventory never enters the tree, so the pattern excluded nothing real while
+# silently dropping roles/decdn_node/files/decdn.env.example, which external
+# operators need (it is the template for the host-provisioned 0600 env file).
+# Add a NARROW, path-anchored pattern here if something must ever be excluded.

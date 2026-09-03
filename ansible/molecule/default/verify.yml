@@ -30,6 +30,7 @@
         - "{{ decdn_etc }}/node.toml"
         - "{{ decdn_etc }}/decdn.env"
         - /etc/systemd/system/decdn-node.service
+        - "{{ decdn_etc }}/.decdn.env.sha256"
 
     - name: Assert node.toml (0640) and the secret env file (0600) modes
       ansible.builtin.assert:
@@ -39,7 +40,74 @@
           - decdn_files.results[0].stat.exists and decdn_files.results[0].stat.mode == '0640'
           - decdn_files.results[1].stat.exists and decdn_files.results[1].stat.mode == '0600'
           - decdn_files.results[2].stat.exists
-        fail_msg: "node.toml / decdn.env / unit missing or wrong mode"
+          # The env-file checksum record (#39) — 0600 root:root. It is what makes an
+          # out-of-band edit of decdn.env notify a restart on the next converge, so
+          # it must be written on the inventory-authored path too.
+          - >-
+            decdn_files.results[3].stat.exists
+            and decdn_files.results[3].stat.mode == '0600'
+            and decdn_files.results[3].stat.pw_name == 'root'
+            and decdn_files.results[3].stat.gr_name == 'root'
+        fail_msg: "node.toml / decdn.env / unit / env-checksum missing or wrong mode/owner"
+
+    # Existence and mode say nothing about the VALUE. A record holding a constant,
+    # an empty string, or the pre-write hash would pass the stat above while
+    # breaking the restart signal in one direction or the other, so compare it
+    # against the file it claims to describe.
+    # The role authored this file from inventory, so unlike the host-env scenario
+    # its exact content IS the role's output and can be asserted directly.
+    - name: Read the role-authored env file
+      ansible.builtin.slurp:
+        src: "{{ decdn_etc }}/decdn.env"
+      register: decdn_env_body
+
+    - name: Assert the env file renders the RPC URL and an escaped decdn_extra_env
+      ansible.builtin.assert:
+        that:
+          - env_rpc_expected in env_body
+          # Exact escaped form. This caught a real inversion in the original
+          # hand-rolled replace() chain, which rendered a quote as \\" — an escaped
+          # backslash plus a CLOSING quote — truncating the value at the first
+          # quote and leaving backslashes unescaped. The failure is silent:
+          # systemd drops the line it cannot parse and the variable is absent.
+          - env_expected in env_body
+        fail_msg: >-
+          {{ decdn_etc }}/decdn.env is missing the RPC URL or did not escape the
+          decdn_extra_env value correctly. Got: {{ env_body }}
+      vars:
+        env_body: "{{ decdn_env_body.content | b64decode }}"
+        env_rpc_expected: 'DECDN_RPC_URL="https://rpc.example.invalid/"'
+        env_expected: 'DECDN_MOLECULE_EXTRA="a \"quoted\" \\ value"'
+
+    - name: Compute the env file's current sha256
+      ansible.builtin.stat:
+        path: "{{ decdn_etc }}/decdn.env"
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: decdn_env_hash
+
+    - name: Read the recorded env-file checksum
+      ansible.builtin.slurp:
+        src: "{{ decdn_etc }}/.decdn.env.sha256"
+      register: decdn_env_recorded
+
+    - name: Assert the record names the inventory path and the file's real hash
+      ansible.builtin.assert:
+        that:
+          - record_fields | length == 2
+          # The source token is not derivable from the hash and is what stops a
+          # later converge with an empty decdn_rpc_url from adopting this
+          # role-authored file as though the operator owned it.
+          - record_fields[0] == 'inventory'
+          - record_fields[1] == decdn_env_hash.stat.checksum
+        fail_msg: >-
+          Expected "inventory <sha256 of decdn.env>" in
+          {{ decdn_etc }}/.decdn.env.sha256, got
+          "{{ decdn_env_recorded.content | b64decode | trim }}". A wrong hash makes
+          the next converge restart for no reason or miss a real change; a wrong
+          source token breaks the provenance guards.
+      vars:
+        record_fields: "{{ (decdn_env_recorded.content | b64decode | trim).split() }}"
 
     # prepare.yml stages the keystore + password at 0644; the role is responsible
     # for locking them to 0600. Asserting 0600 here therefore verifies the role's
@@ -229,6 +297,9 @@
           - "'RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK' in unit"
           - "'SystemCallFilter=@system-service' in unit"
           - "'User=decdn' in unit"
+          # Without this the daemon never receives DECDN_RPC_URL at all, and every
+          # other assertion in this scenario would still pass.
+          - "'EnvironmentFile=/etc/decdn/decdn.env' in unit"
         fail_msg: "hardened unit is missing an expected directive"
       vars:
         unit: "{{ decdn_unit.content | b64decode }}"

@@ -1,0 +1,33 @@
+---
+# Converge with NO decdn_rpc_url and NO decdn_extra_env: every secret the daemon
+# needs is already on the host (staged by prepare.yml), so the role must gate on
+# host state instead of demanding the value from inventory. The remaining
+# chain/contract knobs mirror ../default/converge.yml (placeholder but well-formed,
+# so the role's fail-loud asserts still run). baseline is not exercised here — see
+# molecule.yml.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    # Reuse the single shared stub from the default scenario (do not duplicate it).
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/default/files/decdn-node-stub"
+    decdn_node_install_method: manual
+    decdn_node_manual_bin_src: "{{ stub_bin }}"
+    decdn_cli_manual_bin_src: "{{ stub_bin }}"
+    decdn_node_version: "0.0.0-molecule-stub"
+    # decdn_rpc_url is deliberately UNSET — that is the feature under test.
+    decdn_chain_id: 421614
+    decdn_region: "US"
+    decdn_payment_pool_address: "0x1111111111111111111111111111111111111111"
+    decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
+    decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
+    # REQUIRED upstream (ADR 011/031) — the role asserts it with the other three.
+    decdn_content_blacklist_address: "0x4444444444444444444444444444444444444444"
+    # An S3 origin reading its credentials from the host env file — the exact
+    # combination the old inventory-only path forced onto the control machine.
+    decdn_cache_origin_kind: "s3"
+    decdn_cache_origin_s3_bucket: "molecule-bucket"
+    decdn_cache_origin_s3_region: "us-east-1"
+    decdn_cache_origin_s3_use_default_chain: true
+  roles:
+    - role: decdn_node

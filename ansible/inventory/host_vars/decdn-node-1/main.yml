@@ -1,9 +1,11 @@
 ---
 # Per-node deployment values for decdn-node-1 (COMMITTED — non-secret config only).
 # Ansible merges every *.yml in this directory for host decdn-node-1. The sensitive
-# values (decdn_rpc_url, and any decdn_extra_env secrets) live in the sibling
-# secret.yml (git-ignored) — copy secret.yml.example to secret.yml and fill it in.
-# The node refuses to start until both this file and secret.yml are set.
+# values (decdn_rpc_url, and any environment-borne secrets) live OFF this file:
+# either in a 0600 /etc/decdn/decdn.env provisioned on the target host (preferred —
+# nothing sensitive on the control machine), or in the sibling git-ignored
+# secret.yml (copy secret.yml.example). The role refuses to start the node until
+# this file is set and ONE of those two secret sources exists.
 #
 # CONTRACT ADDRESSES ARE NOT INVENTED HERE. They are a verbatim copy of the
 # upstream deployment manifest decdn/contracts/deployments/421614.json (mirrored
@@ -34,7 +36,8 @@ decdn_node_manual_bin_src: ""   # MUST-EDIT — control-machine path to decdn-no
 decdn_cli_manual_bin_src: ""    # MUST-EDIT — control-machine path to decdn
 
 # --- Chain (Arbitrum Sepolia, chain 421614) -----------------------------------
-# The RPC endpoint (decdn_rpc_url) is the one sensitive value — set it in secret.yml.
+# The RPC endpoint is the one sensitive value — provision it as DECDN_RPC_URL in
+# /etc/decdn/decdn.env on the host, or set decdn_rpc_url in secret.yml.
 decdn_chain_id: 421614                                   # Arbitrum Sepolia
 # Required contracts. All four are mandatory upstream — a node will not resolve its
 # config without them.

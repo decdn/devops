@@ -17,6 +17,15 @@
     # stay in sync with the version string printed by files/decdn-node-stub.
     decdn_node_version: "0.0.0-molecule-stub"
     decdn_rpc_url: "https://rpc.example.invalid/"
+    # The ACCEPTED side of the decdn_extra_env gate (#39): with an inventory
+    # decdn_rpc_url the role authors the whole env file, so extra_env is rendered
+    # rather than rejected. Nothing else in any scenario sets it alongside a
+    # non-empty rpc_url, which left both this branch AND the template's
+    # backslash/quote escaping untested. The value carries a double-quote and a
+    # backslash on purpose — systemd SKIPS a line it cannot parse, so a broken
+    # escape means the variable is silently absent at runtime.
+    decdn_extra_env:
+      DECDN_MOLECULE_EXTRA: 'a "quoted" \ value'
     decdn_chain_id: 421614
     decdn_region: "US"
     decdn_payment_pool_address: "0x1111111111111111111111111111111111111111"

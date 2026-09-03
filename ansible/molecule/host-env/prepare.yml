@@ -1,0 +1,56 @@
+---
+# Stage what an OPERATOR would have provisioned on the host: the eth keystore +
+# password + node identity (as ../default/prepare.yml does), and — the point of
+# this scenario — a /etc/decdn/decdn.env the role must not author or rewrite.
+#
+# Both the env file and the wallet material are staged at 0644, deliberately
+# looser than the target: the role is responsible for locking every one of them
+# to 0600, so verify.yml's mode assertions attribute the mode to the role rather
+# than to what prepare pre-set.
+- name: Prepare
+  hosts: all
+  become: true
+  vars:
+    decdn_home: /var/lib/decdn
+    decdn_etc: /etc/decdn
+  tasks:
+    - name: Ensure data + config directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ decdn_home }}"
+        - "{{ decdn_etc }}"
+
+    - name: Stage a placeholder eth keystore
+      ansible.builtin.copy:
+        dest: "{{ decdn_home }}/keystore.json"
+        content: "{{ '{}' }}\n"
+        mode: "0644"
+
+    - name: Stage a placeholder keystore password file
+      ansible.builtin.copy:
+        dest: "{{ decdn_etc }}/keystore.password"
+        content: "molecule-placeholder\n"
+        mode: "0644"
+
+    - name: Stage a placeholder node identity
+      ansible.builtin.copy:
+        dest: "{{ decdn_home }}/node.secret"
+        content: "molecule-placeholder-node-secret\n"
+        mode: "0644"
+
+    # The host-provisioned secret env file. It carries a second KEY=value the role
+    # has no inventory var for at all (converge passes no decdn_extra_env), so
+    # verify.yml's byte-identical assertion proves the role preserved operator
+    # content it could not have reproduced. In production that second line is
+    # typically AWS_ACCESS_KEY_ID for an S3 origin; a neutral marker name is used
+    # here so the KICS hardcoded-secret query has nothing to flag in a fixture.
+    - name: Stage the operator-provisioned secret environment file
+      ansible.builtin.copy:
+        dest: "{{ decdn_etc }}/decdn.env"
+        content: |
+          DECDN_RPC_URL=https://rpc.example.invalid/
+          DECDN_MOLECULE_HOST_LINE=written-by-the-operator
+        mode: "0644"

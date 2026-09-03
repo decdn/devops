@@ -59,10 +59,58 @@
       decdn_node_generate_keystore must be a boolean (true/false), not a quoted
       string — it gates a `| bool` conditional on host-side wallet generation.
 
+# The RPC URL has TWO authoring paths (#39) and the choice is inferred from host
+# state, so it has to be established BEFORE the asserts that depend on it. Either
+# the operator supplies decdn_rpc_url from inventory (the role then authors the
+# env file, overwriting whatever is on the host), or they provision a 0600
+# /etc/decdn/decdn.env on the target themselves and the secret never touches the
+# control machine at all.
+#
+# `stat.exists` alone cannot tell those apart — a file the role itself wrote on a
+# previous converge exists just as much as an operator-provisioned one. That
+# ambiguity is dangerous in BOTH directions, so after every converge that gets the
+# daemon running the role records WHICH PATH wrote the file and what its contents
+# hashed to, as "<source> <sha256>" in decdn_env_checksum_file. The source token is
+# load-bearing and not derivable from the hash: the record is written on both
+# paths, so a matching hash means only "unchanged since the last converge".
+#   source=host      -> the operator owns this file
+#   source=inventory -> this role rendered it from decdn_rpc_url
+#   no record        -> provenance unknown (a host predating this mechanism)
+#   hash mismatch    -> the file changed since that converge
+# get_checksum is what makes the hash comparison possible; the value is a sha256 of
+# a secret-bearing file, not the secret.
+- name: Check for a host-provisioned secret environment file
+  ansible.builtin.stat:
+    path: "{{ decdn_env_file }}"
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: decdn_env_pre_stat
+
+# Deliberately not `slurp`-ing the env file itself anywhere in this role — only
+# this 0600 record of its hash, which is not sensitive. A missing record is the
+# normal state on a host that has never run a post-#39 converge, so a read failure
+# is an expected outcome rather than an error.
+- name: Read the env-file checksum this role last recorded
+  ansible.builtin.slurp:
+    src: "{{ decdn_env_checksum_file }}"
+  register: decdn_env_recorded
+  failed_when: false
+  changed_when: false
+
+# Both fields default to "" — treated exactly like "no record", which is also the
+# right answer for a truncated or older single-field record: warn, do not fail.
+- name: Resolve the env file's provenance
+  ansible.builtin.set_fact:
+    decdn_env_record_source: >-
+      {{ ((decdn_env_recorded.content | default('') | b64decode | trim).split() | length == 2)
+         | ternary((decdn_env_recorded.content | default('') | b64decode | trim).split()[0], '') }}
+    decdn_env_recorded_sum: >-
+      {{ ((decdn_env_recorded.content | default('') | b64decode | trim).split() | length == 2)
+         | ternary((decdn_env_recorded.content | default('') | b64decode | trim).split()[1], '') }}
+
 - name: Require chain + contract configuration
   ansible.builtin.assert:
     that:
-      - decdn_rpc_url | length > 0
       - decdn_chain_id | int > 0
       - decdn_payment_pool_address is match('^0x[0-9a-fA-F]{40}$')
       - decdn_capacity_bond_address is match('^0x[0-9a-fA-F]{40}$')
@@ -74,7 +122,7 @@
       - decdn_content_blacklist_address != decdn_zero_address
       - decdn_region is match('^[A-Z]{2}$')
     fail_msg: >-
-      decdn_rpc_url, a positive decdn_chain_id, the FOUR contract addresses
+      A positive decdn_chain_id, the FOUR contract addresses
       (0x + 40 hex, none the zero address), and an uppercase ISO-3166 2-letter
       decdn_region are required. decdn_content_blacklist_address joined this list
       upstream (ADR 011/031): the daemon now refuses to resolve a config without a
@@ -84,6 +132,136 @@
       (decdn/contracts/deployments/<chainId>.json) — never guess. Set them in host_vars.
   vars:
     decdn_zero_address: "0x0000000000000000000000000000000000000000"
+
+# The RPC endpoint gate. Mirrors the pre-start keystore gate below: the role does
+# not insist on carrying the secret itself, it insists the secret EXISTS — either
+# in inventory, or already on the host at 0600. Only "neither" is a failure.
+#
+# The provisioning commands below are deliberately heredoc-free and reference NO
+# `decdn` user: this assert fires ~700 tasks before "Create decdn system user", so
+# on a never-converged host that account does not exist yet and `install -o decdn`
+# / `chown decdn:decdn` would fail. Creating the file as root is correct — "Lock
+# down a host-provisioned env file" chowns it to {{ decdn_user }} on the converge
+# that follows. (A heredoc cannot survive this message either: an indented `EOF`
+# does not terminate `<<'EOF'`, and the block's own indentation would prefix the
+# written line with spaces, which the DECDN_RPC_URL grep below then rejects.)
+- name: Require an RPC endpoint — inventory value or a host-provisioned env file
+  ansible.builtin.assert:
+    that:
+      - decdn_rpc_url | length > 0 or decdn_env_pre_stat.stat.exists
+    fail_msg: |-
+      No RPC endpoint: decdn_rpc_url is empty and {{ decdn_env_file }} does not
+      exist on this host. The URL may embed a provider API key, so the preferred
+      posture is to provision it on the host and keep it off the control machine
+      entirely. Run this on the TARGET, as root (the {{ decdn_user }} account may
+      not exist yet — this role creates it, and chowns the file on the next run).
+      umask FIRST, so the file is never briefly world-readable; the explicit chmod
+      is the belt-and-braces, since sudo may apply its own umask:
+        umask 077
+        sudo mkdir -p {{ decdn_etc }}
+        echo 'DECDN_RPC_URL=https://…' | sudo tee {{ decdn_env_file }} >/dev/null
+        sudo chmod 600 {{ decdn_env_file }}
+      Add any other environment-borne secrets (e.g. AWS_ACCESS_KEY_ID /
+      AWS_SECRET_ACCESS_KEY for an S3 cache origin) as further KEY=value lines in
+      that same file — see roles/decdn_node/files/decdn.env.example. This role
+      then leaves the file's CONTENT alone and only enforces 0600 ownership.
+      Alternatively set decdn_rpc_url (plus any decdn_extra_env) in the git-ignored
+      host_vars/<node>/secret.yml and the role will author the file for you.
+
+# stat.exists is true for a directory or a symlink. Both are hazards, not merely
+# unsupported: "Lock down a host-provisioned env file" runs `file` as root, and
+# with the module's default follow:true a symlink planted by a compromised
+# {{ decdn_user }} account (which owns the 0750 {{ decdn_etc }}) would have root
+# chown+chmod the TARGET — /etc/shadow, say. A symlink also has no stat.checksum,
+# which would surface much later as an undefined-variable crash. Refuse early.
+- name: Require the env file to be a regular file
+  ansible.builtin.assert:
+    that:
+      - decdn_env_pre_stat.stat.isreg | default(false)
+    fail_msg: >-
+      {{ decdn_env_file }} exists but is not a regular file
+      (symlink/directory/device). This role chowns and chmods that path as root,
+      so following a link out of {{ decdn_etc }} would apply 0600 {{ decdn_user }}
+      ownership to whatever it points at. Replace it with a real file. To keep the
+      secret on other storage, bind-mount it there rather than symlinking.
+  when: decdn_env_pre_stat.stat.exists
+
+# The dangerous half of inferring the path from host state. An empty decdn_rpc_url
+# is meant to say "the operator provisioned this file" — but it also happens when
+# the git-ignored secret.yml is simply ABSENT: a fresh clone, a new control
+# machine, a CI runner, an undecrypted vault. Without this check the role would
+# then adopt its own previously-written file as though it were operator-supplied,
+# and a ROTATED url in the missing secret.yml would silently never land: the grep
+# finds the role's own stale DECDN_RPC_URL line, the checksum is unchanged, no
+# restart is queued, and the deploy is green. Before #39 that state failed loud at
+# "Require chain + contract configuration"; this restores that.
+- name: Refuse to adopt a role-authored env file as host-provisioned
+  ansible.builtin.assert:
+    that:
+      - decdn_env_record_source != 'inventory'
+        or decdn_env_recorded_sum != (decdn_env_pre_stat.stat.checksum | default(''))
+    fail_msg: >-
+      decdn_rpc_url is empty, but {{ decdn_env_file }} is byte-for-byte the file
+      THIS ROLE last wrote from inventory — so the value has gone missing from the
+      control machine (an absent host_vars/<node>/secret.yml, a fresh clone, an
+      undecrypted vault) rather than being deliberately handed to the host.
+      Treating it as host-provisioned would deploy green while silently keeping the
+      old endpoint. Restore decdn_rpc_url, or — if you really are migrating this
+      node to the host-provisioned path — hand the file over explicitly by
+      discarding the role's provenance record:
+      sudo rm {{ decdn_env_checksum_file }}
+  when: decdn_rpc_url | length == 0
+
+# The mirror direction, and the reason it is an assert rather than the `debug` it
+# started as: the role now actively tells operators to keep AWS credentials in
+# this file, and an inventory decdn_rpc_url rewrites it WHOLESALE. Losing those
+# lines produces exactly the outcome "Reject decdn_extra_env" exists to prevent —
+# an S3 403 hours later behind a green deploy — so it gets the same treatment.
+# Scoped to a file whose provenance is KNOWN to be foreign: with no record (a
+# pre-#39 host's first converge) this cannot distinguish anything, so it stays
+# quiet and the run seeds the record for next time.
+- name: Require confirmation to overwrite an env file this role did not write
+  ansible.builtin.assert:
+    that:
+      - decdn_env_overwrite_host_file | bool
+    fail_msg: >-
+      decdn_rpc_url is set, but {{ decdn_env_file }} on this host is not a file
+      this role authored — the provenance record reads
+      "{{ decdn_env_record_source | default('', true) }}" and/or its checksum no
+      longer matches, so it was written or edited by someone else. Rendering it
+      from inventory would DISCARD those lines (any
+      AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY behind an S3 origin included), and
+      because this role never reads the file it cannot tell you what would be
+      lost. Clear decdn_rpc_url to keep the host's copy, fold the host's extra
+      lines into decdn_extra_env, or set decdn_env_overwrite_host_file: true to
+      confirm the file is the role's to author.
+  when:
+    - decdn_rpc_url | length > 0
+    - decdn_env_pre_stat.stat.exists
+    - decdn_env_recorded_sum | length > 0
+    - >-
+      decdn_env_record_source != 'inventory'
+      or decdn_env_recorded_sum != (decdn_env_pre_stat.stat.checksum | default(''))
+
+# The env file is authored ALL-OR-NOTHING from inventory: the copy below renders
+# DECDN_RPC_URL *and* decdn_extra_env in one go, and it is skipped entirely when
+# decdn_rpc_url is empty. So extra_env alongside a host-provisioned file would be
+# silently dropped — surfacing hours later as an S3 403 with nothing in the deploy
+# output to explain it (AGENTS.md hard-rule 4). Fail loud instead.
+- name: Reject decdn_extra_env when the env file is host-provisioned
+  ansible.builtin.assert:
+    that:
+      - decdn_extra_env | default({}, true) | length == 0
+    fail_msg: >-
+      decdn_extra_env is set but decdn_rpc_url is empty, so this role will NOT
+      write the host-provisioned {{ decdn_env_file }} and those variables would
+      never reach the daemon. Append them as KEY=value lines to
+      {{ decdn_env_file }} on the host instead, or move BOTH decdn_rpc_url and
+      decdn_extra_env into host_vars/<node>/secret.yml so the role authors the
+      whole file.
+  when:
+    - decdn_rpc_url | length == 0
+    - decdn_env_pre_stat.stat.exists
 
 # slash_appeal_address is optional (only `decdn appeal slash` uses it — the daemon
 # validates but ignores the key), so it is not in the hard assert above. But if an
@@ -261,8 +439,9 @@
       decdn_cache_origin_s3_use_default_chain must be a real boolean, and
       decdn_cache_origin_s3_profile (when set) must contain no quote, whitespace or
       backslash. Static AWS keys are never written to node.toml — put
-      AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN in
-      decdn_extra_env (git-ignored secret.yml) and leave the default chain to read them.
+      AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN in the 0600
+      {{ decdn_env_file }} on the host (or in decdn_extra_env, if the role authors
+      that file) and leave the default chain to read them.
 
 - name: Reject S3 credential knobs alongside the multi-origin form
   ansible.builtin.assert:
@@ -274,8 +453,8 @@
       only to the single [cache.origin] table — the template does not render a
       credentials sub-table for [[cache.origins]] entries, so setting them with
       decdn_cache_origins would SILENTLY drop them. Omit the credentials block (the
-      AWS default chain is used anyway when it is absent) and supply keys via
-      decdn_extra_env, or switch to the single-origin form.
+      AWS default chain is used anyway when it is absent) and supply keys via the
+      0600 {{ decdn_env_file }}, or switch to the single-origin form.
   when: decdn_cache_origins | length > 0
 
 # --- Optional tuning knobs ("" => omit + use the daemon default) --------------
@@ -912,19 +1091,151 @@
 # The RPC URL is the one sensitive value (it may embed an API key), so it lives
 # in a 0600 EnvironmentFile (DECDN_RPC_URL, read by the binary's clap env) rather
 # than node.toml. That keeps node.toml non-secret and diffable under `--check`.
-- name: Write the secret environment file
+#
+# Two authoring paths, decided by the gate near the top of this file (#39):
+#   * decdn_rpc_url set  -> the role authors the file from inventory (below). The
+#     value transits the control machine on every converge and OVERWRITES any
+#     host-provisioned file.
+#   * decdn_rpc_url empty -> the operator wrote the file on the host. The role
+#     never reads its content back (that would put the secret on the control
+#     machine, which is the whole point of the host path); it only enforces
+#     ownership + 0600 and greps for a non-empty DECDN_RPC_URL line.
+- name: Write the secret environment file (inventory-supplied)
   ansible.builtin.copy:
     dest: "{{ decdn_env_file }}"
     owner: "{{ decdn_user }}"
     group: "{{ decdn_group }}"
     mode: "0600"
+    # to_json, NOT hand-rolled replace() chains. Inside a YAML literal block Jinja
+    # takes '\\' as TWO literal backslashes, so the obvious
+    # `replace('\\', '\\\\') | replace('"', '\\"')` silently escapes the wrong
+    # thing: it never matches a lone backslash, and it renders a quote as \\" —
+    # an escaped backslash followed by a CLOSING quote, truncating the value.
+    # to_json emits exactly the double-quoted, C-escaped form systemd's
+    # EnvironmentFile parser expects, and ensure_ascii=false keeps UTF-8 literal
+    # (systemd understands \xNN, not \uNNNN). It supplies the quotes itself, so a
+    # value with a space, '#', quote or backslash survives intact — the RPC URL
+    # included, which used to be interpolated raw.
     content: |
-      DECDN_RPC_URL={{ decdn_rpc_url }}
+      DECDN_RPC_URL={{ decdn_rpc_url | string | to_json(ensure_ascii=false) }}
       {% for k, v in (decdn_extra_env | default({}, true)) | dictsort %}
-      {{ k }}="{{ v | string | replace('\\', '\\\\') | replace('"', '\\"') }}"
+      {{ k }}={{ v | string | to_json(ensure_ascii=false) }}
       {% endfor %}
   no_log: true                     # the RPC URL may embed an API key
+  register: decdn_env_copy
   notify: Restart decdn-node
+  when: decdn_rpc_url | length > 0
+
+# The copy above is no_log, so a run that replaced an existing file with
+# control-machine values shows a bare "changed" and nothing else. Say what was
+# lost. A file with a KNOWN-foreign provenance already failed the assert at the
+# top of this file, so what is left here is the unknowable case: no record yet
+# (a pre-#39 host's first converge). Gated on `is changed` as well, so it speaks
+# up only when the contents actually moved rather than nagging every converge.
+- name: Warn that an inventory decdn_rpc_url overwrote an untracked env file
+  ansible.builtin.debug:
+    msg: >-
+      decdn_rpc_url is set in inventory, so {{ decdn_env_file }} was REWRITTEN
+      from control-machine values, and this host carried no provenance record for
+      it — any KEY=value lines added on the host that are not in decdn_extra_env
+      are gone. From this converge on, that file is tracked: an edit made outside
+      Ansible will fail the deploy instead of being silently discarded. Clear
+      decdn_rpc_url (and decdn_extra_env) to hand the file back to the host.
+  when:
+    - decdn_rpc_url | length > 0
+    - decdn_env_pre_stat.stat.exists
+    - decdn_env_recorded_sum | length == 0
+    - decdn_env_copy is changed
+
+# Content untouched (no `content:`/`src:`) — this only asserts the file is owned
+# by the daemon user and unreadable by anyone else, the same lock-down the
+# operator-provisioned keystore gets above.
+- name: Lock down a host-provisioned env file (ownership + mode only)
+  ansible.builtin.file:
+    path: "{{ decdn_env_file }}"
+    owner: "{{ decdn_user }}"
+    group: "{{ decdn_group }}"
+    mode: "0600"
+  when: decdn_rpc_url | length == 0
+
+# `decdn config validate` further down sources this file, so a missing
+# DECDN_RPC_URL would eventually surface — but as an opaque daemon error about an
+# unresolvable config. Name the actual cause here instead. grep -q keeps the
+# secret out of stdout AND out of argv; deliberately NOT slurp, which would copy
+# the secret to the control machine and defeat the point of the host path.
+- name: Confirm a host-provisioned env file carries a non-empty DECDN_RPC_URL
+  ansible.builtin.command:
+    cmd: grep -qE '^[[:space:]]*DECDN_RPC_URL=[^[:space:]]' {{ decdn_env_file | quote }}
+  register: decdn_env_grep
+  changed_when: false
+  # Read-only, so it must still run under `make check` — otherwise the one gate
+  # that can catch a malformed host file is exactly the gate a dry run skips.
+  check_mode: false
+  # Non-fatal here so the next task can turn rc into an actionable message
+  # (mirrors the config-validation pair below).
+  failed_when: false
+  when: decdn_rpc_url | length == 0
+
+- name: Report a host-provisioned env file with no usable DECDN_RPC_URL
+  ansible.builtin.fail:
+    msg: >-
+      {% if decdn_env_grep.rc is not defined %}
+      The {{ decdn_env_file }} content check could not be RUN
+      ({{ decdn_env_grep.msg | default('no rc and no msg — re-run with -vvv', true) }}),
+      so the host-provisioned env file is UNVERIFIED and the daemon must not be
+      started on it.
+      {% elif decdn_env_grep.rc | int > 1 %}
+      {{ decdn_env_file }} could not be read (grep exited
+      {{ decdn_env_grep.rc }}: {{ decdn_env_grep.stderr | default('no stderr', true) }}).
+      {% else %}
+      {{ decdn_env_file }} exists but carries no `DECDN_RPC_URL=` line with a
+      non-whitespace value,
+      so the daemon would start with no chain endpoint. Add one — note systemd
+      SKIPS a line its shell-like parser cannot read, logging a warning to
+      `journalctl -u decdn-node` that is easy to miss, so single-quote a value
+      containing a space, quote, backslash or `$`:
+      echo 'DECDN_RPC_URL=https://your-endpoint.example/rpc' | sudo tee -a
+      {{ decdn_env_file }} >/dev/null
+      {% endif %}
+  when:
+    - decdn_rpc_url | length == 0
+    - decdn_env_grep.rc | default(1) != 0
+
+# Re-stat after the file is final (the inventory path may just have rewritten it)
+# so the comparison below, and the record written at the very end of this role,
+# both describe what the daemon is about to be started on.
+#
+# Not no_log: the value is a sha256, not the secret, and hiding it would censor a
+# module failure here into an unactionable "output has been hidden" — while the
+# `changed` it drives is the only explanation an operator gets for a restart.
+- name: Re-stat the env file now that it is final
+  ansible.builtin.stat:
+    path: "{{ decdn_env_file }}"
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: decdn_env_post_stat
+
+# Restart on an OUT-OF-BAND edit. The copy above already notifies when the role
+# itself authors a changed file, so this covers only the host-provisioned path,
+# where nothing else would notice that the operator edited decdn.env between
+# converges — the daemon would keep running on the previous values behind a fully
+# green deploy. Handlers dedupe and flush before the daemon is started, so this
+# costs at most one restart.
+#
+# An ABSENT record is deliberately not a change: it means this host has never run
+# a post-#39 converge, and treating "not tracked yet" as "edited" would bounce
+# every node in the fleet on the upgrade run for no functional reason.
+- name: Note an out-of-band change to the host-provisioned env file
+  ansible.builtin.debug:
+    msg: >-
+      {{ decdn_env_file }} has changed since the last converge recorded it —
+      restarting decdn-node so the daemon picks the new values up.
+  changed_when: true
+  notify: Restart decdn-node
+  when:
+    - decdn_rpc_url | length == 0
+    - decdn_env_recorded_sum | length > 0
+    - (decdn_env_post_stat.stat.checksum | default('')) != decdn_env_recorded_sum
 
 - name: Template node.toml (non-secret — RPC URL is in the env file)
   ansible.builtin.template:
@@ -956,8 +1267,13 @@
     executable: /bin/bash
     cmd: |
       set -euo pipefail
+      # Exit 3 is reserved for "the env file could not be sourced" so the report
+      # task below does not blame node.toml for a quoting typo in decdn.env. NOTE
+      # this is bash, not systemd's parser: it expands $VAR and executes $(...)
+      # and backticks, which systemd would pass through literally. Operators are
+      # told to single-quote values (files/decdn.env.example).
       set -a
-      . {{ decdn_env_file | quote }}
+      . {{ decdn_env_file | quote }} || { echo "env-file could not be sourced" >&2; exit 3; }
       set +a
       {{ decdn_cli_bin | quote }} config validate \
         --config {{ decdn_config_file | quote }} \
@@ -980,7 +1296,13 @@
 - name: Report the config-validation failure
   ansible.builtin.fail:
     msg: >-
-      {% if decdn_config_validate.rc is not defined %}
+      {% if decdn_config_validate.rc | default(0) == 3 %}
+      {{ decdn_env_file }} could not be sourced, so the config was never
+      validated: {{ decdn_config_validate.stderr | default('(no output)', true) }}.
+      This is a shell-syntax fault in the ENV FILE, not a problem with
+      {{ decdn_config_file }} — most often an unbalanced quote, or an unquoted
+      value containing a space. Single-quote the value and re-run.
+      {% elif decdn_config_validate.rc is not defined %}
       `decdn config validate` could not be RUN
       ({{ decdn_config_validate.msg | default('no rc and no msg — re-run with -vvv', true) }}).
       {{ decdn_config_file }} is therefore UNVALIDATED and the daemon must not be
@@ -1021,6 +1343,41 @@
     name: decdn-node
     enabled: true
     state: started
+
+# Record the env file's hash LAST, and only here — deliberately after the handler
+# flush and the start above, so the record means "the daemon is running on this
+# content", not "Ansible saw this content".
+#
+# Writing it earlier (next to the comparison) looks equivalent and is not: the
+# handler that acts on a detected change does not flush until well after the
+# node.toml template and the `decdn config validate` gate, both of which can abort
+# the play. A record written before that abort would say "already handled" on the
+# NEXT converge — the comparison would find no change, no restart would be queued,
+# and `state: started` is a no-op on a running unit — so a single failed run would
+# permanently burn the one signal that the secret had been rotated. Writing it
+# here means an aborted run simply leaves the old record in place and the next
+# converge re-detects the change.
+#
+# No notify: by the time this runs, any restart this converge owed has happened.
+- name: Record the env-file checksum (the daemon is now running on it)
+  ansible.builtin.copy:
+    dest: "{{ decdn_env_checksum_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    # "<source> <sha256>" — the source token is what a later converge uses to tell
+    # "the operator owns this file" from "I rendered this from inventory".
+    # Parenthesised: filters bind tighter than comparisons, so an unbracketed
+    # `decdn_rpc_url | length > 0 | ternary(...)` parses as
+    # (decdn_rpc_url | length) > (0 | ternary(...)).
+    content: >
+      {{ (decdn_rpc_url | length > 0) | ternary('inventory', 'host') }}
+      {{ decdn_env_post_stat.stat.checksum }}
+  # Under `--check` on an unprovisioned host the env-file copy only SIMULATES the
+  # write, so there is nothing to hash and stat.checksum is undefined. Requiring
+  # the checksum itself (not merely stat.exists) also keeps a non-regular file —
+  # which stat reports as existing but never checksums — from templating undefined.
+  when: (decdn_env_post_stat.stat.checksum | default('')) | length > 0
 
 # --- Readiness ----------------------------------------------------------------
 # ADVISORY probe: the daemon binds its loopback /metrics listener only after its
