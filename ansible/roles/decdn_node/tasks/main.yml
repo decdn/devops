@@ -154,7 +154,10 @@
       exist on this host. The URL may embed a provider API key, so the preferred
       posture is to provision it on the host and keep it off the control machine
       entirely. Run this on the TARGET, as root (the {{ decdn_user }} account may
-      not exist yet — this role creates it, and chowns the file on the next run):
+      not exist yet — this role creates it, and chowns the file on the next run).
+      umask FIRST, so the file is never briefly world-readable; the explicit chmod
+      is the belt-and-braces, since sudo may apply its own umask:
+        umask 077
         sudo mkdir -p {{ decdn_etc }}
         echo 'DECDN_RPC_URL=https://…' | sudo tee {{ decdn_env_file }} >/dev/null
         sudo chmod 600 {{ decdn_env_file }}
@@ -217,7 +220,7 @@
 # Scoped to a file whose provenance is KNOWN to be foreign: with no record (a
 # pre-#39 host's first converge) this cannot distinguish anything, so it stays
 # quiet and the run seeds the record for next time.
-- name: Refuse to overwrite an env file this role did not write
+- name: Require confirmation to overwrite an env file this role did not write
   ansible.builtin.assert:
     that:
       - decdn_env_overwrite_host_file | bool

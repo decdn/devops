@@ -265,9 +265,10 @@ would fail. The full template, including the S3 credential block, is
 [`files/decdn.env.example`](files/decdn.env.example):
 
 ```bash
-(umask 077; sudo mkdir -p /etc/decdn)
+umask 077          # so the file is never briefly world-readable
+sudo mkdir -p /etc/decdn
 echo 'DECDN_RPC_URL=https://your-endpoint.example/rpc' | sudo tee /etc/decdn/decdn.env >/dev/null
-sudo chmod 600 /etc/decdn/decdn.env
+sudo chmod 600 /etc/decdn/decdn.env   # belt-and-braces: sudo may apply its own umask
 ```
 
 systemd's `EnvironmentFile` parser is shell-*like* but not a shell: one `KEY=value`
