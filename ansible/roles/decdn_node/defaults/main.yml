@@ -211,7 +211,12 @@ decdn_circuit_breaker_half_open_max_calls: ""  # daemon dflt 1
 # Node-to-node pull-through (#29). The toggle gates all serve-time origin pull from
 # upstream nodes; the knobs below only take effect when it is true. *_bytes / *_percent
 # are BARE INTEGERS on the wire (bytes; percent at scale 100, so 400 = 4.0x).
-decdn_node_to_node_pull_through_enabled: ""      # bool; daemon dflt false — enable pull from upstream nodes (#29)
+# Default is ROLE-DERIVED (the daemon's own default is a flat false): true when this
+# node has NO cache origin configured, false when it does. A serving-only node with no
+# origin (neither decdn_cache_origin_kind nor decdn_cache_origins set) can satisfy a
+# cache miss only by pulling from upstream nodes, so it defaults ON; a node that backs
+# misses from its own origin defaults OFF. Set an explicit true/false to override.
+decdn_node_to_node_pull_through_enabled: "{{ not decdn_cache_origin_kind and not decdn_cache_origins }}"
 # daemon dflt 5 — providers probed per miss. 0 disables pull in practice (the
 # candidate list is `.take(fanout)`), but that is a consequence, not a validated
 # upstream contract — do not rely on it as an off switch.
