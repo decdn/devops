@@ -55,15 +55,32 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
      from the target host; override `decdn_node_release_base` for a mirror.
      **No upstream release exists yet**, so this mode currently has nothing to
      fetch — the role's assert says so rather than surfacing a bare 404.
-   - **`manual`** (current default) — the role copies the two binaries **verbatim** from the paths
-     you give it (`decdn_node_manual_bin_src` + `decdn_cli_manual_bin_src`) on the
-     Ansible control machine; it does *not* consult `decdn_node_target`, so you are
-     responsible for building for the host's architecture (the default target is
-     `x86_64-unknown-linux-gnu`). Build both `decdn-node` and `decdn` from the
-     upstream `decdn` repo, then set the two paths. `decdn_node_version` is **not**
-     required in this mode — but if it is set (e.g. left over from a `release`
-     deploy) the `--version` backstop still enforces it, so clear it when switching
-     to `manual` unless you intend that binary to report that exact version.
+   - **`manual`** (current default) — the role copies the two binaries from the
+     Ansible control machine. Point it at them **either** way:
+     - **`decdn_release_target_dir`** (recommended) — the Cargo `target/release`
+       dir. The role derives both binary paths from it, **falls back** to the
+       cross / `--target` output dir (`target/{{ decdn_node_target }}/release`)
+       when the plain dir lacks them, and — crucially — **validates on the control
+       machine that both binaries are ELF for `decdn_node_target`** before shipping
+       them. A host-native `cargo build --release` on a non-Linux control machine
+       (macOS) silently produces a Mach-O the Linux node cannot exec; this catches
+       that with an actionable error instead of an opaque first-start failure.
+       Cross-compile for the node: `cross build --release --target
+       {{ decdn_node_target }}` (or `cargo build --release --target …`).
+     - **`decdn_node_manual_bin_src` + `decdn_cli_manual_bin_src`** — explicit paths,
+       copied **verbatim**. This is the escape hatch: the role trusts them and does
+       *not* consult `decdn_node_target` (so a test-harness stub that is legitimately
+       not an ELF for the node's arch still works). You own building for the host's
+       architecture (default target `x86_64-unknown-linux-gnu`). Set **both together
+       or neither** (a partial pair is rejected); when both are set they **take
+       precedence** over `decdn_release_target_dir`, so a host can override a
+       fleet-wide target dir without having to blank it.
+
+     Build both `decdn-node` and `decdn` from the upstream `decdn` repo.
+     `decdn_node_version` is **not** required in this mode — but if it is set (e.g.
+     left over from a `release` deploy) the `--version` backstop still enforces it,
+     so clear it when switching to `manual` unless you intend that binary to report
+     that exact version.
 
 2. **Eth wallet (operator-provisioned).** Generate the node identity + eth
    keystore on the host, as the `decdn` user, directly into the data dir. `key-gen`
@@ -101,8 +118,9 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
 
 ## Required variables (set in `host_vars/<node>/`)
 
-`decdn_node_version` (`release` mode only) **or** `decdn_node_manual_bin_src` +
-`decdn_cli_manual_bin_src` (`manual` mode), an RPC endpoint (sensitive — may embed an
+`decdn_node_version` (`release` mode only) **or**, in `manual` mode, either
+`decdn_release_target_dir` or `decdn_node_manual_bin_src` + `decdn_cli_manual_bin_src`
+(see [Prerequisites](#prerequisites) above), an RPC endpoint (sensitive — may embed an
 API key; provision it on the host or set `decdn_rpc_url` in the git-ignored
 `secret.yml` — see [Secrets](#secrets)), `decdn_region` (ISO 3166-1 alpha-2), and
 **four** contract addresses (all `0x`+40-hex, none the zero address):

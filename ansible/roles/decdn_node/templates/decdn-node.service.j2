@@ -34,9 +34,15 @@ ExecStart={{ decdn_bin }} run \
 # diff touched, so reload is an operator's deliberate call.
 ExecReload=/bin/kill -HUP $MAINPID
 
-# Graceful stop so the node can drain/flush. SIGTERM is its shutdown signal.
+# Graceful stop so the node can drain/flush. SIGTERM is its shutdown signal, and
+# it enters the SAME teardown as `decdn node drain`: it stops accepting work, awaits
+# in-flight streams to zero, then flushes settlement + the receipt/audit tail before
+# exiting. The process exits the instant that drain completes, so systemd proceeds
+# immediately — TimeoutStopSec is only the CAP. Keep it generous: a SIGKILL at the
+# cap would truncate an in-flight drain, dropping paid deliveries and possibly the
+# audit tail (a money-losing cut). Hence the 300s default, not systemd's 90s norm.
 KillSignal=SIGTERM
-TimeoutStopSec=30
+TimeoutStopSec={{ decdn_node_stop_timeout_sec }}
 
 Restart=always
 RestartSec=5

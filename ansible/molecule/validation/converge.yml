@@ -63,6 +63,62 @@
             decdn_rejected: "{{ decdn_rejected + ['cross-field'] }}"
           when: ansible_failed_task.name is match('^Validate optional')
 
+    # --- Case: binary-format (dir-mode ships a non-ELF binary) --------------------
+    # decdn_release_target_dir mode validates on the CONTROL MACHINE that the resolved
+    # binaries are ELF for decdn_node_target before shipping them. Point it at a dir
+    # holding the (non-ELF Python) stub named as the two binaries and confirm the
+    # format assert rejects it — the "built a macOS Mach-O and shipped it" guard.
+    # Staged + validated on the controller (delegate_to: localhost), so it aborts
+    # before any host mutation, like the other assert-only cases.
+    - name: "Case binary-format — dir-mode resolves a non-ELF binary"
+      vars:
+        _decdn_badbin_dir: >-
+          {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/.molecule-badbin/target/release
+      block:
+        - name: Create the staging directory on the control machine
+          ansible.builtin.file:
+            path: "{{ _decdn_badbin_dir }}"
+            state: directory
+            mode: "0755"
+          delegate_to: localhost
+          become: false
+        - name: Stage a non-ELF binary pair on the control machine
+          ansible.builtin.copy:
+            src: "{{ stub_bin }}"
+            dest: "{{ _decdn_badbin_dir }}/{{ item }}"
+            mode: "0755"
+          loop: [decdn-node, decdn]
+          delegate_to: localhost
+          become: false
+        - name: Run decdn_node pointed at the non-ELF target dir
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_node_manual_bin_src: ""
+            decdn_cli_manual_bin_src: ""
+            decdn_release_target_dir: "{{ _decdn_badbin_dir }}"
+      rescue:
+        - name: Record binary-format rejection (only if the ELF assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['binary-format'] }}"
+          when: ansible_failed_task.name is match('^Require both binaries to be ELF')
+      always:
+        - name: Remove the staged non-ELF binaries
+          ansible.builtin.file:
+            path: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/.molecule-badbin"
+            state: absent
+          delegate_to: localhost
+          become: false
+        # The role's derive-paths set_fact left decdn_node_manual_bin_src pointing at
+        # the (now-removed) badbin dir as a HOST FACT, which outranks the play var.
+        # Reset the baseline so later cases — notably config-gate, which reaches the
+        # copy step and does NOT re-pass the path — resolve the stub again.
+        - name: Restore the baseline binary sources for the remaining cases
+          ansible.builtin.set_fact:
+            decdn_node_manual_bin_src: "{{ stub_bin }}"
+            decdn_cli_manual_bin_src: "{{ stub_bin }}"
+            decdn_release_target_dir: ""
+
     # --- Case: range (numeric but below the daemon's minimum) ---------------------
     - name: "Case range — event_poll_interval_ms below 250"
       block:
@@ -354,6 +410,6 @@
           the daemon and crash-loop it at config load).
       vars:
         _decdn_expected:
-          ["cross-field", "range", "bounded-range", "shape", "bool", "enum", "dict",
-           "float", "list", "string", "env-gate", "env-extra", "env-content",
-           "config-gate"]
+          ["cross-field", "binary-format", "range", "bounded-range", "shape", "bool",
+           "enum", "dict", "float", "list", "string", "env-gate", "env-extra",
+           "env-content", "config-gate"]
