@@ -75,6 +75,13 @@
         _decdn_badbin_dir: >-
           {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/.molecule-badbin/target/release
       block:
+        - name: Create the staging directory on the control machine
+          ansible.builtin.file:
+            path: "{{ _decdn_badbin_dir }}"
+            state: directory
+            mode: "0755"
+          delegate_to: localhost
+          become: false
         - name: Stage a non-ELF binary pair on the control machine
           ansible.builtin.copy:
             src: "{{ stub_bin }}"

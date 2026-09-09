@@ -71,7 +71,10 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
        copied **verbatim**. This is the escape hatch: the role trusts them and does
        *not* consult `decdn_node_target` (so a test-harness stub that is legitimately
        not an ELF for the node's arch still works). You own building for the host's
-       architecture (default target `x86_64-unknown-linux-gnu`).
+       architecture (default target `x86_64-unknown-linux-gnu`). Set **both together
+       or neither** (a partial pair is rejected); when both are set they **take
+       precedence** over `decdn_release_target_dir`, so a host can override a
+       fleet-wide target dir without having to blank it.
 
      Build both `decdn-node` and `decdn` from the upstream `decdn` repo.
      `decdn_node_version` is **not** required in this mode — but if it is set (e.g.
