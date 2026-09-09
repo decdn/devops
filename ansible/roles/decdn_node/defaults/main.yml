@@ -17,6 +17,15 @@
 decdn_node_install_method: manual   # "release" | "manual"
 decdn_node_manual_bin_src: ""        # manual: control-machine path to the decdn-node daemon binary
 decdn_cli_manual_bin_src: ""         # manual: control-machine path to the decdn CLI binary
+# Alternative to the two explicit *_manual_bin_src paths: point at the control-
+# machine `target/release` dir and the role derives BOTH binary paths from it. It
+# also (a) falls back to the cross / `--target` output dir
+# (target/{{ decdn_node_target }}/release) when the plain dir lacks the binaries,
+# and (b) validates on the control machine that the binaries are ELF for
+# decdn_node_target BEFORE shipping them — because a host-native `cargo build
+# --release` on a non-Linux control machine (macOS) silently produces a Mach-O the
+# Linux node cannot exec. Leave "" to use the explicit paths above instead.
+decdn_release_target_dir: ""
 
 # --- Release to install (REQUIRED in "release" mode — a v<version> GitHub Release must exist) ---
 decdn_node_version: ""            # e.g. "0.1.1" (asserted non-empty in "release" mode)
@@ -352,3 +361,11 @@ decdn_node_generate_keystore: false
 decdn_cache_dir: /var/lib/decdn/cache
 decdn_bin: /usr/local/bin/decdn-node
 decdn_cli_bin: /usr/local/bin/decdn
+
+# systemd TimeoutStopSec for the node unit (seconds). SIGTERM triggers a full
+# graceful drain (await in-flight streams, flush settlement + receipt/audit tail);
+# the process exits the instant that finishes, so this is only the CAP before a
+# SIGKILL. It is generous on purpose — a SIGKILL mid-drain truncates paid, in-flight
+# deliveries (a money-losing cut), so prefer waiting over cutting. See
+# templates/decdn-node.service.j2.
+decdn_node_stop_timeout_sec: 300

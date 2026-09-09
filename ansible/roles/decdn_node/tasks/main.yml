@@ -40,16 +40,121 @@
       it off means the tarballs are taken on trust.
   when: decdn_node_install_method == "release"
 
-- name: Require manual binary sources when install method is manual
-  ansible.builtin.assert:
-    that:
-      - decdn_node_manual_bin_src | length > 0
-      - decdn_cli_manual_bin_src | length > 0
-    fail_msg: >-
-      decdn_node_install_method "manual" requires decdn_node_manual_bin_src and
-      decdn_cli_manual_bin_src — control-machine paths to the locally-built
-      decdn-node daemon and decdn CLI binaries. Set them in host_vars.
+# Resolve + validate the manual binary sources on the CONTROL MACHINE before they
+# are copied to the node. Two ways to point at them: decdn_release_target_dir (a
+# target/release dir the role searches — plus the cross/`--target` output dir
+# target/<triple>/release as a fallback — for a dir holding both binaries), or the
+# two explicit *_manual_bin_src paths (which win outright). Whatever is resolved is
+# then checked to be ELF for decdn_node_target: a host-native `cargo build --release`
+# on a non-Linux control machine (macOS) yields a Mach-O the Linux node cannot exec,
+# and copying it would only fail opaquely at first start.
+- name: Resolve and validate the manual binary sources
   when: decdn_node_install_method == "manual"
+  block:
+    - name: Require a manual binary source (target dir or explicit paths)
+      ansible.builtin.assert:
+        that:
+          - >-
+            (decdn_release_target_dir | length > 0)
+            or (decdn_node_manual_bin_src | length > 0
+                and decdn_cli_manual_bin_src | length > 0)
+        fail_msg: >-
+          decdn_node_install_method "manual" needs EITHER decdn_release_target_dir
+          (the control-machine target/release dir — the role derives + validates both
+          binaries from it) OR both decdn_node_manual_bin_src and
+          decdn_cli_manual_bin_src (explicit control-machine paths). Set one in host_vars.
+
+    - name: Build the candidate source directories
+      ansible.builtin.set_fact:
+        _decdn_bin_candidate_dirs: >-
+          {{
+            [decdn_release_target_dir,
+             (decdn_release_target_dir | dirname) ~ '/' ~ decdn_node_target ~ '/release']
+            if decdn_release_target_dir | length > 0 else []
+          }}
+
+    - name: Stat the daemon binary in each candidate directory
+      ansible.builtin.stat:
+        path: "{{ item }}/decdn-node"
+      register: _decdn_node_bin_stat
+      loop: "{{ _decdn_bin_candidate_dirs }}"
+      delegate_to: localhost
+      become: false
+      when: decdn_release_target_dir | length > 0
+
+    - name: Select the first candidate directory that holds the daemon binary
+      ansible.builtin.set_fact:
+        _decdn_resolved_dir: >-
+          {{ (_decdn_node_bin_stat.results
+              | selectattr('stat.exists')
+              | map(attribute='item')
+              | first) | default('', true) }}
+      when: decdn_release_target_dir | length > 0
+
+    - name: Fail if no candidate directory held the daemon binary
+      ansible.builtin.assert:
+        that:
+          - _decdn_resolved_dir | length > 0
+        fail_msg: >-
+          No decdn-node binary found under decdn_release_target_dir
+          ({{ decdn_release_target_dir }}) or its cross output dir
+          ({{ (decdn_release_target_dir | dirname) ~ '/' ~ decdn_node_target ~ '/release' }}).
+          Build it first — `cargo build --release` (native Linux control machine) or,
+          cross-compiling for the node, `cross build --release --target {{ decdn_node_target }}`.
+      when: decdn_release_target_dir | length > 0
+
+    # Derive the effective source paths: from the resolved dir when a target dir was
+    # given, else the operator's explicit paths (which the copy step already reads).
+    - name: Derive the effective binary source paths
+      ansible.builtin.set_fact:
+        decdn_node_manual_bin_src: >-
+          {{ (_decdn_resolved_dir ~ '/decdn-node')
+             if decdn_release_target_dir | length > 0 else decdn_node_manual_bin_src }}
+        decdn_cli_manual_bin_src: >-
+          {{ (_decdn_resolved_dir ~ '/decdn')
+             if decdn_release_target_dir | length > 0 else decdn_cli_manual_bin_src }}
+
+    # Format validation (and the cross-dir fallback above) apply ONLY to the
+    # decdn_release_target_dir workflow — the footgun is "I ran `cargo build
+    # --release` into target/release and pointed the dir here" on a non-Linux box.
+    # Explicit *_manual_bin_src paths are the deliberate escape hatch: the role
+    # trusts them and does not consult decdn_node_target (a stub binary in a test
+    # harness, for instance, is legitimately not an ELF for the node's arch).
+    - name: Identify the on-disk format of both resolved binaries
+      ansible.builtin.command: "file -b {{ item }}"
+      register: _decdn_bin_file
+      changed_when: false
+      loop:
+        - "{{ decdn_node_manual_bin_src }}"
+        - "{{ decdn_cli_manual_bin_src }}"
+      loop_control:
+        label: "{{ item }}"
+      delegate_to: localhost
+      become: false
+      when: decdn_release_target_dir | length > 0
+
+    - name: Require both binaries to be ELF for the node's target architecture
+      ansible.builtin.assert:
+        that:
+          - "'ELF' in item.stdout"
+          - _decdn_expect_arch in item.stdout
+        fail_msg: >-
+          {{ item.item }} is "{{ item.stdout }}" — not an ELF {{ _decdn_expect_arch }}
+          binary for {{ decdn_node_target }}. A host-native build on a non-Linux control
+          machine (e.g. `cargo build --release` on macOS) produces a Mach-O the node
+          cannot exec. Cross-compile for the node: `cross build --release --target
+          {{ decdn_node_target }}` (outputs to target/{{ decdn_node_target }}/release),
+          or `cargo build --release --target {{ decdn_node_target }}`.
+        quiet: true
+      loop: "{{ _decdn_bin_file.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }}"
+      vars:
+        _decdn_arch_file_tokens:
+          x86_64-unknown-linux-gnu: x86-64
+          aarch64-unknown-linux-gnu: aarch64
+        _decdn_expect_arch: "{{ _decdn_arch_file_tokens[decdn_node_target] | default('x86-64') }}"
+      when: decdn_release_target_dir | length > 0
 
 - name: Validate decdn_node_generate_keystore is a real boolean
   ansible.builtin.assert:
