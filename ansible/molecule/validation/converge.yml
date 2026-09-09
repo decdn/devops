@@ -102,6 +102,15 @@
             state: absent
           delegate_to: localhost
           become: false
+        # The role's derive-paths set_fact left decdn_node_manual_bin_src pointing at
+        # the (now-removed) badbin dir as a HOST FACT, which outranks the play var.
+        # Reset the baseline so later cases — notably config-gate, which reaches the
+        # copy step and does NOT re-pass the path — resolve the stub again.
+        - name: Restore the baseline binary sources for the remaining cases
+          ansible.builtin.set_fact:
+            decdn_node_manual_bin_src: "{{ stub_bin }}"
+            decdn_cli_manual_bin_src: "{{ stub_bin }}"
+            decdn_release_target_dir: ""
 
     # --- Case: range (numeric but below the daemon's minimum) ---------------------
     - name: "Case range — event_poll_interval_ms below 250"
