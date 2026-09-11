@@ -304,9 +304,10 @@
     label: "{{ item.name }}"
   when: item.value | length > 0
 
-# The CLI-only [blockchain] address keys (usdc + swap venue). The daemon validates
-# them under deny_unknown_fields even though only `decdn setup` / `decdn pool` read
-# them, so a malformed value fails the daemon's own startup — catch it here first.
+# The CLI-only [blockchain] address key (usdc_address). The daemon validates it
+# under deny_unknown_fields even though only `decdn setup` / `decdn pool` read it,
+# so a malformed value fails the daemon's own startup — catch it here first. (The
+# former swap_* address keys were removed upstream with the on-chain swap path.)
 - name: Validate the optional CLI-only contract addresses when set
   ansible.builtin.assert:
     that:
@@ -319,10 +320,6 @@
     decdn_zero_address: "0x0000000000000000000000000000000000000000"
   loop:
     - {name: decdn_usdc_address, value: "{{ decdn_usdc_address }}"}
-    - {name: decdn_swap_router_address, value: "{{ decdn_swap_router_address }}"}
-    - {name: decdn_swap_quoter_address, value: "{{ decdn_swap_quoter_address }}"}
-    - {name: decdn_swap_balancer_pool, value: "{{ decdn_swap_balancer_pool }}"}
-    - {name: decdn_swap_pool_address, value: "{{ decdn_swap_pool_address }}"}
   loop_control:
     label: "{{ item.name }}"
   when: item.value | length > 0
@@ -506,13 +503,13 @@
         decdn_frame_target_bytes, decdn_voucher_commit_interval_ms,
         decdn_redeem_threshold_micro_usdc, decdn_redeem_max_vouchers_per_tx,
         decdn_redeem_interval_secs, decdn_buyer_working_deposit_micro_usdc,
-        decdn_pool_min_remaining_deposit_micro_usdc, decdn_pool_floor_signer_share_bps,
-        decdn_pool_floor_signer_max_windows, decdn_rpc_watchdog_interval_sec,
+        decdn_pool_min_remaining_deposit_micro_usdc, decdn_pool_floor_signer_live_windows,
+        decdn_chain_staleness_grace_sec, decdn_rpc_watchdog_interval_sec,
         decdn_event_poll_interval_ms, decdn_content_blacklist_poll_interval_sec,
         decdn_rate_bounds_poll_interval_sec, decdn_fee_shares_poll_interval_sec,
         decdn_origin_directory_positive_ttl_sec, decdn_origin_directory_negative_ttl_sec,
-        decdn_origin_directory_cache_capacity, decdn_swap_fee_tier,
-        decdn_max_blob_size_mb, decdn_max_rate_per_mb, decdn_max_probe_holds,
+        decdn_origin_directory_cache_capacity,
+        decdn_max_blob_size_mb, decdn_disk_headroom_mb, decdn_max_rate_per_mb, decdn_max_probe_holds,
         decdn_stake_lane_reserved_holds, decdn_gc_interval_sec,
         decdn_fs_rescan_interval_sec, decdn_origin_probe_ttl_sec,
         decdn_origin_probe_negative_ttl_sec, decdn_origin_probe_fault_ttl_sec,
@@ -611,7 +608,6 @@
        allowed: ["off", "margin"]}
     - {name: decdn_load_shed_policy, value: "{{ decdn_load_shed_policy }}",
        allowed: ["resource-pressure", "always-admit"]}
-    - {name: decdn_swap_venue, value: "{{ decdn_swap_venue }}", allowed: ["uniswap-v3", "balancer-v3"]}
     - {name: decdn_log_format, value: "{{ decdn_log_format }}", allowed: ["pretty", "json"]}
     - {name: decdn_log_level, value: "{{ decdn_log_level }}",
        allowed: ["trace", "debug", "info", "warn", "error"]}
@@ -632,6 +628,11 @@
       - >-
         decdn_content_blacklist_poll_interval_sec in ["", none]
         or (decdn_content_blacklist_poll_interval_sec | int >= 1)
+      # chain_staleness_grace_sec must be > 0 (0 would refuse every serve — rejected
+      # upstream). Set it large to opt out of the stale-serve guard.
+      - >-
+        decdn_chain_staleness_grace_sec in ["", none]
+        or (decdn_chain_staleness_grace_sec | int >= 1)
       # Knobs the daemon requires strictly positive (a configured 0 is rejected —
       # omit the knob instead to take the default).
       - item in ["", none] or (item | int >= 1)
@@ -640,7 +641,8 @@
       An optional knob is out of the range the daemon accepts:
       decdn_rpc_watchdog_interval_sec (0 or >= 10),
       decdn_event_poll_interval_ms (>= 250),
-      decdn_content_blacklist_poll_interval_sec (>= 1); and each of
+      decdn_content_blacklist_poll_interval_sec (>= 1),
+      decdn_chain_staleness_grace_sec (>= 1); and each of
       decdn_redeem_threshold_micro_usdc, decdn_redeem_max_vouchers_per_tx,
       decdn_redeem_interval_secs, decdn_buyer_working_deposit_micro_usdc,
       decdn_rate_bounds_poll_interval_sec, decdn_fee_shares_poll_interval_sec,
@@ -667,8 +669,6 @@
     - {name: decdn_eviction_per_sweep_budget, value: "{{ decdn_eviction_per_sweep_budget }}", min: 1, max: 256}
     - {name: decdn_eviction_tick_secs, value: "{{ decdn_eviction_tick_secs }}", min: 1, max: 60}
     - {name: decdn_frame_target_bytes, value: "{{ decdn_frame_target_bytes }}", min: 1, max: 1048576}
-    - {name: decdn_pool_floor_signer_share_bps, value: "{{ decdn_pool_floor_signer_share_bps }}",
-       min: 1, max: 10000}
     - {name: decdn_tinylfu_probation_target_pct, value: "{{ decdn_tinylfu_probation_target_pct }}",
        min: 1, max: 50}
     # sketch_bytes has a HARD FLOOR: below it the daemon errors out at config load.
@@ -760,12 +760,20 @@
       - >-
         decdn_content_denied_origins is none
         or '0x0000000000000000000000000000000000000000' not in decdn_content_denied_origins
+      # [client] region_allowlist: ISO 3166-1 alpha-2 codes. Upstream carries the raw
+      # strings and parses them into Region at the client's discovery boundary, so a
+      # malformed code fails there — validate the shape here to fail loud at deploy.
+      - >-
+        decdn_client_region_allowlist is none
+        or decdn_client_region_allowlist | reject('match', '^[A-Z]{2}$') | list | length == 0
     fail_msg: >-
       decdn_relay_urls entries must each be an http(s):// URL with no quote,
       whitespace or backslash; decdn_pinned_hashes and decdn_content_denied_hashes
       entries must each be a 64-char lowercase-hex BLAKE3 hash (uppercase is
       rejected upstream); decdn_content_denied_origins entries must each be a
-      0x + 40 hex address and none may be the zero address. Leave a list empty ([]).
+      0x + 40 hex address and none may be the zero address;
+      decdn_client_region_allowlist entries must each be an uppercase ISO 3166-1
+      alpha-2 code. Leave a list empty ([]).
 
 # Address discovery (#818): pkarr_url and dns_origin are a PAIR upstream — a custom
 # pkarr relay with no DNS origin cannot resolve peers. Static peers are independent

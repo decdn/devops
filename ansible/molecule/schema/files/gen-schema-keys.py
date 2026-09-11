@@ -28,6 +28,7 @@ from pathlib import Path
 STRUCT_PATHS = {
     "FileConfig": None,
     "IdentityConfig": "identity",
+    "ClientConfig": "client",
     "NetworkConfig": "network",
     "DiscoveryConfig": "network.discovery",
     # Keyed by NodeId, so the concrete hop is a wildcard.
@@ -134,7 +135,7 @@ def main():
         "# a leaf-name inventory cannot tell the two apart. See gen-schema-keys.py for\n"
         "# the struct -> path mapping and molecule/schema/README.md for why this exists.\n"
         "#\n"
-        f"# Synced from decdn/decdn @ d306cc5c (crate version 0.1.1): {len(paths)} paths."
+        f"# Synced from decdn/decdn @ 0b94efe4 (crate version 0.0.0): {len(paths)} paths."
     )
     for path in sorted(paths):
         print(path)

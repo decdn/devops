@@ -43,16 +43,11 @@
     decdn_origin_assignment_address: "0x6666666666666666666666666666666666666666"
     decdn_publisher_registry_address: "0x7777777777777777777777777777777777777777"
     decdn_usdc_address: "0x8888888888888888888888888888888888888888"
-    decdn_swap_venue: "uniswap-v3"
-    decdn_swap_router_address: "0x9999999999999999999999999999999999999999"
-    decdn_swap_quoter_address: "0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA"
-    decdn_swap_fee_tier: 3000
-    decdn_swap_balancer_pool: "0xbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbB"
-    decdn_swap_pool_address: "0xcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcCcC"
     decdn_origin_directory_positive_ttl_sec: 600
     decdn_origin_directory_negative_ttl_sec: 60
     decdn_origin_directory_cache_capacity: 8192
     decdn_content_blacklist_poll_interval_sec: 300
+    decdn_chain_staleness_grace_sec: 900
     decdn_rpc_watchdog_interval_sec: 15
     decdn_event_poll_interval_ms: 5000
     decdn_rate_bounds_poll_interval_sec: 1800
@@ -63,8 +58,7 @@
     decdn_buyer_working_deposit_micro_usdc: 20000000
     decdn_buyer_max_approve: false
     decdn_pool_min_remaining_deposit_micro_usdc: 500000
-    decdn_pool_floor_signer_share_bps: 3000
-    decdn_pool_floor_signer_max_windows: 4
+    decdn_pool_floor_signer_live_windows: 4
 
     # --- [payment] ---
     decdn_rate_per_mb: 12
@@ -76,6 +70,7 @@
 
     # --- [cache] scalars ---
     decdn_cache_size_mb: 20480
+    decdn_disk_headroom_mb: 4096
     decdn_max_blob_size_mb: 2048
     decdn_max_rate_per_mb: 50
     decdn_pinned_hashes: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
@@ -171,6 +166,9 @@
     decdn_receipts_retained_files: 8
     decdn_content_denied_hashes: ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
     decdn_content_denied_origins: ["0x000000000000000000000000000000000000dEaD"]
+
+    # --- [client] ---
+    decdn_client_region_allowlist: ["US", "DE"]
   roles:
     - role: decdn_node
 

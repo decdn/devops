@@ -119,32 +119,36 @@ decdn_buyer_working_deposit_micro_usdc: ""  # daemon dflt 10_000_000 (10 USDC); 
 # pinning it here changes client behaviour too. One-time max USDC approval to PaymentPool.
 decdn_buyer_max_approve: ""
 decdn_pool_min_remaining_deposit_micro_usdc: ""  # daemon dflt 1_000_000 — solvency floor before a pool drains
-# Per-signer floor isolation under the per-pool solvency ceiling (#1841).
-decdn_pool_floor_signer_share_bps: ""    # daemon dflt 2500; range 1..=10000
-decdn_pool_floor_signer_max_windows: ""  # daemon dflt 0 (off)
+# Per-signer LIVE concurrency floor isolation under the per-pool solvency ceiling
+# (ADR 003 §Pool solvency, per-signer floor isolation). Counted in ramp-start credit
+# windows: the most live un-vouchered floor reservation any one signer may hold.
+decdn_pool_floor_signer_live_windows: ""  # daemon dflt 8; lower-clamped to 1 window
 
 # --- Blockchain watcher tuning ("" => daemon default) -------------------------
 decdn_rpc_watchdog_interval_sec: ""    # daemon dflt 30; 0 disables, else >= 10 — RPC watchdog
 decdn_event_poll_interval_ms: ""       # daemon dflt 7000; >= 250 — multiplexed getLogs poll
 decdn_content_blacklist_poll_interval_sec: ""    # daemon dflt 600; >= 1 — blacklist re-scope cadence
+# Seconds the node may go without a successful chain read before it stops serving
+# (ADR 011 §Serving while chain-stale). Always evaluated (no on/off flag) and only
+# consulted when content_blacklist_address is set; set it large to opt out.
+decdn_chain_staleness_grace_sec: ""      # daemon dflt 1800 (30 min); must be > 0
 decdn_rate_bounds_poll_interval_sec: ""  # daemon dflt 3600; > 0 — PaymentPool.getRateBounds refresh
 decdn_fee_shares_poll_interval_sec: ""   # daemon dflt 3600; > 0 — FeeRouter share refresh
 
 # --- CLI-only [blockchain] keys ----------------------------------------------
-# The daemon ACCEPTS these (they are declared so a config that also drives the CLI
-# still passes [blockchain]'s deny_unknown_fields) but never parses or reads them —
-# only `decdn setup` does. So nothing downstream catches a malformed value, which
-# is exactly why the role asserts their shape itself.
+# The daemon ACCEPTS usdc_address (declared so a config that also drives the CLI
+# still passes [blockchain]'s deny_unknown_fields) but never parses or reads it —
+# only `decdn setup` / `decdn pool` do. So nothing downstream catches a malformed
+# value, which is exactly why the role asserts its shape itself. (The former
+# decdn_swap_* knobs were removed upstream along with the on-chain swap path.)
 decdn_usdc_address: ""
-decdn_swap_venue: ""              # "uniswap-v3" | "balancer-v3"
-decdn_swap_router_address: ""
-decdn_swap_quoter_address: ""
-decdn_swap_fee_tier: ""           # e.g. 3000
-decdn_swap_balancer_pool: ""
-decdn_swap_pool_address: ""
 
 # --- Cache --------------------------------------------------------------------
 decdn_cache_size_mb: 10240      # 10 GB
+# Free disk (MB) the eviction driver keeps unused on the cache_dir volume, defended
+# against ANY process, not just this cache (#1930). "" => daemon dflt 8192 (8 GiB);
+# 0 opts out of the disk clamp so only cache_size_mb binds.
+decdn_disk_headroom_mb: ""
 # NOTE: this is a deliberate OVERRIDE, not the daemon default. Upstream defaults
 # max_blob_size_mb to cache_size_mb; 1 GB caps any single blob at a tenth of the
 # cache so one large object cannot evict everything else. Must be <= cache_size_mb.
@@ -290,6 +294,12 @@ decdn_receipts_retained_files: ""   # daemon dflt 4; cap 100
 # Node-local denylist, independent of the on-chain ContentBlacklist. Hot-reloadable.
 decdn_content_denied_hashes: []     # 64-char lowercase-hex BLAKE3 hashes
 decdn_content_denied_origins: []    # 0x publisher addresses (checksum-agnostic; zero address rejected)
+
+# --- Client-scoped discovery ([client]) ---------------------------------------
+# Discovery-time region filter: narrows which regions this node discovers/probes as
+# a CLIENT (node.toml is shared with the CLI). [] => no filter (every registered
+# node considered). ISO 3166-1 alpha-2 codes, e.g. ["US", "DE"].
+decdn_client_region_allowlist: []
 
 # --- Readiness probe (advisory) -----------------------------------------------
 # After start, the role probes http://127.0.0.1:<metrics_port>/metrics as a

@@ -191,6 +191,7 @@
           cache.origin_retry
           cache.serve_economics
           cache.tinylfu
+          client
           content
           dht.rate_limit
           identity
