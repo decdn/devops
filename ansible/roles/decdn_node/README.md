@@ -12,7 +12,7 @@ machine. This is the repo's deployment (`playbooks/site.yml`).
 > download. Build the two binaries from a checkout until that changes.
 
 **Schema tracking.** This role renders `node.toml` against the config schema of
-`decdn/decdn` @ `d306cc5c` (crate version 0.1.1). Upstream marks every config
+`decdn/decdn` main @ `0b94efe4` (crate version 0.0.0 — unreleased). Upstream marks every config
 section `#[serde(deny_unknown_fields)]` and defines **no** serde aliases, so a key
 this role emits that your binary does not know is a startup crash-loop, not a
 warning. The role runs `decdn config validate` against the installed binary after
