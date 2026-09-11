@@ -96,7 +96,7 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
    #    `decdn key-gen` writes to ~/.decdn and the node would NOT find its keys.
    sudo -u decdn decdn key-gen \
      --output-dir /var/lib/decdn \
-     --password-file /etc/decdn/keystore.password
+     --keystore-password-file /etc/decdn/keystore.password
    # prints: node id: <NodeId>   eth address: <0x…>
 
    # 3) verify all three are present (the role locks them to 0600 on deploy)

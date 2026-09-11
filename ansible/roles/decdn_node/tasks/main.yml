@@ -1168,7 +1168,7 @@
     cmd: >-
       {{ decdn_cli_bin }} key-gen
       --output-dir {{ decdn_home }}
-      --password-file {{ decdn_keystore_password_file }}
+      --keystore-password-file {{ decdn_keystore_password_file }}
     creates: "{{ decdn_keystore_file }}"
   become: true
   become_user: "{{ decdn_user }}"
@@ -1222,7 +1222,7 @@
         openssl rand -base64 32 | sudo -u {{ decdn_user }} tee {{ decdn_keystore_password_file }} >/dev/null
         sudo -u {{ decdn_user }} chmod 600 {{ decdn_keystore_password_file }}
         sudo -u {{ decdn_user }} decdn key-gen \
-          --output-dir {{ decdn_home }} --password-file {{ decdn_keystore_password_file }}
+          --output-dir {{ decdn_home }} --keystore-password-file {{ decdn_keystore_password_file }}
       Pass --output-dir {{ decdn_home }} explicitly: a bare `decdn key-gen` writes to
       ~/.decdn and the node would not find its keys. That writes node.secret +
       keystore.json and prints the NodeId + eth address; fund + stake that address per
