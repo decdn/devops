@@ -22,8 +22,8 @@ can be exercised end-to-end without a published release or a live chain:
                      covers key-level drift against the real upstream field list.
   * `key-gen ...` -> stand in for the CLI's wallet generator (exercised by the
                      `generate-keystore` scenario). Enforces the contract the ROLE
-                     ASSUMES (not a verified real-CLI fact): the --password-file is
-                     passed in and must already exist. Writes dummy node.secret +
+                     ASSUMES (not a verified real-CLI fact): the
+                     --keystore-password-file is passed in and must already exist. Writes dummy node.secret +
                      keystore.json into --output-dir and prints the NodeId + a public
                      eth address. No real crypto — the scenario checks that the role
                      minted the password + keystore, not wallet correctness.
@@ -83,14 +83,14 @@ def key_gen(args):
     """Stub `decdn key-gen`: mint dummy node.secret + keystore.json.
 
     Enforces the contract the role ASSUMES (not verified against the real CLI): the
-    --password-file is supplied and must already exist (the role generates it just
-    before calling us), and the wallet material lands under --output-dir. Prints the
+    --keystore-password-file is supplied and must already exist (the role generates it
+    just before calling us), and the wallet material lands under --output-dir. Prints the
     NodeId + a public eth address.
     """
     output_dir = _opt(args, "--output-dir")
-    password_file = _opt(args, "--password-file")
+    password_file = _opt(args, "--keystore-password-file")
     if not output_dir or not password_file:
-        print("stub key-gen: --output-dir and --password-file are required", file=sys.stderr)
+        print("stub key-gen: --output-dir and --keystore-password-file are required", file=sys.stderr)
         return 2
     if not os.path.isfile(password_file):
         print(f"stub key-gen: password file not found: {password_file}", file=sys.stderr)
