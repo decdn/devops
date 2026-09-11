@@ -12,7 +12,7 @@ machine. This is the repo's deployment (`playbooks/site.yml`).
 > download. Build the two binaries from a checkout until that changes.
 
 **Schema tracking.** This role renders `node.toml` against the config schema of
-`decdn/decdn` @ `d306cc5c` (crate version 0.1.1). Upstream marks every config
+`decdn/decdn` main @ `0b94efe4` (crate version 0.0.0 — unreleased). Upstream marks every config
 section `#[serde(deny_unknown_fields)]` and defines **no** serde aliases, so a key
 this role emits that your binary does not know is a startup crash-loop, not a
 warning. The role runs `decdn config validate` against the installed binary after
@@ -146,12 +146,12 @@ Optional (omitted from `node.toml` unless set):
   or neither" rule went away with the whole-directory mirror): the daemon reads
   OriginAssignment for cache-miss pull-through fallback, and only validates
   PublisherRegistry, which `decdn publish` consumes.
-- `decdn_usdc_address` and the `decdn_swap_*` knobs — CLI-only `[blockchain]` keys.
-  The daemon accepts but never parses them — only `decdn setup` reads them, to
-  swap USDC into the deCDN TOKEN and bond that (the bond is always TOKEN; native
-  ETH is only ever gas). They live in `node.toml` because the section is
-  `deny_unknown_fields` and the CLI shares the file, which also means nothing
-  downstream catches a malformed value — hence the role's own shape asserts.
+- `decdn_usdc_address` — a CLI-only `[blockchain]` key. The daemon accepts but
+  never parses it — only `decdn setup` / `decdn pool` read it. It lives in
+  `node.toml` because the section is `deny_unknown_fields` and the CLI shares the
+  file, which also means nothing downstream catches a malformed value — hence the
+  role's own shape assert. (The former `decdn_swap_*` knobs for the on-chain swap
+  path were removed upstream.)
 - `decdn_cache_origin_kind` (`http`|`fs`|`s3`) + that kind's fields — the
   pull-through origin the node fetches on a cache miss. **A serving node needs
   one:** unset ⇒ no `[cache.origin]` and cache misses fail `NoOrigin`. For an
@@ -193,10 +193,12 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
 - **Settlement / payment pool** — `decdn_redeem_threshold_micro_usdc`,
   `decdn_redeem_max_vouchers_per_tx`, `decdn_redeem_interval_secs`,
   `decdn_buyer_working_deposit_micro_usdc`, `decdn_buyer_max_approve` (bool),
-  `decdn_pool_min_remaining_deposit_micro_usdc`, and the per-signer floor pair
-  `decdn_pool_floor_signer_share_bps` (`1..=10000`) /
-  `decdn_pool_floor_signer_max_windows`. All µUSDC unless noted.
-- **Cache sizing + eviction** — `decdn_cache_size_mb`, `decdn_max_blob_size_mb`
+  `decdn_pool_min_remaining_deposit_micro_usdc`, and the per-signer floor knob
+  `decdn_pool_floor_signer_live_windows` (live concurrency cap in credit windows;
+  daemon default `8`). All µUSDC unless noted.
+- **Cache sizing + eviction** — `decdn_cache_size_mb`, `decdn_disk_headroom_mb`
+  (free disk the eviction driver keeps unused on the `cache_dir` volume; daemon
+  default `8192`, `0` opts out of the disk clamp), `decdn_max_blob_size_mb`
   (defaults to `cache_size_mb` upstream; must be `<=` it), `decdn_max_rate_per_mb`
   (buyer-side rate ceiling), `decdn_gc_interval_sec`, `decdn_fs_rescan_interval_sec`,
   `decdn_max_probe_holds`, `decdn_stake_lane_reserved_holds`, `decdn_pinned_hashes`
@@ -226,7 +228,9 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
   `decdn_circuit_breaker_*` families.
 - **Blockchain watchers** — `decdn_rpc_watchdog_interval_sec` (`0` or `>= 10`),
   `decdn_event_poll_interval_ms` (`>= 250`), `decdn_content_blacklist_poll_interval_sec`
-  (`>= 1`), `decdn_rate_bounds_poll_interval_sec`, `decdn_fee_shares_poll_interval_sec`,
+  (`>= 1`), `decdn_chain_staleness_grace_sec` (seconds the node may go without a
+  successful chain read before it stops serving — ADR 011; `> 0`, daemon default
+  `1800`), `decdn_rate_bounds_poll_interval_sec`, `decdn_fee_shares_poll_interval_sec`,
   and the `decdn_origin_directory_*` cache knobs.
 - **Network** — `decdn_relay_urls` (list; the singular `relay_url` config key no
   longer exists). Operator-run address discovery (#818) via
@@ -235,6 +239,9 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
   **on its own**, a resolve-only node that never publishes; and/or
   `decdn_discovery_peers` (a map of 64-char lowercase-hex NodeId to
   `{relay_url, addrs}`). Setting either mechanism drops the n0 discovery leg.
+  `decdn_client_region_allowlist` (a `[client]` knob) narrows which regions this
+  node discovers/probes **as a client** to a list of ISO 3166-1 alpha-2 codes;
+  `[]` ⇒ no filter.
 - **Abuse limits + load shedding** — the `decdn_security_*` family,
   `decdn_load_shed_*` (`policy` is `resource-pressure`|`always-admit`; the low-water
   serve mark must be `<=` the high), and the `decdn_dht_rate_limit` /

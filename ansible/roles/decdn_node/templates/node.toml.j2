@@ -73,6 +73,9 @@ origin_directory_cache_capacity = {{ decdn_origin_directory_cache_capacity | int
 {% if decdn_content_blacklist_poll_interval_sec not in ["", none] %}
 content_blacklist_poll_interval_sec = {{ decdn_content_blacklist_poll_interval_sec | int }}
 {% endif %}
+{% if decdn_chain_staleness_grace_sec not in ["", none] %}
+chain_staleness_grace_sec = {{ decdn_chain_staleness_grace_sec | int }}
+{% endif %}
 {% if decdn_rpc_watchdog_interval_sec not in ["", none] %}
 rpc_watchdog_interval_sec = {{ decdn_rpc_watchdog_interval_sec | int }}
 {% endif %}
@@ -103,32 +106,11 @@ buyer_max_approve = {{ decdn_buyer_max_approve | bool | lower }}
 {% if decdn_pool_min_remaining_deposit_micro_usdc not in ["", none] %}
 pool_min_remaining_deposit_micro_usdc = {{ decdn_pool_min_remaining_deposit_micro_usdc | int }}
 {% endif %}
-{% if decdn_pool_floor_signer_share_bps not in ["", none] %}
-pool_floor_signer_share_bps = {{ decdn_pool_floor_signer_share_bps | int }}
-{% endif %}
-{% if decdn_pool_floor_signer_max_windows not in ["", none] %}
-pool_floor_signer_max_windows = {{ decdn_pool_floor_signer_max_windows | int }}
+{% if decdn_pool_floor_signer_live_windows not in ["", none] %}
+pool_floor_signer_live_windows = {{ decdn_pool_floor_signer_live_windows | int }}
 {% endif %}
 {% if decdn_usdc_address | length > 0 %}
 usdc_address = "{{ decdn_usdc_address }}"
-{% endif %}
-{% if decdn_swap_venue not in ["", none] %}
-swap_venue = "{{ decdn_swap_venue }}"
-{% endif %}
-{% if decdn_swap_router_address | length > 0 %}
-swap_router_address = "{{ decdn_swap_router_address }}"
-{% endif %}
-{% if decdn_swap_quoter_address | length > 0 %}
-swap_quoter_address = "{{ decdn_swap_quoter_address }}"
-{% endif %}
-{% if decdn_swap_fee_tier not in ["", none] %}
-swap_fee_tier = {{ decdn_swap_fee_tier | int }}
-{% endif %}
-{% if decdn_swap_balancer_pool | length > 0 %}
-swap_balancer_pool = "{{ decdn_swap_balancer_pool }}"
-{% endif %}
-{% if decdn_swap_pool_address | length > 0 %}
-swap_pool_address = "{{ decdn_swap_pool_address }}"
 {% endif %}
 
 [payment]
@@ -154,6 +136,9 @@ voucher_commit_interval_ms = {{ decdn_voucher_commit_interval_ms | int }}
 [cache]
 cache_dir = "{{ decdn_cache_dir }}"
 cache_size_mb = {{ decdn_cache_size_mb }}
+{% if decdn_disk_headroom_mb not in ["", none] %}
+disk_headroom_mb = {{ decdn_disk_headroom_mb | int }}
+{% endif %}
 {% if decdn_max_blob_size_mb not in ["", none] %}
 max_blob_size_mb = {{ decdn_max_blob_size_mb | int }}
 {% endif %}
@@ -447,4 +432,9 @@ denied_hashes = [{% for h in decdn_content_denied_hashes %}"{{ h }}"{% if not lo
 {% if decdn_content_denied_origins is not none and decdn_content_denied_origins | length > 0 %}
 denied_origins = [{% for a in decdn_content_denied_origins %}"{{ a }}"{% if not loop.last %}, {% endif %}{% endfor %}]
 {% endif %}
+{% endif %}
+{% if decdn_client_region_allowlist is not none and decdn_client_region_allowlist | length > 0 %}
+
+[client]
+region_allowlist = [{% for r in decdn_client_region_allowlist %}"{{ r }}"{% if not loop.last %}, {% endif %}{% endfor %}]
 {% endif %}
