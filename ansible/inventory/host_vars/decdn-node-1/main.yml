@@ -77,7 +77,7 @@ decdn_region: "US"            # MUST-EDIT — ISO 3166-1 alpha-2 of the node's p
 # decdn_relay_urls: []        # optional iroh relays for NAT traversal ([] => n0 defaults)
 
 # --- Economics ----------------------------------------------------------------
-# Seller-side quote. The on-chain PaymentPool rate bounds are authoritative at
-# runtime — the daemon overwrites payment.delivery_floor from getRateBounds() at
-# startup — so this is the node's own asking price, not a clamp.
+# Seller-side quote: the node's own asking price. The daemon never clamps it — a
+# rate below the on-chain delivery floor still sells and settles, with only its
+# vote-weight byte credit clamped at redemption.
 decdn_rate_per_mb: 10         # USDC base units (6 decimals); 10 = $0.00001/MB

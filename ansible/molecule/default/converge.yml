@@ -48,7 +48,6 @@
     decdn_gc_interval_sec: 0
     decdn_credit_max: 2097152
     decdn_relay_foreign_namespaces: false
-    decdn_delivery_floor: 0
     decdn_redeem_threshold_micro_usdc: 50000000
     # A float knob: `| float` must render a bare TOML float, and verify.yml's type
     # guards have to accept float (not just int) for these. Covers the one rendering

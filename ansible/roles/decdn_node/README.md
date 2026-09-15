@@ -12,7 +12,7 @@ machine. This is the repo's deployment (`playbooks/site.yml`).
 > download. Build the two binaries from a checkout until that changes.
 
 **Schema tracking.** This role renders `node.toml` against the config schema of
-`decdn/decdn` main @ `0b94efe4` (crate version 0.0.0 — unreleased). Upstream marks every config
+`decdn/decdn` main @ `d3bc7da7` (crate version 0.0.0 — unreleased). Upstream marks every config
 section `#[serde(deny_unknown_fields)]` and defines **no** serde aliases, so a key
 this role emits that your binary does not know is a startup crash-loop, not a
 warning. The role runs `decdn config validate` against the installed binary after
@@ -184,12 +184,12 @@ only to override; an explicit `0`/`false` **is** emitted (`0` is meaningful — 
 fails loud at deploy time, and `decdn config validate` catches anything the role's own
 asserts miss. See `defaults/main.yml` for every knob's upstream default, unit and range.
 
-- **Payment / credit** — `decdn_rate_per_mb`, `decdn_delivery_floor`,
+- **Payment / credit** — `decdn_rate_per_mb`,
   `decdn_credit_max` (bare-integer bytes), `decdn_credit_ramp_divisor`,
   `decdn_frame_target_bytes` (`1..=1048576`), `decdn_voucher_commit_interval_ms`.
-  Note `delivery_floor` is a **pre-chain seed only**: the daemon overwrites it from
-  `PaymentPool.getRateBounds()` at startup, so the on-chain value is authoritative.
-  There is no companion ceiling knob any more.
+  The node never clamps its own `rate_per_mb`: a rate below the on-chain delivery
+  floor still sells and settles, with only its vote-weight byte credit clamped at
+  redemption. There is no `delivery_floor` / `delivery_ceiling` knob any more.
 - **Settlement / payment pool** — `decdn_redeem_threshold_micro_usdc`,
   `decdn_redeem_max_vouchers_per_tx`, `decdn_redeem_interval_secs`,
   `decdn_buyer_working_deposit_micro_usdc`, `decdn_buyer_max_approve` (bool),
@@ -230,7 +230,7 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
   `decdn_event_poll_interval_ms` (`>= 250`), `decdn_content_blacklist_poll_interval_sec`
   (`>= 1`), `decdn_chain_staleness_grace_sec` (seconds the node may go without a
   successful chain read before it stops serving — ADR 011; `> 0`, daemon default
-  `1800`), `decdn_rate_bounds_poll_interval_sec`, `decdn_fee_shares_poll_interval_sec`,
+  `1800`), `decdn_fee_shares_poll_interval_sec`,
   and the `decdn_origin_directory_*` cache knobs.
 - **Network** — `decdn_relay_urls` (list; the singular `relay_url` config key no
   longer exists). Operator-run address discovery (#818) via
@@ -251,8 +251,9 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
 - **Receipts + local denylist** — `decdn_receipts_max_file_bytes`,
   `decdn_receipts_retained_files`, and `decdn_content_denied_hashes` /
   `decdn_content_denied_origins` (node-local, independent of the on-chain blacklist).
-- **Observability** — `decdn_otlp_endpoint` (OTLP span export; needs the node built
-  `--features otlp`).
+- **Observability** — `decdn_otlp_endpoint` (OTLP/gRPC span export, always compiled in;
+  must be `http://host:port`, e.g. `http://localhost:4317` — no `https://`, path or
+  userinfo).
 
 ## Secrets
 

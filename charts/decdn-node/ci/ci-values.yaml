@@ -56,7 +56,6 @@ config:
     chain_staleness_grace_sec: 900
     rpc_watchdog_interval_sec: 15
     event_poll_interval_ms: 5000
-    rate_bounds_poll_interval_sec: 1800
     fee_shares_poll_interval_sec: 1800
     redeem_threshold_micro_usdc: 2000000
     redeem_max_vouchers_per_tx: 250
@@ -67,7 +66,6 @@ config:
     pool_floor_signer_live_windows: 4
   payment:
     rate_per_mb: 12
-    delivery_floor: 0
     credit_max: 33554432
     credit_ramp_divisor: 4
     frame_target_bytes: 262144

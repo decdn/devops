@@ -191,8 +191,6 @@
               ("network.relay_urls",
                net.get("relay_urls") == ["https://relay1.example.invalid:443",
                                          "https://relay2.example.invalid:443"]),
-              ("payment.delivery_floor (explicit 0 must emit)",
-               _is_int(pay.get("delivery_floor")) and pay.get("delivery_floor") == 0),
               ("blockchain.redeem_threshold_micro_usdc",
                _is_int(bc.get("redeem_threshold_micro_usdc"))
                and bc.get("redeem_threshold_micro_usdc") == 50000000),

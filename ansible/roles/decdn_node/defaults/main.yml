@@ -100,13 +100,10 @@ decdn_discovery_dns_origin: ""
 decdn_discovery_peers: {}
 
 # --- Economics ----------------------------------------------------------------
+# The node's own asking price. The daemon never clamps it: a rate below the on-chain
+# delivery floor still sells and settles, with only its vote-weight byte credit
+# clamped at redemption. (`delivery_floor` / `delivery_ceiling` were removed upstream.)
 decdn_rate_per_mb: 10           # USDC base units (6 decimals)
-# PRE-CHAIN SEED ONLY: the daemon reads PaymentPool.getRateBounds() at startup and
-# overwrites this before it serves anything, then tracks RateBoundsUpdated. It only
-# governs the window before that read completes (a failed read refuses startup), so
-# the on-chain value is authoritative. There is no companion ceiling knob any more —
-# `delivery_ceiling` was removed and DECDN_DELIVERY_CEILING is a retired env var.
-decdn_delivery_floor: ""        # daemon dflt 0
 # Per-stream credit window (ADR 003 credit slow-start). credit_max is a bare
 # integer of bytes on the wire; ramp_divisor 0 opens the full ceiling immediately.
 decdn_credit_max: ""                  # daemon dflt 67108864 (64 MiB)
@@ -141,7 +138,6 @@ decdn_content_blacklist_poll_interval_sec: ""    # daemon dflt 600; >= 1 — bla
 # (ADR 011 §Serving while chain-stale). Always evaluated (no on/off flag) and only
 # consulted when content_blacklist_address is set; set it large to opt out.
 decdn_chain_staleness_grace_sec: ""      # daemon dflt 1800 (30 min); must be > 0
-decdn_rate_bounds_poll_interval_sec: ""  # daemon dflt 3600; > 0 — PaymentPool.getRateBounds refresh
 decdn_fee_shares_poll_interval_sec: ""   # daemon dflt 3600; > 0 — FeeRouter share refresh
 
 # --- CLI-only [blockchain] keys ----------------------------------------------
@@ -167,8 +163,8 @@ decdn_disk_headroom_mb: ""
 decdn_max_blob_size_mb: 1024    # 1 GB
 # Buyer-side ABSOLUTE per-MB rate ceiling for paid pulls (#1375) — what this node
 # will accept a provider to quote on a cache-miss pull, on top of the always-applied
-# probe-relative bound. Distinct from payment.delivery_floor, which raises this
-# node's own SELLER quote. "" / 0 => unlimited.
+# probe-relative bound. Buyer-side only — nothing bounds this node's own SELLER
+# quote. "" / 0 => unlimited.
 decdn_max_rate_per_mb: ""
 # Cache tuning ("" / [] => omit + use the daemon default; an explicit 0 IS emitted —
 # 0 is meaningful here, e.g. gc_interval_sec = 0 disables the sweep and
@@ -274,7 +270,7 @@ decdn_metrics_port: 9090
 decdn_metrics_bind: "127.0.0.1"   # keep loopback — Prometheus scrape is a follow-up
 decdn_admin_port: 9191
 # Optional ("" => omit + use the daemon default).
-decdn_otlp_endpoint: ""    # OTLP span export; http(s)://; needs the node built --features otlp
+decdn_otlp_endpoint: ""    # OTLP/gRPC span export; http://host:port only (e.g. http://localhost:4317)
 
 # --- Abuse limits, load shedding, receipts, local denylist --------------------
 # [security] and [load_shed] and [content] are HOT-RELOADABLE: change them and run

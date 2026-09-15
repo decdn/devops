@@ -6,6 +6,19 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Removed
+
+- `decdn_delivery_floor` and `decdn_rate_bounds_poll_interval_sec`: upstream
+  (decdn/decdn @ d3bc7da7) dropped `payment.delivery_floor` and
+  `blockchain.rate_bounds_poll_interval_sec` with the seller-side rate-floor clamp,
+  so emitting either is a startup failure. Setting them now has no effect.
+
+### Changed
+
+- `decdn_otlp_endpoint` must be `http://host:port`, matching upstream: `https://`,
+  a missing port, a path/query/fragment and userinfo are rejected at deploy time.
+  OTLP export is always compiled in; no `--features otlp` build is needed.
+
 ## [0.1.0] — unreleased
 
 Initial packaging of the public deCDN node roles as a distributable collection.
