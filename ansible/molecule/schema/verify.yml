@@ -16,96 +16,17 @@
         dest: /root/schema-keys.txt
         mode: "0644"
 
+    # The checker is shared with the Helm chart (`make lint-helm`), so one key
+    # inventory guards both deploy paths.
     - name: Stage the schema-drift checker
       ansible.builtin.copy:
+        src: check-schema-keys.py
         dest: /root/molecule-assert-schema.py
         mode: "0755"
-        content: |
-          """Flag any config PATH in the rendered node.toml that upstream rejects."""
-          import sys, tomllib
-
-          config_path = sys.argv[1] if len(sys.argv) > 1 else "/etc/decdn/node.toml"
-          with open(config_path, "rb") as fh:
-              config = tomllib.load(fh)
-          with open("/root/schema-keys.txt", encoding="utf-8") as fh:
-              known = {
-                  line.strip() for line in fh
-                  if line.strip() and not line.startswith("#")
-              }
-
-          def _lookup(root, dotted):
-              """Resolve a dotted path back to its value, for leaf/table triage."""
-              node = root
-              for part in dotted.split("."):
-                  if isinstance(node, list):
-                      node = node[0] if node else {}
-                  if not isinstance(node, dict) or part not in node:
-                      return None
-                  node = node[part]
-              return node
-
-          def walk(node, path=""):
-              """Yield the dotted path of every key in every table."""
-              if isinstance(node, dict):
-                  for key, value in node.items():
-                      here = f"{path}.{key}" if path else key
-                      yield here
-                      yield from walk(value, here)
-              elif isinstance(node, list):
-                  # [[cache.origins]] is an array of tables. Every element shares one
-                  # schema, so they collapse onto the same path -- an index would make
-                  # the inventory depend on how many origins an operator configured.
-                  for item in node:
-                      if isinstance(item, dict):
-                          yield from walk(item, path)
-
-          def normalize(dotted):
-              """Collapse the one path hop that is data rather than a schema field.
-
-              [network.discovery.peers.<NodeId>] is keyed by a 64-char NodeId, so the
-              hop itself is never in the inventory; the DiscoveryPeer fields BELOW it
-              are (as network.discovery.peers.*). Only that single hop is rewritten,
-              so a bogus key beside relay_url/addrs is still caught.
-              """
-              prefix = "network.discovery.peers."
-              if dotted.startswith(prefix):
-                  rest = dotted[len(prefix):].split(".", 1)
-                  return prefix + "*" + ("." + rest[1] if len(rest) > 1 else "")
-              return dotted
-
-          # A table header is itself a path (`cache.tinylfu`), and intermediate tables
-          # are not fields of anything -- they are the sections the inventory is keyed
-          # BY. Only leaf paths are checked; a bogus TABLE surfaces as its children
-          # being unknown, or (if empty) as the section-set assertion below.
-          unknown = sorted({
-              normalize(dotted) for dotted in walk(config)
-              if not isinstance(_lookup(config, dotted), (dict, list))
-              and normalize(dotted) not in known
-          })
-
-          if unknown:
-              print("node.toml emits paths absent from the upstream config schema:",
-                    file=sys.stderr)
-              for path in unknown:
-                  print(f"  {path}", file=sys.stderr)
-              print(
-                  "\nEvery config section upstream is deny_unknown_fields with no "
-                  "serde aliases, so each of these is a daemon startup failure. Note "
-                  "a path can be wrong because the KEY is unknown or because a known "
-                  "key landed in the wrong TABLE -- a scalar [cache] key emitted below "
-                  "a [cache.*] header nests into it silently. Re-sync "
-                  "roles/decdn_node/templates/node.toml.j2, then regenerate "
-                  "molecule/schema/files/schema-keys.txt (see gen-schema-keys.py).",
-                  file=sys.stderr,
-              )
-              sys.exit(1)
-
-          print(f"schema OK ({config_path}): {len(known)} known paths, "
-                f"{sum(1 for _ in walk(config))} emitted, all recognised")
 
     - name: Assert node.toml emits no key outside the upstream schema
       ansible.builtin.command:
-        cmd: python3 /root/molecule-assert-schema.py
+        cmd: python3 /root/molecule-assert-schema.py /etc/decdn/node.toml /root/schema-keys.txt
       changed_when: false
 
     # The second converge play renders the mutually-exclusive [[cache.origins]]
@@ -113,12 +34,12 @@
     # array-of-tables branch and the http/fs origin variants.
     - name: Assert the multi-origin render emits no key outside the schema
       ansible.builtin.command:
-        cmd: python3 /root/molecule-assert-schema.py /etc/decdn/node-origins.toml
+        cmd: python3 /root/molecule-assert-schema.py /etc/decdn/node-origins.toml /root/schema-keys.txt
       changed_when: false
 
     - name: Assert the resolve-only render emits no key outside the schema
       ansible.builtin.command:
-        cmd: python3 /root/molecule-assert-schema.py /etc/decdn/node-resolve-only.toml
+        cmd: python3 /root/molecule-assert-schema.py /etc/decdn/node-resolve-only.toml /root/schema-keys.txt
       changed_when: false
 
     # The schema checker above only proves every emitted key is LEGAL. It cannot

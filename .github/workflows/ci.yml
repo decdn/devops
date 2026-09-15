@@ -18,7 +18,7 @@ concurrency:
 # malicious code — cf. the March 2026 KICS action compromise). The trailing
 # comment records the human-readable version; .github/dependabot.yml bumps them.
 jobs:
-  # Detect whether ansible/ changed so the heavy Ansible jobs skip unrelated PRs.
+  # Detect whether ansible/ or the Helm chart changed so heavy jobs skip unrelated PRs.
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -26,6 +26,7 @@ jobs:
       pull-requests: read
     outputs:
       ansible: ${{ steps.filter.outputs.ansible }}
+      helm: ${{ steps.filter.outputs.helm }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -34,6 +35,12 @@ jobs:
           filters: |
             ansible:
               - 'ansible/**'
+            # The chart shares the schema-key inventory and checker with molecule.
+            helm:
+              - 'charts/**'
+              - 'ansible/molecule/schema/files/**'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
 
   # Ansible style + best-practice + the production-profile SECURITY rules,
   # plus a syntax-check of every playbook. Runs only when ansible/ changed.
@@ -96,7 +103,29 @@ jobs:
           path: ansible/build/decdn-node-*.tar.gz
           if-no-files-found: ignore
 
-  # Dedicated IaC security scan of the Ansible tree, driven straight from the
+  # Helm chart: `helm lint --strict`, positive + negative render tests, kubeconform
+  # (digest-pinned image) and the upstream schema-key check shared with molecule —
+  # all via `make lint-helm`, the same command developers run locally.
+  helm:
+    needs: changes
+    if: needs.changes.outputs.helm == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Helm version is pinned here AND in the kics job below; bump both.
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Chart lint + render tests
+        # yq (mikefarah) and Docker ship on ubuntu-latest. No decdn binary here, so
+        # the real `decdn config validate` step reports SKIPPED; run it locally with
+        # DECDN_CLI=... before bumping the decdn version.
+        run: make lint-helm
+
+  # Dedicated IaC security scan of the Ansible tree and the rendered Helm chart, driven straight from the
   # digest-pinned KICS *engine* image by `make security` — the exact command
   # developers run locally, so CI and local results cannot drift. KICS severities
   # are CRITICAL/HIGH/MEDIUM/LOW/INFO; the engine's own `--fail-on high` exit
@@ -115,19 +144,24 @@ jobs:
   # hijacked action). See CONTRIBUTING.md.
   kics:
     needs: changes
-    if: needs.changes.outputs.ansible == 'true'
+    if: needs.changes.outputs.ansible == 'true' || needs.changes.outputs.helm == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: KICS Ansible security scan (fail on HIGH)
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
+      - name: KICS security scan of ansible/ + the rendered chart (fail on HIGH)
         run: make security
       # Replaces the action's `enable_jobs_summary`.
       - name: Summarise KICS findings
         if: always()
         run: |
+          for scan in ansible helm; do
           results=kics-results/results.json
+          [ "$scan" = helm ] && results=kics-results/helm/results.json
           {
-            echo "### KICS IaC scan"
+            echo "### KICS IaC scan ($scan)"
             echo
             if [ -f "$results" ]; then
               jq -r '.severity_counters
@@ -142,7 +176,9 @@ jobs:
             else
               echo "No results file — the scan did not complete."
             fi
+            echo
           } >> "$GITHUB_STEP_SUMMARY"
+          done
       - name: Upload KICS results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

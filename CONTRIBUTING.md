@@ -23,15 +23,17 @@ tree), and `markdownlint`.
 |--------|--------------|
 | `make lint` | run all pre-commit hooks on every file (the full local hygiene gate) |
 | `make lint-ansible` | install Galaxy collections + run `ansible-lint` (its production profile includes the Ansible security rules) |
-| `make security` | KICS IaC security scan of `ansible/` (digest-pinned engine image — CI runs this same target) |
+| `make lint-helm` | Helm chart: `helm lint --strict`, positive/negative render tests, kubeconform (digest-pinned image), shared schema-key check and its fixtures (needs `helm`, `yq`, `python3` ≥ 3.11, Docker). Set `DECDN_CLI=<path to decdn>` to also run the real `decdn config validate` (CI can't). |
+| `make security` | KICS IaC security scan of `ansible/` and the rendered Helm chart (digest-pinned engine image — CI runs this same target) |
 
 `ansible-lint` is **not** a per-commit hook (it needs the collections installed).
 Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hook-stage manual`.
 
 ## CI overview
 
-- **`ci.yml`** — `ansible-lint` + `galaxy-build` + `kics` (on `ansible/**`) and
-  `actionlint`. Bash-only PRs skip the Ansible jobs. Hygiene/shellcheck/markdownlint
+- **`ci.yml`** — `ansible-lint` + `galaxy-build` (on `ansible/**`), `helm` (on
+  `charts/**`, the shared schema inventory/checker, the root `Makefile` or `ci.yml`
+  itself), `kics` (on either) and `actionlint`. Bash-only PRs skip the Ansible jobs. Hygiene/shellcheck/markdownlint
   run via **pre-commit locally only** (`make hooks` / `make lint`), not in CI.
 - **`molecule.yml`** — containerised converge + idempotence + verify of the `decdn_node`
   role (privileged systemd Docker container; scoped to `ansible/**`). Run locally with
@@ -52,7 +54,9 @@ Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hoo
   hijacked action — pinned by a digest verified against Docker Hub, currently
   `v2.1.20`. The engine's `--fail-on high` exit code is the gate.
 - **Dependabot** (`.github/dependabot.yml`) bumps the other action SHAs weekly.
-- **Bump manually** (Dependabot can't): the `KICS_IMAGE` digest in the `Makefile`,
+- **Bump manually** (Dependabot can't): the `KICS_IMAGE` and `KUBECONFORM_IMAGE` digests
+  in the `Makefile`, both `setup-helm` `version:` inputs in `ci.yml` (`helm` and `kics`
+  jobs),
   and the pre-commit hook revs via `pre-commit autoupdate`.
 
 ## Solidity

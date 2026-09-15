@@ -5,9 +5,9 @@ DevOps repo.
 
 ## What this repo is
 
-The official Ansible project for deploying a **deCDN node**: infrastructure, deployment,
-and operational tooling. The whole repo is **Ansible-driven** — `ansible/` is the
-deployment project.
+The official DevOps project for deploying a **deCDN node**: infrastructure, deployment,
+and operational tooling. There are two deploy paths: **Ansible** (`ansible/`, VMs/bare
+metal, the primary path) and a **Helm chart** (`charts/decdn-node/`, Kubernetes).
 
 This repo is **infrastructure only**. It is *not* a source of truth for protocol or
 economic claims — those trace to the deCDN ADRs. If something here states a protocol fact
@@ -20,12 +20,22 @@ economic claims — those trace to the deCDN ADRs. If something here states a pr
    (e.g. the node's eth keystore, or `rpc_url` which may embed an API key) and stored under
    `/etc/<svc>/` with `chmod 600` and a dedicated owner. The repo ships `*.example`
    templates for secret files only (non-secret config may be committed directly). The root
-   `.gitignore` is a backstop — do not rely on it; keep secrets out by design.
+   `.gitignore` is a backstop — do not rely on it; keep secrets out by design. The Helm
+   chart never creates a Secret: it references operator-provisioned ones
+   (`existingSecret`), injects only named env keys (never `envFrom` — `DECDN_*` env
+   overrides `node.toml`), keeps the keystore password off the PVC, and refuses
+   secret-bearing keys in `config`.
 2. **Localhost-only by default.** Service daemons bind `127.0.0.1` (e.g. the node's metrics
    and admin RPC). A service that must accept public traffic declares exactly one hole (the
    node's QUIC udp/4433) via `baseline_extra_inbound`; if a service ever needs an HTTP-facing
    public path, front it with an explicit reverse proxy that terminates auth + TLS. Never
    bind a *backend* to `0.0.0.0` or expose its raw port.
+   **Kubernetes exception (chart only):** the node's metrics bind `0.0.0.0` inside the pod
+   so kubelet probes and Prometheus can reach them. That is allowed only behind a
+   ClusterIP-only Service and the chart's NetworkPolicy (metrics ingress limited to
+   `metrics.networkPolicy.from`); disabling the policy fails the render unless
+   `networkPolicy.allowUnrestrictedMetrics=true` acknowledges it. Never front metrics with
+   a LoadBalancer/NodePort/Ingress.
 3. **Role templates render to their target paths.** Ansible roles template config directly
    onto the host (e.g. `roles/decdn_node/templates/decdn-node.service.j2` →
    `/etc/systemd/system/`), with secrets generated on the host at `0600`.
@@ -42,6 +52,10 @@ ansible/                # the deployment project (DevSec-hardened, lean roles)
   playbooks/            # site.yml (decdn node)
   roles/                # baseline, decdn_node
   inventory/ galaxy/ molecule/    # see ansible/README.md
+charts/
+  decdn-node/           # Helm chart for the node on Kubernetes (see its README.md)
+    ci/                 # CI values files (mirror molecule/schema's three plays)
+    tests/render-test.sh  # positive/negative render tests (`make lint-helm`)
 ```
 
 ## Current services
@@ -65,6 +79,20 @@ ansible/                # the deployment project (DevSec-hardened, lean roles)
   `molecule/schema` scenario checks the rendered key set against a committed inventory of
   upstream field names. Re-sync both when bumping the pinned decdn version.
 
+- **`charts/decdn-node/`** — the same node on Kubernetes: a one-replica StatefulSet (one
+  release = one identity) on the upstream daemon-only image (`ghcr.io/decdn/decdn-node`;
+  unpublished, so `image.tag`/`image.digest` is required), PVC data dir, a `prepare` init
+  container that installs the identity files from an `existingSecret` onto the PVC at
+  `0600` (upstream rejects symlinked or group/world-readable key files) and the password
+  into an in-memory volume, `DECDN_RPC_URL` via `secretKeyRef` (named keys only), public
+  UDP Service (LoadBalancer/NodePort/ClusterIP) or `hostPort`, and metrics bound `0.0.0.0`
+  behind a ClusterIP Service + NetworkPolicy. `values.config` mirrors `node.toml`; the
+  chart injects the path/port keys and fails on collisions. **The config-schema coupling
+  above applies here too:** `make lint-helm` runs the same `check-schema-keys.py` +
+  `schema-keys.txt` on the rendered ConfigMap, so a re-sync covers both paths. Unlike the
+  role, CI has no real-binary `decdn config validate` for the chart — run
+  `DECDN_CLI=… make lint-helm` locally when bumping the decdn version.
+
 ## Commands
 
 Two Makefiles: the **root** is the hygiene/security/CI mirror; **`ansible/`** drives
@@ -75,8 +103,9 @@ deploys (its targets must run from `ansible/`). `make help` lists root targets.
 make hooks            # one-time: install pre-commit git hook (pip install pre-commit first)
 make lint             # all pre-commit hooks on all files (hygiene, shellcheck, yamllint, markdown)
 make lint-ansible     # vendor collections + full ansible-lint (production profile)
-make security         # KICS IaC scan of ansible/ (pinned engine image)
 make molecule         # containerised converge/verify of the decdn_node role (needs Docker)
+make lint-helm        # chart: helm lint + render tests + kubeconform + schema keys (needs helm, yq, Docker)
+make security         # = security-ansible + security-helm (KICS over the rendered chart; needs helm)
 
 # Ansible deploys — run from ansible/ (see ansible/README.md for the full flow)
 cd ansible
@@ -95,7 +124,9 @@ collection tree by `galaxy/build.sh` — there is **no** `galaxy.yml` at the `an
 
 **Gotcha — pre-commit is local-only.** Hygiene/shellcheck/yamllint/markdown run via
 `make hooks`/`make lint` on your machine, **not** in CI. CI (`.github/workflows/`) is the
-blocking gate and runs `ansible-lint` + KICS + `galaxy-build` (on `ansible/**`) + `actionlint`. `ansible-lint`
+blocking gate and runs `ansible-lint` + `galaxy-build` (on `ansible/**`), `helm` (`make lint-helm`,
+on `charts/**`, the shared schema checker/inventory, `Makefile` or `ci.yml`), KICS (on either) +
+`actionlint`. `ansible-lint`
 is **not** a per-commit hook (it needs collections vendored) — run `make lint-ansible`.
 A separate `molecule.yml` workflow runs the containerised converge/verify in CI too, so
 `make molecule` is not purely local.

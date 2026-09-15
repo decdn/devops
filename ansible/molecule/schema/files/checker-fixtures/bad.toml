@@ -1,0 +1,26 @@
+# Must FAIL check-schema-keys.py, naming every path listed in bad.expected.
+[identity]
+region = "DE"
+bogus_scalar = 1
+
+[network]
+relay_urlz = ["https://relay.example.invalid/"]
+
+[network.discovery.peers.253bad481e6371866c9f6276b2a7b3a10ca16255668e740e6fc01da1cacc4350]
+addrs = ["203.0.113.4:4433"]
+bogus_peer_field = "x"
+
+[content]
+denied_hashez = []
+
+[cache.tinylfu]
+cache_size_mb = 10240
+
+[[cache.origins]]
+kind = "http"
+
+[[cache.origins]]
+kind = "fs"
+bogus_origin_field = "x"
+
+[bogus_empty_table]

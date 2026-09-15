@@ -1,0 +1,8 @@
+# Not part of the packaged chart.
+.DS_Store
+.git/
+*.swp
+*.bak
+*.tmp
+*.orig
+tests/

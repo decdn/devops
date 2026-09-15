@@ -4,8 +4,8 @@
 #   pip install pre-commit && make hooks      # one-time install
 #   make lint                                 # run on all files
 #
-# Heavier Ansible checks (ansible-lint, syntax-check, KICS security scan) run in
-# CI only — see .github/workflows/. ansible-lint's production profile already
+# Heavier checks (ansible-lint, syntax-check, KICS security scan, and the Helm
+# chart's `make lint-helm`) run in CI — see .github/workflows/. ansible-lint's production profile already
 # carries the Ansible security rules; this file is the fast local gate (hygiene,
 # shellcheck, yamllint, markdown).
 minimum_pre_commit_version: "3.5.0"
@@ -38,6 +38,9 @@ repos:
         args: [--fix=lf]
       - id: check-yaml
         args: [--unsafe]   # tolerate custom/!vault tags; syntax check only
+        # Helm templates are Go templates, not YAML; `make lint-helm` renders and
+        # validates them instead.
+        exclude: ^charts/[^/]+/templates/
       - id: check-json
       - id: check-toml
 

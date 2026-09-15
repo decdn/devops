@@ -1,0 +1,29 @@
+---
+# Resolve-only discovery: dns_origin WITHOUT pkarr_url, no origin (pull-through
+# must derive true). Also exercises ClusterIP, a digest-pinned image, and the
+# explicitly acknowledged NetworkPolicy-off path. Mirrors the resolve-only play of
+# ansible/molecule/schema/converge.yml.
+image:
+  digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+service:
+  type: ClusterIP
+networkPolicy:
+  enabled: false
+  allowUnrestrictedMetrics: true
+secrets:
+  keystore:
+    existingSecret: decdn-node-keys
+  env:
+    existingSecret: decdn-node-env
+config:
+  identity:
+    region: DE
+  network:
+    discovery:
+      dns_origin: resolve-only.example.invalid
+  blockchain:
+    chain_id: 421614
+    payment_pool_address: "0x1111111111111111111111111111111111111111"
+    capacity_bond_address: "0x2222222222222222222222222222222222222222"
+    slash_judge_address: "0x3333333333333333333333333333333333333333"
+    content_blacklist_address: "0x4444444444444444444444444444444444444444"

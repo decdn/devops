@@ -1,0 +1,23 @@
+---
+# Metrics: ClusterIP only, never public. Reach is further limited by the
+# NetworkPolicy to metrics.networkPolicy.from.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "decdn-node.fullname" . }}-metrics
+  labels:
+    {{- include "decdn-node.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+  {{- with .Values.metrics.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "decdn-node.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: {{ int .Values.metrics.port }}
+      targetPort: metrics
+      protocol: TCP

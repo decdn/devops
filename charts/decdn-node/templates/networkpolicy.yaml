@@ -1,0 +1,39 @@
+{{- if not .Values.networkPolicy.enabled }}
+{{- if not .Values.networkPolicy.allowUnrestrictedMetrics }}
+{{- fail "networkPolicy.enabled=false leaves metrics (bound 0.0.0.0 in the pod) reachable from every pod in the cluster; set networkPolicy.allowUnrestrictedMetrics=true to accept that (AGENTS.md hard rule 2)" }}
+{{- end }}
+{{- else }}
+---
+# Ingress: public QUIC from anywhere; metrics only from metrics.networkPolicy.from.
+# Egress: open unless networkPolicy.egress is given.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "decdn-node.fullname" . }}
+  labels:
+    {{- include "decdn-node.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "decdn-node.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    {{- if .Values.networkPolicy.egress }}
+    - Egress
+    {{- end }}
+  ingress:
+    - ports:
+        - protocol: UDP
+          port: {{ int .Values.quic.port }}
+    {{- with .Values.metrics.networkPolicy.from }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: {{ int $.Values.metrics.port }}
+    {{- end }}
+  {{- with .Values.networkPolicy.egress }}
+  egress:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

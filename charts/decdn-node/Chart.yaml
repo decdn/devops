@@ -1,0 +1,27 @@
+---
+apiVersion: v2
+name: decdn-node
+description: >-
+  A deCDN node (decdn-node daemon) on Kubernetes: public QUIC over UDP, a
+  persistent data dir holding the operator-provisioned node identity, and a
+  ClusterIP-only metrics endpoint behind a NetworkPolicy.
+type: application
+# Chart version: bump on any chart change (SemVer).
+version: 0.1.0
+# The decdn release the chart's config rendering is synced against. Upstream has
+# no `v*` tag (or published image) yet, so 0.0.0 is a placeholder and the chart
+# refuses to render until `image.tag` or `image.digest` is set explicitly.
+appVersion: "0.0.0"
+kubeVersion: ">=1.25.0-0"
+home: https://decdn.org
+sources:
+  - https://github.com/decdn/devops
+  - https://github.com/decdn/decdn
+keywords:
+  - decdn
+  - cdn
+  - iroh
+  - quic
+maintainers:
+  - name: deCDN
+    url: https://decdn.org
