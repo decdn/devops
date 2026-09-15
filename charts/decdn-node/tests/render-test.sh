@@ -243,11 +243,13 @@ expect_fail() { # <description> <layer: schema|template> <message ERE> <helm arg
 expect_fail "missing keystore Secret"      template 'secrets.keystore.existingSecret is required' --set secrets.keystore.existingSecret=
 expect_fail "missing env Secret"           template 'secrets.env.existingSecret is required'      --set secrets.env.existingSecret=
 expect_fail "DECDN_* passthrough key"      template 'passthroughKeys: DECDN_BIND_PORT is refused'  --set 'secrets.env.passthroughKeys[0]=DECDN_BIND_PORT'
-expect_fail "missing required address"     schema   "missing propert(y|ies) 'slash_judge_address'" --set config.blockchain.slash_judge_address=null
+# A --set null is dropped by some Helm versions (missing property) and kept by others
+# (got null); both are correct rejections.
+expect_fail "missing required address"     schema   "missing propert(y|ies) 'slash_judge_address'|/config/blockchain/slash_judge_address': got null" --set config.blockchain.slash_judge_address=null
 expect_fail "malformed address"            schema   "/config/blockchain/slash_judge_address"      --set config.blockchain.slash_judge_address=0x12
 expect_fail "zero address"                 schema   "/config/blockchain/payment_pool_address.*'not' failed|payment_pool_address.*not" --set config.blockchain.payment_pool_address=0x0000000000000000000000000000000000000000
 expect_fail "lowercase region"             schema   "/config/identity/region.*does not match"    --set config.identity.region=de
-expect_fail "missing chain_id"             schema   "missing propert(y|ies) 'chain_id'"          --set config.blockchain.chain_id=null
+expect_fail "missing chain_id"             schema   "missing propert(y|ies) 'chain_id'|/config/blockchain/chain_id': got null" --set config.blockchain.chain_id=null
 expect_fail "empty origins list"           schema   "/config/cache/origins"                      --set-json 'config.cache.origins=[]'
 expect_fail "managed metrics_port"         template 'observability.metrics_port is managed'      --set config.observability.metrics_port=9999
 expect_fail "managed metrics_bind"         template 'observability.metrics_bind is managed'      --set config.observability.metrics_bind=127.0.0.1
@@ -268,6 +270,18 @@ expect_fail "max_blob > cache_size"        template 'max_blob_size_mb must be <=
 expect_fail "integer beyond 2^53"          template 'too large to render exactly'                --set-json 'config.payment.credit_max=18446744073709551615'
 expect_fail "null inside a list element"   template 'null inside a list element'                 --set-json 'config.cache.origins=[{"kind":"fs","path":null}]'
 expect_fail "policy off, not acknowledged" template 'allowUnrestrictedMetrics'                   --set networkPolicy.allowUnrestrictedMetrics=false
+expect_fail "podLabels overrides selector" template 'podLabels.app.kubernetes.io/instance is set by the chart' --set-json 'podLabels={"app.kubernetes.io/instance":"x"}'
+expect_fail "podAnnotations checksum"      template 'podAnnotations.checksum/config is set by the chart' --set-json 'podAnnotations={"checksum/config":"pinned"}'
+expect_fail "runAsNonRoot false"           template 'runAsNonRoot must be true'                  --set podSecurityContext.runAsNonRoot=false
+expect_fail "runAsNonRoot removed"         template 'runAsNonRoot must be true'                  --set podSecurityContext.runAsNonRoot=null
+expect_fail "runAsUser 0"                  template 'runAsUser must not be 0'                    --set podSecurityContext.runAsUser=0
+expect_fail "container runAsUser 0"        template 'must not run as root'                       --set securityContext.runAsUser=0
+expect_fail "seccomp Unconfined"           template 'must not be Unconfined'                     --set podSecurityContext.seccompProfile.type=Unconfined
+expect_fail "privilege escalation"         template 'allowPrivilegeEscalation must be false'     --set securityContext.allowPrivilegeEscalation=true
+expect_fail "privileged"                   template 'privileged must not be true'                --set securityContext.privileged=true
+expect_fail "writable root filesystem"     template 'readOnlyRootFilesystem must be true'        --set securityContext.readOnlyRootFilesystem=false
+expect_fail "capabilities added"           template 'capabilities.add must be empty'             --set 'securityContext.capabilities.add[0]=NET_ADMIN'
+expect_fail "capabilities not dropped"     template 'capabilities.drop must include ALL'         --set-json 'securityContext.capabilities.drop=["NET_RAW"]'
 expect_fail "ServiceMonitor, policy blocks" template 'metrics.networkPolicy.from'                --set metrics.serviceMonitor.enabled=true --set networkPolicy.enabled=true
 
 # --- optional: the real binary --------------------------------------------------

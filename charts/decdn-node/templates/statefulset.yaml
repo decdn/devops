@@ -1,4 +1,5 @@
 {{- include "decdn-node.validateSecrets" . }}
+{{- include "decdn-node.validatePod" . }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet

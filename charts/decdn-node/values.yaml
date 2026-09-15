@@ -24,6 +24,8 @@ serviceAccount:
   name: ""
   annotations: {}
 
+# Chart-owned keys (the app.kubernetes.io/* and helm.sh/chart labels, the
+# checksum/config annotation) cannot be overridden; setting one fails the render.
 podAnnotations: {}
 podLabels: {}
 
@@ -77,8 +79,9 @@ metrics:
   port: 9090
   service:
     annotations: {}
-  # Who may reach tcp/<metrics.port>. Empty = nobody (kubelet probes still work
-  # on common CNIs). Entries are NetworkPolicyPeer objects, e.g.:
+  # Who may reach tcp/<metrics.port>. Empty = no pod. Kubelet probes still work:
+  # the NetworkPolicy spec always allows traffic between a pod and its own node.
+  # Entries are NetworkPolicyPeer objects, e.g.:
   #   - namespaceSelector:
   #       matchLabels: {kubernetes.io/metadata.name: monitoring}
   networkPolicy:
@@ -176,6 +179,10 @@ livenessProbe:
   timeoutSeconds: 5
   failureThreshold: 6
 
+# Overridable (e.g. a different non-root uid), but the render fails if the merged
+# result runs as root, allows privilege escalation or privileged mode, has a
+# writable root filesystem, adds capabilities, drops fewer than ALL, or uses an
+# Unconfined seccomp profile.
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 1000

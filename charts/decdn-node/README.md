@@ -180,6 +180,13 @@ see [Secrets](#secrets).)
 the namespace. The guard checks key names only: never embed a credential in a value
 either (such as `https://user:pass@…` in an origin URL). Put secrets in the env Secret.
 
+**Pod overrides.** `podLabels` cannot re-set a chart label (that would detach the pod from
+its StatefulSet selector and Services), `podAnnotations` cannot re-set `checksum/config`,
+and `podSecurityContext` / `securityContext` can be changed (for example, a different
+non-root uid) but the render fails if the result runs as root, allows privilege escalation
+or privileged mode, makes the root filesystem writable, adds capabilities, drops fewer than
+`ALL`, or disables seccomp.
+
 **Other render-time checks.** Every top-level `config` entry must be a table; a `null`
 inside a list element is refused (omit the key instead); and whole numbers of 2^53 or more
 are refused, because values files decode numbers as float64 and they would render rounded.
@@ -208,7 +215,8 @@ their own token volume, so they should work with the chart's
   requires. That is how kubelet probes and Prometheus reach `/metrics`. Metrics are
   exposed only by a ClusterIP Service, and the NetworkPolicy admits TCP to that port only
   from `metrics.networkPolicy.from`. That list is empty by default, so no scraper is
-  allowed.
+  allowed. Kubelet probes are unaffected: the NetworkPolicy spec always allows traffic
+  between a pod and the node it runs on.
   - The NetworkPolicy is what keeps metrics private, so `networkPolicy.enabled: false`
     fails the render unless `networkPolicy.allowUnrestrictedMetrics: true` accepts that
     every pod in the cluster can reach them.

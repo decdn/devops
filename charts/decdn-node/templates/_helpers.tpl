@@ -88,6 +88,62 @@ Required Secret references (the chart never creates a Secret).
 {{- end }}
 
 {{/* ---------------------------------------------------------------------------
+Pod-level overrides that would silently break a chart invariant. Fail loud rather
+than let a values override win:
+- podLabels re-setting a chart label (the selector labels would detach the pod
+  from the StatefulSet and Services);
+- podAnnotations re-setting checksum/config (config changes would stop rolling);
+- a (pod)securityContext that drops the non-root / no-privilege /
+  read-only-rootfs / all-capabilities-dropped hardening (compared as strings: `get`
+  yields "" for a missing key, which `eq` cannot compare with a bool). Helm merges overrides
+  into the defaults, so these must hold on the merged values, and a `null` that
+  removes one of them fails too.
+--------------------------------------------------------------------------- */}}
+{{- define "decdn-node.validatePod" -}}
+{{- $chartLabels := include "decdn-node.labels" . | fromYaml }}
+{{- range $k, $_ := default (dict) .Values.podLabels }}
+{{- if hasKey $chartLabels $k }}
+{{- fail (printf "podLabels.%s is set by the chart and must not be overridden" $k) }}
+{{- end }}
+{{- end }}
+{{- if hasKey (default (dict) .Values.podAnnotations) "checksum/config" }}
+{{- fail "podAnnotations.checksum/config is set by the chart (it rolls the pod on config changes) and must not be overridden" }}
+{{- end }}
+{{- $psc := default (dict) .Values.podSecurityContext }}
+{{- if not (eq (toString (get $psc "runAsNonRoot")) "true") }}
+{{- fail "podSecurityContext.runAsNonRoot must be true" }}
+{{- end }}
+{{- range $f := list "runAsUser" "runAsGroup" }}
+{{- if and (hasKey $psc $f) (eq (int (get $psc $f)) 0) }}
+{{- fail (printf "podSecurityContext.%s must not be 0 (root)" $f) }}
+{{- end }}
+{{- end }}
+{{- if eq (dig "seccompProfile" "type" "" $psc) "Unconfined" }}
+{{- fail "podSecurityContext.seccompProfile.type must not be Unconfined" }}
+{{- end }}
+{{- $sc := default (dict) .Values.securityContext }}
+{{- if not (eq (toString (get $sc "allowPrivilegeEscalation")) "false") }}
+{{- fail "securityContext.allowPrivilegeEscalation must be false" }}
+{{- end }}
+{{- if not (eq (toString (get $sc "readOnlyRootFilesystem")) "true") }}
+{{- fail "securityContext.readOnlyRootFilesystem must be true" }}
+{{- end }}
+{{- if eq (toString (get $sc "privileged")) "true" }}
+{{- fail "securityContext.privileged must not be true" }}
+{{- end }}
+{{- if or (eq (toString (get $sc "runAsNonRoot")) "false") (and (hasKey $sc "runAsUser") (eq (int (get $sc "runAsUser")) 0)) }}
+{{- fail "securityContext must not run as root (runAsNonRoot=false or runAsUser=0)" }}
+{{- end }}
+{{- $caps := default (dict) (get $sc "capabilities") }}
+{{- if not (has "ALL" (default (list) (get $caps "drop"))) }}
+{{- fail "securityContext.capabilities.drop must include ALL" }}
+{{- end }}
+{{- if get $caps "add" }}
+{{- fail "securityContext.capabilities.add must be empty: the node needs no Linux capabilities" }}
+{{- end }}
+{{- end }}
+
+{{/* ---------------------------------------------------------------------------
 Refuse secret-bearing keys anywhere in `config`. node.toml lands in a ConfigMap,
 which is readable by anyone with get on configmaps in the namespace.
 Arg: dict "node" <map|list|scalar> "path" <string>
