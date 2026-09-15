@@ -1,0 +1,7 @@
+identity.bogus_scalar
+network.relay_urlz
+network.discovery.peers.*.bogus_peer_field
+content.denied_hashez
+cache.tinylfu.cache_size_mb
+cache.origins.bogus_origin_field
+bogus_empty_table

@@ -1,0 +1,30 @@
+{{ $admin := dig "observability" "admin_port" 9191 (.Values.config | default dict) -}}
+deCDN node {{ include "decdn-node.fullname" . }} (namespace {{ .Release.Namespace }}).
+
+- Wait for the node to become Ready. Ready means /metrics answers (startup and
+  chain bring-up done); paid QUIC listeners open only after the first
+  ContentBlacklist sync, so check the logs before routing traffic:
+
+     kubectl -n {{ .Release.Namespace }} rollout status statefulset/{{ include "decdn-node.fullname" . }}
+{{- if and .Values.service.enabled (eq .Values.service.type "LoadBalancer") }}
+
+- Public QUIC address (udp/{{ .Values.quic.port }}):
+
+     kubectl -n {{ .Release.Namespace }} get svc {{ include "decdn-node.fullname" . }} -o jsonpath='{.status.loadBalancer.ingress[0]}'
+{{- end }}
+{{- if eq (int $admin) 0 }}
+
+- The admin RPC is disabled (observability.admin_port = 0).
+{{- else }}
+
+- Health and status go through the loopback-only admin RPC. From your machine,
+  with the `decdn` CLI installed:
+
+     kubectl -n {{ .Release.Namespace }} port-forward pod/{{ include "decdn-node.fullname" . }}-0 {{ $admin }}
+     DECDN_ADMIN_URL=http://127.0.0.1:{{ $admin }} decdn node health
+{{- end }}
+
+- On-chain stake/registration (ADR 019 Phase 2) is a manual operator step:
+  run `decdn setup` off-cluster against the same keystore.
+
+Graceful drain window: {{ .Values.terminationGracePeriodSeconds }}s. Do not force-delete the pod.

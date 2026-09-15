@@ -1,0 +1,43 @@
+{{- if .Values.service.enabled }}
+{{- $type := .Values.service.type }}
+{{- if not (has $type (list "LoadBalancer" "NodePort" "ClusterIP")) }}
+{{- fail (printf "service.type must be LoadBalancer, NodePort or ClusterIP (got %q)" $type) }}
+{{- end }}
+---
+# Public QUIC (udp) — the node's one public hole.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "decdn-node.fullname" . }}
+  labels:
+    {{- include "decdn-node.labels" . | nindent 4 }}
+    app.kubernetes.io/component: quic
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $type }}
+  {{- if ne $type "ClusterIP" }}
+  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy }}
+  {{- end }}
+  {{- if eq $type "LoadBalancer" }}
+  {{- with .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ . }}
+  {{- end }}
+  {{- with .Values.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  selector:
+    {{- include "decdn-node.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: quic
+      port: {{ int .Values.quic.port }}
+      targetPort: quic
+      protocol: UDP
+      {{- if and (ne $type "ClusterIP") .Values.service.nodePort }}
+      nodePort: {{ int .Values.service.nodePort }}
+      {{- end }}
+{{- end }}

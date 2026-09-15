@@ -1,0 +1,206 @@
+---
+# Default values for decdn-node. One release = one node identity (one keystore,
+# one data dir); run a fleet by installing one release per node.
+#
+# NO SECRET VALUES BELONG IN THIS FILE OR ANY OVERRIDE OF IT (AGENTS.md hard
+# rule 1). The chart never creates a Secret: key material and the RPC URL are
+# referenced from Secrets the operator provisions out of band (see README.md).
+
+image:
+  repository: ghcr.io/decdn/decdn-node
+  # Defaults to the chart appVersion. Upstream has published no release yet, so
+  # rendering fails until tag or digest is set (e.g. a locally built image).
+  tag: ""
+  # sha256:... — takes precedence over tag when set.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Chart-owned keys (the app.kubernetes.io/* and helm.sh/chart labels, the
+# checksum/config annotation) cannot be overridden; setting one fails the render.
+podAnnotations: {}
+podLabels: {}
+
+# --- Secrets (referenced, never created) ------------------------------------
+secrets:
+  # Output of an off-cluster `decdn key-gen`. On every pod start the `prepare`
+  # init container installs keystore.json + node.secret into the data dir at 0600
+  # (upstream rejects symlinked key files and any group/world bit, and Secret
+  # volume files are symlinks), and keystore.password into an in-memory volume —
+  # never onto the PVC, where a snapshot would hold the keystore AND its password.
+  keystore:
+    existingSecret: ""   # required
+    keys:
+      keystore: keystore.json
+      nodeSecret: node.secret
+      password: keystore.password
+  # The k8s equivalent of /etc/decdn/decdn.env. Only named keys are injected —
+  # never the whole Secret: upstream lets DECDN_* env override node.toml, so a
+  # stray DECDN_BIND_PORT / DECDN_METRICS_BIND / DECDN_ETH_KEYSTORE / address
+  # would silently bypass the chart's managed keys and schema checks.
+  env:
+    existingSecret: ""   # required
+    rpcUrlKey: DECDN_RPC_URL   # the key holding the RPC URL (may embed an API key)
+    # Extra keys to inject verbatim, e.g. [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+    # for an S3 origin using the default credential chain. DECDN_* names are refused.
+    passthroughKeys: []
+
+# --- Public QUIC (the one public hole) --------------------------------------
+quic:
+  port: 4433
+  # Bind udp/<port> directly on the k8s node as well. Pair with
+  # service.enabled=false for a bare-metal-style deployment.
+  hostPort:
+    enabled: false
+    port: 4433
+
+service:
+  enabled: true
+  # LoadBalancer | NodePort | ClusterIP
+  type: LoadBalancer
+  # Local preserves the client source IP (per-source rate limits need it).
+  # Only applied to LoadBalancer/NodePort.
+  externalTrafficPolicy: Local
+  nodePort: null
+  loadBalancerIP: ""
+  loadBalancerSourceRanges: []
+  annotations: {}
+
+# --- Metrics (0.0.0.0 in the pod, ClusterIP-only, NetworkPolicy-gated) ------
+metrics:
+  port: 9090
+  service:
+    annotations: {}
+  # Who may reach tcp/<metrics.port>. Empty = no pod. Kubelet probes still work:
+  # the NetworkPolicy spec always allows traffic between a pod and its own node.
+  # Entries are NetworkPolicyPeer objects, e.g.:
+  #   - namespaceSelector:
+  #       matchLabels: {kubernetes.io/metadata.name: monitoring}
+  networkPolicy:
+    from: []
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
+networkPolicy:
+  enabled: true
+  # Egress is unrestricted unless rules are given here (RPC, relays, origins and
+  # peers are arbitrary endpoints). A non-empty list switches Egress enforcement on.
+  egress: []
+  # Metrics bind 0.0.0.0 in the pod; this policy is what keeps them private.
+  # Disabling it fails the render unless this is set to accept cluster-wide reach.
+  allowUnrestrictedMetrics: false
+
+# --- Storage ----------------------------------------------------------------
+# Holds the node identity and the cache. Size it above
+# config.cache.cache_size_mb + cache.disk_headroom_mb (daemon default 8192 MiB).
+persistence:
+  size: 20Gi
+  storageClass: ""
+  accessModes: [ReadWriteOnce]
+  annotations: {}
+
+# --- node.toml ----------------------------------------------------------------
+# Mirrors node.toml section-for-section (upstream decdn
+# crates/common/src/config/types.rs; every section is deny_unknown_fields, so an
+# unknown key crash-loops the pod). Unset keys take the daemon default.
+#
+# Managed by the chart — setting them here fails the render:
+#   identity.data_dir, blockchain.eth_keystore, cache.cache_dir,
+#   network.bind_port (quic.port), observability.metrics_port (metrics.port),
+#   observability.metrics_bind.
+# Refused here (the ConfigMap is readable by anyone who can read configmaps):
+# rpc_url, access_key_id, session_token, and any key containing "password" or
+# "secret" — use secrets.env (rpcUrlKey / passthroughKeys).
+#
+# cache.node_to_node_pull_through_enabled, when unset, is derived: true when no
+# cache.origin / cache.origins is configured, false when one is (as the Ansible
+# role does).
+config:
+  identity:
+    region: ""                    # required, ISO 3166-1 alpha-2, uppercase
+  blockchain:
+    # Required. Protocol facts: take them from the deCDN ADRs / deployment
+    # manifest for your chain, never invent them.
+    chain_id: null                # e.g. 421614 (Arbitrum Sepolia)
+    payment_pool_address: ""
+    capacity_bond_address: ""
+    slash_judge_address: ""
+    content_blacklist_address: ""
+  payment:
+    rate_per_mb: 10               # USDC base units (6 decimals)
+  cache:
+    cache_size_mb: 10240          # 10 GB
+    # Deliberate override (daemon default = min(51200, cache_size_mb)): caps one
+    # blob at a tenth of the default cache. Must be >= 1 — the cache engine's admit
+    # gate has no zero special-case (despite the CLI help), so 0 rejects every blob.
+    max_blob_size_mb: 1024
+  observability:
+    log_level: info
+    log_format: json
+
+# --- Pod --------------------------------------------------------------------
+# SIGTERM runs a graceful drain; killing mid-drain loses paid deliveries.
+terminationGracePeriodSeconds: 300
+
+# /metrics is the only probe target: there is no /health route and the admin RPC
+# is loopback-only. It binds only after startup completes — RPC preflight, key
+# load, cache/endpoint build, then the chain bring-up (CapacityBond + slash-watcher
+# enumerations, blacklist and DHT bootstrap) — so startup must cover a slow RPC; a
+# failed bring-up exits the container and restarts it. Ready != serving: paid QUIC
+# listeners open only after the first ContentBlacklist sync.
+startupProbe:
+  httpGet:
+    path: /metrics
+    port: metrics
+  periodSeconds: 5
+  failureThreshold: 60
+readinessProbe:
+  httpGet:
+    path: /metrics
+    port: metrics
+  periodSeconds: 10
+  failureThreshold: 3
+livenessProbe:
+  httpGet:
+    path: /metrics
+    port: metrics
+  periodSeconds: 20
+  timeoutSeconds: 5
+  failureThreshold: 6
+
+# Overridable (e.g. a different non-root uid), but the render fails if the merged
+# result runs as root, allows privilege escalation or privileged mode, has a
+# writable root filesystem, adds capabilities, drops fewer than ALL, or uses an
+# Unconfined seccomp profile.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  privileged: false
+  capabilities:
+    drop: [ALL]
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""

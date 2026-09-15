@@ -1,0 +1,457 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "decdn-node values",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "image",
+    "secrets",
+    "quic",
+    "service",
+    "metrics",
+    "networkPolicy",
+    "persistence",
+    "config"
+  ],
+  "definitions": {
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "address": {
+      "type": "string",
+      "pattern": "^0x[0-9a-fA-F]{40}$"
+    },
+    "requiredAddress": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/address"
+        },
+        {
+          "not": {
+            "pattern": "^0x0{40}$"
+          }
+        }
+      ]
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "properties": {
+    "global": {
+      "type": "object"
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^(sha256:[0-9a-f]{64})?$"
+        },
+        "pullPolicy": {
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array"
+    },
+    "nameOverride": {
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "type": "string"
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "annotations": {
+          "$ref": "#/definitions/stringMap"
+        }
+      }
+    },
+    "podAnnotations": {
+      "$ref": "#/definitions/stringMap"
+    },
+    "podLabels": {
+      "$ref": "#/definitions/stringMap"
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "keystore",
+        "env"
+      ],
+      "properties": {
+        "keystore": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "existingSecret",
+            "keys"
+          ],
+          "properties": {
+            "existingSecret": {
+              "type": "string"
+            },
+            "keys": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "keystore",
+                "nodeSecret",
+                "password"
+              ],
+              "properties": {
+                "keystore": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "nodeSecret": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "password": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "existingSecret",
+            "rpcUrlKey"
+          ],
+          "properties": {
+            "existingSecret": {
+              "type": "string"
+            },
+            "rpcUrlKey": {
+              "type": "string",
+              "minLength": 1
+            },
+            "passthroughKeys": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "quic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "port"
+      ],
+      "properties": {
+        "port": {
+          "$ref": "#/definitions/port"
+        },
+        "hostPort": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "port": {
+              "$ref": "#/definitions/port"
+            }
+          }
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "type": {
+          "enum": [
+            "LoadBalancer",
+            "NodePort",
+            "ClusterIP"
+          ]
+        },
+        "externalTrafficPolicy": {
+          "enum": [
+            "Local",
+            "Cluster"
+          ]
+        },
+        "nodePort": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 30000,
+          "maximum": 32767
+        },
+        "loadBalancerIP": {
+          "type": "string"
+        },
+        "loadBalancerSourceRanges": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "annotations": {
+          "$ref": "#/definitions/stringMap"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "port"
+      ],
+      "properties": {
+        "port": {
+          "$ref": "#/definitions/port"
+        },
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "annotations": {
+              "$ref": "#/definitions/stringMap"
+            }
+          }
+        },
+        "networkPolicy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "from": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "interval": {
+              "type": "string"
+            },
+            "scrapeTimeout": {
+              "type": "string"
+            },
+            "labels": {
+              "$ref": "#/definitions/stringMap"
+            }
+          }
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "egress": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "allowUnrestrictedMetrics": {
+          "type": "boolean"
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "size"
+      ],
+      "properties": {
+        "size": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|K|M|G|T|P)?$"
+        },
+        "storageClass": {
+          "type": "string"
+        },
+        "accessModes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "annotations": {
+          "$ref": "#/definitions/stringMap"
+        }
+      }
+    },
+    "config": {
+      "description": "node.toml, section for section. Only the keys the chart must enforce are typed here; the chart's own CI fixtures are checked against the committed upstream key inventory, but operator-supplied keys and value types are validated only by the daemon at startup.",
+      "type": "object",
+      "required": [
+        "identity",
+        "blockchain"
+      ],
+      "properties": {
+        "identity": {
+          "type": "object",
+          "required": [
+            "region"
+          ],
+          "properties": {
+            "region": {
+              "type": "string",
+              "pattern": "^[A-Z]{2}$"
+            }
+          }
+        },
+        "blockchain": {
+          "type": "object",
+          "required": [
+            "chain_id",
+            "payment_pool_address",
+            "capacity_bond_address",
+            "slash_judge_address",
+            "content_blacklist_address"
+          ],
+          "properties": {
+            "chain_id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "payment_pool_address": {
+              "$ref": "#/definitions/requiredAddress"
+            },
+            "capacity_bond_address": {
+              "$ref": "#/definitions/requiredAddress"
+            },
+            "slash_judge_address": {
+              "$ref": "#/definitions/requiredAddress"
+            },
+            "content_blacklist_address": {
+              "$ref": "#/definitions/requiredAddress"
+            }
+          },
+          "patternProperties": {
+            "_address$": {
+              "$ref": "#/definitions/address"
+            }
+          }
+        },
+        "cache": {
+          "type": "object",
+          "properties": {
+            "cache_size_mb": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_blob_size_mb": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "origins": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "kind"
+                ]
+              },
+              "minItems": 1
+            },
+            "origin": {
+              "type": "object",
+              "required": [
+                "kind"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "terminationGracePeriodSeconds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "startupProbe": {
+      "type": "object"
+    },
+    "readinessProbe": {
+      "type": "object"
+    },
+    "livenessProbe": {
+      "type": "object"
+    },
+    "podSecurityContext": {
+      "type": "object"
+    },
+    "securityContext": {
+      "type": "object"
+    },
+    "resources": {
+      "type": "object"
+    },
+    "nodeSelector": {
+      "$ref": "#/definitions/stringMap"
+    },
+    "tolerations": {
+      "type": "array"
+    },
+    "affinity": {
+      "type": "object"
+    },
+    "priorityClassName": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "decdn-node.fullname" . }}
+  labels:
+    {{- include "decdn-node.labels" . | nindent 4 }}
+data:
+  node.toml: |
+    {{- include "decdn-node.nodeToml" . | nindent 4 }}

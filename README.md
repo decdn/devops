@@ -9,7 +9,8 @@
 [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow.svg)](https://www.conventionalcommits.org)
 
 The official **DevOps repo** for deploying a deCDN node — infrastructure, deployment, and
-operational tooling, driven by a single declarative [Ansible](ansible/README.md) project.
+operational tooling: a declarative [Ansible](ansible/README.md) project for VMs and bare
+metal, and a [Helm chart](charts/decdn-node/README.md) for Kubernetes.
 
 This repo is **infrastructure only**. It is *not* a source of truth for protocol or
 economic facts (chain-id, token addresses, fee splits) — those trace to the deCDN ADRs.
@@ -18,11 +19,12 @@ this repo.
 
 ## What it deploys
 
-A single deployment over a hardened host baseline:
+The same node, two ways:
 
-| Playbook | Deploys | Exposure |
-|----------|---------|----------|
-| **`site.yml`** | A public **deCDN node** (`decdn-node`) — the product. Installed from a pinned GitHub release tarball under a hardened systemd unit. | Public QUIC **udp/4433** |
+| Path | Deploys | Exposure |
+|------|---------|----------|
+| **`ansible/playbooks/site.yml`** | A public **deCDN node** (`decdn-node`) — the product. Installed from a pinned GitHub release tarball under a hardened systemd unit, over a hardened host baseline. | Public QUIC **udp/4433** |
+| **`charts/decdn-node`** | The same node on Kubernetes: one-replica StatefulSet, PVC data dir, operator-provisioned Secrets, restricted pod security. | Public QUIC **udp/4433** (LoadBalancer/NodePort/hostPort); metrics ClusterIP + NetworkPolicy |
 
 ## Architecture
 
@@ -45,9 +47,10 @@ stops at host prep and startup.
 | Path | What it is |
 |------|------------|
 | [`ansible/`](ansible/README.md) | The **declarative deployment project** — `inventory/`, `playbooks/`, `roles/` (baseline, decdn_node). The whole deploy surface lives here. |
+| [`charts/decdn-node/`](charts/decdn-node/README.md) | The **Helm chart** for running the node on Kubernetes. |
 | `Makefile` | Root hygiene/security/CI mirror — runs the same lint + IaC scans CI does. |
 | `ansible/Makefile` | The deploy driver — `make deps/check/deploy`. |
-| `.github/workflows/` | The blocking CI gate (`ansible-lint` + KICS + `galaxy-build` + `molecule` + `actionlint`). |
+| `.github/workflows/` | The blocking CI gate (`ansible-lint` + `helm` + KICS + `galaxy-build` + `molecule` + `actionlint`). |
 
 ## Quickstart
 
@@ -65,6 +68,13 @@ make deploy                                    # provision the deCDN node
 
 See [`ansible/README.md`](ansible/README.md) for the full setup and the deCDN-node
 prerequisites (release tarball, per-node `host_vars`, operator-provisioned eth keystore).
+
+On Kubernetes, create the keystore and RPC Secrets out of band, then install the chart
+(see [`charts/decdn-node/README.md`](charts/decdn-node/README.md)):
+
+```bash
+helm install decdn-node-1 charts/decdn-node -n decdn -f values-node-1.yaml
+```
 
 ## Security model
 
@@ -93,7 +103,8 @@ Two Makefiles, two jobs. The **root** Makefile mirrors CI's hygiene/security gat
 make hooks            # one-time: install the pre-commit git hook (pip install pre-commit first)
 make lint             # all pre-commit hooks on all files (hygiene, shellcheck, yamllint, markdown)
 make lint-ansible     # vendor collections + full ansible-lint (production profile)
-make security         # KICS IaC scan of ansible/ (pinned engine image)
+make lint-helm        # chart: helm lint + render tests + kubeconform + schema keys
+make security         # KICS IaC scan of ansible/ + the rendered chart (pinned engine image)
 
 # Ansible deploys — run from ansible/
 cd ansible
@@ -105,14 +116,16 @@ make check / deploy               # deCDN node (site.yml): dry-run / provision
 **Gotcha — pre-commit is local-only.** Hygiene/shellcheck/yamllint/markdown run via
 `make hooks`/`make lint` on your machine, **not** in CI. The blocking gate is
 `.github/workflows/` (`ansible-lint` + KICS + `galaxy-build` + `molecule` on `ansible/**`,
-plus `actionlint`). `ansible-lint`
+`helm` + KICS on `charts/**` and the shared schema checker, plus `actionlint`). `ansible-lint`
 is not a per-commit hook (it needs collections vendored) — run `make lint-ansible`.
 
 ## CI & quality gates
 
 - **`ci.yml`** — path-filtered so heavy jobs skip unrelated PRs: `ansible-lint` (production
   profile + playbook syntax-check), a `galaxy-build` readiness gate (builds the `decdn.node`
-  collection and runs galaxy-importer's checks), **KICS** IaC scan (fail on HIGH), and
+  collection and runs galaxy-importer's checks), a `helm` job (`make lint-helm`: strict lint,
+  positive/negative render tests, kubeconform, and the upstream schema-key check shared with
+  molecule), **KICS** IaC scan of `ansible/` and the rendered chart (fail on HIGH), and
   `actionlint` on the workflows themselves. The KICS engine is pinned by digest and every
   third-party action by full commit SHA (a re-pointed tag can ship malicious code).
 - **`molecule.yml`** — a containerised converge + idempotence + verify of the `decdn_node`
@@ -131,5 +144,6 @@ is not a per-commit hook (it needs collections vendored) — run `make lint-ansi
 
 - [`ansible/README.md`](ansible/README.md) — full setup, security model, and deploy steps
 - [`ansible/roles/decdn_node/README.md`](ansible/roles/decdn_node/README.md) — the deCDN node role
+- [`charts/decdn-node/README.md`](charts/decdn-node/README.md) — the Helm chart
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — the local + CI check workflow
 - [`AGENTS.md`](AGENTS.md) — repo hard rules and conventions (for humans and AI agents)

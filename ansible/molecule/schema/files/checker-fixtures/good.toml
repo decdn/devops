@@ -1,0 +1,26 @@
+# Must PASS check-schema-keys.py: one of each shape the walker handles.
+[identity]
+region = "DE"
+
+[network]
+bind_port = 4433
+relay_urls = ["https://relay.example.invalid/"]
+
+[network.discovery.peers.253bad481e6371866c9f6276b2a7b3a10ca16255668e740e6fc01da1cacc4350]
+addrs = ["203.0.113.4:4433"]
+
+[cache]
+pinned_hashes = []
+
+[[cache.origins]]
+kind = "http"
+url = "https://a.example.invalid/"
+
+[[cache.origins]]
+kind = "s3"
+bucket = "b"
+
+[cache.origins.credentials]
+source = "default-chain"
+
+[security]

@@ -1,0 +1,212 @@
+{{- include "decdn-node.validateSecrets" . }}
+{{- include "decdn-node.validatePod" . }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "decdn-node.fullname" . }}
+  labels:
+    {{- include "decdn-node.labels" . | nindent 4 }}
+spec:
+  # One release = one node identity. Never scale this: two pods would share one
+  # keystore and node.secret (a double-signing / slashing hazard).
+  replicas: 1
+  serviceName: {{ include "decdn-node.fullname" . }}-metrics
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "decdn-node.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include "decdn-node.nodeToml" . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "decdn-node.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "decdn-node.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ int .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        # Upstream refuses key files that are symlinks or carry any group/world bit,
+        # and a data_dir with group/world bits. Secret volume files are symlinks
+        # (and fsGroup-adjusted), so on every pod start the identity files are
+        # installed into the PVC at 0600 — re-asserting the data/cache dir and key
+        # modes after any fsGroup change. The password goes to an in-memory volume,
+        # never the PVC: a volume snapshot must not hold the keystore and its password.
+        - name: prepare
+          image: {{ include "decdn-node.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/sh", "-euc"]
+          args:
+            - |
+              umask 077
+              mkdir -p "$DATA_DIR" "$CACHE_DIR"
+              chmod 0700 "$DATA_DIR" "$CACHE_DIR"
+              for f in keystore.json node.secret keystore.password; do
+                if [ ! -s "/run/decdn-keys/$f" ]; then
+                  echo "prepare: $f is empty in Secret {{ .Values.secrets.keystore.existingSecret }}" >&2
+                  exit 1
+                fi
+              done
+              install -m 0600 /run/decdn-keys/keystore.json "$DATA_DIR/keystore.json"
+              install -m 0600 /run/decdn-keys/node.secret "$DATA_DIR/node.secret"
+              install -m 0600 /run/decdn-keys/keystore.password "$SECRETS_DIR/keystore.password"
+              # Earlier chart versions kept the password on the PVC.
+              rm -f "$DATA_DIR/keystore.password"
+              echo "prepare: data dir and key material ready"
+          env:
+            - name: DATA_DIR
+              value: {{ include "decdn-node.dataDir" . }}
+            - name: CACHE_DIR
+              value: {{ include "decdn-node.cacheDir" . }}
+            - name: SECRETS_DIR
+              value: {{ include "decdn-node.secretsDir" . }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
+          volumeMounts:
+            - name: data
+              mountPath: {{ include "decdn-node.dataMount" . }}
+            - name: keys
+              mountPath: /run/decdn-keys
+              readOnly: true
+            - name: run-secrets
+              mountPath: {{ include "decdn-node.secretsDir" . }}
+      containers:
+        - name: decdn-node
+          image: {{ include "decdn-node.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --config
+            - {{ include "decdn-node.configFile" . }}
+            - run
+            - --keystore-password-file
+            - {{ include "decdn-node.secretsDir" . }}/keystore.password
+          # Named keys only (see values.yaml secrets.env): envFrom would let any
+          # DECDN_* in the Secret override node.toml. A missing key fails pod start.
+          env:
+            - name: DECDN_RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.env.existingSecret }}
+                  key: {{ .Values.secrets.env.rpcUrlKey }}
+            {{- range .Values.secrets.env.passthroughKeys }}
+            - name: {{ . }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.secrets.env.existingSecret }}
+                  key: {{ . }}
+            {{- end }}
+          ports:
+            - name: quic
+              containerPort: {{ int .Values.quic.port }}
+              protocol: UDP
+              {{- if .Values.quic.hostPort.enabled }}
+              hostPort: {{ int .Values.quic.hostPort.port }}
+              {{- end }}
+            - name: metrics
+              containerPort: {{ int .Values.metrics.port }}
+              protocol: TCP
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ include "decdn-node.dataMount" . }}
+            - name: config
+              mountPath: /etc/decdn
+              readOnly: true
+            - name: run-secrets
+              mountPath: {{ include "decdn-node.secretsDir" . }}
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "decdn-node.fullname" . }}
+        - name: keys
+          secret:
+            secretName: {{ .Values.secrets.keystore.existingSecret }}
+            defaultMode: 0400
+            items:
+              - key: {{ .Values.secrets.keystore.keys.keystore }}
+                path: keystore.json
+              - key: {{ .Values.secrets.keystore.keys.nodeSecret }}
+                path: node.secret
+              - key: {{ .Values.secrets.keystore.keys.password }}
+                path: keystore.password
+        - name: run-secrets
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        {{- with .Values.persistence.annotations }}
+        annotations:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.accessModes | nindent 10 }}
+        {{- with .Values.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}

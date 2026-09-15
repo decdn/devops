@@ -1,0 +1,67 @@
+---
+# The [[cache.origins]] array-of-tables form (http, fs, s3 with a nested
+# credentials table), with pull-through left to the chart's derivation (must render
+# false). Mirrors the multi-origin play of ansible/molecule/schema/converge.yml.
+# Also the non-default wiring branches: custom ports (so port agreement between
+# node.toml, the pod, the Services and the NetworkPolicy is actually tested),
+# NodePort + nodePort, hostPort, egress rules, custom Secret key names,
+# passthrough env, and an externally managed ServiceAccount.
+image:
+  tag: 0.0.0-ci
+fullnameOverride: node-origins
+# Allowed pod overrides: extra labels/annotations and a different non-root uid.
+podLabels:
+  team: edge
+podAnnotations:
+  example.invalid/owner: edge
+podSecurityContext:
+  runAsUser: 2000
+  runAsGroup: 2000
+  fsGroup: 2000
+imagePullSecrets:
+  - name: regcred
+serviceAccount:
+  create: false
+  name: decdn-sa
+service:
+  type: NodePort
+  nodePort: 30443
+quic:
+  port: 5000
+  hostPort:
+    enabled: true
+    port: 5000
+metrics:
+  port: 9100
+networkPolicy:
+  egress:
+    - ports:
+        - protocol: TCP
+          port: 443
+secrets:
+  keystore:
+    existingSecret: decdn-node-keys
+    keys:
+      keystore: ks
+      nodeSecret: ns
+      password: pw
+  env:
+    existingSecret: decdn-node-env
+    rpcUrlKey: rpc
+    passthroughKeys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+config:
+  identity:
+    region: DE
+  blockchain:
+    chain_id: 421614
+    payment_pool_address: "0x1111111111111111111111111111111111111111"
+    capacity_bond_address: "0x2222222222222222222222222222222222222222"
+    slash_judge_address: "0x3333333333333333333333333333333333333333"
+    content_blacklist_address: "0x4444444444444444444444444444444444444444"
+  cache:
+    origins:
+      - {kind: http, url: "https://primary.example.invalid/", decompress: strict}
+      - {kind: fs, path: /var/lib/decdn/origin}
+      - {kind: s3, bucket: mirror-blobs, region: eu-west-1, path_style: false,
+         endpoint_url: "https://acct.b2.example.invalid", prefix: "blobs/",
+         credentials: {source: default-chain, profile: mirror}}
