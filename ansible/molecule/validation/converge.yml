@@ -254,6 +254,95 @@
             decdn_rejected: "{{ decdn_rejected + ['string'] }}"
           when: ansible_failed_task.name is match('^Validate optional')
 
+    # --- Cases: otlp_endpoint grammar --------------------------------------------
+    # Upstream resolves observability.otlp_endpoint as http://host:port ONLY (the
+    # OTLP gRPC exporter has no TLS), so each class below is a daemon start-up
+    # refusal the role has to catch first. One case per rejection class: without
+    # them a later loosening of the pattern would re-admit an invalid endpoint with
+    # the whole suite still green. `_bad` is the tag suffix, not a knob name.
+    # (`block` takes no `loop`, so each class is its own case — same shape as above.)
+    - name: "Case otlp-https — TLS scheme the gRPC exporter cannot speak"
+      block:
+        - name: Run decdn_node with an https otlp_endpoint
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_otlp_endpoint: "https://collector:4317"
+      rescue:
+        - name: Record otlp-https rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-https'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
+    - name: "Case otlp-noport — no collector port"
+      block:
+        - name: Run decdn_node with a portless otlp_endpoint
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_otlp_endpoint: "http://collector"
+      rescue:
+        - name: Record otlp-noport rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-noport'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
+    - name: "Case otlp-path — an OTLP/HTTP URL (port 4318, /v1/traces) is the wrong protocol"
+      block:
+        - name: Run decdn_node with a path-bearing otlp_endpoint
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_otlp_endpoint: "http://collector:4318/v1/traces"
+      rescue:
+        - name: Record otlp-path rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-path'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
+    - name: "Case otlp-userinfo — credentials carried in the URL"
+      block:
+        - name: Run decdn_node with userinfo in otlp_endpoint
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_otlp_endpoint: "http://user:pass@collector:4317"
+      rescue:
+        - name: Record otlp-userinfo rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-userinfo'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
+    # Only a bracketed IPv6 literal may carry a colon in the host. Unbracketed,
+    # url::Url::parse upstream reads "bad:4317" as the port and refuses.
+    - name: "Case otlp-colon — unbracketed extra colon in the host"
+      block:
+        - name: Run decdn_node with a multi-colon otlp_endpoint host
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_otlp_endpoint: "http://collector:bad:4317"
+      rescue:
+        - name: Record otlp-colon rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-colon'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
+    # A trailing newline would break the rendered TOML basic string. Python's `$`
+    # matches before a final newline, so this case is what pins the `\Z` anchor.
+    - name: "Case otlp-newline — trailing newline"
+      block:
+        - name: Run decdn_node with a trailing newline in otlp_endpoint
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_otlp_endpoint: "http://collector:4317\n"
+      rescue:
+        - name: Record otlp-newline rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-newline'] }}"
+          when: ansible_failed_task.name is match('^Validate optional')
+
     # --- Case: no RPC endpoint anywhere (#39) -------------------------------------
     # decdn_rpc_url may now be empty — but ONLY when the operator has provisioned
     # /etc/decdn/decdn.env on the host. Nothing has staged that file yet at this
@@ -411,5 +500,6 @@
       vars:
         _decdn_expected:
           ["cross-field", "binary-format", "range", "bounded-range", "shape", "bool",
-           "enum", "dict", "float", "list", "string", "env-gate", "env-extra",
-           "env-content", "config-gate"]
+           "enum", "dict", "float", "list", "string", "otlp-https", "otlp-noport",
+           "otlp-path", "otlp-userinfo", "otlp-colon", "otlp-newline", "env-gate",
+           "env-extra", "env-content", "config-gate"]

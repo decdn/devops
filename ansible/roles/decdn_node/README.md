@@ -187,9 +187,11 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
 - **Payment / credit** — `decdn_rate_per_mb`,
   `decdn_credit_max` (bare-integer bytes), `decdn_credit_ramp_divisor`,
   `decdn_frame_target_bytes` (`1..=1048576`), `decdn_voucher_commit_interval_ms`.
-  The node never clamps its own `rate_per_mb`: a rate below the on-chain delivery
-  floor still sells and settles, with only its vote-weight byte credit clamped at
-  redemption. There is no `delivery_floor` / `delivery_ceiling` knob any more.
+  The node advertises `rate_per_mb` verbatim and never clamps it to the delivery
+  floor, which is a redemption-time credit clamp rather than a quote gate — see
+  ADR 003 §Rate-floor enforcement and ADR 005 §Rate bounds for the authoritative
+  behaviour, and ADR 019 §Step 3.3 for the operator-facing rate choice. There is no
+  `delivery_floor` / `delivery_ceiling` knob any more.
 - **Settlement / payment pool** — `decdn_redeem_threshold_micro_usdc`,
   `decdn_redeem_max_vouchers_per_tx`, `decdn_redeem_interval_secs`,
   `decdn_buyer_working_deposit_micro_usdc`, `decdn_buyer_max_approve` (bool),

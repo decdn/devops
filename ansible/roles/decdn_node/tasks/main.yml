@@ -985,12 +985,18 @@
   ansible.builtin.assert:
     that:
       # No '"', CR, LF or backslash (would break the TOML string / are rejected upstream).
-      - decdn_cache_user_agent in ["", none] or (decdn_cache_user_agent is match('^[^\"\\r\\n\\\\]+$'))
+      # `\Z`, not `$`: Python's `$` also matches BEFORE a final newline, so `$` would
+      # let a trailing-newline value through the very guard that exists to block it.
+      - decdn_cache_user_agent in ["", none] or (decdn_cache_user_agent is match('^[^\"\\r\\n\\\\]+\\Z'))
       # http://host:port (optional trailing '/'), no userinfo/path/query/fragment, and no
-      # quote/whitespace/backslash (same TOML-injection guard).
+      # quote/whitespace/backslash (same TOML-injection guard). The host alternation is
+      # what bounds the colon: only a bracketed IPv6 literal may contain one, so
+      # `http://host:bad:4317` (which upstream's url::Url::parse rejects as a bad port)
+      # cannot slip through a permissive host class.
       - >-
         decdn_otlp_endpoint in ["", none]
-        or (decdn_otlp_endpoint is match('^http://[^\"\\s\\\\/@?#]+:[0-9]+/?$', ignorecase=true))
+        or (decdn_otlp_endpoint is match('^http://(\\[[0-9A-Fa-f:.]+\\]|[^\"\\s\\\\/@?#:]+):[0-9]+/?\\Z',
+            ignorecase=true))
     fail_msg: >-
       decdn_cache_user_agent must contain no double-quote, backslash or newline, and
       decdn_otlp_endpoint must be http://host:port (e.g. http://localhost:4317) with no

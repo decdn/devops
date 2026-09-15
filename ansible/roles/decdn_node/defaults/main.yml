@@ -100,9 +100,12 @@ decdn_discovery_dns_origin: ""
 decdn_discovery_peers: {}
 
 # --- Economics ----------------------------------------------------------------
-# The node's own asking price. The daemon never clamps it: a rate below the on-chain
-# delivery floor still sells and settles, with only its vote-weight byte credit
-# clamped at redemption. (`delivery_floor` / `delivery_ceiling` were removed upstream.)
+# The node's own asking price, advertised verbatim (ADR 005 §Rate bounds). The daemon
+# never clamps it: the delivery floor is a redemption-time credit clamp, not a quote
+# gate (ADR 003 §Rate-floor enforcement). Setting this at or above the live
+# deliveryFloor is a revenue choice — full vote-weight credit — not a protocol
+# requirement (ADR 019 §Step 3.3). (`delivery_floor` / `delivery_ceiling` were removed
+# upstream; see that ADR text for the authoritative behaviour.)
 decdn_rate_per_mb: 10           # USDC base units (6 decimals)
 # Per-stream credit window (ADR 003 credit slow-start). credit_max is a bare
 # integer of bytes on the wire; ramp_divisor 0 opens the full ceiling immediately.
