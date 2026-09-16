@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN DevOps monorepo.
 # Run from the repo root. Ansible-specific work is delegated to ansible/Makefile.
-.PHONY: help hooks lint lint-ansible lint-helm security security-ansible security-helm molecule galaxy-build galaxy-check
+.PHONY: help hooks lint lint-ansible lint-helm security security-ansible security-helm molecule molecule-serial galaxy-build galaxy-check
 SHELL := /bin/bash
 
 # KICS runs straight from the engine image, pinned by digest. This target IS the
@@ -59,8 +59,11 @@ security-helm:       ## KICS scan of the decdn-node chart's rendered manifests (
 lint-helm:           ## helm lint + render tests + kubeconform + shared schema-key check (needs helm, yq, python3>=3.11, docker)
 	KUBECONFORM="docker run --rm -i $(KUBECONFORM_IMAGE)" $(CHART)/tests/render-test.sh
 
-molecule:            ## containerised converge/verify of the decdn_node role (needs Docker)
+molecule:            ## containerised converge/verify of the decdn_node role, scenarios in parallel (needs Docker)
 	$(MAKE) -C ansible molecule
+
+molecule-serial:     ## same suite, one scenario at a time (readable output on failure)
+	$(MAKE) -C ansible molecule-serial
 
 galaxy-build:        ## stage + build the decdn.node Galaxy collection artifact
 	$(MAKE) -C ansible build

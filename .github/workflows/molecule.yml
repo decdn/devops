@@ -36,11 +36,11 @@ jobs:
       - name: Install Galaxy collections
         run: make deps
       - name: molecule test
-        # --all runs every scenario under ansible/molecule/: default
-        # (operator-provisioned keystore + rendered-value assertions), schema
-        # (config key-set drift against the upstream field list), validation
-        # (bad knobs must be rejected by the role's own asserts), generate-keystore
-        # (opt-in host-side wallet generation), host-env (host-provisioned
-        # /etc/decdn/decdn.env — no secret on the control machine), and
-        # slow-readiness (advisory /metrics probe timeout).
-        run: molecule test --all
+        # `make molecule` runs every scenario under ansible/molecule/ and fans them out
+        # in parallel; ansible/Makefile documents the set and the fail-loud guards.
+        #
+        # JOBS is capped at 3 rather than the default (one job per scenario, currently
+        # 6): every scenario is a privileged systemd container, and they share this
+        # runner's cores and cgroup hierarchy. If this job turns flaky, drop to JOBS=1
+        # or swap in `make molecule-serial` — the latter also serialises the output.
+        run: make molecule JOBS=3

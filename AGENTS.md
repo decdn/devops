@@ -103,7 +103,9 @@ deploys (its targets must run from `ansible/`). `make help` lists root targets.
 make hooks            # one-time: install pre-commit git hook (pip install pre-commit first)
 make lint             # all pre-commit hooks on all files (hygiene, shellcheck, yamllint, markdown)
 make lint-ansible     # vendor collections + full ansible-lint (production profile)
-make molecule         # containerised converge/verify of the decdn_node role (needs Docker)
+make molecule         # containerised converge/verify of the decdn_node role — all six
+                      # scenarios in parallel (needs Docker); cap with JOBS=<n>
+make molecule-serial  # the same suite one scenario at a time (readable failure output)
 make lint-helm        # chart: helm lint + render tests + kubeconform + schema keys (needs helm, yq, Docker)
 make security         # = security-ansible + security-helm (KICS over the rendered chart; needs helm)
 

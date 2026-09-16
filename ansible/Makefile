@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN Ansible project.
 # Always run from the ansible/ directory.
-.PHONY: deps lint check deploy molecule build galaxy-check
+.PHONY: deps lint check deploy molecule molecule-serial build galaxy-check
 SHELL := /bin/bash
 
 # Install the required Galaxy collections (>= constraints in requirements.yml)
@@ -67,11 +67,51 @@ deploy:
 # stub daemon (needs Docker; a privileged systemd container). See molecule/.
 # Scenarios: default (rendered values + idempotence), schema (config key-set drift
 # against the upstream field list), validation (bad knobs must be rejected by the
-# role's own asserts), generate-keystore (opt-in host-side wallet), slow-readiness
-# (advisory /metrics probe timeout).
-# `--all` runs every scenario: `default` (operator-provisioned keystore) and
-# `generate-keystore` (opt-in host-side wallet generation).
-molecule:
+# role's own asserts), generate-keystore (opt-in host-side wallet), host-env
+# (host-provisioned /etc/decdn/decdn.env), slow-readiness (advisory /metrics probe
+# timeout).
+#
+# The scenarios run concurrently: distinct container names, no published host ports,
+# per-scenario ephemeral dirs, and what they share on the control machine (the
+# vendored collections, roles/, the stub under default/files/) they only read.
+# 595s -> 151s on a 16-core box. They DO share one Docker daemon and the host cgroup
+# hierarchy — every platform is a privileged systemd container — which is why CI caps
+# JOBS. Output interleaves, hence the [scenario] prefix; `molecule-serial` is the
+# escape hatch when a failure needs reading in order. Override the fan-out width with
+# e.g. `make molecule JOBS=2` on a small machine.
+#
+# Molecule's own --workers is not usable here: it refuses to run outside collection
+# mode ("--workers > 1 is only supported in collection mode (galaxy.yml required)"),
+# and this project deliberately has no galaxy.yml at its root — that would make
+# ansible-lint reinterpret the deploy project as a collection (see galaxy/README.md).
+#
+# Fail loud (hard rule 4), in three places, because a test harness that passes when it
+# did not run is worse than a slow one:
+#   - the guard below refuses an empty or truncated scenario set. Discovery moved from
+#     molecule to a glob, and a glob that matches nothing (wrong cwd, renamed layout)
+#     would otherwise run zero scenarios and exit 0 — a green build that tested nothing.
+#   - pipefail stops the [scenario] prefixing pipe from masking molecule's status, and
+#     each scenario announces its own failure by name (the bare xargs message does not).
+#   - xargs then exits non-zero: 123 for an ordinary failure, or 124 on a status-255
+#     abort, which also skips any scenario it had not started yet.
+SCENARIOS := $(notdir $(patsubst %/,%,$(dir $(wildcard molecule/*/molecule.yml))))
+SCENARIO_DIRS := $(notdir $(patsubst %/,%,$(wildcard molecule/*/)))
+JOBS ?= $(words $(SCENARIOS))
+
+molecule: deps
+	@test -n "$(strip $(SCENARIOS))" && test "$(strip $(SCENARIOS))" = "$(strip $(SCENARIO_DIRS))" || { \
+	  echo "scenario discovery failed: molecule.yml in [$(SCENARIOS)] but scenario dirs are [$(SCENARIO_DIRS)]"; \
+	  echo "refusing to run a silently-truncated suite (this target must run from ansible/)"; exit 1; }
+	@case '$(JOBS)' in ''|*[!0-9]*|0) \
+	  echo "JOBS must be a positive integer (got '$(JOBS)'); note xargs -P 0 means unlimited"; exit 1 ;; esac
+	@printf '%s\n' $(SCENARIOS) | xargs -P $(JOBS) -I{} \
+		bash -c 'set -euo pipefail; molecule test -s {} --no-command-borders 2>&1 | sed -u "s/^/[{}] /" \
+		  || { echo "[{}] SCENARIO FAILED"; exit 1; }'
+
+# The same suite, one scenario at a time (molecule's own --all). It stops at the FIRST
+# failing scenario (--continue-on-failure defaults off), so it reports less than the
+# parallel target — but readably, which is the point.
+molecule-serial: deps
 	molecule test --all
 
 # --- Galaxy collection (decdn.node) ------------------------------------------
