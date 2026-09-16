@@ -827,11 +827,9 @@
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['alloy-root-group-alias'] }}"
           when: ansible_failed_task.name is match('^Require an unprivileged Alloy identity')
-      always:
-        - name: Remove the root-GID alias group
-          ansible.builtin.group:
-            name: alloy-root-group-alias
-            state: absent
+      # As with the UID-0 alias above, do not groupdel this fixture: GID 0 is
+      # root's primary group, so groupdel refuses the duplicate alias. Molecule
+      # destroys the whole validation container after the scenario.
 
     - name: "Case ga-path-traversal — state directory escaping /var/lib"
       block:
