@@ -92,8 +92,11 @@ deploy:
 #     would otherwise run zero scenarios and exit 0 — a green build that tested nothing.
 #   - pipefail stops the [scenario] prefixing pipe from masking molecule's status, and
 #     each scenario announces its own failure by name (the bare xargs message does not).
-#   - xargs then exits non-zero: 123 for an ordinary failure, or 124 on a status-255
-#     abort, which also skips any scenario it had not started yet.
+#   - xargs then exits non-zero. The `|| exit 1` in the wrapper normalises every
+#     scenario failure to 1, which is what keeps xargs off its own abort-on-255 path —
+#     that one stops launching queued scenarios, so a single unlucky exit code would
+#     otherwise cut the suite short. So: 123 when a scenario failed, 125 if one was
+#     killed by a signal, and every scenario always gets to run.
 SCENARIOS := $(notdir $(patsubst %/,%,$(dir $(wildcard molecule/*/molecule.yml))))
 SCENARIO_DIRS := $(notdir $(patsubst %/,%,$(wildcard molecule/*/)))
 JOBS ?= $(words $(SCENARIOS))
@@ -102,8 +105,11 @@ molecule: deps
 	@test -n "$(strip $(SCENARIOS))" && test "$(strip $(SCENARIOS))" = "$(strip $(SCENARIO_DIRS))" || { \
 	  echo "scenario discovery failed: molecule.yml in [$(SCENARIOS)] but scenario dirs are [$(SCENARIO_DIRS)]"; \
 	  echo "refusing to run a silently-truncated suite (this target must run from ansible/)"; exit 1; }
-	@case '$(JOBS)' in ''|*[!0-9]*|0) \
-	  echo "JOBS must be a positive integer (got '$(JOBS)'); note xargs -P 0 means unlimited"; exit 1 ;; esac
+	@case '$(JOBS)' in ''|*[!0-9]*) \
+	  echo "JOBS must be a positive integer (got '$(JOBS)')"; exit 1 ;; esac
+	@test "$$((10#$(JOBS)))" -gt 0 || { \
+	  echo "JOBS must be a positive integer (got '$(JOBS)'): any all-zero value — 0, 00, 000 —"; \
+	  echo "reaches xargs as -P 0, which means UNLIMITED concurrency, not none"; exit 1; }
 	@printf '%s\n' $(SCENARIOS) | xargs -P $(JOBS) -I{} \
 		bash -c 'set -euo pipefail; molecule test -s {} --no-command-borders 2>&1 | sed -u "s/^/[{}] /" \
 		  || { echo "[{}] SCENARIO FAILED"; exit 1; }'

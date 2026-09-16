@@ -33,11 +33,14 @@ jobs:
         run: |
           python -m pip install --upgrade \
             molecule "molecule-plugins[docker]" ansible ansible-lint docker
-      - name: Install Galaxy collections
-        run: make deps
       - name: molecule test
         # `make molecule` runs every scenario under ansible/molecule/ and fans them out
         # in parallel; ansible/Makefile documents the set and the fail-loud guards.
+        #
+        # There is deliberately no separate `make deps` step: the molecule targets take
+        # `deps` as a prerequisite, so a standalone one would resolve and install the
+        # Galaxy requirements a second time every run — a second chance to trip over a
+        # flaky galaxy.ansible.com, for no added coverage.
         #
         # JOBS is capped at 3 rather than the default (one job per scenario, currently
         # 6): every scenario is a privileged systemd container, and they share this
