@@ -131,31 +131,49 @@
 
 # --- Host-state credential gates ------------------------------------------------
 
-- name: Inspect the secret file parent directory
-  ansible.builtin.stat:
-    path: "{{ grafana_alloy_secret_file | dirname }}"
-    follow: false
-  register: _ga_secret_parent_stat
+- name: Resolve any existing Alloy user/group IDs before startup
+  ansible.builtin.getent:
+    database: "{{ item.database }}"
+    key: "{{ item.key }}"
+  register: _ga_existing_id
+  failed_when: false
+  loop:
+    - {database: passwd, key: "{{ grafana_alloy_user }}"}
+    - {database: group, key: "{{ grafana_alloy_group }}"}
 
-- name: Assert the secret file parent is root-controlled
+- name: Reject root-owned Alloy identities before startup
   ansible.builtin.assert:
     that:
-      # Restrict the credential to a direct child of /etc. Checking only the
-      # immediate parent of a nested path is insufficient: a writable grandparent
-      # can replace the whole supposedly-safe directory.
-      - (grafana_alloy_secret_file | dirname) == '/etc'
-      - _ga_secret_parent_stat.stat.exists
-      - _ga_secret_parent_stat.stat.isdir | default(false)
-      - (_ga_secret_parent_stat.stat.pw_name | default('')) == 'root'
-      - (_ga_secret_parent_stat.stat.gr_name | default('')) == 'root'
-      - (_ga_secret_parent_stat.stat.mode | default('')) | length == 4
-      - (_ga_secret_parent_stat.stat.mode | string)[-2] not in ['2', '3', '6', '7']
-      - (_ga_secret_parent_stat.stat.mode | string)[-1] not in ['2', '3', '6', '7']
+      - >-
+        (_ga_existing_id.results[0].getent_passwd[grafana_alloy_user] is not defined)
+        or ((_ga_existing_id.results[0].getent_passwd[grafana_alloy_user][1] | int) != 0)
+      - >-
+        (_ga_existing_id.results[1].getent_group[grafana_alloy_group] is not defined)
+        or ((_ga_existing_id.results[1].getent_group[grafana_alloy_group][1] | int) != 0)
     fail_msg: >-
-      grafana_alloy_secret_file must be directly under /etc, and /etc must be a
-      real root:root directory with no group/other write bit. A writable parent or
-      ancestor lets a service replace the root-only EnvironmentFile before systemd
-      reads it.
+      {{ grafana_alloy_user }} user and {{ grafana_alloy_group }} group must not
+      resolve to UID/GID 0 (root, or a named 0 alias). Existing root-owned
+      identities are rejected before startup and teardown because they can own a
+      privileged write target instead of an unprivileged runtime account.
+
+- name: Validate the parent /etc directory for the secret file
+  ansible.builtin.stat:
+    path: /etc
+  register: _ga_etc_stat
+
+- name: Require /etc to be a real root-owned, non-writable parent
+  ansible.builtin.assert:
+    that:
+      - _ga_etc_stat.stat.exists
+      - _ga_etc_stat.stat.isdir | default(false)
+      - (_ga_etc_stat.stat.pw_name | default('')) == 'root'
+      - (_ga_etc_stat.stat.gr_name | default('')) == 'root'
+      - ((_ga_etc_stat.stat.mode | int(base=8)) & 0o022) == 0
+    fail_msg: >-
+      {{ grafana_alloy_secret_file }} must be a direct child of /etc, and /etc
+      must be a real root:root directory with no group/other write bit. A
+      writable parent or ancestor lets a service replace the root-only
+      EnvironmentFile before systemd reads it.
 
 - name: Require the Grafana Cloud secret environment file
   ansible.builtin.stat:
@@ -165,7 +183,7 @@
 
 # stat.exists alone cannot see the difference between a regular file and a
 # symlink planted at the credential path that later passes a root chown/chmod
-# would harden whatever TARGET it points at — exactly what decdn.env's gate
+# would harden whatever TARGET it points at — exactly what the secret-file gate
 # refuses, so refuse here too.
 - name: Assert the secret file is a real root-owned 0600 file
   ansible.builtin.assert:

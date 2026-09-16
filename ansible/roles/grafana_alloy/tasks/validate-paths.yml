@@ -14,16 +14,16 @@
       # because '.' and '/' are in the class, which would let a hostile/typo'd
       # inventory aim the disable-path `file: state=absent` at /etc.
       - item.value is match(item.regex)
-      - "'..' not in item.value.split('/')"
       - "'.' not in item.value.split('/')"
+      - "'..' not in item.value.split('/')"
       - "'' not in item.value.split('/')[1:]"
     quiet: true
     fail_msg: >-
       {{ item.name }} must be an absolute, traversal-free path under
-      {{ item.under }} whose segments use only [A-Za-z0-9._-] (got
-      "{{ item.value }}"). These paths are removed wholesale when
-      decdn_grafana_cloud_enabled is turned off, so '.' and '..' segments are
-      refused outright.
+      {{ item.under }} whose segments use only [A-Za-z0-9._-] and never contain
+      '.' or '..' as full path segments (got "{{ item.value }}"). These paths
+      are removed wholesale when decdn_grafana_cloud_enabled is turned off, so
+      the exact path shape is enforced before any delete.
   loop:
     # Must stay under /var/lib: systemd's StateDirectory= is relative to it.
     - name: grafana_alloy_state_dir
@@ -41,7 +41,7 @@
     - name: grafana_alloy_secret_file
       value: "{{ grafana_alloy_secret_file }}"
       under: /etc
-      regex: '^/etc/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
+      regex: '^/etc/[A-Za-z0-9._-]+$'
   loop_control:
     label: "{{ item.name }}"
 

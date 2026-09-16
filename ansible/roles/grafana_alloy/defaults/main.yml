@@ -33,8 +33,8 @@ grafana_alloy_state_dir: /var/lib/alloy      # WAL/storage state, owned by the a
 # pairs (template: files/grafana-alloy.env.example). Root-owned 0600 — systemd
 # reads EnvironmentFile= as root BEFORE dropping to the agent user, so `alloy`
 # never needs read access to it and no secret transits this repo. Provision it on
-# the target host at this root-owned path. Keep it outside service-owned trees:
-# write access to the parent is enough to unlink and replace a 0600 file.
+# the target host as a direct child of /etc so a writable parent/ancestor cannot
+# swap the root-owned EnvironmentFile before systemd reads it.
 grafana_alloy_secret_file: /etc/grafana-alloy.env
 
 # --- Network (loopback-only; AGENTS.md hard rule 2) ---------------------------
