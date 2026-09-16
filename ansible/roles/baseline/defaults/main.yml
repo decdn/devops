@@ -65,3 +65,10 @@ baseline_packages:
   - fail2ban
   - unattended-upgrades
   - chrony
+  # `acl` is what lets Ansible hand a temp module file to an unprivileged become_user.
+  # decdn_node runs two tasks as the unprivileged decdn user (`decdn key-gen` and the
+  # `decdn config validate` gate); without it those fail on Debian with no rc at all,
+  # and the role can only report the failure after the fact ("needs the `acl` package
+  # on this host"). Molecule never caught this: it connects as root, where the same
+  # hand-off is a plain chown.
+  - acl

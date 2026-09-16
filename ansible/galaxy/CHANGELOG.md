@@ -6,6 +6,14 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- `baseline_packages` now includes `acl`. `decdn_node` runs two tasks as the
+  unprivileged `decdn` user (`decdn key-gen`, and the `decdn config validate` gate),
+  and on Debian Ansible needs ACL support to hand the temp module file to that user.
+  Without it both fail without an `rc`, which the role can only report after the fact
+  ("becoming the unprivileged decdn user needs the `acl` package on this host").
+
 ### Removed
 
 - `decdn_delivery_floor` and `decdn_rate_bounds_poll_interval_sec`: upstream

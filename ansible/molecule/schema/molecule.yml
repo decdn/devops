@@ -12,10 +12,12 @@
 # `baseline` is NOT exercised here, for the same reasons as the `default` scenario.
 # There is no idempotence step: this scenario asserts on rendered content, and
 # `default` already covers idempotence.
-dependency:
-  name: galaxy
-  options:
-    requirements-file: ../../requirements.yml
+# No `dependency` step (and no dependency config): molecule never vendored anything
+# here. Its roles invoker reads `role-file`, not `requirements-file`, and its
+# collections invoker resolves a relative path against the process CWD — so
+# ../../requirements.yml pointed outside the repo and both halves just warned on every
+# run. The collections come from `make deps` -> ansible/collections, surfaced by
+# ANSIBLE_COLLECTIONS_PATH below.
 driver:
   name: docker
 platforms:
@@ -35,11 +37,17 @@ provisioner:
   env:
     ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
     ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # The docker connection plugin supports pipelining, which drops a `docker exec`
+    # round trip per remote task (measured at -22% on the `default` scenario, which
+    # also carries the coverage note). Safe here: the containers have no sudo requiretty.
+    ANSIBLE_PIPELINING: "true"
 verifier:
   name: ansible
 scenario:
   test_sequence:
-    - dependency
+    # Leading `destroy` so an orphaned container is never reused — see
+    # ../default/molecule.yml.
+    - destroy
     - create
     - prepare
     - converge

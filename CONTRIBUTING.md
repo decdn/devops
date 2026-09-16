@@ -37,7 +37,8 @@ Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hoo
   run via **pre-commit locally only** (`make hooks` / `make lint`), not in CI.
 - **`molecule.yml`** — containerised converge + idempotence + verify of the `decdn_node`
   role (privileged systemd Docker container; scoped to `ansible/**`). Run locally with
-  `make molecule` (needs Docker).
+  `make molecule` (needs Docker) — it runs all six scenarios in parallel, so reach for
+  `make molecule-serial` when you need to read a failure in order.
 
 ## Supply-chain / pinning rules
 

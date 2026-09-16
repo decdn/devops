@@ -191,11 +191,22 @@ primitives underneath it. All take `--dry-run`. See
 ```bash
 make lint           # yamllint + ansible-lint (production profile)
 ansible-playbook playbooks/site.yml --syntax-check
-make molecule       # containerised converge + idempotence + verify (needs Docker)
+make molecule       # all six molecule scenarios, in parallel (needs Docker)
+make molecule JOBS=2   # …capped to two at a time on a small machine
+make molecule-serial   # …one at a time, when a failure needs readable output
 ```
 
-`make molecule` converges the **`decdn_node`** role in a privileged systemd container
-against a stub daemon (`molecule/default/`): it installs via the `manual` method (no
+`make molecule` runs every scenario under `molecule/`: **`default`** (described below),
+`schema` (config key-set drift against the upstream field list), `validation` (bad knobs
+must be rejected by the role's own asserts), `generate-keystore` (opt-in host-side
+wallet), `host-env` (host-provisioned `/etc/decdn/decdn.env`) and `slow-readiness`
+(advisory `/metrics` probe timeout). They are independent, so they run concurrently —
+~151s instead of ~595s — and each line of output is prefixed with its scenario name
+because the runs interleave. `make molecule-serial` is the escape hatch when that
+interleaving gets in the way of reading a failure.
+
+The `default` scenario converges the **`decdn_node`** role in a privileged systemd
+container against a stub daemon: it installs via the `manual` method (no
 published release needed), stages a placeholder keystore, renders `node.toml` + the
 hardened unit, starts the service, and passes the role's own `/metrics` readiness probe;
 `verify.yml` then asserts the node user, valid TOML, a valid systemd unit, loopback-only

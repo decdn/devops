@@ -11,10 +11,12 @@
 # ssh_hardening (sysctl, mount, auth, sshd) and fail2ban — none of which behave
 # meaningfully in a throwaway systemd container. It is validated on real hosts via
 # `make check` instead.
-dependency:
-  name: galaxy
-  options:
-    requirements-file: ../../requirements.yml
+# No `dependency` step (and no dependency config): molecule never vendored anything
+# here. Its roles invoker reads `role-file`, not `requirements-file`, and its
+# collections invoker resolves a relative path against the process CWD — so
+# ../../requirements.yml pointed outside the repo and both halves just warned on every
+# run. The collections come from `make deps` -> ansible/collections, surfaced by
+# ANSIBLE_COLLECTIONS_PATH below.
 driver:
   name: docker
 platforms:
@@ -34,11 +36,24 @@ provisioner:
   env:
     ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
     ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # The docker connection plugin supports pipelining, which drops a `docker exec`
+    # round trip per remote task — 105s -> 82s measured on this scenario. Safe here:
+    # the containers have no sudo requiretty.
+    # Known coverage boundary: with pipelining on, command/shell modules are fed over
+    # stdin, so the remote-tmp path behind `become_user` is not exercised. Molecule
+    # connects as root, where that path is a plain chown, so it never reproduced the
+    # real-host `acl` failure the role warns about (tasks/main.yml) either way.
+    ANSIBLE_PIPELINING: "true"
 verifier:
   name: ansible
 scenario:
   test_sequence:
-    - dependency
+    # The leading `destroy` is deliberate. The docker driver creates with
+    # `recreate: false`, so a container orphaned by an aborted run (Ctrl-C, OOM —
+    # both likelier now that the scenarios run in parallel) would be REUSED, and
+    # `converge` + `idempotence` would then pass trivially against a host that was
+    # already converged by the previous run.
+    - destroy
     - create
     - prepare
     - converge
