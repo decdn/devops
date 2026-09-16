@@ -322,10 +322,12 @@
             decdn_rejected: "{{ decdn_rejected + ['otlp-path'] }}"
           when: ansible_failed_task.name == 'Validate optional string knobs (user_agent, otlp_endpoint)'
 
-    # `user@host`, NOT `user:pass@host`: the latter is rejected by the colon rule that
-    # otlp-colon already pins, so it would leave the '@' exclusion untested — drop '@'
-    # from the host class and a credential-bearing endpoint would render into the 0640
-    # node.toml unnoticed.
+    # `user@host`, NOT `user:pass@host`, for two independent reasons: the latter is
+    # rejected by the colon rule that otlp-colon already pins, so it would leave the
+    # '@' exclusion untested — drop '@' from the host class and a credential-bearing
+    # endpoint would render into the 0640 node.toml unnoticed — AND a `scheme://u:p@`
+    # literal trips KICS's HIGH "Passwords And Secrets - Password in URL" query, which
+    # fails `make security` in CI. Keep this fixture password-free.
     - name: "Case otlp-userinfo — credentials carried in the URL"
       block:
         - name: Run decdn_node with userinfo in otlp_endpoint
