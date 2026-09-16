@@ -122,7 +122,7 @@ molecule-serial: deps
 
 # --- Galaxy collection (decdn.node) ------------------------------------------
 # Stage baseline + decdn_node into a clean collection tree and build the artifact
-# under build/. Only those two roles ship; see galaxy/README.md. Publishing stays
+# under build/. Only the three deployment roles ship; see galaxy/README.md. Publishing stays
 # a manual step (ansible-galaxy collection publish build/decdn-node-*.tar.gz).
 build:
 	./galaxy/build.sh

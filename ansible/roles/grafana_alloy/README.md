@@ -8,7 +8,7 @@ loopback-only [Grafana Alloy](https://grafana.com/docs/alloy/) agent that
   and pushes it to your Grafana Cloud Prometheus, stamped with low-cardinality
   identity labels, and
 - receives the daemon's OTLP span exports (`otlp_endpoint`) on gRPC `127.0.0.1:4317`
-  and HTTP `127.0.0.1:4318`, parent-based samples traces (default keep-ratio 0.25),
+  and HTTP `127.0.0.1:4318`, probabilistically samples traces (default keep-ratio 0.25),
   batches them, and exports via OTLP/HTTP to your Grafana Cloud org.
 
 The Helm-chart path is separate and deliberately untouched by this role.
@@ -52,9 +52,8 @@ upstream version/sha256). Highlights:
 | `grafana_alloy_install_method` | `release` | `manual` copies a control-machine binary (CI stubs) |
 | `grafana_alloy_version` / `grafana_alloy_sha256` | pin | Bump together from upstream release digests |
 | `grafana_alloy_trace_sampling_ratio` | `0.25` | Trace keep-ratio, validated to `[0,1]` |
-| `grafana_alloy_scrape_target` | `127.0.0.1:9090` | Must mirror `decdn_metrics_port`'s default |
 | `grafana_alloy_otlp_grpc_port` | `4317` | Hard-coupled to the literal emitted into node.toml |
-| `grafana_alloy_region` | `""` | Set = your `decdn_region`; empty omits the attribute |
+| `grafana_alloy_region` | `decdn_region` | Required identity attribute; derived from the node region |
 
 Label variables (`service_name`, `service_namespace`, `instance_id`,
 `deployment_environment`, `region`) ship on EVERY series/span/log line — keep
@@ -66,8 +65,8 @@ spans, and no per-request/per-hash label values.
 
 Two couplings between roles are pinned by constants plus molecule assertions:
 
-1. This role's `prometheus.scrape` targets `127.0.0.1:9090` — the
-   `decdn_metrics_port` default.
+1. This role's `prometheus.scrape` targets `127.0.0.1:<decdn_metrics_port>`, using
+   the node role's configured metrics port directly.
 2. `decdn_node` injects `otlp_endpoint = "http://127.0.0.1:4317"` when the flag
    flips on — the port constant here.
 

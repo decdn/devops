@@ -17,5 +17,5 @@ baseline_extra_inbound:
 # credential file on each host — see roles/grafana_alloy/files/grafana-alloy.env.example:
 #
 # decdn_grafana_cloud_enabled: true
-# grafana_alloy_region: ""              # e.g. "US" — same value as decdn_region
+# grafana_alloy_region: "{{ decdn_region }}"  # override only when needed
 # grafana_alloy_deployment_environment: production

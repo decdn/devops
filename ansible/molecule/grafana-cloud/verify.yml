@@ -60,7 +60,7 @@
           # ratio 0.25 -> percentage 25; batch size overrides pass through; labels
           # dotted AND set-variable ones present; secrets remain ${...} placeholders.
           - >-
-            'sampling_percentage = 25' in ga_config
+            'sampling_percentage = 25.0' in ga_config
           - >-
             'send_batch_size     = 512' in ga_config
           - >-

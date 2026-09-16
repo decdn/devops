@@ -42,10 +42,22 @@
       loop:
         - /etc/systemd/system/alloy.service
         - "{{ grafana_alloy_config_dir }}"
+        - "{{ grafana_alloy_state_dir }}"
       notify: Reload systemd
 
     - name: Apply pending teardown notifications
       ansible.builtin.meta: flush_handlers
+
+    - name: Remove the leftover Alloy account
+      ansible.builtin.user:
+        name: "{{ grafana_alloy_user }}"
+        state: absent
+        remove: true
+
+    - name: Remove the leftover Alloy group
+      ansible.builtin.group:
+        name: "{{ grafana_alloy_group }}"
+        state: absent
 
 # Everything below runs only when observability is explicitly enabled.
 - name: Enable and configure the Grafana Cloud agent
@@ -126,7 +138,7 @@
     # the file has not been written yet, so skip like the decdn_node config gate.
     - name: Check the rendered configuration with the installed binary
       ansible.builtin.command:
-        cmd: "{{ grafana_alloy_bin }} fmt --test {{ grafana_alloy_config_file }}"
+        cmd: "{{ grafana_alloy_bin_effective }} fmt --test {{ grafana_alloy_config_file }}"
       changed_when: false
       register: _ga_fmt_check
       failed_when: false
@@ -152,11 +164,13 @@
         name: alloy
         enabled: true
         state: started
+      when: not ansible_check_mode
 
     # Backstop for a Type=simple unit that exited fast enough to have already
     # flipped to failed by the time we got here (the stub in CI sleeps forever).
     - name: Gather service facts
       ansible.builtin.service_facts:
+      when: not ansible_check_mode
 
     - name: Confirm Alloy is running (not failed/crash-looping)
       ansible.builtin.assert:
@@ -164,3 +178,4 @@
           - "'alloy.service' in ansible_facts.services"
           - ansible_facts.services['alloy.service'].state == 'running'
         fail_msg: "alloy is not running — check: journalctl -u alloy -e"
+      when: not ansible_check_mode

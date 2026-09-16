@@ -14,6 +14,6 @@
     # flag drives this + the otlp_endpoint injection inside decdn_node). Runs
     # BEFORE decdn_node so Alloy's receivers exist before the daemon exports.
     - role: grafana_alloy
-      tags: [observability]
+      tags: [observability, decdn_node, node]
     - role: decdn_node
       tags: [decdn_node, node]

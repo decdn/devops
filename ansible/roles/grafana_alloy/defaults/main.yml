@@ -49,11 +49,6 @@ grafana_alloy_server_http_addr: 127.0.0.1:12345
 grafana_alloy_server_grpc_addr: 127.0.0.1:12347
 
 # --- Metrics scrape (node /metrics -> Grafana Cloud Prometheus) ---------------
-# COUPLING: mirrors decdn_metrics_port's DEFAULT (9090) in roles/decdn_node.
-# Kept a plain constant here because cross-role vars are fragile; the molecule
-# suite guards the drift — if you move decdn_metrics_port off 9090, set
-# grafana_alloy_scrape_target on the same inventory level.
-grafana_alloy_scrape_target: 127.0.0.1:9090
 grafana_alloy_scrape_interval: 30s
 
 # --- Resource identity labels (low-cardinality only!) --------------------------
@@ -64,11 +59,11 @@ grafana_alloy_scrape_interval: 30s
 grafana_alloy_service_name: decdn-node
 grafana_alloy_service_namespace: decdn
 grafana_alloy_instance_id: ""            # "" => derive from inventory_hostname
-grafana_alloy_deployment_environment: ""  # "" => attribute omitted entirely
-grafana_alloy_region: ""                  # operator sets it = decdn_region ("" => omitted)
+grafana_alloy_deployment_environment: production
+grafana_alloy_region: "{{ decdn_region | default('') }}"
 
 # --- Pipeline tuning ------------------------------------------------------------
-# Parent-based probabilistic sampler for TRACES, expressed as the 0..1 keep-ratio
+# Probabilistic sampler for TRACES, expressed as the 0..1 keep-ratio
 # the deCDN issue settled on (0.25 == keep ~25% of spans); converted to the
 # component's percentage internally. Validated at preflight.
 grafana_alloy_trace_sampling_ratio: 0.25

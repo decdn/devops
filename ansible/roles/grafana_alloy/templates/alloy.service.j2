@@ -25,6 +25,7 @@ ExecStart={{ grafana_alloy_bin_effective }} run \
     --config.expand-env \
     --server.http.listen-addr={{ grafana_alloy_server_http_addr }} \
     --server.grpc.listen-addr={{ grafana_alloy_server_grpc_addr }} \
+    --storage.path={{ grafana_alloy_state_dir }}/data \
     {{ grafana_alloy_config_file }}
 
 # Graceful stop cap: flush the exporter queue on SIGTERM before SIGKILL would cut
@@ -39,7 +40,7 @@ RestartSec=5
 # Mirrors decdn-node.service: strict filesystem, privilege boundary, syscall
 # filter. StateDirectory owns {{ grafana_alloy_state_dir }} (the only writable
 # path under ProtectSystem=strict): WAL/queue state lives there.
-StateDirectory=alloy
+StateDirectory={{ grafana_alloy_state_dir | regex_replace('^/var/lib/', '') }}
 StateDirectoryMode=0750
 NoNewPrivileges=true
 ProtectSystem=strict

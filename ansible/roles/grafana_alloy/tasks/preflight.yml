@@ -34,12 +34,14 @@
     - "{{ grafana_alloy_batch_timeout }}"
     - "{{ grafana_alloy_retry_initial_interval }}"
     - "{{ grafana_alloy_retry_max_elapsed_time }}"
+    - "{{ grafana_alloy_scrape_interval }}"
   loop_control:
     label: "{{ item }}"
 
 - name: Validate integer pipeline knobs
   ansible.builtin.assert:
     that:
+      - (item.value | string) is match('^[0-9]+$')
       - item.value | int >= 1
     quiet: true
     fail_msg: >-
@@ -76,6 +78,46 @@
   loop_control:
     label: "{{ item }}"
 
+- name: Require deployment identity attributes
+  ansible.builtin.assert:
+    that:
+      - grafana_alloy_deployment_environment | length > 0
+      - grafana_alloy_region | length > 0
+    fail_msg: >-
+      grafana_alloy_deployment_environment and grafana_alloy_region are required
+      identity attributes when Grafana Cloud observability is enabled.
+
+- name: Validate loopback listener addresses
+  ansible.builtin.assert:
+    that:
+      - grafana_alloy_otlp_grpc_bind == '127.0.0.1'
+      - grafana_alloy_otlp_http_bind == '127.0.0.1'
+      - grafana_alloy_server_http_addr is match('^127[.]0[.]0[.]1:[0-9]+$')
+      - grafana_alloy_server_grpc_addr is match('^127[.]0[.]0[.]1:[0-9]+$')
+    fail_msg: >-
+      Grafana Alloy OTLP and admin listeners must bind to 127.0.0.1 only;
+      wildcard or public listener addresses are not permitted.
+
+- name: Validate listener ports
+  ansible.builtin.assert:
+    that:
+      - (item | string) is match('^[0-9]+$')
+      - item | int >= 1
+      - item | int <= 65535
+    quiet: true
+    fail_msg: "Grafana Alloy listener ports must be decimal integers in 1..65535 (got {{ item }})."
+  loop:
+    - "{{ grafana_alloy_otlp_grpc_port }}"
+    - "{{ grafana_alloy_otlp_http_port }}"
+    - "{{ grafana_alloy_server_http_addr.split(':')[-1] }}"
+    - "{{ grafana_alloy_server_grpc_addr.split(':')[-1] }}"
+
+- name: Constrain the Alloy state directory to systemd's writable area
+  ansible.builtin.assert:
+    that:
+      - grafana_alloy_state_dir is match('^/var/lib/[A-Za-z0-9._/-]+$')
+    fail_msg: "grafana_alloy_state_dir must be a path below /var/lib."
+
 # COUPLING GUARD: the node-side otlp_endpoint injected by
 # roles/decdn_node/templates/node.toml.j2 hardcodes the gRPC receiver port
 # constant. If this default ever moves, node.toml must move WITH it — the molecule
@@ -84,6 +126,7 @@
   ansible.builtin.assert:
     that:
       - grafana_alloy_otlp_grpc_port | int == 4317
+      - (grafana_alloy_otlp_grpc_port | string) is match('^[0-9]+$')
     fail_msg: >-
       grafana_alloy_otlp_grpc_port was moved away from 4317, but
       roles/decdn_node emits otlp_endpoint="http://127.0.0.1:4317" as a fixed

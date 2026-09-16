@@ -118,4 +118,6 @@
         name: baseline
         tasks_from: sudo_users
   roles:
+    - role: grafana_alloy
+      tags: [observability, decdn_node, node]
     - role: decdn_node

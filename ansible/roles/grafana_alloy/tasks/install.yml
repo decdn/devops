@@ -42,7 +42,9 @@
 - name: Decide whether (re)install is needed
   ansible.builtin.set_fact:
     _ga_need_install: "{{ (_ga_dpkg_version.rc | default(1)) != 0
-                          or (grafana_alloy_version not in (_ga_dpkg_version.stdout | default(''))) }}"
+                          or (_ga_dpkg_version.stdout | trim)
+                             not in [grafana_alloy_version,
+                                     grafana_alloy_version ~ '-1'] }}"
   when:
     - grafana_alloy_install_method == "release"
     - not ansible_check_mode
@@ -132,7 +134,9 @@
   ansible.builtin.command: "{{ grafana_alloy_bin_effective }} --version"
   changed_when: false
   register: _ga_installed_version
+  when: not ansible_check_mode
   failed_when: >-
     _ga_installed_version.rc != 0
     or (grafana_alloy_install_method == "release"
-        and grafana_alloy_version not in _ga_installed_version.stdout)
+        and not (_ga_installed_version.stdout
+                 | regex_search('(^|[^0-9])v?' ~ (grafana_alloy_version | regex_escape) ~ '([^0-9]|$)')))

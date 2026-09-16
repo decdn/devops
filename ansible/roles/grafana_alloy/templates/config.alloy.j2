@@ -3,7 +3,7 @@
 # Pipeline: scrape the node's /metrics and push it to Grafana Cloud Prometheus;
 # receive OTLP traces (plus any logs/metrics pushed over localhost) on gRPC 4317 /
 # HTTP 4318 bound to loopback only; stamp resource identity on everything,
-# parent-based sample traces, batch, then export via OTLP/HTTP.
+# probabilistically sample traces, batch, then export via OTLP/HTTP.
 #
 # Secrets are NOT literals here: every ${GC_*} placeholder expands at load time
 # from the root-owned 0600 environment file systemd hands the unit
@@ -12,7 +12,7 @@
 
 prometheus.scrape "decdn_node" {
   targets = [
-    { "__address__" = "{{ grafana_alloy_scrape_target }}",
+    { "__address__" = "127.0.0.1:{{ decdn_metrics_port | default(9090) }}",
       "instance"    = "{{ _ga_instance_id }}" },
   ]
   forward_to      = [prometheus.relabel.decdn_identity.receiver]
@@ -61,9 +61,9 @@ otelcol.receiver.otlp "local" {
   }
 
   output {
-    traces  = [otelcol.processor.probabilistic_sampler.parent_based_traces.input]
-    logs    = [otelcol.processor.attributes.decdn_identity.input]
-    metrics = [otelcol.processor.attributes.decdn_identity.input]
+    traces  = [otelcol.processor.probabilistic_sampler.traces.input]
+    logs    = [otelcol.processor.resource.decdn_identity.input]
+    metrics = [otelcol.processor.resource.decdn_identity.input]
   }
 }
 
@@ -77,7 +77,7 @@ otelcol.receiver.otlp "local" {
      "service.name": grafana_alloy_service_name,
      "service.namespace": grafana_alloy_service_namespace,
    } %}
-otelcol.processor.attributes "decdn_identity" {
+otelcol.processor.resource "decdn_identity" {
 {% for attr_key in ga_res_attrs.keys() | sort if ga_res_attrs[attr_key] | length > 0 %}
   action {
     key    = {{ attr_key | tojson }}
@@ -93,14 +93,13 @@ otelcol.processor.attributes "decdn_identity" {
   }
 }
 
-{#- Parent-based sampling: spans without an explicit flag inherit their parent's
-    decision, so whole trace subtrees survive or drop together. Renders the
-    operator-facing 0..1 keep-ratio as the component's percentage. #}
-otelcol.processor.probabilistic_sampler "parent_based_traces" {
+{#- Renders the operator-facing 0..1 keep-ratio as the component's percentage.
+    Parent-based decisions must be made by the emitting SDK. #}
+otelcol.processor.probabilistic_sampler "traces" {
   sampling_percentage = {{ grafana_alloy_trace_sampling_ratio | float * 100 }}
 
   output {
-    traces = [otelcol.processor.attributes.decdn_identity.input]
+    traces = [otelcol.processor.resource.decdn_identity.input]
   }
 }
 
