@@ -93,7 +93,6 @@
       - grafana_alloy_otlp_grpc_bind == '127.0.0.1'
       - grafana_alloy_otlp_http_bind == '127.0.0.1'
       - grafana_alloy_server_http_addr is match('^127[.]0[.]0[.]1:[0-9]+$')
-      - grafana_alloy_server_grpc_addr is match('^127[.]0[.]0[.]1:[0-9]+$')
     fail_msg: >-
       Grafana Alloy OTLP and admin listeners must bind to 127.0.0.1 only;
       wildcard or public listener addresses are not permitted.
@@ -110,13 +109,9 @@
     - "{{ grafana_alloy_otlp_grpc_port }}"
     - "{{ grafana_alloy_otlp_http_port }}"
     - "{{ grafana_alloy_server_http_addr.split(':')[-1] }}"
-    - "{{ grafana_alloy_server_grpc_addr.split(':')[-1] }}"
 
-- name: Constrain the Alloy state directory to systemd's writable area
-  ansible.builtin.assert:
-    that:
-      - grafana_alloy_state_dir is match('^/var/lib/[A-Za-z0-9._/-]+$')
-    fail_msg: "grafana_alloy_state_dir must be a path below /var/lib."
+- name: Validate the managed filesystem paths
+  ansible.builtin.import_tasks: validate-paths.yml
 
 # COUPLING GUARD: the node-side otlp_endpoint injected by
 # roles/decdn_node/templates/node.toml.j2 hardcodes the gRPC receiver port

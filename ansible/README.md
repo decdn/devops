@@ -220,6 +220,9 @@ ansible-playbook playbooks/site.yml --syntax-check
 make molecule       # all seven molecule scenarios, in parallel (needs Docker)
 make molecule JOBS=2   # …capped to two at a time on a small machine
 make molecule-serial   # …one at a time, when a failure needs readable output
+
+# from the repo ROOT — the only test that uses a real Grafana Alloy binary
+make lint-alloy     # render grafana_alloy's templates, then `alloy validate` them
 ```
 
 `make molecule` runs every scenario under `molecule/`: **`default`** (described below),
@@ -232,6 +235,14 @@ They are independent, so they run concurrently —
 ~151s instead of ~595s — and each line of output is prefixed with its scenario name
 because the runs interleave. `make molecule-serial` is the escape hatch when that
 interleaving gets in the way of reading a failure.
+
+`grafana-cloud` runs against a *stub* Alloy that exits 0 for every subcommand, so it
+proves the role's plumbing but cannot prove the rendered `config.alloy` is loadable.
+That gap is closed by `make lint-alloy` (repo root; CI job `alloy-config`), which renders
+the templates in several variable combinations and runs the **real**, digest-pinned Alloy
+binary's `alloy validate` over them plus a check that every `ExecStart` flag actually
+exists in `alloy run --help`. Re-run it when bumping `grafana_alloy_version`. See
+[`tests/alloy-config/`](tests/alloy-config/).
 
 The `default` scenario converges the **`decdn_node`** role in a privileged systemd
 container against a stub daemon: it installs via the `manual` method (no

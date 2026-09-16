@@ -107,6 +107,8 @@ make molecule         # containerised converge/verify of the decdn_node role —
                       # scenarios in parallel (needs Docker); cap with JOBS=<n>
 make molecule-serial  # the same suite one scenario at a time (readable failure output)
 make lint-helm        # chart: helm lint + render tests + kubeconform + schema keys (needs helm, yq, Docker)
+make lint-alloy       # grafana_alloy: render its templates + `alloy validate` them with the real
+                      # pinned binary (the molecule stub exits 0 for everything and cannot)
 make security         # = security-ansible + security-helm (KICS over the rendered chart; needs helm)
 
 # Ansible deploys — run from ansible/ (see ansible/README.md for the full flow)

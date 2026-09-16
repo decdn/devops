@@ -8,8 +8,14 @@
 #
 # Known boundary (why no runtime socket assertions): the stub does NOT bind
 # 4317/4318/12345, so `ss -ltn` proofs are meaningless here. Loopback-binding is
-# asserted textually against the rendered config + unit, matches what real-binary
-# deploys enforce via `alloy fmt --test` at deploy time.
+# asserted textually against the rendered config + unit, matching what
+# real-binary deploys enforce via `alloy validate` at deploy time.
+#
+# Second boundary (READ THIS BEFORE TRUSTING A GREEN RUN): the stub exits 0 for
+# every subcommand, so the role's `alloy validate` gate proves only that the gate
+# is wired up. Whether Alloy can actually LOAD the rendered config is proven by
+# ../../tests/alloy-config/validate.sh (`make lint-alloy`), which renders the same
+# templates against the real pinned binary and runs in CI.
 #
 # `baseline` is not exercised (real-host-only — see ../default/molecule.yml).
 driver:

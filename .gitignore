@@ -36,3 +36,7 @@ ansible/importer_result.json
 # Python bytecode (e.g. from the molecule stub daemon or any local tooling)
 __pycache__/
 *.pyc
+
+# Pinned third-party binaries downloaded by the test harnesses (`make lint-alloy`
+# caches the verified Grafana Alloy release here so repeat runs skip the fetch).
+ansible/.cache/

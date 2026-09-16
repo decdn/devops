@@ -533,7 +533,7 @@
 
     # --- Cases: grafana_alloy preflight gates (#55) --------------------------------
     # The opt-in Grafana Cloud role's OWN fail-loud gates get the same treatment.
-    # All five broken configs abort inside preflight-imported tasks BEFORE any
+    # All seven broken configs abort inside preflight-imported tasks BEFORE any
     # host mutation (user/package/config), so they cannot interfere with the other
     # cases or start services. Tag deduping at the bottom handles two cases per
     # gate. Fixtures are staged/restored per case; none of this touches decdn.env.
@@ -668,6 +668,37 @@
             decdn_rejected: "{{ decdn_rejected + ['pipeline-knobs'] }}"
           when: ansible_failed_task.name is match('^Validate the pipeline knobs')
 
+    - name: "Case ga-path-traversal — state directory escaping /var/lib"
+      block:
+        - name: Run grafana_alloy with a traversing state directory
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            # Passes a naive "^/var/lib/[A-Za-z0-9._/-]+$" prefix check, but
+            # resolves to /etc — which the disable path would delete outright.
+            grafana_alloy_state_dir: /var/lib/../../etc
+      rescue:
+        - name: Record ga-path-traversal rejection (only if the path gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
+          when: ansible_failed_task.name is match('^Constrain the managed Alloy paths')
+
+    - name: "Case ga-config-outside-dir — rendered config outside the managed directory"
+      block:
+        - name: Run grafana_alloy with a config file outside its config directory
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_config_dir: /etc/alloy
+            grafana_alloy_config_file: /etc/somewhere-else/config.alloy
+      rescue:
+        - name: Record ga-config-outside-dir rejection (only if the containment gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
+          when: ansible_failed_task.name is match('^Require the rendered config to live inside')
+
     - name: Confirm every bad value was rejected by the role's own validation
       ansible.builtin.assert:
         that:
@@ -686,4 +717,4 @@
            "enum", "dict", "float", "list", "string", "string-newline", "otlp-https",
            "otlp-noport", "otlp-path", "otlp-userinfo", "otlp-colon", "otlp-port",
            "otlp-newline", "env-gate", "env-extra", "env-content", "config-gate",
-           "secret-file", "secret-content", "pipeline-knobs"]
+           "secret-file", "secret-content", "pipeline-knobs", "managed-paths"]

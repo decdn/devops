@@ -1,14 +1,20 @@
-# MANAGED BY the grafana_alloy Ansible role — do not edit by hand.
-#
-# Pipeline: scrape the node's /metrics and push it to Grafana Cloud Prometheus;
-# receive OTLP traces (plus any logs/metrics pushed over localhost) on gRPC 4317 /
-# HTTP 4318 bound to loopback only; stamp resource identity on everything,
-# probabilistically sample traces, batch, then export via OTLP/HTTP.
-#
-# Secrets are NOT literals here: every ${GC_*} placeholder expands at load time
-# from the root-owned 0600 environment file systemd hands the unit
-# (--config.expand-env in alloy.service; operator template:
-# roles/grafana_alloy/files/grafana-alloy.env.example).
+// MANAGED BY the grafana_alloy Ansible role — do not edit by hand.
+//
+// Alloy's configuration syntax only understands `//` and `/* */` comments — a
+// `#` is an illegal character that aborts the parse, so every comment in this
+// file (and everything the Jinja layer emits) must stay `//`.
+//
+// Pipeline: scrape the node's /metrics and push it to Grafana Cloud Prometheus;
+// receive OTLP traces (plus any logs/metrics pushed over localhost) on gRPC 4317 /
+// HTTP 4318 bound to loopback only; stamp resource identity on everything,
+// probabilistically sample traces, batch, then export via OTLP/HTTP.
+//
+// Secrets are NOT literals here: every credential is read at config-load time
+// with the `sys.env` stdlib function from the root-owned 0600 environment file
+// systemd hands the unit (EnvironmentFile= in alloy.service; operator template:
+// roles/grafana_alloy/files/grafana-alloy.env.example). Alloy has no
+// `--config.expand-env` flag — `${VAR}` inside a string is a literal, so
+// `sys.env("VAR")` is the only working indirection.
 
 prometheus.scrape "decdn_node" {
   targets = [
@@ -19,9 +25,9 @@ prometheus.scrape "decdn_node" {
   scrape_interval = {{ grafana_alloy_scrape_interval | to_json }}
 }
 
-{#- Low-cardinality identity labels shipped with every metric. Prom label NAMES
-    may not contain '.', so the dotted service.* naming flattens to underscores;
-    empty values omit their rule entirely. #}
+{# Low-cardinality identity labels shipped with every metric. Prom label NAMES
+   may not contain '.', so the dotted service.* naming flattens to underscores;
+   empty values omit their rule entirely. #}
 {% set ga_metric_labels = [
      ["service_name", grafana_alloy_service_name],
      ["service_namespace", grafana_alloy_service_namespace],
@@ -42,11 +48,11 @@ prometheus.relabel "decdn_identity" {
 
 prometheus.remote_write "cloud" {
   endpoint {
-    url = "${GC_PROM_REMOTE_WRITE_URL}"
+    url = sys.env("GC_PROM_REMOTE_WRITE_URL")
 
     basic_auth {
-      username = "${GC_PROM_USERNAME}"
-      password = "${GC_API_TOKEN}"
+      username = sys.env("GC_PROM_USERNAME")
+      password = sys.env("GC_API_TOKEN")
     }
   }
 }
@@ -62,14 +68,19 @@ otelcol.receiver.otlp "local" {
 
   output {
     traces  = [otelcol.processor.probabilistic_sampler.traces.input]
-    logs    = [otelcol.processor.resource.decdn_identity.input]
-    metrics = [otelcol.processor.resource.decdn_identity.input]
+    logs    = [otelcol.processor.transform.decdn_identity.input]
+    metrics = [otelcol.processor.transform.decdn_identity.input]
   }
 }
 
-{#- Identity as OTLP resource attributes; unlike Prom labels these MAY use dotted
-    names. Sorted keys keep rendering byte-stable across converges (idempotence)
-    and empty values drop out of the action list entirely. #}
+{# Identity as OTLP resource attributes; unlike Prom labels these MAY use dotted
+   names. Alloy ships no `otelcol.processor.resource` component, so the upstream
+   collector's resource processor is expressed as OTTL `set()` statements in the
+   `resource` context of otelcol.processor.transform (the supported equivalent).
+   Sorted keys keep rendering byte-stable across converges (idempotence) and
+   empty values drop out of the statement list entirely. Values are constrained
+   to [A-Za-z0-9._/-] by preflight, so they cannot break out of the OTTL string
+   literal or the enclosing backtick-quoted Alloy string. #}
 {% set ga_res_attrs = {
      "deployment.environment": grafana_alloy_deployment_environment,
      "region": grafana_alloy_region,
@@ -77,12 +88,23 @@ otelcol.receiver.otlp "local" {
      "service.name": grafana_alloy_service_name,
      "service.namespace": grafana_alloy_service_namespace,
    } %}
-otelcol.processor.resource "decdn_identity" {
+{% set ga_res_statements = [] %}
 {% for attr_key in ga_res_attrs.keys() | sort if ga_res_attrs[attr_key] | length > 0 %}
-  action {
-    key    = {{ attr_key | tojson }}
-    action = "upsert"
-    value  = {{ ga_res_attrs[attr_key] | tojson }}
+{% set _ = ga_res_statements.append(
+     'set(attributes[' ~ (attr_key | tojson) ~ '], ' ~ (ga_res_attrs[attr_key] | tojson) ~ ')') %}
+{% endfor %}
+otelcol.processor.transform "decdn_identity" {
+  // Fail loud rather than silently shipping unlabelled telemetry.
+  error_mode = "propagate"
+{% for signal in ["trace", "metric", "log"] %}
+
+  {{ signal }}_statements {
+    context = "resource"
+    statements = [
+{% for statement in ga_res_statements %}
+      `{{ statement }}`,
+{% endfor %}
+    ]
   }
 {% endfor %}
 
@@ -93,13 +115,13 @@ otelcol.processor.resource "decdn_identity" {
   }
 }
 
-{#- Renders the operator-facing 0..1 keep-ratio as the component's percentage.
-    Parent-based decisions must be made by the emitting SDK. #}
+{# Renders the operator-facing 0..1 keep-ratio as the component's percentage.
+   Parent-based decisions must be made by the emitting SDK. #}
 otelcol.processor.probabilistic_sampler "traces" {
   sampling_percentage = {{ grafana_alloy_trace_sampling_ratio | float * 100 }}
 
   output {
-    traces = [otelcol.processor.resource.decdn_identity.input]
+    traces = [otelcol.processor.transform.decdn_identity.input]
   }
 }
 
@@ -115,23 +137,25 @@ otelcol.processor.batch "decdn" {
   }
 }
 
+{# `sending_queue` and `retry_on_failure` are blocks of the EXPORTER, siblings of
+   `client` — nesting them inside `client` is rejected at config load. #}
 otelcol.exporter.otlphttp "cloud" {
   client {
-    endpoint = "${GC_OTLP_ENDPOINT}"
+    endpoint = sys.env("GC_OTLP_ENDPOINT")
     auth     = otelcol.auth.basic.cloud.handler
+  }
 
-    sending_queue {
-      queue_size = {{ grafana_alloy_queue_size }}
-    }
+  sending_queue {
+    queue_size = {{ grafana_alloy_queue_size }}
+  }
 
-    retry_on_failure {
-      initial_interval = {{ grafana_alloy_retry_initial_interval | to_json }}
-      max_elapsed_time = {{ grafana_alloy_retry_max_elapsed_time | to_json }}
-    }
+  retry_on_failure {
+    initial_interval = {{ grafana_alloy_retry_initial_interval | to_json }}
+    max_elapsed_time = {{ grafana_alloy_retry_max_elapsed_time | to_json }}
   }
 }
 
 otelcol.auth.basic "cloud" {
-  username = "${GC_PROM_USERNAME}"
-  password = "${GC_API_TOKEN}"
+  username = sys.env("GC_PROM_USERNAME")
+  password = sys.env("GC_API_TOKEN")
 }

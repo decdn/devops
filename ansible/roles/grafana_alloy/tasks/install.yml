@@ -27,7 +27,7 @@
       install step; configuration templating below still diffs normally.
   when:
     - grafana_alloy_install_method == "release"
-    - not ansible_check_mode
+    - ansible_check_mode
 
 - name: Query the currently-installed package version
   ansible.builtin.command:

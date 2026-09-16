@@ -14,10 +14,13 @@ case "${1-}" in
   --version)
     echo "alloy, version v${MOLECULE_STUB_VERSION:-0.0.0}-molecule-stub"
     ;;
-  # fmt --test: the real command validates syntax + canonical formatting; the
-  # stub just exits 0 so the gate proves plumbing only — content correctness is
-  # asserted textually in verify.yml.
-  fmt)
+  # validate: the real binary builds the component graph and rejects an
+  # unloadable config. A stub CANNOT do that, so this exits 0 and proves the
+  # role's gate is wired up — nothing more. Content correctness is asserted
+  # textually in verify.yml and, against the REAL pinned binary, by
+  # ../../tests/alloy-config/validate.sh (`make lint-alloy`, run in CI). Do not
+  # read a green run here as "the configuration loads".
+  validate | fmt)
     :
     ;;
   # Long-running foreground process keeps the Type=simple unit 'running'.

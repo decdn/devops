@@ -33,13 +33,18 @@ sudo install -m 600 -o root -g root grafana-alloy.env /etc/decdn/grafana-alloy.e
 
 using `roles/grafana_alloy/files/grafana-alloy.env.example` as the template. The
 four required keys are `GC_PROM_REMOTE_WRITE_URL`, `GC_OTLP_ENDPOINT`,
-`GC_PROM_USERNAME` and `GC_API_TOKEN`; both URLs must be `https://`. Values are
-expanded into `config.alloy` at load time via `--config.expand-env` — the file on
-disk stays free of secret literals, and the role only ever greps shapes on the
-host rather than reading values back.
+`GC_PROM_USERNAME` and `GC_API_TOKEN`; both URLs must be `https://`.
+`config.alloy` reads each of them at load time with `sys.env("GC_…")` — Alloy has
+**no** `--config.expand-env` flag, so a `${GC_…}` placeholder would be a literal
+string, not an expansion. The file on disk stays free of secret literals, and the
+role only ever greps shapes on the host rather than reading values back.
 
-With the flag off, the role removes any prior unit + rendered config it manages
-(disable/rollback); binary/package removal is manual.
+With the flag off, the role removes the unit, rendered config, state directory
+and service account **it installed** — identified by the managed-by marker in
+`/etc/systemd/system/alloy.service`. An Alloy installed by anything else (the
+upstream apt repo, another role, by hand) carries no marker and is left strictly
+alone, which matters because the flag is `false` by default on every host.
+Binary/package removal is manual.
 
 ## Variables
 
@@ -75,6 +80,21 @@ If you move either default, update BOTH sides and the molecule guard in
 
 ## Testing
 
-Covered by the `grafana-cloud` molecule scenario (positive path with a stub
-binary + negative preflight cases) and disabled-path assertions in the `default`
-scenario. Real-binary validation happens at deploy time via `alloy fmt --test`.
+Three layers, because the first one cannot prove correctness on its own:
+
+1. **`grafana-cloud` molecule scenario** — the role end-to-end against a *stub*
+   binary (plumbing, rendered content, hardened unit, teardown scope), plus
+   negative preflight cases in `validation` and disabled-path assertions in
+   `default`. The stub exits 0 for every subcommand, so a green run says nothing
+   about whether Alloy can load the config.
+2. **`make lint-alloy`** (CI job `alloy-config`) — renders these templates in
+   several variable combinations and feeds them to the REAL pinned Alloy binary:
+   `alloy validate` (component graph, not just syntax) and a check that every
+   `ExecStart` flag exists in `alloy run --help`. See
+   `ansible/tests/alloy-config/`.
+3. **Deploy time** — the role runs `alloy validate` against the just-rendered
+   file with the installed binary before any restart.
+
+Re-run `make lint-alloy` whenever `grafana_alloy_version` is bumped: the harness
+downloads the same digest-pinned `.deb` the role installs, so a version bumped
+without its sha256 fails there rather than on a host.

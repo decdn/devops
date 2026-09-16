@@ -43,10 +43,12 @@ grafana_alloy_otlp_grpc_bind: 127.0.0.1
 grafana_alloy_otlp_grpc_port: 4317          # standard OTLP/gRPC port; decdn_node's
 grafana_alloy_otlp_http_bind: 127.0.0.1     # injected otlp_endpoint depends on the
 grafana_alloy_otlp_http_port: 4318          # gRPC value staying put (see node.toml.j2)
-# Alloy's own admin/UI server defaults to :12345/:12347 on ALL interfaces — pin it
-# to loopback explicitly via --server.*.listen-addr in the unit.
+# Alloy's own admin/UI server. Upstream already defaults it to 127.0.0.1:12345,
+# but the unit passes it explicitly so the binding is reviewable in the unit and
+# a future upstream default change cannot quietly widen it. There is NO gRPC
+# admin listener in Alloy (that was Grafana Agent) — `alloy run` has no
+# --server.grpc.listen-addr flag, and passing one is an immediate crash-loop.
 grafana_alloy_server_http_addr: 127.0.0.1:12345
-grafana_alloy_server_grpc_addr: 127.0.0.1:12347
 
 # --- Metrics scrape (node /metrics -> Grafana Cloud Prometheus) ---------------
 grafana_alloy_scrape_interval: 30s
