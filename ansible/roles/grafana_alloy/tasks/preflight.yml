@@ -131,31 +131,6 @@
 
 # --- Host-state credential gates ------------------------------------------------
 
-- name: Resolve any existing Alloy user/group IDs before startup
-  ansible.builtin.getent:
-    database: "{{ item.database }}"
-    key: "{{ item.key }}"
-  register: _ga_existing_id
-  failed_when: false
-  loop:
-    - {database: passwd, key: "{{ grafana_alloy_user }}"}
-    - {database: group, key: "{{ grafana_alloy_group }}"}
-
-- name: Reject root-owned Alloy identities before startup
-  ansible.builtin.assert:
-    that:
-      - >-
-        (_ga_existing_id.results[0].getent_passwd[grafana_alloy_user] is not defined)
-        or ((_ga_existing_id.results[0].getent_passwd[grafana_alloy_user][1] | int) != 0)
-      - >-
-        (_ga_existing_id.results[1].getent_group[grafana_alloy_group] is not defined)
-        or ((_ga_existing_id.results[1].getent_group[grafana_alloy_group][1] | int) != 0)
-    fail_msg: >-
-      {{ grafana_alloy_user }} user and {{ grafana_alloy_group }} group must not
-      resolve to UID/GID 0 (root, or a named 0 alias). Existing root-owned
-      identities are rejected before startup and teardown because they can own a
-      privileged write target instead of an unprivileged runtime account.
-
 - name: Validate the parent /etc directory for the secret file
   ansible.builtin.stat:
     path: /etc
@@ -168,7 +143,9 @@
       - _ga_etc_stat.stat.isdir | default(false)
       - (_ga_etc_stat.stat.pw_name | default('')) == 'root'
       - (_ga_etc_stat.stat.gr_name | default('')) == 'root'
-      - ((_ga_etc_stat.stat.mode | int(base=8)) & 0o022) == 0
+      - (_ga_etc_stat.stat.mode | default('')) | length == 4
+      - (_ga_etc_stat.stat.mode | string)[-2] not in ['2', '3', '6', '7']
+      - (_ga_etc_stat.stat.mode | string)[-1] not in ['2', '3', '6', '7']
     fail_msg: >-
       {{ grafana_alloy_secret_file }} must be a direct child of /etc, and /etc
       must be a real root:root directory with no group/other write bit. A

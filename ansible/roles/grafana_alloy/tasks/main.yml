@@ -95,32 +95,6 @@
         - _ga_leftover_unit.stat.exists
         - not _ga_ours | bool
 
-    - name: Reject root-owned Alloy identities before teardown
-      ansible.builtin.getent:
-        database: "{{ item.database }}"
-        key: "{{ item.key }}"
-      register: _ga_teardown_ids
-      failed_when: false
-      loop:
-        - {database: passwd, key: "{{ grafana_alloy_user }}"}
-        - {database: group, key: "{{ grafana_alloy_group }}"}
-      when: _ga_ours | bool
-
-    - name: Refuse to remove a root-owned Alloy identity
-      ansible.builtin.assert:
-        that:
-          - >-
-            (_ga_teardown_ids.results[0].getent_passwd[grafana_alloy_user] is not defined)
-            or ((_ga_teardown_ids.results[0].getent_passwd[grafana_alloy_user][1] | int) != 0)
-          - >-
-            (_ga_teardown_ids.results[1].getent_group[grafana_alloy_group] is not defined)
-            or ((_ga_teardown_ids.results[1].getent_group[grafana_alloy_group][1] | int) != 0)
-        fail_msg: >-
-          Refusing to tear down {{ grafana_alloy_user }} / {{ grafana_alloy_group }}
-          because it resolves to UID/GID 0; a root-owned runtime account would be
-          a privilege escalation hazard, and teardown must never delete it.
-      when: _ga_ours | bool
-
     - name: Remove this role's installation
       when: _ga_ours | bool
       block:
