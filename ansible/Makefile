@@ -66,10 +66,10 @@ deploy:
 # Containerised converge + idempotence + verify of the decdn_node role against a
 # stub daemon (needs Docker; a privileged systemd container). See molecule/.
 # Scenarios: default (rendered values + idempotence), schema (config key-set drift
-# against the upstream field list), validation (bad knobs must be rejected by the
-# role's own asserts), generate-keystore (opt-in host-side wallet), host-env
-# (host-provisioned /etc/decdn/decdn.env), slow-readiness (advisory /metrics probe
-# timeout).
+# against the upstream field list), validation (bad knobs, both roles, must be
+# rejected by their own asserts), generate-keystore (opt-in host-side wallet),
+# host-env (host-provisioned /etc/decdn/decdn.env), slow-readiness (advisory
+# /metrics probe timeout), grafana-cloud (opt-in Grafana Cloud observability).
 #
 # The scenarios run concurrently: distinct container names, no published host ports,
 # per-scenario ephemeral dirs, and what they share on the control machine (the

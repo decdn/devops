@@ -1,0 +1,85 @@
+---
+# grafana_alloy role defaults. This role ships with the decdn_node role and is
+# OFF by default: the single opt-in point at group/host level is
+# decdn_grafana_cloud_enabled, defined IDENTICALLY in roles/decdn_node/defaults
+# (the mirroring is deliberate — it gives inventory one override knob that both
+# roles read; see "Grafana Cloud observability" in ansible/README.md).
+
+decdn_grafana_cloud_enabled: false
+
+# --- Install ------------------------------------------------------------------
+# "release": download the pinned GitHub Release .deb and verify its sha256 before
+# dpkg-install. "manual": copy a control-machine binary path (molecule stubs,
+# pre-release testing) — no package, no version pin.
+grafana_alloy_install_method: release   # "release" | "manual"
+grafana_alloy_manual_bin_src: ""
+# Pinned upstream version + per-arch sha256 of the .deb asset. Bump BOTH together
+# from https://github.com/grafana/alloy/releases/<tag> (asset digests are shown on
+# every release). A missing arch entry fails loud at preflight when enabled.
+grafana_alloy_version: "1.19.2"
+grafana_alloy_release_base: https://github.com/grafana/alloy/releases/download
+grafana_alloy_sha256:
+  amd64: 9872732d43c6d14996e1ad5a075086a93381ea6375c8c756820da68b85422eea
+  arm64: 04dcc80ae4fe75832bfb9d3f376753210c635f1c0a9e851f3cded9ab20dc2b7d
+
+# --- Paths / identities -------------------------------------------------------
+grafana_alloy_user: alloy
+grafana_alloy_group: alloy
+grafana_alloy_bin: /usr/local/bin/alloy      # manual mode; release deb installs /usr/bin/alloy
+grafana_alloy_config_dir: /etc/alloy
+grafana_alloy_config_file: /etc/alloy/config.alloy
+grafana_alloy_state_dir: /var/lib/alloy      # WAL/storage state, owned by the agent user
+# SENSITIVE environment file holding the Grafana Cloud credentials as KEY=value
+# pairs (template: files/grafana-alloy.env.example). Root-owned 0600 — systemd
+# reads EnvironmentFile= as root BEFORE dropping to the agent user, so `alloy`
+# never needs read access to it and no secret transits this repo. Provision it on
+# the target host like /etc/decdn/decdn.env.
+grafana_alloy_secret_file: /etc/decdn/grafana-alloy.env
+
+# --- Network (loopback-only; AGENTS.md hard rule 2) ---------------------------
+# OTLP receivers bound to loopback ONLY — the daemon accepts telemetry pushed
+# over localhost, never from the network; no firewall hole exists or is needed.
+grafana_alloy_otlp_grpc_bind: 127.0.0.1
+grafana_alloy_otlp_grpc_port: 4317          # standard OTLP/gRPC port; decdn_node's
+grafana_alloy_otlp_http_bind: 127.0.0.1     # injected otlp_endpoint depends on the
+grafana_alloy_otlp_http_port: 4318          # gRPC value staying put (see node.toml.j2)
+# Alloy's own admin/UI server defaults to :12345/:12347 on ALL interfaces — pin it
+# to loopback explicitly via --server.*.listen-addr in the unit.
+grafana_alloy_server_http_addr: 127.0.0.1:12345
+grafana_alloy_server_grpc_addr: 127.0.0.1:12347
+
+# --- Metrics scrape (node /metrics -> Grafana Cloud Prometheus) ---------------
+# COUPLING: mirrors decdn_metrics_port's DEFAULT (9090) in roles/decdn_node.
+# Kept a plain constant here because cross-role vars are fragile; the molecule
+# suite guards the drift — if you move decdn_metrics_port off 9090, set
+# grafana_alloy_scrape_target on the same inventory level.
+grafana_alloy_scrape_target: 127.0.0.1:9090
+grafana_alloy_scrape_interval: 30s
+
+# --- Resource identity labels (low-cardinality only!) --------------------------
+# These become metric labels and OTLP resource attributes shipped to your Grafana
+# Cloud org for EVERY series/span/log line: never add high-cardinality values
+# (hashes, per-request ids, timestamps) — the remote bill scales with unique
+# label sets (see README cost guardrails).
+grafana_alloy_service_name: decdn-node
+grafana_alloy_service_namespace: decdn
+grafana_alloy_instance_id: ""            # "" => derive from inventory_hostname
+grafana_alloy_deployment_environment: ""  # "" => attribute omitted entirely
+grafana_alloy_region: ""                  # operator sets it = decdn_region ("" => omitted)
+
+# --- Pipeline tuning ------------------------------------------------------------
+# Parent-based probabilistic sampler for TRACES, expressed as the 0..1 keep-ratio
+# the deCDN issue settled on (0.25 == keep ~25% of spans); converted to the
+# component's percentage internally. Validated at preflight.
+grafana_alloy_trace_sampling_ratio: 0.25
+grafana_alloy_batch_timeout: 3s           # max delay before a partial batch flushes
+grafana_alloy_batch_send_size: 1024       # items per batch (soft target)
+grafana_alloy_batch_max_size: 2048        # hard cap; larger batches split
+grafana_alloy_queue_size: 5000            # exporter sending queue capacity
+grafana_alloy_retry_initial_interval: 5s  # first backoff after a failed push
+grafana_alloy_retry_max_elapsed_time: 5m  # total retry budget per request
+
+# systemd TimeoutStopSec for the unit (seconds): cap for flushing the exporter
+# queue on shutdown. Truncating it drops buffered telemetry (not money), so the
+# default stays modest.
+grafana_alloy_stop_timeout_sec: 90

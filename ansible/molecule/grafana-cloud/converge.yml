@@ -1,0 +1,46 @@
+---
+# Positive path only — see molecule.yml for scope and ../validation for the
+# negative (block/rescue) matrix. Both roles run in sequence: Alloy first so its
+# receivers exist before the daemon is started and exports spans at them.
+#
+# The stub does not serve /metrics, so decdn_node's readiness probe would sit out
+# its full advisory window (~60s of retries); decdn_readiness_* below bounds that
+# to ~3s without changing what the role asserts.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/files/alloy-stub"
+    decdn_grafana_cloud_enabled: true
+    grafana_alloy_install_method: manual
+    grafana_alloy_manual_bin_src: "{{ stub_bin }}"
+    # The credential fixture (staged by prepare.yml) matches these shapes; region/
+    # environment labels exercise the "set" branch of the attribute rendering.
+    grafana_alloy_deployment_environment: production
+    grafana_alloy_region: US
+    # Keep the advisory metrics probe short (stub serves nothing).
+    decdn_readiness_retries: 3
+    decdn_readiness_delay: 1
+
+    # --- Required decdn_node knobs (mirrors ../default's core block) -------------
+    _proj_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+    decdn_node_install_method: manual
+    decdn_node_manual_bin_src: "{{ _proj_dir }}/molecule/default/files/decdn-node-stub"
+    decdn_cli_manual_bin_src: "{{ _proj_dir }}/molecule/default/files/decdn-node-stub"
+    decdn_node_version: "0.0.0-molecule-stub"
+    decdn_rpc_url: "https://rpc.example.invalid/"
+    decdn_chain_id: 421614
+    decdn_region: "US"
+    decdn_payment_pool_address: "0x1111111111111111111111111111111111111111"
+    decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
+    decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
+    decdn_content_blacklist_address: "0x4444444444444444444444444444444444444444"
+
+    # Sanity-coupling override: verify.yml greps the RENDERED config for this value,
+    # proving template plumbing passes through rather than constants being checked.
+    grafana_alloy_batch_send_size: 512
+  roles:
+    - role: grafana_alloy
+      tags: [observability]
+    - role: decdn_node
+      tags: [decdn_node, node]

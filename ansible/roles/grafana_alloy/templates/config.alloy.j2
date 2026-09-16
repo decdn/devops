@@ -1,0 +1,138 @@
+# MANAGED BY the grafana_alloy Ansible role — do not edit by hand.
+#
+# Pipeline: scrape the node's /metrics and push it to Grafana Cloud Prometheus;
+# receive OTLP traces (plus any logs/metrics pushed over localhost) on gRPC 4317 /
+# HTTP 4318 bound to loopback only; stamp resource identity on everything,
+# parent-based sample traces, batch, then export via OTLP/HTTP.
+#
+# Secrets are NOT literals here: every ${GC_*} placeholder expands at load time
+# from the root-owned 0600 environment file systemd hands the unit
+# (--config.expand-env in alloy.service; operator template:
+# roles/grafana_alloy/files/grafana-alloy.env.example).
+
+prometheus.scrape "decdn_node" {
+  targets = [
+    { "__address__" = "{{ grafana_alloy_scrape_target }}",
+      "instance"    = "{{ _ga_instance_id }}" },
+  ]
+  forward_to      = [prometheus.relabel.decdn_identity.receiver]
+  scrape_interval = {{ grafana_alloy_scrape_interval | to_json }}
+}
+
+{#- Low-cardinality identity labels shipped with every metric. Prom label NAMES
+    may not contain '.', so the dotted service.* naming flattens to underscores;
+    empty values omit their rule entirely. #}
+{% set ga_metric_labels = [
+     ["service_name", grafana_alloy_service_name],
+     ["service_namespace", grafana_alloy_service_namespace],
+     ["service_instance_id", _ga_instance_id],
+     ["deployment_environment", grafana_alloy_deployment_environment],
+     ["region", grafana_alloy_region],
+   ] %}
+prometheus.relabel "decdn_identity" {
+  forward_to = [prometheus.remote_write.cloud.receiver]
+{% for name, value in ga_metric_labels if value | length > 0 %}
+
+  rule {
+    target_label = {{ name | tojson }}
+    replacement  = {{ value | tojson }}
+  }
+{% endfor %}
+}
+
+prometheus.remote_write "cloud" {
+  endpoint {
+    url = "${GC_PROM_REMOTE_WRITE_URL}"
+
+    basic_auth {
+      username = "${GC_PROM_USERNAME}"
+      password = "${GC_API_TOKEN}"
+    }
+  }
+}
+
+otelcol.receiver.otlp "local" {
+  grpc {
+    endpoint = "{{ grafana_alloy_otlp_grpc_bind }}:{{ grafana_alloy_otlp_grpc_port }}"
+  }
+
+  http {
+    endpoint = "{{ grafana_alloy_otlp_http_bind }}:{{ grafana_alloy_otlp_http_port }}"
+  }
+
+  output {
+    traces  = [otelcol.processor.probabilistic_sampler.parent_based_traces.input]
+    logs    = [otelcol.processor.attributes.decdn_identity.input]
+    metrics = [otelcol.processor.attributes.decdn_identity.input]
+  }
+}
+
+{#- Identity as OTLP resource attributes; unlike Prom labels these MAY use dotted
+    names. Sorted keys keep rendering byte-stable across converges (idempotence)
+    and empty values drop out of the action list entirely. #}
+{% set ga_res_attrs = {
+     "deployment.environment": grafana_alloy_deployment_environment,
+     "region": grafana_alloy_region,
+     "service.instance.id": _ga_instance_id,
+     "service.name": grafana_alloy_service_name,
+     "service.namespace": grafana_alloy_service_namespace,
+   } %}
+otelcol.processor.attributes "decdn_identity" {
+{% for attr_key in ga_res_attrs.keys() | sort if ga_res_attrs[attr_key] | length > 0 %}
+  action {
+    key    = {{ attr_key | tojson }}
+    action = "upsert"
+    value  = {{ ga_res_attrs[attr_key] | tojson }}
+  }
+{% endfor %}
+
+  output {
+    traces  = [otelcol.processor.batch.decdn.input]
+    logs    = [otelcol.processor.batch.decdn.input]
+    metrics = [otelcol.processor.batch.decdn.input]
+  }
+}
+
+{#- Parent-based sampling: spans without an explicit flag inherit their parent's
+    decision, so whole trace subtrees survive or drop together. Renders the
+    operator-facing 0..1 keep-ratio as the component's percentage. #}
+otelcol.processor.probabilistic_sampler "parent_based_traces" {
+  sampling_percentage = {{ grafana_alloy_trace_sampling_ratio | float * 100 }}
+
+  output {
+    traces = [otelcol.processor.attributes.decdn_identity.input]
+  }
+}
+
+otelcol.processor.batch "decdn" {
+  send_batch_size     = {{ grafana_alloy_batch_send_size }}
+  send_batch_max_size = {{ grafana_alloy_batch_max_size }}
+  timeout             = {{ grafana_alloy_batch_timeout | to_json }}
+
+  output {
+    traces  = [otelcol.exporter.otlphttp.cloud.input]
+    logs    = [otelcol.exporter.otlphttp.cloud.input]
+    metrics = [otelcol.exporter.otlphttp.cloud.input]
+  }
+}
+
+otelcol.exporter.otlphttp "cloud" {
+  client {
+    endpoint = "${GC_OTLP_ENDPOINT}"
+    auth     = otelcol.auth.basic.cloud.handler
+
+    sending_queue {
+      queue_size = {{ grafana_alloy_queue_size }}
+    }
+
+    retry_on_failure {
+      initial_interval = {{ grafana_alloy_retry_initial_interval | to_json }}
+      max_elapsed_time = {{ grafana_alloy_retry_max_elapsed_time | to_json }}
+    }
+  }
+}
+
+otelcol.auth.basic "cloud" {
+  username = "${GC_PROM_USERNAME}"
+  password = "${GC_API_TOKEN}"
+}

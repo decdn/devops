@@ -16,7 +16,7 @@ repo_root="$(cd "$ansible_dir/.." && pwd)"             # repo root
 
 build_dir="$ansible_dir/build"
 stage="$build_dir/ansible_collections/decdn/node"
-roles=(baseline decdn_node)
+roles=(baseline decdn_node grafana_alloy)
 
 echo "staging decdn.node -> $stage"
 rm -rf "$stage"

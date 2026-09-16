@@ -1,0 +1,166 @@
+---
+# Fail-loud preflight, run BEFORE any host mutation. Mirrors decdn_node's
+# secret-file posture: this role never carries secrets in inventory and never
+# reads the env file's values onto the control machine — it only greps shapes on
+# the host itself.
+#
+# Ordering matters for testability (molecule/validation): PURE-INVENTORY gates
+# run first so a bad knob rejects deterministically regardless of what fixtures
+# exist on the host; the host-state credential gates follow.
+
+# --- Variable-shape gates -------------------------------------------------------
+# Env-var placeholders resolve AFTER these checks, so anything templatable from
+# inventory must be validated here, on the spot.
+
+- name: Validate the pipeline knobs
+  ansible.builtin.assert:
+    that:
+      # ratio is the 0..1 keep-ratio documented for operators; the template renders
+      # sampling_percentage = ratio * 100, so out-of-range values are an operator
+      # surprise (0 = everything dropped, >1 upstream-rejected float32 semantics).
+      - grafana_alloy_trace_sampling_ratio is number
+      - grafana_alloy_trace_sampling_ratio >= 0
+      - grafana_alloy_trace_sampling_ratio <= 1
+      # Duration strings interpolate verbatim into Go duration fields — one wrong
+      # suffix is a config-load crash-loop.
+      - item is match('^[0-9]+(ms|s|m|h)$')
+    quiet: true
+    fail_msg: >-
+      grafana_alloy_trace_sampling_ratio must be a number in [0, 1] (got
+      "{{ grafana_alloy_trace_sampling_ratio }}"), and every *_interval /
+      *_timeout / max_elapsed_time knob must be a bare integer with an ms/s/m/h
+      suffix, e.g. 5s or 500ms.
+  loop:
+    - "{{ grafana_alloy_batch_timeout }}"
+    - "{{ grafana_alloy_retry_initial_interval }}"
+    - "{{ grafana_alloy_retry_max_elapsed_time }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Validate integer pipeline knobs
+  ansible.builtin.assert:
+    that:
+      - item.value | int >= 1
+    quiet: true
+    fail_msg: >-
+      {{ item.name }} must be a positive integer (got "{{ item.value }}").
+  loop:
+    - {name: grafana_alloy_batch_send_size, value: "{{ grafana_alloy_batch_send_size }}"}
+    - {name: grafana_alloy_batch_max_size, value: "{{ grafana_alloy_batch_max_size }}"}
+    - {name: grafana_alloy_queue_size, value: "{{ grafana_alloy_queue_size }}"}
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Validate identity labels
+  ansible.builtin.assert:
+    that:
+      # "" is legal here (attribute omitted entirely) but a blank AFTER trimming
+      # whitespace must not sneak through.
+      - item in ["", none] or item is match('^[A-Za-z0-9._/-]{1,63}$')
+    quiet: true
+    fail_msg: >-
+      Identity label values are shipped to Grafana Cloud as metric labels and OTLP
+      resource attributes on EVERY series/span, so they are restricted to a
+      low-cardinality charset (letters, digits, dot, underscore, slash, ≤ 63
+      chars): {{ item }} does not fit. Offending variables:
+      grafana_alloy_service_name / service_namespace / instance_id /
+      deployment_environment / region.
+  loop:
+    - "{{ grafana_alloy_service_name }}"
+    - "{{ grafana_alloy_service_namespace }}"
+    # _ga_instance_id is REQUIRED (never "") — it has a derived non-empty default.
+    - "{{ _ga_instance_id }}"
+    # These two may be "" (= attribute omitted entirely).
+    - "{{ grafana_alloy_deployment_environment | default('', true) }}"
+    - "{{ grafana_alloy_region | default('', true) }}"
+  loop_control:
+    label: "{{ item }}"
+
+# COUPLING GUARD: the node-side otlp_endpoint injected by
+# roles/decdn_node/templates/node.toml.j2 hardcodes the gRPC receiver port
+# constant. If this default ever moves, node.toml must move WITH it — the molecule
+# suite asserts the pair stays coherent; update both plus their comments.
+- name: Require the standard OTLP gRPC port the node's exporter expects
+  ansible.builtin.assert:
+    that:
+      - grafana_alloy_otlp_grpc_port | int == 4317
+    fail_msg: >-
+      grafana_alloy_otlp_grpc_port was moved away from 4317, but
+      roles/decdn_node emits otlp_endpoint="http://127.0.0.1:4317" as a fixed
+      literal — spans would stop reaching Alloy while every deploy stays green.
+      Either restore 4317 or re-sync node.toml.j2 + the schema docs in the same
+      change.
+
+# --- Host-state credential gates ------------------------------------------------
+
+- name: Require the Grafana Cloud secret environment file
+  ansible.builtin.stat:
+    path: "{{ grafana_alloy_secret_file }}"
+    follow: false
+  register: _ga_secret_stat
+
+# stat.exists alone cannot see the difference between a regular file and a
+# symlink/directory; only `isreg` can. A symlink planted into the (root-owned)
+# /etc/decdn dir that later passes a root chown/chmod would harden whatever TARGET
+# it points at — exactly what decdn.env's gate refuses, so refuse here too.
+- name: Assert the secret file is a real root-owned 0600 file
+  ansible.builtin.assert:
+    that:
+      - _ga_secret_stat.stat.exists
+      - _ga_secret_stat.stat.isreg | default(false)
+      - (_ga_secret_stat.stat.pw_name | default('')) == 'root'
+      - (_ga_secret_stat.stat.gr_name | default('')) == 'root'
+      - _ga_secret_stat.stat.mode | string == '0600'
+    fail_msg: >-
+      {{ grafana_alloy_secret_file }} is missing, not a regular file (symlink?
+      directory?), or not owned root:root 0600 (found owner
+      {{ _ga_secret_stat.stat.pw_name | default('?') }}, mode
+      {{ _ga_secret_stat.stat.mode | default('?') }}). Provision it on the target
+      host per roles/grafana_alloy/files/grafana-alloy.env.example:
+        umask 077
+        sudo install -m 600 -o root -g root grafana-alloy.env {{ grafana_alloy_secret_file }}
+      systemd expands its KEY=value pairs into the unit before dropping
+      privileges, so root ownership is sufficient — do not relax it.
+
+# systemd skips an EnvironmentFile line it cannot parse SILENTLY, so each required
+# key is grepped for presence + value shape directly on the host: grep keeps the
+# values off stdout AND off the control machine (slurping the file back would put
+# the API token there, defeating the point of the host-provisioned path).
+- name: Confirm every required credential key is present and shaped correctly
+  ansible.builtin.command:
+    cmd: grep -qE -- '{{ item.regex }}' {{ grafana_alloy_secret_file | quote }}
+  changed_when: false
+  check_mode: false               # read-only gate: must also run under make check
+  failed_when: false
+  loop:
+    # The two cloud URLs must be https:// (plain http would ship the API token in
+    # cleartext); the credential values must be non-empty, non-comment text.
+    # POSIX bracket classes only — grep -E does NOT interpret \r/\n escapes (they
+    # become literal 'r'/'n', silently poisoning the class), and each grep line is
+    # already newline-free by construction.
+    - key: GC_PROM_REMOTE_WRITE_URL
+      regex: ^GC_PROM_REMOTE_WRITE_URL=https://[^[:space:]]+$
+    - key: GC_PROM_USERNAME
+      regex: ^GC_PROM_USERNAME=[^[:space:]#][^[:space:]]*$
+    - key: GC_API_TOKEN
+      regex: ^GC_API_TOKEN=[^[:space:]#][^[:space:]]*$
+    - key: GC_OTLP_ENDPOINT
+      regex: ^GC_OTLP_ENDPOINT=https://[^[:space:]]+$
+  loop_control:
+    label: "{{ item.key }}"
+  register: _ga_secret_grep
+
+- name: Report which credential key was missing or malformed
+  ansible.builtin.fail:
+    msg: >-
+      {{ grafana_alloy_secret_file }} does not carry a usable line for
+      {{ _ga_missing_keys | join(', ') }}. The file must contain exactly the four
+      KEY=value pairs shown in roles/grafana_alloy/files/grafana-alloy.env.example;
+      both cloud URLs must be https:// and each value non-empty (systemd silently
+      drops unparseable lines, so a quoting typo looks identical to a missing key).
+  vars:
+    _ga_missing_keys: >-
+      {{ _ga_secret_grep.results
+         | rejectattr('rc', 'equalto', 0)
+         | map(attribute='item.key') | list }}
+  when: _ga_missing_keys | length > 0

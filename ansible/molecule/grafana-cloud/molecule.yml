@@ -1,0 +1,47 @@
+---
+# Positive-path exercise of the opt-in Grafana Cloud integration: the
+# `grafana_alloy` role end-to-end against a stub binary (manual install mode,
+# mirroring how ../default stubs the daemon) followed by `decdn_node`, proving
+# the mirrored flag wires otlp_endpoint into node.toml pointing at Alloy's
+# receiver. The broken-input matrix lives in ../validation (block/rescue cases
+# cannot be idempotence-clean, which this scenario must stay).
+#
+# Known boundary (why no runtime socket assertions): the stub does NOT bind
+# 4317/4318/12345, so `ss -ltn` proofs are meaningless here. Loopback-binding is
+# asserted textually against the rendered config + unit, matches what real-binary
+# deploys enforce via `alloy fmt --test` at deploy time.
+#
+# `baseline` is not exercised (real-host-only — see ../default/molecule.yml).
+driver:
+  name: docker
+platforms:
+  - name: decdn-node-grafana-cloud
+    # Same digest-pinned image as the other scenarios (repo convention). Re-resolve
+    # all of them together to bump.
+    image: geerlingguy/docker-debian12-ansible@sha256:4553092be2c00b1ffe580927b9ff03f3c3a0df32b7dd693a3eb02efb6c2b77b7
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # Same pipelining note as ../default/molecule.yml (-22% measured there).
+    ANSIBLE_PIPELINING: "true"
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    # Leading `destroy` so an orphaned container is never reused — see
+    # ../default/molecule.yml.
+    - destroy
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - destroy

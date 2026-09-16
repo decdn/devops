@@ -1,0 +1,62 @@
+# MANAGED BY the grafana_alloy role — do not edit by hand.
+#
+# Runs Grafana Alloy as the dedicated, unprivileged `{{ grafana_alloy_user }}`
+# user. Both OTLP receivers and Alloy's own admin server are pinned to loopback
+# (AGENTS.md hard rule 2): nothing here faces public traffic, so no firewall hole
+# exists. The credential env file is read by systemd as ROOT before privileges
+# drop, so the agent never needs (and must not get) direct read access.
+[Unit]
+Description=Grafana Alloy telemetry agent (deCDN node observability)
+Documentation=https://grafana.com/docs/alloy/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ grafana_alloy_user }}
+Group={{ grafana_alloy_group }}
+
+# Sensitive: GC_PROM_REMOTE_WRITE_URL / GC_PROM_USERNAME / GC_API_TOKEN /
+# GC_OTLP_ENDPOINT. Root-owned 0600; expanded into ${GC_*} placeholders inside
+# config.alloy via --config.expand-env below.
+EnvironmentFile={{ grafana_alloy_secret_file }}
+
+ExecStart={{ grafana_alloy_bin_effective }} run \
+    --config.expand-env \
+    --server.http.listen-addr={{ grafana_alloy_server_http_addr }} \
+    --server.grpc.listen-addr={{ grafana_alloy_server_grpc_addr }} \
+    {{ grafana_alloy_config_file }}
+
+# Graceful stop cap: flush the exporter queue on SIGTERM before SIGKILL would cut
+# buffered telemetry loose.
+KillSignal=SIGTERM
+TimeoutStopSec={{ grafana_alloy_stop_timeout_sec }}
+
+Restart=on-failure
+RestartSec=5
+
+# --- Hardening ---------------------------------------------------------------
+# Mirrors decdn-node.service: strict filesystem, privilege boundary, syscall
+# filter. StateDirectory owns {{ grafana_alloy_state_dir }} (the only writable
+# path under ProtectSystem=strict): WAL/queue state lives there.
+StateDirectory=alloy
+StateDirectoryMode=0750
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+# AF_INET/AF_INET6 for the loopback OTLP/scrape/remotes; AF_UNIX for journald.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

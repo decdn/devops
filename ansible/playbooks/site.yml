@@ -10,5 +10,10 @@
   roles:
     - role: baseline
       tags: [baseline]
+    # Opt-in Grafana Cloud observability (off by default; one mirrored inventory
+    # flag drives this + the otlp_endpoint injection inside decdn_node). Runs
+    # BEFORE decdn_node so Alloy's receivers exist before the daemon exports.
+    - role: grafana_alloy
+      tags: [observability]
     - role: decdn_node
       tags: [decdn_node, node]

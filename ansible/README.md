@@ -184,6 +184,32 @@ The node serves paid traffic only **after** on-chain stake + registration (ADR 0
 primitives underneath it. All take `--dry-run`. See
 [`roles/decdn_node/README.md`](roles/decdn_node/README.md#on-chain-onboarding).
 
+### Grafana Cloud observability (opt-in)
+
+The play ships a third role, `grafana_alloy`, that installs a loopback-only
+[Grafana Alloy](https://grafana.com/docs/alloy/) agent scraping the node's `/metrics`
+and receiving its OTLP span exports (`127.0.0.1:4317`), shipping both to your Grafana
+Cloud org — off by default, driven by ONE mirrored inventory flag:
+
+```yaml
+# group_vars/host_vars — drives BOTH roles from one knob
+decdn_grafana_cloud_enabled: true
+```
+
+Provision the credentials **on the target host** (they never transit this repo or the
+control machine):
+
+```bash
+umask 077
+sudo install -m 600 -o root -g root grafana-alloy.env /etc/decdn/grafana-alloy.env
+```
+
+with `roles/grafana_alloy/files/grafana-alloy.env.example` as the template (remote-write
+URL, OTLP endpoint, instance id, API token — all four keys required, https only). Setup,
+rotation, cost/cardinality guardrails and rollback: see
+[`roles/grafana_alloy/README.md`](roles/grafana_alloy/README.md). The Helm chart path is
+separate and deliberately untouched.
+
 ---
 
 ## Testing
@@ -191,16 +217,18 @@ primitives underneath it. All take `--dry-run`. See
 ```bash
 make lint           # yamllint + ansible-lint (production profile)
 ansible-playbook playbooks/site.yml --syntax-check
-make molecule       # all six molecule scenarios, in parallel (needs Docker)
+make molecule       # all seven molecule scenarios, in parallel (needs Docker)
 make molecule JOBS=2   # …capped to two at a time on a small machine
 make molecule-serial   # …one at a time, when a failure needs readable output
 ```
 
 `make molecule` runs every scenario under `molecule/`: **`default`** (described below),
-`schema` (config key-set drift against the upstream field list), `validation` (bad knobs
-must be rejected by the role's own asserts), `generate-keystore` (opt-in host-side
-wallet), `host-env` (host-provisioned `/etc/decdn/decdn.env`) and `slow-readiness`
-(advisory `/metrics` probe timeout). They are independent, so they run concurrently —
+`schema` (config key-set drift against the upstream field list), `validation` (bad knobs,
+for both roles, must be rejected by their own asserts), `generate-keystore` (opt-in
+host-side wallet), `host-env` (host-provisioned `/etc/decdn/decdn.env`) and
+`slow-readiness` (advisory `/metrics` probe timeout), `grafana-cloud` (the opt-in
+observability wiring — see [Grafana Cloud observability](#grafana-cloud-observability-opt-in)).
+They are independent, so they run concurrently —
 ~151s instead of ~595s — and each line of output is prefixed with its scenario name
 because the runs interleave. `make molecule-serial` is the escape hatch when that
 interleaving gets in the way of reading a failure.
@@ -234,6 +262,7 @@ the RPC URL when it is not provisioned on the host instead). Highlights:
 | `decdn_rpc_url` + 3 contract addresses | `""` | **required** per node — `rpc_url` from a host-provisioned `0600 /etc/decdn/decdn.env` (preferred) *or* `host_vars/<node>/secret.yml`, addresses in `main.yml`; sourced from an ADR/deployment. |
 | `decdn_region` / `decdn_bind_port` / `decdn_rate_per_mb` | `""` / `4433` / `10` | node identity, QUIC port, USDC base units/MB. |
 | `decdn_env_checksum_file` / `decdn_env_overwrite_host_file` | `/etc/decdn/.decdn.env.sha256` / `false` | Provenance record for the secret env file (`0600 root`), and the opt-in that lets an inventory `decdn_rpc_url` overwrite a host-edited one. |
+| `decdn_grafana_cloud_enabled` | `false` | ONE mirrored knob (identical default in both roles) wiring on Grafana Cloud observability: installs + configures `grafana_alloy` AND injects `otlp_endpoint` into `node.toml`. Credentials are provisioned per role README; label/cost guardrails there too. |
 
 ---
 

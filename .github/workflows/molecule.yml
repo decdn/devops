@@ -67,7 +67,7 @@ jobs:
         # Make-owned invocation instead.
         #
         # JOBS is capped at 3 rather than the default (one job per scenario, currently
-        # 6): every scenario is a privileged systemd container, and they share this
+        # 7): every scenario is a privileged systemd container, and they share this
         # runner's cores and cgroup hierarchy. If this job turns flaky, drop to JOBS=1
         # or swap in `make molecule-serial` — the latter also serialises the output.
         run: make molecule JOBS=3
