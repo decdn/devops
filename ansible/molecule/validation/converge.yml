@@ -891,6 +891,9 @@
               GC_PROM_USERNAME=999888777
               GC_API_TOKEN=molecule-test-token
 
+        # The fixture is deliberately root-owned and 0750 — the credential must
+        # still be refused purely on path shape, because auditing only the
+        # immediate parent cannot rule out a writable grandparent swapping it.
         - name: Run grafana_alloy against a nested credential path
           ansible.builtin.include_role:
             name: grafana_alloy
@@ -901,7 +904,7 @@
         - name: Record nested secret-path rejection (only if its gate failed)
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['secret-path-nested'] }}"
-          when: ansible_failed_task.name is match('^Assert the secret file parent')
+          when: ansible_failed_task.name is match('^Constrain the managed Alloy paths')
       always:
         - name: Remove the nested credential directory fixture
           ansible.builtin.file:
