@@ -39,6 +39,18 @@ Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hoo
   role (privileged systemd Docker container; scoped to `ansible/**`). Run locally with
   `make molecule` (needs Docker) — it runs all six scenarios in parallel, so reach for
   `make molecule-serial` when you need to read a failure in order.
+- **Every job is bounded** by `timeout-minutes`. The values are bounds sized off
+  observed runtimes, not targets — without one a hung job burns the 360-minute
+  default, and combined with `cancel-in-progress` some branch-protection setups read
+  the resulting *cancelled* check as "not failed" rather than as a failure.
+- **Two caches.** `ansible/collections` is cached across `ansible-lint`,
+  `galaxy-build` and `molecule` under one shared key; a hit makes `make deps` a no-op
+  that never contacts `galaxy.ansible.com`, which is what keeps a transient Galaxy
+  error from failing an unrelated PR. pip is cached via `setup-python`, keyed on the
+  workflow file (the repo has no pip manifest, so the workflow *is* the package list);
+  the installs stay unpinned, so that saves the download but not the PyPI round trip.
+  Both use `actions/cache`'s split `restore`/`save`, with `save` gated on success so a
+  part-way Galaxy failure can't poison the cache.
 
 ## Supply-chain / pinning rules
 
@@ -57,8 +69,13 @@ Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hoo
 - **Dependabot** (`.github/dependabot.yml`) bumps the other action SHAs weekly.
 - **Bump manually** (Dependabot can't): the `KICS_IMAGE` and `KUBECONFORM_IMAGE` digests
   in the `Makefile`, both `setup-helm` `version:` inputs in `ci.yml` (`helm` and `kics`
-  jobs),
+  jobs), `GALAXY_CACHE_EPOCH` in **both** `ci.yml` and `molecule.yml` (they must match —
+  it is one shared cache key), the collection versions in `ansible/requirements.yml`,
   and the pre-commit hook revs via `pre-commit autoupdate`.
+- **Bump `GALAXY_CACHE_EPOCH` whenever you want CI to re-resolve the collections.**
+  `requirements.yml` uses `>=` ranges, so a warm cache pins the resolved set —
+  transitive collections like `community.crypto` included — until that file changes;
+  the epoch is the lever that forces a fresh resolve without editing requirements.
 
 ## Solidity
 
