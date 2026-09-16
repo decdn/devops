@@ -804,12 +804,9 @@
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['alloy-root-user-alias'] }}"
           when: ansible_failed_task.name is match('^Require an unprivileged Alloy identity')
-      always:
-        - name: Remove the root-UID alias account
-          ansible.builtin.user:
-            name: alloy-root-alias
-            state: absent
-            remove: false
+      # Do not remove this UID-0 fixture: in a container, userdel treats PID 1
+      # (root) as using every UID-0 alias and refuses deletion. Molecule destroys
+      # the entire test instance after this scenario, which safely removes it.
 
     - name: "Case ga-root-group-alias — named group resolves to GID 0"
       block:
