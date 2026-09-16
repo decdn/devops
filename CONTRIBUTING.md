@@ -39,6 +39,19 @@ Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hoo
   role (privileged systemd Docker container; scoped to `ansible/**`). Run locally with
   `make molecule` (needs Docker) — it runs all six scenarios in parallel, so reach for
   `make molecule-serial` when you need to read a failure in order.
+- **Every job is bounded** by `timeout-minutes`. The values are bounds sized off
+  observed runtimes, not targets — without one a hung job burns the 360-minute
+  default, and combined with `cancel-in-progress` some branch-protection setups read
+  the resulting *cancelled* check as "not failed" rather than as a failure.
+- **Two caches.** `ansible/collections` is cached across `ansible-lint`,
+  `galaxy-build` and `molecule` under one shared key; a hit makes `make deps` a no-op
+  that never contacts `galaxy.ansible.com`, which is what keeps a transient Galaxy
+  error from failing an unrelated PR. pip is cached via `setup-python`, keyed on the
+  workflow file (the repo has no pip manifest, so the workflow *is* the package list);
+  the installs stay unpinned, so that saves the download but not the PyPI round trip.
+  Only the Galaxy cache is wired by hand — it uses `actions/cache`'s split
+  `restore`/`save` with `save` gated on success, so a part-way Galaxy failure can't
+  poison it. The pip cache is `setup-python`'s built-in one and manages itself.
 
 ## Supply-chain / pinning rules
 
@@ -57,8 +70,15 @@ Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hoo
 - **Dependabot** (`.github/dependabot.yml`) bumps the other action SHAs weekly.
 - **Bump manually** (Dependabot can't): the `KICS_IMAGE` and `KUBECONFORM_IMAGE` digests
   in the `Makefile`, both `setup-helm` `version:` inputs in `ci.yml` (`helm` and `kics`
-  jobs),
-  and the pre-commit hook revs via `pre-commit autoupdate`.
+  jobs), the collection versions in `ansible/requirements.yml`, and the pre-commit hook
+  revs via `pre-commit autoupdate`.
+- **Bump the `cache-epoch:` counter in `ansible/requirements.yml` to make CI
+  re-resolve the collections.** Those are `>=` ranges, so a warm cache pins the
+  resolved set — transitive collections like `community.crypto` included — until the
+  file changes; the counter forces a fresh resolve without editing the requirements
+  themselves. It is a comment, but a load-bearing one: the cache key is that file's
+  hash. Keeping it *in* the hashed file is deliberate — an epoch duplicated across
+  both workflows could drift, since neither workflow runs on a change to the other.
 
 ## Solidity
 

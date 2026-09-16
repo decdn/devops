@@ -1,6 +1,20 @@
 ---
 # Galaxy collections this project composes. Install with `make deps`
 # (ansible-galaxy collection install -r requirements.yml -p collections).
+#
+# CI caches the resolved tree under a key derived from THIS FILE's hash
+# (.github/workflows/{ci,molecule}.yml). The versions below are `>=` ranges, not
+# pins, so a warm cache freezes whatever was resolved — transitive collections like
+# community.crypto included — until this file changes.
+#
+# The counter below is the lever to force a fresh resolve without otherwise editing
+# the requirements. It is LOAD-BEARING despite being a comment: bumping it changes
+# this file's hash, and therefore the cache key. It lives here, rather than as an env
+# var in each workflow, so the key has exactly one source — two copies could drift
+# apart silently, since neither workflow runs on a change to the other. Editing it
+# also matches both workflows' `ansible/**` trigger, so a bump is exercised at once.
+#
+#   cache-epoch: 1
 collections:
   - name: devsec.hardening      # os_hardening + ssh_hardening (CIS-style baseline)
     version: ">=10.0.0"
