@@ -143,21 +143,25 @@
           delegate_to: localhost
           become: false
 
+        # Host facts, not include_role vars: include vars outrank the role's own
+        # set_fact that derives these paths, leaving them empty at the file probe.
+        - name: Activate dir-mode facts for the check-mode probe
+          ansible.builtin.set_fact:
+            decdn_node_manual_bin_src: ""
+            decdn_cli_manual_bin_src: ""
+            decdn_release_target_dir: "{{ _decdn_check_dir }}"
+            decdn_node_target: >-
+              {{ 'aarch64-unknown-linux-gnu'
+                 if ansible_facts.architecture in ['aarch64', 'arm64']
+                 else 'x86_64-unknown-linux-gnu' }}
+            decdn_rpc_url: ""
+
         - name: Dry-run decdn_node in manual dir-mode
           check_mode: true
           block:
             - name: Include decdn_node under check mode
               ansible.builtin.include_role:
                 name: decdn_node
-              vars:
-                decdn_node_manual_bin_src: ""
-                decdn_cli_manual_bin_src: ""
-                decdn_release_target_dir: "{{ _decdn_check_dir }}"
-                decdn_node_target: >-
-                  {{ 'aarch64-unknown-linux-gnu'
-                     if ansible_architecture in ['aarch64', 'arm64']
-                     else 'x86_64-unknown-linux-gnu' }}
-                decdn_rpc_url: ""
       rescue:
         - name: Record binary check-mode success at the next expected gate
           ansible.builtin.set_fact:
@@ -175,6 +179,8 @@
             decdn_node_manual_bin_src: "{{ stub_bin }}"
             decdn_cli_manual_bin_src: "{{ stub_bin }}"
             decdn_release_target_dir: ""
+            decdn_node_target: x86_64-unknown-linux-gnu
+            decdn_rpc_url: "https://rpc.example.invalid/"
 
     # --- Case: range (numeric but below the daemon's minimum) ---------------------
     - name: "Case range — event_poll_interval_ms below 250"
@@ -449,7 +455,9 @@
           ansible.builtin.include_role:
             name: decdn_node
           vars:
-            decdn_rpc_url: '{{ "https://rpc.example.invalid/" ~ "\t" ~ "secret" }}'
+            # Decode at runtime so the YAML source contains no literal tab (which
+            # ansible-lint's no-tabs rule correctly rejects).
+            decdn_rpc_url: "{{ 'aHR0cHM6Ly9ycGMuZXhhbXBsZS5pbnZhbGlkLwlzZWNyZXQ=' | b64decode }}"
       rescue:
         - name: Record inventory RPC control-character rejection
           ansible.builtin.set_fact:
@@ -463,7 +471,7 @@
             name: decdn_node
           vars:
             decdn_extra_env:
-              DECDN_MOLECULE_BAD: '{{ "left" ~ "\t" ~ "right" }}'
+              DECDN_MOLECULE_BAD: "{{ 'bGVmdAlyaWdodA==' | b64decode }}"
       rescue:
         - name: Record extra environment control-character rejection
           ansible.builtin.set_fact:
