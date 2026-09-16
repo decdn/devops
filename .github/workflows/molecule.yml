@@ -51,7 +51,7 @@ jobs:
       # copy the way a duplicated env var would. It wraps
       # `make molecule` because the deps install is owned by the Make target here, not
       # by a step of its own.
-      - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: galaxy-cache
         with:
           path: ansible/collections
@@ -75,7 +75,7 @@ jobs:
       # skipped when anything above failed — including a genuinely failing scenario,
       # which leaves the cache cold for that run. Conservative on purpose: it is the
       # same guard that keeps a part-way Galaxy install out of the cache.
-      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: steps.galaxy-cache.outputs.cache-hit != 'true'
         with:
           path: ansible/collections
