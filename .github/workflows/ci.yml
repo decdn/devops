@@ -14,16 +14,6 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Bumping GALAXY_CACHE_EPOCH forces CI to re-resolve the Galaxy collections from
-# scratch. ansible/requirements.yml carries `>=` ranges rather than pins, so a warm
-# cache otherwise freezes the resolved set — transitive collections like
-# community.crypto included — until that file itself changes, and CI quietly drifts
-# from whatever a local `make lint-ansible` resolves. Dependabot does not cover
-# Galaxy (see .github/dependabot.yml), so this is the same manual lever as the
-# collection versions themselves. Declared in molecule.yml too: bump BOTH.
-env:
-  GALAXY_CACHE_EPOCH: '1'
-
 # Third-party actions are pinned to a full commit SHA (a re-pointed tag can ship
 # malicious code — cf. the March 2026 KICS action compromise). The trailing
 # comment records the human-readable version; .github/dependabot.yml bumps them.
@@ -96,9 +86,9 @@ jobs:
       # and the combined action's post step would persist that half-written tree.
       # Saving only after `make deps` returns 0 keeps a poisoned cache out.
       #
-      # No restore-keys — an older cache still satisfies the `>=` ranges, so `make
-      # deps` would find nothing to do and a GALAXY_CACHE_EPOCH bump would silently
-      # be a no-op.
+      # No restore-keys — an older cache still satisfies the `>=` ranges in
+      # requirements.yml, so `make deps` would find nothing to do and the cache-epoch
+      # bump documented in that file would silently be a no-op.
       #
       # `path:` and `hashFiles()` resolve against the workspace root, NOT this job's
       # `working-directory: ansible`. The key is shared with galaxy-build and with
@@ -108,14 +98,14 @@ jobs:
         id: galaxy-cache
         with:
           path: ansible/collections
-          key: galaxy-${{ runner.os }}-${{ env.GALAXY_CACHE_EPOCH }}-${{ hashFiles('ansible/requirements.yml') }}
+          key: galaxy-${{ runner.os }}-${{ hashFiles('ansible/requirements.yml') }}
       - name: Install Galaxy collections
         run: make deps          # must precede lint/syntax-check
       - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         if: steps.galaxy-cache.outputs.cache-hit != 'true'
         with:
           path: ansible/collections
-          key: galaxy-${{ runner.os }}-${{ env.GALAXY_CACHE_EPOCH }}-${{ hashFiles('ansible/requirements.yml') }}
+          key: galaxy-${{ runner.os }}-${{ hashFiles('ansible/requirements.yml') }}
       - name: Lint (yamllint + ansible-lint)
         run: make lint
       - name: Syntax-check playbook
@@ -151,7 +141,7 @@ jobs:
         id: galaxy-cache
         with:
           path: ansible/collections
-          key: galaxy-${{ runner.os }}-${{ env.GALAXY_CACHE_EPOCH }}-${{ hashFiles('ansible/requirements.yml') }}
+          key: galaxy-${{ runner.os }}-${{ hashFiles('ansible/requirements.yml') }}
       - name: Vendor collection dependencies
         # So galaxy-importer's embedded ansible-lint can resolve the roles' FQCNs
         # (devsec.hardening, ansible.posix). Installed under ansible/collections.
@@ -162,7 +152,7 @@ jobs:
         if: steps.galaxy-cache.outputs.cache-hit != 'true'
         with:
           path: ansible/collections
-          key: galaxy-${{ runner.os }}-${{ env.GALAXY_CACHE_EPOCH }}-${{ hashFiles('ansible/requirements.yml') }}
+          key: galaxy-${{ runner.os }}-${{ hashFiles('ansible/requirements.yml') }}
       - name: Build + validate the decdn.node collection
         run: make galaxy-check
         env:

@@ -49,8 +49,9 @@ Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hoo
   error from failing an unrelated PR. pip is cached via `setup-python`, keyed on the
   workflow file (the repo has no pip manifest, so the workflow *is* the package list);
   the installs stay unpinned, so that saves the download but not the PyPI round trip.
-  Both use `actions/cache`'s split `restore`/`save`, with `save` gated on success so a
-  part-way Galaxy failure can't poison the cache.
+  Only the Galaxy cache is wired by hand — it uses `actions/cache`'s split
+  `restore`/`save` with `save` gated on success, so a part-way Galaxy failure can't
+  poison it. The pip cache is `setup-python`'s built-in one and manages itself.
 
 ## Supply-chain / pinning rules
 
@@ -69,13 +70,15 @@ Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hoo
 - **Dependabot** (`.github/dependabot.yml`) bumps the other action SHAs weekly.
 - **Bump manually** (Dependabot can't): the `KICS_IMAGE` and `KUBECONFORM_IMAGE` digests
   in the `Makefile`, both `setup-helm` `version:` inputs in `ci.yml` (`helm` and `kics`
-  jobs), `GALAXY_CACHE_EPOCH` in **both** `ci.yml` and `molecule.yml` (they must match —
-  it is one shared cache key), the collection versions in `ansible/requirements.yml`,
-  and the pre-commit hook revs via `pre-commit autoupdate`.
-- **Bump `GALAXY_CACHE_EPOCH` whenever you want CI to re-resolve the collections.**
-  `requirements.yml` uses `>=` ranges, so a warm cache pins the resolved set —
-  transitive collections like `community.crypto` included — until that file changes;
-  the epoch is the lever that forces a fresh resolve without editing requirements.
+  jobs), the collection versions in `ansible/requirements.yml`, and the pre-commit hook
+  revs via `pre-commit autoupdate`.
+- **Bump the `cache-epoch:` counter in `ansible/requirements.yml` to make CI
+  re-resolve the collections.** Those are `>=` ranges, so a warm cache pins the
+  resolved set — transitive collections like `community.crypto` included — until the
+  file changes; the counter forces a fresh resolve without editing the requirements
+  themselves. It is a comment, but a load-bearing one: the cache key is that file's
+  hash. Keeping it *in* the hashed file is deliberate — an epoch duplicated across
+  both workflows could drift, since neither workflow runs on a change to the other.
 
 ## Solidity
 

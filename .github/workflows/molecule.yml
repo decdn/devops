@@ -20,11 +20,6 @@ concurrency:
   group: molecule-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Must match ci.yml's value — same cache key, so a mismatch would split the cache in
-# two and half the bump would do nothing. ci.yml carries the full rationale.
-env:
-  GALAXY_CACHE_EPOCH: '1'
-
 jobs:
   molecule:
     runs-on: ubuntu-latest      # Docker is preinstalled
@@ -51,14 +46,16 @@ jobs:
             molecule "molecule-plugins[docker]" ansible ansible-lint docker
       # Same key and same rationale as ci.yml's jobs (see ansible-lint there): a warm
       # tree makes the install a no-op that never contacts galaxy.ansible.com, and the
-      # save is gated so a part-way Galaxy failure cannot poison the cache. It wraps
+      # save is gated so a part-way Galaxy failure cannot poison the cache. The key is
+      # derived wholly from ansible/requirements.yml, so it cannot drift from ci.yml's
+      # copy the way a duplicated env var would. It wraps
       # `make molecule` because the deps install is owned by the Make target here, not
       # by a step of its own.
       - uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         id: galaxy-cache
         with:
           path: ansible/collections
-          key: galaxy-${{ runner.os }}-${{ env.GALAXY_CACHE_EPOCH }}-${{ hashFiles('ansible/requirements.yml') }}
+          key: galaxy-${{ runner.os }}-${{ hashFiles('ansible/requirements.yml') }}
       - name: molecule test
         # `make molecule` runs every scenario under ansible/molecule/ and fans them out
         # in parallel; ansible/Makefile documents the set and the fail-loud guards.
@@ -82,4 +79,4 @@ jobs:
         if: steps.galaxy-cache.outputs.cache-hit != 'true'
         with:
           path: ansible/collections
-          key: galaxy-${{ runner.os }}-${{ env.GALAXY_CACHE_EPOCH }}-${{ hashFiles('ansible/requirements.yml') }}
+          key: galaxy-${{ runner.os }}-${{ hashFiles('ansible/requirements.yml') }}
