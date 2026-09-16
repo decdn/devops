@@ -11,8 +11,9 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `decdn_delivery_floor` and `decdn_rate_bounds_poll_interval_sec`: upstream
   (decdn/decdn @ d3bc7da7) removed `payment.delivery_floor` and
   `blockchain.rate_bounds_poll_interval_sec`, so emitting either is a startup
-  failure. The node no longer reads the on-chain rate bounds at all; the floor's
-  role is defined by ADR 003 §Rate-floor enforcement and ADR 005 §Rate bounds.
+  failure. The floor is redemption-time contract state that the node reads for no
+  wire decision (ADR 003 §Rate-floor enforcement, ADR 005 §Rate bounds), so there
+  is nothing left for either knob to tune.
 
 ### Changed
 

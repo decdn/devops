@@ -981,6 +981,12 @@
 # requires otlp_endpoint to be exactly http://host:port (the gRPC exporter has no TLS,
 # so https:// is rejected, as are a missing port, a path/query/fragment and userinfo).
 # Neither is emitted through | int, so validate their shape here (guarded so "" / null pass).
+# This guard is a deliberate SUPERSET of upstream's parser: it catches every plausible
+# operator mistake (https, no port, /v1/traces, userinfo, a stray newline, a port out of
+# range) but still admits fuzz upstream refuses — malformed IPv6 brackets like `[:::]`,
+# a non-ASCII-idna host. Those reach the `decdn config validate` gate below and fail the
+# deploy with the daemon's own message. It is never the other way round: no endpoint
+# upstream accepts is rejected here (checked differentially against the real binary).
 - name: Validate optional string knobs (user_agent, otlp_endpoint)
   ansible.builtin.assert:
     that:
@@ -997,11 +1003,20 @@
         decdn_otlp_endpoint in ["", none]
         or (decdn_otlp_endpoint is match('^http://(\\[[0-9A-Fa-f:.]+\\]|[^\"\\s\\\\/@?#:]+):[0-9]+/?\\Z',
             ignorecase=true))
+      # Port 1..=65535 — the range every other port knob in this role is checked at, and
+      # what upstream's url::Url::parse accepts (it refuses both 0 and >65535). Separate
+      # from the shape regex because an out-of-range port still renders VALID TOML, so
+      # without this only the daemon would catch it. Leading zeros are upstream-legal.
+      - >-
+        decdn_otlp_endpoint in ["", none]
+        or ((decdn_otlp_endpoint | regex_replace('^.*:0*([0-9]*)/?$', '\\1') | int) >= 1
+            and (decdn_otlp_endpoint | regex_replace('^.*:0*([0-9]*)/?$', '\\1') | int) <= 65535)
     fail_msg: >-
       decdn_cache_user_agent must contain no double-quote, backslash or newline, and
       decdn_otlp_endpoint must be http://host:port (e.g. http://localhost:4317) with no
-      https, userinfo, path, query, fragment, quote, whitespace or backslash (both are
-      interpolated verbatim into node.toml). Leave either "" to omit.
+      https, userinfo, path, query, fragment, quote, whitespace or backslash — a bare
+      trailing "/" is fine (both are interpolated verbatim into node.toml). Leave
+      either "" to omit.
 
 # The REQUIRED scalars render raw (no `not in ["", none]` guard), so unlike every
 # optional knob they reach node.toml unchecked. `decdn_cache_size_mb: "20 GB"`

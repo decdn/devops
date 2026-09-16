@@ -105,7 +105,7 @@ decdn_discovery_peers: {}
 # gate (ADR 003 §Rate-floor enforcement). Setting this at or above the live
 # deliveryFloor is a revenue choice — full vote-weight credit — not a protocol
 # requirement (ADR 019 §Step 3.3). (`delivery_floor` / `delivery_ceiling` were removed
-# upstream; see that ADR text for the authoritative behaviour.)
+# upstream; ADR 003 §Rate-floor enforcement is authoritative for floor behaviour.)
 decdn_rate_per_mb: 10           # USDC base units (6 decimals)
 # Per-stream credit window (ADR 003 credit slow-start). credit_max is a bare
 # integer of bytes on the wire; ramp_divisor 0 opens the full ceiling immediately.
@@ -166,8 +166,10 @@ decdn_disk_headroom_mb: ""
 decdn_max_blob_size_mb: 1024    # 1 GB
 # Buyer-side ABSOLUTE per-MB rate ceiling for paid pulls (#1375) — what this node
 # will accept a provider to quote on a cache-miss pull, on top of the always-applied
-# probe-relative bound. Buyer-side only — nothing bounds this node's own SELLER
-# quote. "" / 0 => unlimited.
+# probe-relative bound. Buyer-side only: it does not constrain this node's own SELLER
+# quote (decdn_rate_per_mb), which the delivery floor never clamps but which the wire
+# caps at MAX_RATE_PER_MB = 1000 (ADR 005 §Rate bounds, ADR 019 §Step 3.3) — upstream
+# refuses a config above that. "" / 0 => unlimited.
 decdn_max_rate_per_mb: ""
 # Cache tuning ("" / [] => omit + use the daemon default; an explicit 0 IS emitted —
 # 0 is meaningful here, e.g. gc_interval_sec = 0 disables the sweep and
