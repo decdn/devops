@@ -145,6 +145,9 @@
               ("identity", "region"): "US",
               ("observability", "metrics_bind"): "127.0.0.1",
               ("observability", "metrics_port"): 9090,
+              # Bracketed IPv6 + uppercase scheme, rendered verbatim (accept half of
+              # the otlp grammar; molecule/validation owns the reject matrix).
+              ("observability", "otlp_endpoint"): "HTTP://[::1]:4317",
               ("blockchain", "chain_id"): 421614,
               ("blockchain", "payment_pool_address"): "0x1111111111111111111111111111111111111111",
               ("blockchain", "capacity_bond_address"): "0x2222222222222222222222222222222222222222",
@@ -191,8 +194,6 @@
               ("network.relay_urls",
                net.get("relay_urls") == ["https://relay1.example.invalid:443",
                                          "https://relay2.example.invalid:443"]),
-              ("payment.delivery_floor (explicit 0 must emit)",
-               _is_int(pay.get("delivery_floor")) and pay.get("delivery_floor") == 0),
               ("blockchain.redeem_threshold_micro_usdc",
                _is_int(bc.get("redeem_threshold_micro_usdc"))
                and bc.get("redeem_threshold_micro_usdc") == 50000000),

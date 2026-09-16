@@ -50,7 +50,6 @@
     decdn_chain_staleness_grace_sec: 900
     decdn_rpc_watchdog_interval_sec: 15
     decdn_event_poll_interval_ms: 5000
-    decdn_rate_bounds_poll_interval_sec: 1800
     decdn_fee_shares_poll_interval_sec: 1800
     decdn_redeem_threshold_micro_usdc: 2000000
     decdn_redeem_max_vouchers_per_tx: 250
@@ -62,7 +61,6 @@
 
     # --- [payment] ---
     decdn_rate_per_mb: 12
-    decdn_delivery_floor: 0
     decdn_credit_max: 33554432
     decdn_credit_ramp_divisor: 4
     decdn_frame_target_bytes: 262144

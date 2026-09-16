@@ -252,7 +252,139 @@
         - name: Record string rejection (only if a validation assert failed)
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['string'] }}"
-          when: ansible_failed_task.name is match('^Validate optional')
+          when: ansible_failed_task.name == 'Validate optional string knobs (user_agent, otlp_endpoint)'
+
+    # The quote case above is caught by the character class alone, so it would still
+    # pass with the old `$` anchor. This one pins `\Z`: a trailing newline renders a
+    # raw newline inside the TOML basic string, and `$` matches just before it.
+    - name: "Case string-newline — user_agent with a trailing newline"
+      block:
+        - name: Run decdn_node with a trailing newline in user_agent
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_cache_user_agent: "agent\n"
+      rescue:
+        - name: Record string-newline rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['string-newline'] }}"
+          when: ansible_failed_task.name == 'Validate optional string knobs (user_agent, otlp_endpoint)'
+
+    # --- Cases: otlp_endpoint grammar --------------------------------------------
+    # Upstream resolves observability.otlp_endpoint as http://host:port ONLY (the
+    # OTLP gRPC exporter has no TLS), so each class below is a daemon start-up
+    # refusal the role has to catch first. One case per rejection class: without
+    # them a later loosening of the pattern would re-admit an invalid endpoint with
+    # the whole suite still green. The `otlp-*` strings are decdn_rejected tracker
+    # tags, not knob names.
+    #
+    # Each rescue matches the EXACT task name rather than the `^Validate optional`
+    # family (ten tasks share that prefix): these cases and the user_agent ones all
+    # target one assert, so a prefix match would let a regression that fails that
+    # assert unconditionally record every tag and "prove" guards that are broken.
+    # (`block` takes no `loop`, so each class is its own case — same shape as above.)
+    - name: "Case otlp-https — TLS scheme the gRPC exporter cannot speak"
+      block:
+        - name: Run decdn_node with an https otlp_endpoint
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_otlp_endpoint: "https://collector:4317"
+      rescue:
+        - name: Record otlp-https rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-https'] }}"
+          when: ansible_failed_task.name == 'Validate optional string knobs (user_agent, otlp_endpoint)'
+
+    - name: "Case otlp-noport — no collector port"
+      block:
+        - name: Run decdn_node with a portless otlp_endpoint
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_otlp_endpoint: "http://collector"
+      rescue:
+        - name: Record otlp-noport rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-noport'] }}"
+          when: ansible_failed_task.name == 'Validate optional string knobs (user_agent, otlp_endpoint)'
+
+    - name: "Case otlp-path — an OTLP/HTTP URL (port 4318, /v1/traces) is the wrong protocol"
+      block:
+        - name: Run decdn_node with a path-bearing otlp_endpoint
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_otlp_endpoint: "http://collector:4318/v1/traces"
+      rescue:
+        - name: Record otlp-path rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-path'] }}"
+          when: ansible_failed_task.name == 'Validate optional string knobs (user_agent, otlp_endpoint)'
+
+    # `user@host`, NOT `user:pass@host`, for two independent reasons: the latter is
+    # rejected by the colon rule that otlp-colon already pins, so it would leave the
+    # '@' exclusion untested — drop '@' from the host class and a credential-bearing
+    # endpoint would render into the 0640 node.toml unnoticed — AND a `scheme://u:p@`
+    # literal trips KICS's HIGH "Passwords And Secrets - Password in URL" query, which
+    # fails `make security` in CI. Keep this fixture password-free.
+    - name: "Case otlp-userinfo — credentials carried in the URL"
+      block:
+        - name: Run decdn_node with userinfo in otlp_endpoint
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_otlp_endpoint: "http://user@collector:4317"
+      rescue:
+        - name: Record otlp-userinfo rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-userinfo'] }}"
+          when: ansible_failed_task.name == 'Validate optional string knobs (user_agent, otlp_endpoint)'
+
+    # Only a bracketed IPv6 literal may carry a colon in the host. Unbracketed,
+    # url::Url::parse upstream reads "bad:4317" as the port and refuses.
+    - name: "Case otlp-colon — unbracketed extra colon in the host"
+      block:
+        - name: Run decdn_node with a multi-colon otlp_endpoint host
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_otlp_endpoint: "http://collector:bad:4317"
+      rescue:
+        - name: Record otlp-colon rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-colon'] }}"
+          when: ansible_failed_task.name == 'Validate optional string knobs (user_agent, otlp_endpoint)'
+
+    # An out-of-range port renders as VALID TOML, so the config-validate gate is the
+    # only other thing that would catch it — and that gate is skipped in check mode.
+    - name: "Case otlp-port — port above 65535"
+      block:
+        - name: Run decdn_node with an out-of-range otlp_endpoint port
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_otlp_endpoint: "http://collector:70000"
+      rescue:
+        - name: Record otlp-port rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-port'] }}"
+          when: ansible_failed_task.name == 'Validate optional string knobs (user_agent, otlp_endpoint)'
+
+    # A trailing newline would break the rendered TOML basic string. Python's `$`
+    # matches before a final newline, so this case is what pins the `\Z` anchor.
+    - name: "Case otlp-newline — trailing newline"
+      block:
+        - name: Run decdn_node with a trailing newline in otlp_endpoint
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_otlp_endpoint: "http://collector:4317\n"
+      rescue:
+        - name: Record otlp-newline rejection (only if a validation assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-newline'] }}"
+          when: ansible_failed_task.name == 'Validate optional string knobs (user_agent, otlp_endpoint)'
 
     # --- Case: no RPC endpoint anywhere (#39) -------------------------------------
     # decdn_rpc_url may now be empty — but ONLY when the operator has provisioned
@@ -411,5 +543,6 @@
       vars:
         _decdn_expected:
           ["cross-field", "binary-format", "range", "bounded-range", "shape", "bool",
-           "enum", "dict", "float", "list", "string", "env-gate", "env-extra",
-           "env-content", "config-gate"]
+           "enum", "dict", "float", "list", "string", "string-newline", "otlp-https",
+           "otlp-noport", "otlp-path", "otlp-userinfo", "otlp-colon", "otlp-port",
+           "otlp-newline", "env-gate", "env-extra", "env-content", "config-gate"]

@@ -82,9 +82,6 @@ rpc_watchdog_interval_sec = {{ decdn_rpc_watchdog_interval_sec | int }}
 {% if decdn_event_poll_interval_ms not in ["", none] %}
 event_poll_interval_ms = {{ decdn_event_poll_interval_ms | int }}
 {% endif %}
-{% if decdn_rate_bounds_poll_interval_sec not in ["", none] %}
-rate_bounds_poll_interval_sec = {{ decdn_rate_bounds_poll_interval_sec | int }}
-{% endif %}
 {% if decdn_fee_shares_poll_interval_sec not in ["", none] %}
 fee_shares_poll_interval_sec = {{ decdn_fee_shares_poll_interval_sec | int }}
 {% endif %}
@@ -115,9 +112,6 @@ usdc_address = "{{ decdn_usdc_address }}"
 
 [payment]
 rate_per_mb = {{ decdn_rate_per_mb }}
-{% if decdn_delivery_floor not in ["", none] %}
-delivery_floor = {{ decdn_delivery_floor | int }}
-{% endif %}
 {% if decdn_credit_max not in ["", none] %}
 credit_max = {{ decdn_credit_max | int }}
 {% endif %}
