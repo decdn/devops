@@ -1,0 +1,53 @@
+---
+# Stage the host-provisioned fixtures both roles' gates demand:
+#   1. decdn_node's operator keystore + node identity + password (same trick as
+#      ../default/prepare.yml — placeholders at 0644 that the role locks to 0600).
+#   2. The Grafana Cloud credential env file for grafana_alloy, which unlike those
+#      is asserted ALREADY-SECURED by preflight (the role never rewrites it), so
+#      stage it directly at root:root 0600 with all four required keys.
+- name: Prepare
+  hosts: all
+  become: true
+  tasks:
+    - name: Ensure data + config directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - /var/lib/decdn
+        - /etc/decdn
+
+    # Staged looser than target so verify.yml can attribute the 0600 lock-down
+    # to the role rather than to what prepare pre-set.
+    - name: Stage a placeholder eth keystore
+      ansible.builtin.copy:
+        dest: /var/lib/decdn/keystore.json
+        content: "{{ '{}' }}\n"
+        mode: "0644"
+
+    - name: Stage a placeholder keystore password file
+      ansible.builtin.copy:
+        dest: /etc/decdn/keystore.password
+        content: "molecule-placeholder\n"
+        mode: "0644"
+
+    - name: Stage a placeholder node identity
+      ansible.builtin.copy:
+        dest: /var/lib/decdn/node.secret
+        content: "molecule-placeholder-node-secret\n"
+        mode: "0644"
+
+    # Values are throwaway; only the SHAPES matter to the role's greps (https://,
+    # non-empty). Written directly at 0600 because preflight refuses anything else.
+    - name: Stage the Grafana Cloud credential fixture on the host
+      ansible.builtin.copy:
+        dest: /etc/decdn/grafana-alloy.env
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+          GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+          GC_PROM_USERNAME=999888777
+          GC_API_TOKEN=molecule-test-token

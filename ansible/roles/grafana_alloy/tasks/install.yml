@@ -1,0 +1,142 @@
+---
+# Install the Alloy binary. Two methods, selected by grafana_alloy_install_method
+# (the same shape roles/decdn_node uses):
+#   "release": download the pinned GitHub Release .deb for this architecture,
+#     verify its sha256 against the hand-pinned digest, then dpkg-install.
+#     Idempotent via a dpkg-query version gate — re-downloads only on upgrade.
+#   "manual": copy a control-machine binary path (molecule CI stubs, pre-release
+#     testing) straight to /usr/local/bin/alloy. No package is created.
+
+# Map Ansible's machine facts onto Debian arch names used by the asset set
+# (alloy-<version>-1.<arch>.deb). Unsupported architectures fail loud here so an
+# operator gets a clear message instead of a 404 mid-play.
+- name: Resolve the Debian package architecture
+  ansible.builtin.set_fact:
+    _ga_deb_arch: "{{ ({'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] | default('unsupported')) }}"
+
+- name: Name the .deb asset for this architecture
+  # Reusable across the download + install tasks below.
+  ansible.builtin.set_fact:
+    _ga_deb_file: "alloy-{{ grafana_alloy_version }}-1.{{ _ga_deb_arch }}.deb"
+
+- name: Report that the release download is not simulated in check mode
+  ansible.builtin.debug:
+    msg: >-
+      check mode: skipping the download + verification + install of Alloy
+      {{ grafana_alloy_version }}. The target host is NOT changed by this run's
+      install step; configuration templating below still diffs normally.
+  when:
+    - grafana_alloy_install_method == "release"
+    - ansible_check_mode
+
+- name: Query the currently-installed package version
+  ansible.builtin.command:
+    cmd: dpkg-query -W -f='${Version}\n' alloy
+  register: _ga_dpkg_version
+  changed_when: false
+  failed_when: false              # rc=1 just means "not installed yet"
+  when:
+    - grafana_alloy_install_method == "release"
+    - not ansible_check_mode
+
+- name: Decide whether (re)install is needed
+  ansible.builtin.set_fact:
+    _ga_need_install: "{{ (_ga_dpkg_version.rc | default(1)) != 0
+                          or (_ga_dpkg_version.stdout | trim)
+                             not in [grafana_alloy_version,
+                                     grafana_alloy_version ~ '-1'] }}"
+  when:
+    - grafana_alloy_install_method == "release"
+    - not ansible_check_mode
+
+- name: Install the pinned upstream .deb package
+  when:
+    - grafana_alloy_install_method == "release"
+    - not ansible_check_mode
+    - _ga_need_install | bool
+  block:
+    - name: Look up the pinned sha256 for this architecture
+      ansible.builtin.assert:
+        that:
+          - (grafana_alloy_sha256[_ga_deb_arch] | default('', true)) | length == 64
+        fail_msg: >-
+          No sha256 pin recorded for the {{ _ga_deb_arch }} flavor of Grafana Alloy
+          {{ grafana_alloy_version }}. Add one under grafana_alloy_sha256 in this
+          role's defaults (copy the digest published with the release), or bump the
+          pin together with grafana_alloy_version — never ship the .deb unverified.
+
+    # A private staging directory, not a fixed /tmp path — these bytes are trusted
+    # on the strength of a pinned digest, and a predictable world-writable location
+    # lets any local user pre-seed between fetch and verification. get_url's native
+    # checksum parameter downloads-and-verifies atomically.
+    - name: Create a private download staging directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: alloy-install-
+      register: _ga_stage
+      changed_when: false
+
+    - name: Download the pinned Alloy .deb and verify its sha256
+      ansible.builtin.get_url:
+        url: "{{ grafana_alloy_release_base }}/v{{ grafana_alloy_version }}/{{ _ga_deb_file }}"
+        dest: "{{ _ga_stage.path }}/{{ _ga_deb_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+        checksum: "sha256:{{ grafana_alloy_sha256[_ga_deb_arch] }}"
+
+    - name: Install the verified package
+      ansible.builtin.apt:
+        deb: "{{ _ga_stage.path }}/{{ _ga_deb_file }}"
+      notify: Restart alloy
+
+  always:
+    - name: Remove the download staging directory
+      ansible.builtin.file:
+        path: "{{ _ga_stage.path }}"
+        state: absent
+      when: _ga_stage.path is defined
+
+# Binary path the unit will ExecStart. Package installs land at /usr/bin/alloy;
+# manual copies go to grafana_alloy_bin (/usr/local/bin). Resolved into a fact so
+# templates and checks share exactly one value.
+- name: Resolve the effective binary path
+  ansible.builtin.set_fact:
+    grafana_alloy_bin_effective: >-
+      {{ '/usr/bin/alloy' if grafana_alloy_install_method == 'release'
+         else grafana_alloy_bin }}
+
+- name: Copy a local/stub binary from the control machine
+  when: grafana_alloy_install_method == "manual"
+  block:
+    - name: Require an explicit source path in manual mode
+      ansible.builtin.assert:
+        that:
+          - grafana_alloy_manual_bin_src | length > 0
+        fail_msg: >-
+          grafana_alloy_install_method "manual" requires
+          grafana_alloy_manual_bin_src (a control-machine path to the alloy
+          binary). Set it in the play/inventory that invokes this role.
+
+    - name: Copy the Alloy binary into place
+      ansible.builtin.copy:
+        src: "{{ grafana_alloy_manual_bin_src }}"
+        dest: "{{ grafana_alloy_bin }}"
+        owner: root
+        group: root
+        mode: "0755"
+      notify: Restart alloy
+
+# Integrity/liveness backstop: runs EVERY converge so a drifted/broken binary is
+# caught loudly rather than silently. Strict version match only applies to the
+# packaged flavor; manual mode degrades to a bare liveness check (rc == 0).
+- name: Verify the installed Alloy runs (version backstop)
+  ansible.builtin.command: "{{ grafana_alloy_bin_effective }} --version"
+  changed_when: false
+  register: _ga_installed_version
+  when: not ansible_check_mode
+  failed_when: >-
+    _ga_installed_version.rc != 0
+    or (grafana_alloy_install_method == "release"
+        and not (_ga_installed_version.stdout
+                 | regex_search('(^|[^0-9])v?' ~ (grafana_alloy_version | regex_escape) ~ '([^0-9]|$)')))

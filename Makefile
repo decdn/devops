@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN DevOps monorepo.
 # Run from the repo root. Ansible-specific work is delegated to ansible/Makefile.
-.PHONY: help hooks lint lint-ansible lint-helm security security-ansible security-helm molecule molecule-serial galaxy-build galaxy-check
+.PHONY: help hooks lint lint-ansible lint-helm lint-alloy security security-ansible security-helm molecule molecule-serial galaxy-build galaxy-check
 SHELL := /bin/bash
 
 # KICS runs straight from the engine image, pinned by digest. This target IS the
@@ -58,6 +58,16 @@ security-helm:       ## KICS scan of the decdn-node chart's rendered manifests (
 
 lint-helm:           ## helm lint + render tests + kubeconform + shared schema-key check (needs helm, yq, python3>=3.11, docker)
 	KUBECONFORM="docker run --rm -i $(KUBECONFORM_IMAGE)" $(CHART)/tests/render-test.sh
+
+# The molecule grafana-cloud scenario runs the role against a stub that exits 0
+# for every subcommand, so it can only prove plumbing. This target renders the
+# grafana_alloy templates and feeds them to the REAL pinned Alloy binary
+# (`alloy validate` + an ExecStart flag check) — the only thing that catches an
+# unknown component, a misplaced block or a non-existent CLI flag before a host
+# crash-loops. Downloads the role's pinned .deb once, then caches it under
+# ansible/.cache (git-ignored); ALLOY_BIN=<path> skips the download.
+lint-alloy:          ## validate grafana_alloy's rendered config against the real pinned Alloy binary
+	ansible/tests/alloy-config/validate.sh
 
 molecule:            ## containerised converge/verify of the decdn_node role, scenarios in parallel (needs Docker)
 	$(MAKE) -C ansible molecule

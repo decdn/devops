@@ -1,0 +1,10 @@
+---
+# Role-internal constants (vars/, not defaults/: these are NOT operator knobs).
+#
+# _ga_managed_marker is the ownership stamp emitted as the first line of
+# templates/alloy.service.j2. The disable path greps for it before removing
+# anything, so the two must be edited together — losing the marker turns
+# teardown into a silent no-op, changing it independently turns teardown into a
+# destructive operation against an unrelated Alloy install.
+_ga_unit_path: /etc/systemd/system/alloy.service
+_ga_managed_marker: MANAGED BY the grafana_alloy role

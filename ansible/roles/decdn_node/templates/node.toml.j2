@@ -355,6 +355,11 @@ metrics_bind = "{{ decdn_metrics_bind }}"
 admin_port = {{ decdn_admin_port }}
 {% if decdn_otlp_endpoint not in ["", none] %}
 otlp_endpoint = "{{ decdn_otlp_endpoint }}"
+{% elif decdn_grafana_cloud_enabled | bool %}
+{#- Opt-in Grafana Cloud observability: span export flows to the loopback Alloy
+    receiver (roles/grafana_alloy). The port is a deliberate literal — it MUST
+    match grafana_alloy_otlp_grpc_port; preflight + molecule guard both sides. -#}
+otlp_endpoint = "http://127.0.0.1:4317"
 {% endif %}
 {% if decdn_security_max_concurrent_handlers not in ["", none] or decdn_security_per_source_rate_per_sec not in ["", none] or decdn_security_per_source_burst not in ["", none] or decdn_security_max_tracked_sources not in ["", none] %}
 

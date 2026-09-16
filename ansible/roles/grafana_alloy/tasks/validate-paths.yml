@@ -1,0 +1,57 @@
+---
+# Path-shape gates for every filesystem location this role manages.
+#
+# Imported by BOTH preflight.yml (enable path) and the teardown block in
+# main.yml (disable path). The disable path deletes these directories outright,
+# so it must not trust an un-validated variable either — that is the whole point
+# of factoring them out here instead of leaving them inside preflight.
+
+- name: Constrain the managed Alloy paths (no traversal, no symlink-bait segments)
+  ansible.builtin.assert:
+    that:
+      # Anchored prefix AND a per-segment charset. A prefix match alone is not
+      # enough: "/var/lib/../../etc" satisfies "^/var/lib/[A-Za-z0-9._/-]+$"
+      # because '.' and '/' are in the class, which would let a hostile/typo'd
+      # inventory aim the disable-path `file: state=absent` at /etc.
+      - item.value is match(item.regex)
+      - "'..' not in item.value.split('/')"
+      - "'' not in item.value.split('/')[1:]"
+    quiet: true
+    fail_msg: >-
+      {{ item.name }} must be an absolute, traversal-free path under
+      {{ item.under }} whose segments use only [A-Za-z0-9._-] (got
+      "{{ item.value }}"). These paths are removed wholesale when
+      decdn_grafana_cloud_enabled is turned off, so '..' segments are refused
+      outright.
+  loop:
+    # Must stay under /var/lib: systemd's StateDirectory= is relative to it.
+    - name: grafana_alloy_state_dir
+      value: "{{ grafana_alloy_state_dir }}"
+      under: /var/lib
+      regex: '^/var/lib/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
+    - name: grafana_alloy_config_dir
+      value: "{{ grafana_alloy_config_dir }}"
+      under: /etc
+      regex: '^/etc/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
+    - name: grafana_alloy_config_file
+      value: "{{ grafana_alloy_config_file }}"
+      under: /etc
+      regex: '^/etc/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
+    - name: grafana_alloy_secret_file
+      value: "{{ grafana_alloy_secret_file }}"
+      under: /etc
+      regex: '^/etc/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
+  loop_control:
+    label: "{{ item.name }}"
+
+# The role templates the config INTO the directory it creates and chowns; a file
+# outside it would be written to an unmanaged (possibly unsafe) location and
+# would survive the disable path's directory removal.
+- name: Require the rendered config to live inside the managed config directory
+  ansible.builtin.assert:
+    that:
+      - grafana_alloy_config_file.startswith(grafana_alloy_config_dir ~ '/')
+      - (grafana_alloy_config_file | dirname) == grafana_alloy_config_dir
+    fail_msg: >-
+      grafana_alloy_config_file ({{ grafana_alloy_config_file }}) must be a file
+      directly inside grafana_alloy_config_dir ({{ grafana_alloy_config_dir }}).

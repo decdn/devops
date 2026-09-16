@@ -1,0 +1,121 @@
+---
+# Render roles/grafana_alloy's two templates on the control machine so
+# validate.sh can feed them to a REAL Grafana Alloy binary.
+#
+# Why this exists: the molecule `grafana-cloud` scenario runs against a stub that
+# exits 0 for every subcommand, so it proves the role's plumbing but can never
+# prove the rendered config is one Alloy accepts. Alloy's config syntax rejects
+# '#' comments, has no `otelcol.processor.resource`, and puts `sending_queue` /
+# `retry_on_failure` on the exporter rather than inside `client` — all three were
+# shipped green by the stub. This harness closes that gap.
+#
+# Renders several variable combinations so the template's conditional branches
+# (omitted identity attributes, 0 and 1 sampling ratios, overridden ports) are
+# all parsed by the real binary, not just the default one.
+#
+# Not a deploy playbook: localhost only, writes only into $ALLOY_RENDER_DIR, and
+# `become: false` overrides ansible.cfg's project-wide privilege escalation.
+
+- name: Render the default-values Alloy configuration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars_files:
+    - ../../roles/grafana_alloy/defaults/main.yml
+  vars:
+    _ga_render_dir: "{{ lookup('ansible.builtin.env', 'ALLOY_RENDER_DIR') }}"
+    _ga_instance_id: decdn-node-1
+    grafana_alloy_bin_effective: /usr/bin/alloy
+    grafana_alloy_deployment_environment: production
+    grafana_alloy_region: US
+  tasks:
+    - name: Render config.alloy and the systemd unit with default knobs
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/defaults.{{ item.ext }}"
+        mode: "0644"
+      loop:
+        - {src: config.alloy.j2, ext: alloy}
+        - {src: alloy.service.j2, ext: service}
+      loop_control:
+        label: "defaults.{{ item.ext }}"
+
+    # Hands validate.sh the release pin without making it parse YAML itself: the
+    # values come from the role's own defaults, so the download it verifies is
+    # byte-identical to the one the role installs.
+    - name: Export the pinned release for the validation script
+      ansible.builtin.copy:
+        dest: "{{ _ga_render_dir }}/pin.env"
+        mode: "0644"
+        content: |
+          GRAFANA_ALLOY_VERSION={{ grafana_alloy_version }}
+          GRAFANA_ALLOY_SHA256_AMD64={{ grafana_alloy_sha256.amd64 | default('') }}
+          GRAFANA_ALLOY_SHA256_ARM64={{ grafana_alloy_sha256.arm64 | default('') }}
+
+# Exercises the omit branches: an empty namespace/region must drop its relabel
+# rule and its OTTL `set()` statement entirely rather than emit an empty value,
+# and a 0 ratio must still render a valid float.
+- name: Render the minimal-identity Alloy configuration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars_files:
+    - ../../roles/grafana_alloy/defaults/main.yml
+  vars:
+    _ga_render_dir: "{{ lookup('ansible.builtin.env', 'ALLOY_RENDER_DIR') }}"
+    _ga_instance_id: decdn-node-2
+    grafana_alloy_bin_effective: /usr/local/bin/alloy
+    grafana_alloy_service_namespace: ""
+    grafana_alloy_deployment_environment: ""
+    grafana_alloy_region: ""
+    grafana_alloy_trace_sampling_ratio: 0
+  tasks:
+    - name: Render config.alloy and the systemd unit with minimal identity
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/minimal.{{ item.ext }}"
+        mode: "0644"
+      loop:
+        - {src: config.alloy.j2, ext: alloy}
+        - {src: alloy.service.j2, ext: service}
+      loop_control:
+        label: "minimal.{{ item.ext }}"
+
+# Exercises the overridden branches: non-default ports, a keep-everything ratio,
+# and pipeline knobs well away from their defaults.
+- name: Render the fully-overridden Alloy configuration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars_files:
+    - ../../roles/grafana_alloy/defaults/main.yml
+  vars:
+    _ga_render_dir: "{{ lookup('ansible.builtin.env', 'ALLOY_RENDER_DIR') }}"
+    _ga_instance_id: decdn-node-3
+    grafana_alloy_bin_effective: /usr/bin/alloy
+    grafana_alloy_deployment_environment: staging
+    grafana_alloy_region: EU
+    grafana_alloy_trace_sampling_ratio: 1
+    grafana_alloy_scrape_interval: 15s
+    grafana_alloy_batch_timeout: 500ms
+    grafana_alloy_batch_send_size: 512
+    grafana_alloy_batch_max_size: 4096
+    grafana_alloy_queue_size: 100
+    grafana_alloy_retry_initial_interval: 1s
+    grafana_alloy_retry_max_elapsed_time: 1h
+    grafana_alloy_otlp_http_port: 14318
+    decdn_metrics_port: 19090
+  tasks:
+    - name: Render config.alloy and the systemd unit with overridden knobs
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/overridden.{{ item.ext }}"
+        mode: "0644"
+      loop:
+        - {src: config.alloy.j2, ext: alloy}
+        - {src: alloy.service.j2, ext: service}
+      loop_control:
+        label: "overridden.{{ item.ext }}"

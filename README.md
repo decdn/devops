@@ -104,6 +104,7 @@ make hooks            # one-time: install the pre-commit git hook (pip install p
 make lint             # all pre-commit hooks on all files (hygiene, shellcheck, yamllint, markdown)
 make lint-ansible     # vendor collections + full ansible-lint (production profile)
 make lint-helm        # chart: helm lint + render tests + kubeconform + schema keys
+make lint-alloy       # grafana_alloy: render its templates, validate with the real Alloy binary
 make security         # KICS IaC scan of ansible/ + the rendered chart (pinned engine image)
 
 # Ansible deploys — run from ansible/
@@ -123,7 +124,9 @@ is not a per-commit hook (it needs collections vendored) — run `make lint-ansi
 
 - **`ci.yml`** — path-filtered so heavy jobs skip unrelated PRs: `ansible-lint` (production
   profile + playbook syntax-check), a `galaxy-build` readiness gate (builds the `decdn.node`
-  collection and runs galaxy-importer's checks), a `helm` job (`make lint-helm`: strict lint,
+  collection and runs galaxy-importer's checks), an `alloy-config` job (`make lint-alloy`: renders
+  the `grafana_alloy` templates and runs the real digest-pinned Alloy binary's `alloy validate`
+  over them — the molecule stub cannot), a `helm` job (`make lint-helm`: strict lint,
   positive/negative render tests, kubeconform, and the upstream schema-key check shared with
   molecule), **KICS** IaC scan of `ansible/` and the rendered chart (fail on HIGH), and
   `actionlint` on the workflows themselves. The KICS engine is pinned by digest and every

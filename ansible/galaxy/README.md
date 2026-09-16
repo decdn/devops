@@ -2,12 +2,13 @@
 
 Deploy and harden a **public [deCDN](https://decdn.org) node**. This collection is
 the public, reusable slice of the [`decdn/devops`](https://github.com/decdn/devops)
-repository — two roles and nothing else:
+repository — three roles and nothing else:
 
 | Role | Purpose |
 |------|---------|
 | `decdn.node.baseline` | Debian host baseline — nftables default-deny inbound, fail2ban, unattended-upgrades, chrony, an admin sudo user, then DevSec OS + SSH hardening (applied last). |
 | `decdn.node.decdn_node` | The `decdn-node` daemon — installed from a pinned GitHub Release tarball under a hardened systemd unit; public QUIC udp/4433, loopback metrics + admin RPC. |
+| `decdn.node.grafana_alloy` | Opt-in Grafana Cloud observability agent — loopback-only Alloy receiver and hardened telemetry export. |
 
 ## Requirements
 
@@ -60,6 +61,7 @@ full variable list, the eth-keystore prerequisite, and day-2 ops:
 
 - [`roles/baseline`](https://github.com/decdn/devops/tree/main/ansible/roles/baseline)
 - [`roles/decdn_node`](https://github.com/decdn/devops/tree/main/ansible/roles/decdn_node)
+- [`roles/grafana_alloy`](https://github.com/decdn/devops/tree/main/ansible/roles/grafana_alloy)
 
 ## Security model
 

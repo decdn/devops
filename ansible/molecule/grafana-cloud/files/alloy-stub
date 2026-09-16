@@ -1,0 +1,31 @@
+#!/bin/sh
+# Molecule stub standing in for the Grafana Alloy binary in CI.
+#
+# The grafana-cloud scenario runs the real role logic (user/group/dirs, secret
+# gate, template rendering, hardened unit, systemd start) against this shim so no
+# ~160 MB release download is needed per CI run. It intentionally does NOT listen
+# on any socket: runtime socket assertions are out of scope for containerised CI
+# (see ../verify.yml comments) and remain covered by real-host deploys + content-
+# level checks here.
+set -u
+
+case "${1-}" in
+  # Version backstop in tasks/install.yml (manual mode degrades to rc==0 anyway).
+  --version)
+    echo "alloy, version v${MOLECULE_STUB_VERSION:-0.0.0}-molecule-stub"
+    ;;
+  # validate: the real binary builds the component graph and rejects an
+  # unloadable config. A stub CANNOT do that, so this exits 0 and proves the
+  # role's gate is wired up — nothing more. Content correctness is asserted
+  # textually in verify.yml and, against the REAL pinned binary, by
+  # ../../tests/alloy-config/validate.sh (`make lint-alloy`, run in CI). Do not
+  # read a green run here as "the configuration loads".
+  validate | fmt)
+    :
+    ;;
+  # Long-running foreground process keeps the Type=simple unit 'running'.
+  run)
+    exec sleep infinity
+    ;;
+esac
+exit 0

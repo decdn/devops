@@ -1,0 +1,16 @@
+---
+galaxy_info:
+  role_name: grafana_alloy
+  author: deCDN Contributors
+  description: >-
+    Opt-in Grafana Cloud observability — a loopback-only Alloy agent shipping the
+    node's metrics + OTLP traces to your Grafana Cloud org.
+  license: MIT
+  min_ansible_version: "2.15"
+  galaxy_tags: [decdn, cdn, observability, grafana, otlp, debian]
+  platforms:
+    - name: Debian
+      versions: [bookworm]
+    - name: Ubuntu
+      versions: [jammy, noble]
+dependencies: []

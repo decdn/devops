@@ -3,6 +3,9 @@
 # valid non-secret node.toml, a valid + hardened systemd unit, loopback-only
 # metrics binding, 0600 on the secret env file, and a running service. Real
 # paid-traffic readiness additionally needs on-chain registration (not tested).
+# Plus DISABLED-PATH coverage for the opt-in Grafana Cloud integration: with
+# decdn_grafana_cloud_enabled false (the default), nothing may appear on the host
+# and node.toml must be byte-identical to the pre-integration rendering.
 - name: Verify
   hosts: all
   become: true
@@ -335,6 +338,44 @@
             'decdn-node.service' in ansible_facts.services
             and ansible_facts.services['decdn-node.service'].state == 'running'
         fail_msg: "decdn-node is not running — check: journalctl -u decdn-node -e"
+
+    # --- Grafana Cloud integration stays inert by default ------------------------
+    # The converge playbook does NOT set decdn_grafana_cloud_enabled, so no part of
+    # grafana_alloy may have touched this container. These asserts fail if the
+    # opt-in ever leaks into the off-path (a stray unconditional task, a template
+    # side effect, or the role wired unconditionally into site.yml).
+    - name: Stat the paths the disabled Alloy path must never create
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: ga_absent_paths
+      loop:
+        - /etc/alloy
+        - /var/lib/alloy
+        - /etc/systemd/system/alloy.service
+        - /etc/decdn/grafana-alloy.env
+
+    - name: Assert no Alloy artifacts exist while observability is disabled
+      ansible.builtin.assert:
+        that:
+          # `| any` needs newer ansible-core than the suite pins; keep to filters.
+          - ga_absent_paths.results | map(attribute='stat.exists') | select | list | length == 0
+        fail_msg: >-
+          decdn_grafana_cloud_enabled is false but an Alloy artifact exists:
+          {{ ga_absent_paths.results | selectattr('stat.exists')
+             | map(attribute='item') | list }}
+
+    - name: Look up the alloy user (expected absent)
+      ansible.builtin.getent:
+        database: passwd
+        key: alloy
+      failed_when: false
+      changed_when: false
+
+    - name: Assert the alloy system user was not created
+      ansible.builtin.assert:
+        that:
+          - getent_passwd['alloy'] is not defined
+        fail_msg: "grafana_alloy created its system user despite the flag being off"
 
     # --- baseline_sudo_users: the two named sudo users created by converge ---------
     # molecule-operator (simple name, one key) and alice.smith (a '.' in the name, so

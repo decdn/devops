@@ -276,6 +276,13 @@ decdn_metrics_bind: "127.0.0.1"   # keep loopback — Prometheus scrape is a fol
 decdn_admin_port: 9191
 # Optional ("" => omit + use the daemon default).
 decdn_otlp_endpoint: ""    # OTLP/gRPC span export; http://host:port only (e.g. http://localhost:4317)
+# OPT-IN Grafana Cloud observability, defined IDENTICALLY in
+# roles/grafana_alloy/defaults/main.yml so inventory overrides it ONCE and both
+# roles react: enabling it makes THIS role inject
+# otlp_endpoint = "http://127.0.0.1:4317" (the local Alloy gRPC receiver below),
+# while the grafana_alloy role installs + configures that receiver. Keep the two
+# definitions byte-identical by intent — do not fork the semantics.
+decdn_grafana_cloud_enabled: false
 
 # --- Abuse limits, load shedding, receipts, local denylist --------------------
 # [security] and [load_shed] and [content] are HOT-RELOADABLE: change them and run

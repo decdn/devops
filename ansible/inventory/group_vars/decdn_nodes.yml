@@ -10,3 +10,12 @@ baseline_extra_inbound:
   - proto: udp
     port: "{{ decdn_bind_port }}"
     comment: "decdn QUIC"
+
+# --- Grafana Cloud observability (opt-in) --------------------------------------
+# One mirrored flag drives BOTH roles (grafana_alloy install/config AND the
+# otlp_endpoint injection into node.toml). Uncomment after provisioning the
+# credential file on each host — see roles/grafana_alloy/files/grafana-alloy.env.example:
+#
+# decdn_grafana_cloud_enabled: true
+# grafana_alloy_region: "{{ decdn_region }}"  # override only when needed
+# grafana_alloy_deployment_environment: production

@@ -30,7 +30,8 @@ tags:
 #   baseline -> devsec.hardening (os_hardening + ssh_hardening), ansible.posix
 #               (authorized_key)
 #   decdn_node -> ansible.builtin only
-# community.general is NOT used by either role, so it is intentionally absent here.
+#   grafana_alloy -> ansible.builtin only
+# community.general is NOT used by any role, so it is intentionally absent here.
 dependencies:
   devsec.hardening: ">=10.0.0"
   ansible.posix: ">=1.5.0"

@@ -1,0 +1,321 @@
+---
+# Verify the rendered Grafana Cloud wiring. Content-level assertions (parse +
+# grep + TOML) replace runtime socket proofs, which are impossible against the
+# stub binary — see molecule.yml's boundary note.
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+    - name: Stat the artifacts the positive run must have produced
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      register: ga_files
+      loop:
+        - {path: /etc/alloy/config.alloy, mode: "0644"}
+        - {path: /etc/decdn/grafana-alloy.env, mode: "0600"}
+        - {path: /etc/systemd/system/alloy.service, mode: "0644"}
+
+    - name: Assert ownership/modes of the Alloy artifacts
+      ansible.builtin.assert:
+        that:
+          # exists-and-mode first so a missing file short-circuits to fail_msg
+          # instead of raising on absent stat fields.
+          - item.stat.exists and item.stat.mode == item.item.mode
+          - item.stat.pw_name == 'root'
+        fail_msg: "{{ item.item.path }} missing or wrong mode/owner"
+      loop: "{{ ga_files.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+
+    # --- Rendered pipeline configuration -----------------------------------------
+    - name: Read the rendered config.alloy
+      ansible.builtin.slurp:
+        src: /etc/alloy/config.alloy
+      register: ga_config_b64
+
+    - name: Parse config.alloy into text
+      ansible.builtin.set_fact:
+        ga_config: "{{ ga_config_b64.content | b64decode }}"
+
+    - name: Assert receivers + scrape target bind loopback only
+      ansible.builtin.assert:
+        that:
+          - >-
+            '127.0.0.1:4317' in ga_config
+          - >-
+            '127.0.0.1:4318' in ga_config
+          - >-
+            '127.0.0.1:9090' in ga_config
+          - >-
+            '0.0.0.0' not in ga_config
+          - >-
+            '[::]' not in ga_config
+        fail_msg: >-
+          Alloy listeners are not pinned to loopback as required — AGENTS.md hard
+          rule 2 forbids any backend binding to a wildcard address.
+
+    - name: Assert identity labels, sampling and batch knobs render with converged values
+      ansible.builtin.assert:
+        that:
+          # ratio 0.25 -> percentage 25; batch size overrides pass through; labels
+          # dotted AND set-variable ones present; credentials stay sys.env()
+          # indirections (Alloy has no ${VAR} expansion — a literal ${GC_*} here
+          # would ship a broken URL to the cloud endpoint).
+          - >-
+            'sampling_percentage = 25.0' in ga_config
+          - >-
+            'send_batch_size     = 512' in ga_config
+          - >-
+            '"service.name"' in ga_config
+          - >-
+            '"service.namespace"' in ga_config
+          - >-
+            '"service.instance.id"' in ga_config
+          - >-
+            '"deployment.environment"' in ga_config
+          - >-
+            '"region"' in ga_config
+          - >-
+            '"decdn-node"' in ga_config
+          - >-
+            'sys.env("GC_PROM_REMOTE_WRITE_URL")' in ga_config
+          - >-
+            'sys.env("GC_OTLP_ENDPOINT")' in ga_config
+          - >-
+            'sys.env("GC_API_TOKEN")' in ga_config
+          - >-
+            '${GC_' not in ga_config
+          # Alloy's syntax rejects '#' outright, and the template's own comments
+          # plus everything the Jinja layer emits must respect that.
+          - >-
+            ga_config.splitlines() | select('match', '\\s*#') | list | length == 0
+          # Components that do not exist in Alloy (they are OTel collector names,
+          # not Alloy ones) — a rename upstream must not sneak back in.
+          - >-
+            'otelcol.processor.resource ' not in ga_config
+        fail_msg: >-
+          config.alloy is missing expected content (samplers, labels, sys.env()
+          credential indirection) or carries syntax Alloy rejects. Got:
+          {{ ga_config }}
+
+    # --- Secret hygiene -------------------------------------------------------------
+    - name: Read the credential fixture back
+      ansible.builtin.slurp:
+        src: /etc/decdn/grafana-alloy.env
+      register: ga_env_b64
+
+    - name: Assert the env file carries every required key verbatim
+      ansible.builtin.assert:
+        that:
+          - >-
+            'GC_API_TOKEN=molecule-test-token' in ga_env_body
+          - >-
+            'GC_PROM_USERNAME=999888777' in ga_env_body
+          - >-
+            'GC_PROM_REMOTE_WRITE_URL=https://' in ga_env_body
+          - >-
+            'GC_OTLP_ENDPOINT=https://' in ga_env_body
+        fail_msg: prepare.yml fixture diverged from what the greps require
+      vars:
+        ga_env_body: "{{ ga_env_b64.content | b64decode }}"
+
+    # The token value must exist ONLY inside the 0600 env file. node.toml stays a
+    # non-secret diffable artifact, and the unit/config must hold placeholders only.
+    - name: Register the secret-token absence across non-secret files
+      ansible.builtin.command:
+        cmd: grep -Rq molecule-test-token {{ item }}
+      changed_when: false
+      failed_when: false
+      loop:
+        - /etc/decdn/node.toml
+        - /etc/systemd/system/alloy.service
+        - /etc/alloy/config.alloy
+      register: ga_leak_probe
+
+    - name: Assert no secret literal leaked into non-secret artifacts
+      ansible.builtin.assert:
+        that:
+          - ga_leak_probe.results | selectattr('rc', 'equalto', 0) | list | length == 0
+        fail_msg: >-
+          The GC_API_TOKEN literal appears outside the 0600 env file — config or
+          templates stopped using sys.env() indirection.
+
+    # --- Node-side wiring (the mirrored flag) ----------------------------------------
+    - name: Stage the otlp_endpoint assertion script
+      ansible.builtin.copy:
+        dest: /root/molecule-assert-ga-toml.py
+        mode: "0755"
+        content: |
+          import sys, tomllib
+          d = tomllib.load(open("/etc/decdn/node.toml", "rb"))
+          want = "http://127.0.0.1:4317"
+          got = d.get("observability", {}).get("otlp_endpoint")
+          if got != want:
+              print(f"otlp_endpoint mismatch: got {got!r}, want {want!r}", file=sys.stderr)
+              sys.exit(1)
+
+    - name: Assert node.toml exports spans to the local Alloy receiver
+      ansible.builtin.command:
+        cmd: python3 /root/molecule-assert-ga-toml.py
+      changed_when: false
+
+    # --- systemd ----------------------------------------------------------------------
+    - name: Validate the Alloy unit syntax
+      ansible.builtin.command:
+        cmd: systemd-analyze verify /etc/systemd/system/alloy.service
+      changed_when: false
+
+    - name: Read the rendered systemd unit
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/alloy.service
+      register: ga_unit_b64
+
+    - name: Assert the unit carries the credential + hardening directives
+      ansible.builtin.assert:
+        that:
+          - >-
+            'EnvironmentFile=/etc/decdn/grafana-alloy.env' in ga_unit
+          # Alloy defines no --config.expand-env and no gRPC admin listener;
+          # either flag makes `alloy run` exit non-zero, i.e. a crash-loop.
+          # Checked against the ExecStart flag lines ONLY — the unit's comments
+          # name both flags precisely to explain why they must not be passed.
+          - >-
+            '--config.expand-env' not in ga_unit_flags
+          - >-
+            '--server.grpc.listen-addr' not in ga_unit_flags
+          - >-
+            'User=alloy' in ga_unit
+          - >-
+            'NoNewPrivileges=true' in ga_unit
+          - >-
+            'ProtectSystem=strict' in ga_unit
+          - >-
+            'SystemCallFilter=@system-service' in ga_unit
+          # Alloy's admin/UI server is pinned explicitly rather than left to the
+          # upstream default.
+          - >-
+            '--server.http.listen-addr=127.0.0.1:' in ga_unit
+        fail_msg: hardened Alloy unit is missing an expected directive
+      vars:
+        ga_unit: "{{ ga_unit_b64.content | b64decode }}"
+        ga_unit_flags: >-
+          {{ ga_unit.splitlines() | select('match', '\\s*--') | join(' ') }}
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert both services are running
+      ansible.builtin.assert:
+        that:
+          - >-
+            'alloy.service' in ansible_facts.services
+            and ansible_facts.services['alloy.service'].state == 'running'
+          - >-
+            'decdn-node.service' in ansible_facts.services
+            and ansible_facts.services['decdn-node.service'].state == 'running'
+        fail_msg: "alloy or decdn-node is not running — journalctl -u alloy -e / -u decdn-node -e"
+
+# Runs LAST, after the idempotence phase and the assertions above, because it
+# deliberately mutates the converged host: it exercises the disable path, whose
+# whole job is to remove things.
+- name: Verify the disable path removes this role's install and nothing else
+  hosts: all
+  become: true
+  tasks:
+    # --- Part 1: flipping the flag off is a complete rollback -------------------
+    - name: Run the role with observability disabled
+      ansible.builtin.include_role:
+        name: grafana_alloy
+      vars:
+        decdn_grafana_cloud_enabled: false
+
+    - name: Stat what the teardown must have removed
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: ga_removed
+      loop:
+        - /etc/systemd/system/alloy.service
+        - /etc/alloy
+        - /var/lib/alloy
+
+    - name: Read the account database back
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: Assert the role removed its own installation
+      ansible.builtin.assert:
+        that:
+          - ga_removed.results | selectattr('stat.exists') | list | length == 0
+          - "'alloy' not in ansible_facts.getent_passwd"
+        fail_msg: >-
+          Disabling decdn_grafana_cloud_enabled left this role's artifacts behind
+          ({{ ga_removed.results | selectattr('stat.exists')
+              | map(attribute='item') | list }}).
+
+    # --- Part 2: it must NOT touch an Alloy installed by anything else ----------
+    # THE REGRESSION THIS GUARDS: the teardown used to delete /etc/alloy,
+    # /var/lib/alloy and the alloy account unconditionally whenever the flag was
+    # false — which is the DEFAULT — so every converge of an unrelated host would
+    # destroy an Alloy installed from the upstream apt repo or another role.
+    - name: Stage the foreign installation's directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - /etc/alloy
+        - /var/lib/alloy
+
+    - name: Stage a foreign Alloy installation (no managed-by marker)
+      ansible.builtin.copy:
+        dest: "{{ item.path }}"
+        content: "{{ item.content }}"
+        mode: "0644"
+      loop:
+        - path: /etc/systemd/system/alloy.service
+          content: |
+            [Unit]
+            Description=Somebody else's Alloy
+            [Service]
+            ExecStart=/bin/true
+        - path: /etc/alloy/config.alloy
+          content: "// installed by someone else\n"
+      loop_control:
+        label: "{{ item.path }}"
+
+    - name: Stage the foreign install's account
+      ansible.builtin.user:
+        name: alloy
+        system: true
+        create_home: false
+        shell: /usr/sbin/nologin
+
+    - name: Run the role with observability disabled again
+      ansible.builtin.include_role:
+        name: grafana_alloy
+      vars:
+        decdn_grafana_cloud_enabled: false
+
+    - name: Stat what the teardown must have left alone
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: ga_foreign
+      loop:
+        - /etc/systemd/system/alloy.service
+        - /etc/alloy/config.alloy
+        - /var/lib/alloy
+
+    - name: Re-read the account database
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: Assert the foreign installation survived untouched
+      ansible.builtin.assert:
+        that:
+          - ga_foreign.results | rejectattr('stat.exists') | list | length == 0
+          - "'alloy' in ansible_facts.getent_passwd"
+        fail_msg: >-
+          The disable path destroyed an Alloy installation this role never made
+          ({{ ga_foreign.results | rejectattr('stat.exists')
+              | map(attribute='item') | list }}). Teardown must be gated on the
+          managed-by marker in the unit file.

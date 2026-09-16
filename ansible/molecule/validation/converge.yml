@@ -531,18 +531,190 @@
             path: /etc/decdn/stub-bad-config
             state: absent
 
+    # --- Cases: grafana_alloy preflight gates (#55) --------------------------------
+    # The opt-in Grafana Cloud role's OWN fail-loud gates get the same treatment.
+    # All seven broken configs abort inside preflight-imported tasks BEFORE any
+    # host mutation (user/package/config), so they cannot interfere with the other
+    # cases or start services. Tag deduping at the bottom handles two cases per
+    # gate. Fixtures are staged/restored per case; none of this touches decdn.env.
+    - name: "Case ga-no-secret — enabled without /etc/decdn/grafana-alloy.env"
+      block:
+        - name: Stage only a placeholder credential path (absent file)
+          ansible.builtin.file:
+            path: /etc/decdn/grafana-alloy.env
+            state: absent
+
+        - name: Run grafana_alloy with its credential file absent
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+      rescue:
+        - name: Record ga-no-secret rejection (only if the secret-file assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['secret-file'] }}"
+          when: ansible_failed_task.name is match('^Assert the secret file')
+
+    - name: "Case ga-symlink-secret — symlinked credential file"
+      block:
+        - name: Stage the symlink target outside /etc/decdn
+          ansible.builtin.copy:
+            dest: /var/lib/grafana-alloy-fixture.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+              GC_API_TOKEN=molecule-test-token
+
+        - name: Point the credential path at the out-of-tree symlink target
+          ansible.builtin.file:
+            src: /var/lib/grafana-alloy-fixture.env
+            dest: /etc/decdn/grafana-alloy.env
+            state: link
+            force: true
+
+        - name: Run grafana_alloy against a symlinked credential file
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+      rescue:
+        - name: Record ga-symlink-secret rejection (only if the secret-file assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['secret-file'] }}"
+          when: ansible_failed_task.name is match('^Assert the secret file')
+      always:
+        - name: Remove the symlink and target
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/decdn/grafana-alloy.env
+            - /var/lib/grafana-alloy-fixture.env
+
+    - name: "Case ga-missing-key — GC_API_TOKEN line dropped"
+      block:
+        - name: Stage an otherwise-complete credential file without the token
+          ansible.builtin.copy:
+            dest: /etc/decdn/grafana-alloy.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+
+        - name: Run grafana_alloy with an incomplete credential file
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+      rescue:
+        - name: Record ga-missing-key rejection (only if the grep report gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['secret-content'] }}"
+          when: ansible_failed_task.name is match('^Report which credential key')
+      always:
+        - name: Remove the partial credential fixture
+          ansible.builtin.file:
+            path: /etc/decdn/grafana-alloy.env
+            state: absent
+
+    - name: "Case ga-http-url — cleartext remote-write endpoint"
+      block:
+        - name: Stage a credential file with an http:// push URL
+          ansible.builtin.copy:
+            dest: /etc/decdn/grafana-alloy.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=http://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+              GC_API_TOKEN=molecule-test-token
+
+        - name: Run grafana_alloy with a non-https push URL
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+      rescue:
+        - name: Record ga-http-url rejection (only if the grep report gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['secret-content'] }}"
+          when: ansible_failed_task.name is match('^Report which credential key')
+      always:
+        - name: Remove the http-url credential fixture
+          ansible.builtin.file:
+            path: /etc/decdn/grafana-alloy.env
+            state: absent
+
+    - name: "Case ga-ratio — trace sampler keep-ratio above 1"
+      block:
+        - name: Run grafana_alloy with a malformed sampling ratio
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_trace_sampling_ratio: "0.5x"
+      rescue:
+        - name: Record ga-ratio rejection (only if the knob validator failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['pipeline-knobs'] }}"
+          when: ansible_failed_task.name is match('^Validate the pipeline knobs')
+
+    - name: "Case ga-path-traversal — state directory escaping /var/lib"
+      block:
+        - name: Run grafana_alloy with a traversing state directory
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            # Passes a naive "^/var/lib/[A-Za-z0-9._/-]+$" prefix check, but
+            # resolves to /etc — which the disable path would delete outright.
+            grafana_alloy_state_dir: /var/lib/../../etc
+      rescue:
+        - name: Record ga-path-traversal rejection (only if the path gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
+          when: ansible_failed_task.name is match('^Constrain the managed Alloy paths')
+
+    - name: "Case ga-config-outside-dir — rendered config outside the managed directory"
+      block:
+        - name: Run grafana_alloy with a config file outside its config directory
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_config_dir: /etc/alloy
+            grafana_alloy_config_file: /etc/somewhere-else/config.alloy
+      rescue:
+        - name: Record ga-config-outside-dir rejection (only if the containment gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
+          when: ansible_failed_task.name is match('^Require the rendered config to live inside')
+
     - name: Confirm every bad value was rejected by the role's own validation
       ansible.builtin.assert:
         that:
-          - decdn_rejected | sort == _decdn_expected | sort
+          # unique(): the grafana_alloy cases append the SAME tag for different
+          # inputs guarded by one shared gate (both bad file shapes -> 'secret-file').
+          - decdn_rejected | unique | sort == _decdn_expected | sort
         fail_msg: >-
-          decdn_node did NOT reject every bad value at its validation asserts.
+          Neither decdn_node nor grafana_alloy rejected every bad value at their
+          validation asserts.
           Expected {{ _decdn_expected | sort }}, got {{ decdn_rejected | sort }} —
           a missing tag means that bad value slipped past validation (it would reach
-          the daemon and crash-loop it at config load).
+          the daemon/crash-loop it at config load, or ship credentials insecurely).
       vars:
         _decdn_expected:
           ["cross-field", "binary-format", "range", "bounded-range", "shape", "bool",
            "enum", "dict", "float", "list", "string", "string-newline", "otlp-https",
            "otlp-noport", "otlp-path", "otlp-userinfo", "otlp-colon", "otlp-port",
-           "otlp-newline", "env-gate", "env-extra", "env-content", "config-gate"]
+           "otlp-newline", "env-gate", "env-extra", "env-content", "config-gate",
+           "secret-file", "secret-content", "pipeline-knobs", "managed-paths"]

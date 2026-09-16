@@ -1,0 +1,221 @@
+---
+# Opt-in Grafana Cloud Application Observability for an Ansible-deployed deCDN
+# node: a loopback-only Grafana Alloy agent that scrapes the node's /metrics and
+# receives the daemon's OTLP traces, then ships both to Grafana Cloud.
+#
+# Gated by decdn_grafana_cloud_enabled (mirrored in roles/decdn_node/defaults —
+# ONE inventory knob drives both roles). When false this role does nothing except
+# tear down any prior install (clean disable/rollback); when true it fail-louds on
+# every misconfiguration BEFORE touching a running system (AGENTS.md hard rule 4).
+
+- name: Validate decdn_grafana_cloud_enabled is a real boolean
+  ansible.builtin.assert:
+    that:
+      - decdn_grafana_cloud_enabled is boolean
+    fail_msg: >-
+      decdn_grafana_cloud_enabled must be a boolean (true/false), not a quoted
+      string — it gates this entire role and the otlp_endpoint injection in
+      roles/decdn_node/templates/node.toml.j2.
+
+# --- Disabled path: stop + uninstall ONLY what this role installed, so flipping -
+# --- the flag off is a complete rollback and a no-op for anything else --------
+- name: Tear down a prior installation by this role (flag off)
+  when: not decdn_grafana_cloud_enabled | bool
+  block:
+    # Refuse to aim `state: absent` at an un-validated path even here — the
+    # disable path never runs preflight, and these variables are inventory-
+    # overridable (see validate-paths.yml).
+    - name: Validate the managed filesystem paths before removing them
+      ansible.builtin.import_tasks: validate-paths.yml
+
+    - name: Check for a leftover Alloy systemd unit
+      ansible.builtin.stat:
+        path: "{{ _ga_unit_path }}"
+      register: _ga_leftover_unit
+
+    # SCOPE GUARD: an Alloy installed by some OTHER mechanism (upstream apt repo,
+    # a different role, a hand-rolled unit) owns the very same conventional paths
+    # — /etc/alloy, /var/lib/alloy, the alloy user. Deleting those because a flag
+    # this repo defaults to FALSE is false would destroy an unrelated install on
+    # every single converge. So teardown is gated on the marker line this role's
+    # own unit template emits: no marker, no removal.
+    - name: Read the leftover unit to confirm this role wrote it
+      ansible.builtin.slurp:
+        src: "{{ _ga_unit_path }}"
+      register: _ga_leftover_unit_body
+      when: _ga_leftover_unit.stat.exists
+
+    - name: Decide whether the leftover install is ours to remove
+      ansible.builtin.set_fact:
+        _ga_ours: "{{ _ga_leftover_unit.stat.exists
+                      and _ga_managed_marker in (_ga_leftover_unit_body.content | b64decode) }}"
+
+    - name: Report that an unmanaged Alloy installation was left untouched
+      ansible.builtin.debug:
+        msg: >-
+          {{ _ga_unit_path }} exists but carries no "{{ _ga_managed_marker }}"
+          marker, so it was NOT installed by this role. Leaving it, its
+          configuration, its state directory and the
+          {{ grafana_alloy_user }} account alone — remove that installation with
+          whatever tool created it.
+      when:
+        - _ga_leftover_unit.stat.exists
+        - not _ga_ours | bool
+
+    - name: Remove this role's installation
+      when: _ga_ours | bool
+      block:
+        - name: Stop and disable the Alloy service
+          ansible.builtin.systemd:
+            name: alloy
+            state: stopped
+            enabled: false
+          failed_when: false      # best-effort teardown of an already-broken install
+
+        - name: Remove the unit and rendered configuration
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - "{{ _ga_unit_path }}"
+            - "{{ grafana_alloy_config_dir }}"
+            - "{{ grafana_alloy_state_dir }}"
+          notify: Reload systemd
+
+        - name: Apply pending teardown notifications
+          ansible.builtin.meta: flush_handlers
+
+        - name: Remove the Alloy account
+          ansible.builtin.user:
+            name: "{{ grafana_alloy_user }}"
+            state: absent
+            remove: true
+
+        - name: Remove the Alloy group
+          ansible.builtin.group:
+            name: "{{ grafana_alloy_group }}"
+            state: absent
+
+# Everything below runs only when observability is explicitly enabled.
+- name: Enable and configure the Grafana Cloud agent
+  when: decdn_grafana_cloud_enabled | bool
+  block:
+    # A derived id used by BOTH the preflight regex-free checks below and the two
+    # templates; resolved once here so labels never disagree.
+    - name: Resolve the low-cardinality instance identifier
+      ansible.builtin.set_fact:
+        _ga_instance_id: >-
+          {{ grafana_alloy_instance_id if grafana_alloy_instance_id | length > 0
+             else inventory_hostname }}
+
+    - name: Fail loud on preflight misconfiguration
+      ansible.builtin.import_tasks: preflight.yml
+
+    # --- User + directories ----------------------------------------------------
+    - name: Create the alloy system group
+      ansible.builtin.group:
+        name: "{{ grafana_alloy_group }}"
+        system: true
+
+    - name: Create the alloy system user
+      ansible.builtin.user:
+        name: "{{ grafana_alloy_user }}"
+        group: "{{ grafana_alloy_group }}"
+        system: true
+        home: "{{ grafana_alloy_state_dir }}"
+        create_home: false
+        shell: /usr/sbin/nologin
+
+    - name: Ensure config + state directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ grafana_alloy_group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: "{{ grafana_alloy_config_dir }}", owner: root, mode: "0755"}
+        # 0750, not 0700: systemd's StateDirectory=alloy stamps this SAME mode on
+        # every unit start — a stricter here/looser-there pair would make the two
+        # flip-flop forever and break molecule's idempotence phase.
+        - {path: "{{ grafana_alloy_state_dir }}", owner: "{{ grafana_alloy_user }}", mode: "0750"}
+      loop_control:
+        label: "{{ item.path }}"
+
+    # --- Install ----------------------------------------------------------------
+    - name: Install the Alloy binary
+      ansible.builtin.import_tasks: install.yml
+
+    # --- Configuration + hardened unit ------------------------------------------
+    - name: Render the Alloy pipeline configuration
+      ansible.builtin.template:
+        src: config.alloy.j2
+        dest: "{{ grafana_alloy_config_file }}"
+        owner: root
+        group: "{{ grafana_alloy_group }}"
+        mode: "0644"                 # non-secret by design: credentials are read via sys.env()
+      notify: Restart alloy
+
+    - name: Install the hardened systemd unit
+      ansible.builtin.template:
+        src: alloy.service.j2
+        dest: "{{ _ga_unit_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Reload systemd
+        - Restart alloy
+
+    # --- Config validation gate (fail loud before any restart) ------------------
+    # `alloy validate` (NOT `fmt --test`): fmt only parses and re-prints, so it
+    # accepts a syntactically valid file that names a component which does not
+    # exist or nests a block in the wrong place — exactly the class of regression
+    # that turns into a crash-loop. `validate` builds the component graph and
+    # rejects both. It does not need the credentials: `sys.env` on an unset
+    # variable yields "" and still validates, so no secret is required here.
+    # Under check mode the file has not been written yet, so skip like the
+    # decdn_node config gate.
+    - name: Check the rendered configuration with the installed binary
+      ansible.builtin.command:
+        cmd: "{{ grafana_alloy_bin_effective }} validate {{ grafana_alloy_config_file }}"
+      changed_when: false
+      register: _ga_config_check
+      failed_when: false
+      when: not ansible_check_mode
+
+    - name: Report the configuration-validation failure
+      ansible.builtin.fail:
+        msg: >-
+          `alloy validate` rejected {{ grafana_alloy_config_file }}
+          (rc={{ _ga_config_check.rc | default('?') }}):
+          {{ (_ga_config_check.stderr | default('', true))
+             or (_ga_config_check.stdout | default('', true)) }} — fix the
+          template regression before deploying.
+      when:
+        - not ansible_check_mode
+        - _ga_config_check.rc | default(1) != 0
+
+    - name: Apply pending Alloy changes
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start Alloy
+      ansible.builtin.systemd:
+        name: alloy
+        enabled: true
+        state: started
+      when: not ansible_check_mode
+
+    # Backstop for a Type=simple unit that exited fast enough to have already
+    # flipped to failed by the time we got here (the stub in CI sleeps forever).
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+      when: not ansible_check_mode
+
+    - name: Confirm Alloy is running (not failed/crash-looping)
+      ansible.builtin.assert:
+        that:
+          - "'alloy.service' in ansible_facts.services"
+          - ansible_facts.services['alloy.service'].state == 'running'
+        fail_msg: "alloy is not running — check: journalctl -u alloy -e"
+      when: not ansible_check_mode
