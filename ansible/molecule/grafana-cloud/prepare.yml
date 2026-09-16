@@ -42,7 +42,7 @@
     # non-empty). Written directly at 0600 because preflight refuses anything else.
     - name: Stage the Grafana Cloud credential fixture on the host
       ansible.builtin.copy:
-        dest: /etc/decdn/grafana-alloy.env
+        dest: /etc/grafana-alloy.env
         owner: root
         group: root
         mode: "0600"

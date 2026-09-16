@@ -15,14 +15,15 @@
       # inventory aim the disable-path `file: state=absent` at /etc.
       - item.value is match(item.regex)
       - "'..' not in item.value.split('/')"
+      - "'.' not in item.value.split('/')"
       - "'' not in item.value.split('/')[1:]"
     quiet: true
     fail_msg: >-
       {{ item.name }} must be an absolute, traversal-free path under
       {{ item.under }} whose segments use only [A-Za-z0-9._-] (got
       "{{ item.value }}"). These paths are removed wholesale when
-      decdn_grafana_cloud_enabled is turned off, so '..' segments are refused
-      outright.
+      decdn_grafana_cloud_enabled is turned off, so '.' and '..' segments are
+      refused outright.
   loop:
     # Must stay under /var/lib: systemd's StateDirectory= is relative to it.
     - name: grafana_alloy_state_dir

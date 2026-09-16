@@ -12,7 +12,7 @@
       register: ga_files
       loop:
         - {path: /etc/alloy/config.alloy, mode: "0644"}
-        - {path: /etc/decdn/grafana-alloy.env, mode: "0600"}
+        - {path: /etc/grafana-alloy.env, mode: "0600"}
         - {path: /etc/systemd/system/alloy.service, mode: "0644"}
 
     - name: Assert ownership/modes of the Alloy artifacts
@@ -101,7 +101,7 @@
     # --- Secret hygiene -------------------------------------------------------------
     - name: Read the credential fixture back
       ansible.builtin.slurp:
-        src: /etc/decdn/grafana-alloy.env
+        src: /etc/grafana-alloy.env
       register: ga_env_b64
 
     - name: Assert the env file carries every required key verbatim
@@ -174,7 +174,7 @@
       ansible.builtin.assert:
         that:
           - >-
-            'EnvironmentFile=/etc/decdn/grafana-alloy.env' in ga_unit
+            'EnvironmentFile=/etc/grafana-alloy.env' in ga_unit
           # Alloy defines no --config.expand-env and no gRPC admin listener;
           # either flag makes `alloy run` exit non-zero, i.e. a crash-loop.
           # Checked against the ExecStart flag lines ONLY — the unit's comments
@@ -266,7 +266,7 @@
         - /etc/alloy
         - /var/lib/alloy
 
-    - name: Stage a foreign Alloy installation (no managed-by marker)
+    - name: Stage a foreign Alloy installation (marker mentioned after line one)
       ansible.builtin.copy:
         dest: "{{ item.path }}"
         content: "{{ item.content }}"
@@ -276,6 +276,8 @@
           content: |
             [Unit]
             Description=Somebody else's Alloy
+            # This role used to write:
+            # MANAGED BY the grafana_alloy role — do not edit by hand.
             [Service]
             ExecStart=/bin/true
         - path: /etc/alloy/config.alloy

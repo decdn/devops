@@ -302,11 +302,15 @@ sudo chmod 600 /etc/decdn/decdn.env   # belt-and-braces: sudo may apply its own 
 systemd's `EnvironmentFile` parser is shell-*like* but not a shell: one `KEY=value`
 per line, no `export`, no expansion — and it **skips** a line it cannot parse,
 logging a warning to `journalctl -u decdn-node` that is easy to miss, so the
-variable is simply absent at runtime. Single-quote any value containing a space,
-quote, backslash, `$` or backtick. (`decdn config validate` sources this file with
-bash, which *would* expand `$VAR` and execute `$(…)`; quoting avoids both.) On the
-inventory path the role applies that escaping to `decdn_extra_env` values for you —
-but **not** to `decdn_rpc_url` itself, which is rendered raw.
+variable is simply absent at runtime. Single-quote any host-provisioned value
+containing a space, quote, backslash, `$` or backtick. On the inventory path the
+role renders `decdn_rpc_url` and every `decdn_extra_env` value with `to_json`
+(systemd EnvironmentFile double-quotes). `decdn config validate` loads the
+role-supported one-line assignment forms with a non-expanding host-side parser
+rather than bash `source`, so `$VAR` / `$(…)` in an inventory URL stay literal —
+matching what the daemon receives. Host-provisioned values may be unquoted,
+completely single-quoted, or JSON-style double-quoted; shell concatenation and
+multiline EnvironmentFile forms are deliberately rejected by the deploy gate.
 
 ### The provenance record
 

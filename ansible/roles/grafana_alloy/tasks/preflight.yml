@@ -131,6 +131,32 @@
 
 # --- Host-state credential gates ------------------------------------------------
 
+- name: Inspect the secret file parent directory
+  ansible.builtin.stat:
+    path: "{{ grafana_alloy_secret_file | dirname }}"
+    follow: false
+  register: _ga_secret_parent_stat
+
+- name: Assert the secret file parent is root-controlled
+  ansible.builtin.assert:
+    that:
+      # Restrict the credential to a direct child of /etc. Checking only the
+      # immediate parent of a nested path is insufficient: a writable grandparent
+      # can replace the whole supposedly-safe directory.
+      - (grafana_alloy_secret_file | dirname) == '/etc'
+      - _ga_secret_parent_stat.stat.exists
+      - _ga_secret_parent_stat.stat.isdir | default(false)
+      - (_ga_secret_parent_stat.stat.pw_name | default('')) == 'root'
+      - (_ga_secret_parent_stat.stat.gr_name | default('')) == 'root'
+      - (_ga_secret_parent_stat.stat.mode | default('')) | length == 4
+      - (_ga_secret_parent_stat.stat.mode | string)[-2] not in ['2', '3', '6', '7']
+      - (_ga_secret_parent_stat.stat.mode | string)[-1] not in ['2', '3', '6', '7']
+    fail_msg: >-
+      grafana_alloy_secret_file must be directly under /etc, and /etc must be a
+      real root:root directory with no group/other write bit. A writable parent or
+      ancestor lets a service replace the root-only EnvironmentFile before systemd
+      reads it.
+
 - name: Require the Grafana Cloud secret environment file
   ansible.builtin.stat:
     path: "{{ grafana_alloy_secret_file }}"
@@ -138,9 +164,9 @@
   register: _ga_secret_stat
 
 # stat.exists alone cannot see the difference between a regular file and a
-# symlink/directory; only `isreg` can. A symlink planted into the (root-owned)
-# /etc/decdn dir that later passes a root chown/chmod would harden whatever TARGET
-# it points at — exactly what decdn.env's gate refuses, so refuse here too.
+# symlink planted at the credential path that later passes a root chown/chmod
+# would harden whatever TARGET it points at — exactly what decdn.env's gate
+# refuses, so refuse here too.
 - name: Assert the secret file is a real root-owned 0600 file
   ansible.builtin.assert:
     that:

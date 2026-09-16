@@ -79,8 +79,22 @@
           decdn_extra_env value correctly. Got: {{ env_body }}
       vars:
         env_body: "{{ decdn_env_body.content | b64decode }}"
-        env_rpc_expected: 'DECDN_RPC_URL="https://rpc.example.invalid/"'
+        env_rpc_expected: >-
+          DECDN_RPC_URL="https://rpc.example.invalid/?token=$HOME$(touch /tmp/decdn-rpc-expanded)&quote=o'brien"
         env_expected: 'DECDN_MOLECULE_EXTRA="a \"quoted\" \\ value"'
+
+    - name: Check whether sourcing the RPC URL executed its command substitution
+      ansible.builtin.stat:
+        path: /tmp/decdn-rpc-expanded
+      register: decdn_rpc_expansion_marker
+
+    - name: Assert config validate did not expand the RPC URL as a shell
+      ansible.builtin.assert:
+        that:
+          - not decdn_rpc_expansion_marker.stat.exists
+        fail_msg: >-
+          config validate expanded a literal command substitution embedded in
+          decdn_rpc_url; the env file must be loaded without bash source.
 
     - name: Compute the env file's current sha256
       ansible.builtin.stat:
@@ -352,7 +366,7 @@
         - /etc/alloy
         - /var/lib/alloy
         - /etc/systemd/system/alloy.service
-        - /etc/decdn/grafana-alloy.env
+        - /etc/grafana-alloy.env
 
     - name: Assert no Alloy artifacts exist while observability is disabled
       ansible.builtin.assert:

@@ -23,6 +23,19 @@
     - name: Gather service facts
       ansible.builtin.service_facts:
 
+    - name: Read node.toml for the disabled-observability branch
+      ansible.builtin.slurp:
+        src: /etc/decdn/node.toml
+      register: node_toml_b64
+
+    - name: Assert disabled Grafana with no explicit endpoint omits OTLP entirely
+      ansible.builtin.assert:
+        that:
+          - "'otlp_endpoint' not in (node_toml_b64.content | b64decode)"
+        fail_msg: >-
+          node.toml rendered observability.otlp_endpoint even though both
+          decdn_grafana_cloud_enabled is false and decdn_otlp_endpoint is empty.
+
     - name: Assert the deploy survived a metrics-probe timeout with the unit running
       ansible.builtin.assert:
         that:

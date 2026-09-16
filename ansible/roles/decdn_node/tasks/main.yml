@@ -164,6 +164,7 @@
           - "{{ item }}"
       register: _decdn_bin_file
       changed_when: false
+      check_mode: false
       loop:
         - "{{ decdn_node_manual_bin_src }}"
         - "{{ decdn_cli_manual_bin_src }}"
@@ -1068,18 +1069,30 @@
   ansible.builtin.assert:
     that:
       - item.key is match('^[A-Za-z_][A-Za-z0-9_]*$')
-      - item.value | string is match('^[^\r\n]*$')
+      - item.value | string is match('^[^\x00-\x1f\x7f]*\Z')
       - item.key != 'DECDN_RPC_URL'
     fail_msg: >-
       decdn_extra_env keys must be POSIX environment-variable names and values must
-      contain no newline (systemd silently DROPS an unparseable EnvironmentFile
-      line, so the variable would be absent at runtime rather than wrong).
+      contain no ASCII control characters (systemd silently DROPS an unparseable
+      EnvironmentFile line, so the variable would be absent at runtime rather than
+      wrong).
       DECDN_RPC_URL is set from decdn_rpc_url and must not be overridden here.
       Offending entry: {{ item.key }}.
   loop: "{{ decdn_extra_env | default({}, true) | dict2items }}"
   loop_control:
     label: "{{ item.key }}"
   no_log: true                     # values are secrets by design
+
+- name: Validate the inventory RPC URL is one-line EnvironmentFile data
+  ansible.builtin.assert:
+    that:
+      - decdn_rpc_url | string is match('^[^\x00-\x1f\x7f]*\Z')
+    fail_msg: >-
+      decdn_rpc_url must contain no ASCII control characters; the role renders it
+      as one EnvironmentFile assignment and must preserve one value identically for
+      both systemd and the deploy-time config validation.
+  no_log: true
+  when: decdn_rpc_url | length > 0
 
 # --- User & directories -------------------------------------------------------
 - name: Create decdn system group
@@ -1293,8 +1306,9 @@
     # to_json emits exactly the double-quoted, C-escaped form systemd's
     # EnvironmentFile parser expects, and ensure_ascii=false keeps UTF-8 literal
     # (systemd understands \xNN, not \uNNNN). It supplies the quotes itself, so a
-    # value with a space, '#', quote or backslash survives intact — the RPC URL
-    # included, which used to be interpolated raw.
+    # value with a space, '#', quote, `$` or backslash survives intact — the RPC
+    # URL included. The validate task below must NOT bash-source this file:
+    # bash would expand $VAR / $(...) inside those double quotes; systemd will not.
     content: |
       DECDN_RPC_URL={{ decdn_rpc_url | string | to_json(ensure_ascii=false) }}
       {% for k, v in (decdn_extra_env | default({}, true)) | dictsort %}
@@ -1435,28 +1449,107 @@
 # Runs as decdn_user because it reads the 0600 keystore password; DECDN_RPC_URL is
 # supplied from the same value systemd will hand the daemon. Skipped in check mode
 # (node.toml has not been written yet) — the asserts above are the check-mode gate.
-# The RPC URL is sourced from the 0600 env file rather than passed via Ansible's
+# The RPC URL is loaded from the 0600 env file rather than passed via Ansible's
 # `environment:`. `environment:` is implemented as a shell prefix on the module
 # command (`ENV=val /usr/bin/python3 ...`), so it lands in the target host's
 # process table and any local user can read the embedded API key out of `ps` for
 # the duration of the task — `no_log` hides it from Ansible's output, not from
-# /proc. Sourcing the file systemd already reads keeps the secret on disk at 0600.
+# /proc. A host-side, non-expanding parser reads the same file and passes the
+# resulting environment directly to the CLI subprocess, keeping the secret out of
+# the shell command line and preventing shell expansion.
 - name: Validate the rendered node.toml with the installed binary
   ansible.builtin.shell:
     executable: /bin/bash
     cmd: |
       set -euo pipefail
-      # Exit 3 is reserved for "the env file could not be sourced" so the report
-      # task below does not blame node.toml for a quoting typo in decdn.env. NOTE
-      # this is bash, not systemd's parser: it expands $VAR and executes $(...)
-      # and backticks, which systemd would pass through literally. Operators are
-      # told to single-quote values (files/decdn.env.example).
-      set -a
-      . {{ decdn_env_file | quote }} || { echo "env-file could not be sourced" >&2; exit 3; }
-      set +a
-      {{ decdn_cli_bin | quote }} config validate \
-        --config {{ decdn_config_file | quote }} \
-        --keystore-password-file {{ decdn_keystore_password_file | quote }}
+      # Exit 3 is reserved for "the env file could not be parsed" so the report
+      # task below does not blame node.toml for a quoting typo in decdn.env.
+      # Do NOT bash-source the file: bash expands $VAR and executes $(...) /
+      # backticks inside double quotes, which systemd's EnvironmentFile parser
+      # (and therefore the running daemon) would pass through literally.
+      python3 - \
+        {{ decdn_env_file | quote }} \
+        {{ decdn_cli_bin | quote }} \
+        {{ decdn_config_file | quote }} \
+        {{ decdn_keystore_password_file | quote }} \
+        <<'PY'
+      import os, re, subprocess, sys
+
+      def parse_double_quoted(value):
+          """Parse systemd's one-line double-quoted EnvironmentFile subset."""
+          body = value[1:-1]
+          parsed = []
+          index = 0
+          while index < len(body):
+              char = body[index]
+              if char == '"':
+                  raise ValueError("adjacent double-quoted segments are unsupported")
+              if char != "\\":
+                  parsed.append(char)
+                  index += 1
+                  continue
+              if index + 1 >= len(body):
+                  raise ValueError("trailing backslash")
+              following = body[index + 1]
+              if following in ['"', "\\", "$", "`"]:
+                  parsed.append(following)
+              else:
+                  # In systemd double quotes, a backslash before any other
+                  # character is preserved literally.
+                  parsed.extend(["\\", following])
+              index += 2
+          return "".join(parsed)
+
+      def validate_value(value):
+          """Reject bytes/code points systemd refuses plus unsupported controls."""
+          for char in value:
+              codepoint = ord(char)
+              if codepoint < 0x20 or codepoint == 0x7F:
+                  raise ValueError("ASCII control character")
+              if codepoint == 0xFEFF or 0xFDD0 <= codepoint <= 0xFDEF:
+                  raise ValueError("Unicode noncharacter/BOM")
+              if (codepoint & 0xFFFF) in [0xFFFE, 0xFFFF]:
+                  raise ValueError("Unicode noncharacter")
+
+      try:
+          path, cli, config, pwfile = sys.argv[1:5]
+      except ValueError:
+          sys.stderr.write("env-file could not be parsed\n")
+          sys.exit(3)
+      env = os.environ.copy()
+      key_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+      try:
+          with open(path, "r", encoding="utf-8") as fh:
+              for raw in fh:
+                  line = raw.rstrip("\r\n")
+                  if not line.strip() or line.lstrip().startswith("#"):
+                      continue
+                  if "=" not in line:
+                      raise ValueError("missing assignment")
+                  key, value = line.split("=", 1)
+                  if not key_re.fullmatch(key):
+                      raise ValueError("bad key")
+                  if len(value) >= 2 and value[0] == value[-1] == '"':
+                      value = parse_double_quoted(value)
+                  elif len(value) >= 2 and value[0] == value[-1] == "'":
+                      value = value[1:-1]
+                      if "'" in value:
+                          raise ValueError("single-quote concatenation is unsupported")
+                  elif value[:1] in ['"', "'"] or value[-1:] in ['"', "'"]:
+                      raise ValueError("unbalanced quote")
+                  elif value and not re.fullmatch(r'''[^\s\\'"]+''', value):
+                      raise ValueError("unsupported unquoted value")
+                  validate_value(value)
+                  env[key] = value
+      except Exception:
+          sys.stderr.write("env-file could not be parsed\n")
+          sys.exit(3)
+      result = subprocess.run(
+          [cli, "config", "validate", "--config", config, "--keystore-password-file", pwfile],
+          env=env,
+      )
+      sys.exit(result.returncode)
+      PY
   become_user: "{{ decdn_user }}"
   become: true
   register: decdn_config_validate
@@ -1476,11 +1569,11 @@
   ansible.builtin.fail:
     msg: >-
       {% if decdn_config_validate.rc | default(0) == 3 %}
-      {{ decdn_env_file }} could not be sourced, so the config was never
+      {{ decdn_env_file }} could not be parsed, so the config was never
       validated: {{ decdn_config_validate.stderr | default('(no output)', true) }}.
-      This is a shell-syntax fault in the ENV FILE, not a problem with
-      {{ decdn_config_file }} — most often an unbalanced quote, or an unquoted
-      value containing a space. Single-quote the value and re-run.
+      This is a fault in the ENV FILE, not a problem with
+      {{ decdn_config_file }} — most often an unbalanced quote. Fix the
+      EnvironmentFile syntax and re-run.
       {% elif decdn_config_validate.rc is not defined %}
       `decdn config validate` could not be RUN
       ({{ decdn_config_validate.msg | default('no rc and no msg — re-run with -vvv', true) }}).
