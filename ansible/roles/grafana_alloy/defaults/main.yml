@@ -68,6 +68,12 @@ grafana_alloy_env_checksum_file: /etc/grafana-alloy.env.sha256
 # rewrite is token-only, any lines added outside Ansible are DISCARDED; migrate
 # them to their inventory variables BEFORE turning this on (preflight then stops
 # demanding them from the file, which also makes the migration verifiable).
+#
+# Turn it back to false after the one converge that needs it. Left true, this host
+# has NO clobber guard: the next hand-edit to the env file is silently destroyed
+# instead of stopping the deploy, which is the whole point of the record. It must
+# be a real boolean — preflight rejects "yes"/"on"/"1" rather than let YAML
+# truthiness grant an authorisation nobody typed.
 grafana_alloy_overwrite_host_file: false
 
 # --- Network (loopback-only; AGENTS.md hard rule 2) ---------------------------
