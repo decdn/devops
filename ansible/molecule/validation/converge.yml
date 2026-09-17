@@ -646,7 +646,7 @@
         - name: Record ga-no-secret rejection (only if the secret-file assert failed)
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['secret-file'] }}"
-          when: ansible_failed_task.name is match('^Assert the secret file')
+          when: ansible_failed_task.name is match('^Require the Grafana Cloud secret environment file')
 
     - name: "Case ga-symlink-secret — symlinked credential file"
       block:
@@ -1127,6 +1127,70 @@
             path: /etc/grafana-alloy.env
             state: absent
 
+    # The #39 relaxation lets the token ride inventory, but only as a bare,
+    # whitespace-free value — it becomes a single systemd EnvironmentFile line.
+    - name: "Case ga-token-var-shape — whitespace inside grafana_alloy_api_token"
+      block:
+        - name: Run grafana_alloy with a whitespace-carrying API token variable
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_api_token: "glc_molecule spaced"
+      rescue:
+        - name: Record ga-token-var-shape rejection (only if the token-shape gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['token-shape'] }}"
+          when: ansible_failed_task.name is match('^Validate the shape of an inventory-provided API token')
+
+    # A tracked host-authored env file must not be silently clobbered by an
+    # inventory token; overwriting requires the explicit opt-in knob.
+    - name: "Case ga-collision — inventory token aimed at an untracked host env file"
+      block:
+        - name: Stage a host-style credential fixture
+          ansible.builtin.copy:
+            dest: /etc/grafana-alloy.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+              GC_API_TOKEN=molecule-test-token
+
+        # Seed a KNOWN-foreign provenance record: source says 'inventory' but the
+        # checksum no longer matches the staged file, which is exactly the
+        # role-didn't-last-write-this state the overwrite knob exists for.
+        - name: Seed a stale provenance record for the fixture
+          ansible.builtin.copy:
+            dest: /etc/grafana-alloy.env.sha256
+            owner: root
+            group: root
+            mode: "0600"
+            content: >-
+              inventory 0000000000000000000000000000000000000000000000000000000000000000
+
+        - name: Run grafana_alloy with an inventory token against the foreign fixture
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_api_token: molecule-test-token
+      rescue:
+        - name: Record ga-collision rejection (only if the overwrite gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['token-collision'] }}"
+          when: ansible_failed_task.name is match('^Require confirmation to overwrite an env file')
+      always:
+        - name: Remove the collision fixtures
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/grafana-alloy.env
+            - /etc/grafana-alloy.env.sha256
+
     - name: Confirm every bad value was rejected by the role's own validation
       ansible.builtin.assert:
         that:
@@ -1152,5 +1216,5 @@
            "alloy-root-user-alias", "alloy-root-group-alias",
            "host-collectors", "host-collectors", "host-collectors",
            "endpoint-scheme", "inventory-token", "inventory-token", "instance-id",
-           "otlp-username-env",
+           "otlp-username-env", "token-shape", "token-collision",
            "managed-paths", "managed-paths", "managed-paths"]

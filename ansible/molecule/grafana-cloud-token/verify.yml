@@ -1,0 +1,179 @@
+---
+# Verify the inventory-path authoring: a role-authored token-only 0600 env file,
+# its provenance record, no secret literals outside it, and a running agent.
+# Content assertions are grep-shape only against values this repo already knew
+# (the molecule token) — mirroring how the role itself treats the host path.
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+    - name: Stat the artifacts the run must have produced
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+        # Must match the checksum algorithm the role records (stat defaults to sha1).
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: ga_files
+      # config.alloy is root:alloy by design (the agent user reads its own config);
+      # the credential file and its provenance record are strictly root:root.
+      loop:
+        - {path: /etc/grafana-alloy.env, mode: "0600", grp: root}
+        - {path: /etc/grafana-alloy.env.sha256, mode: "0600", grp: root}
+        - {path: /etc/alloy/config.alloy, mode: "0644", grp: alloy}
+
+    - name: Assert ownership/modes of the artifacts
+      ansible.builtin.assert:
+        that:
+          # exists-and-mode first so a missing file short-circuits to fail_msg
+          # instead of raising on absent stat fields.
+          - item.stat.exists and item.stat.mode == item.item.mode
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == item.item.grp
+          # Regular file: the authored credential must not be a symlink, same as
+          # preflight demands from operator-provisioned ones.
+          - item.stat.isreg | default(false)
+      loop: "{{ ga_files.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+
+    - name: Read the authored credential file back
+      ansible.builtin.slurp:
+        src: /etc/grafana-alloy.env
+      register: ga_env_b64
+
+    - name: Assert the env file is exactly one JSON-encoded token line
+      ansible.builtin.assert:
+        that:
+          # to_json always double-quotes a plain string; systemd strips the outer
+          # quotes when expanding EnvironmentFile=.
+          - >-
+            ga_lines | length == 1
+          - >-
+            ga_lines[0] == 'GC_API_TOKEN="' ~ (ga_expected_token) ~ '"'
+          - >-
+            ga_body.count('GC_') == 1
+        fail_msg: >-
+          The authored env file must be a single GC_API_TOKEN="<token>" line.
+          Got: {{ ga_body }}
+      vars:
+        ga_expected_token: molecule-test-token
+        ga_body: "{{ ga_env_b64.content | b64decode }}"
+        ga_lines: "{{ (ga_env_b64.content | b64decode).splitlines() }}"
+
+    - name: Read the provenance record back
+      ansible.builtin.slurp:
+        src: /etc/grafana-alloy.env.sha256
+      register: ga_record_b64
+
+    - name: Resolve the record's two fields
+      ansible.builtin.set_fact:
+        ga_record_fields: "{{ (ga_record_b64.content | b64decode | trim).split() }}"
+
+    - name: Assert the record says inventory-authored and matches the live file
+      ansible.builtin.assert:
+        that:
+          - ga_record_fields | length == 2
+          - ga_record_fields[0] == 'inventory'
+          - ga_record_fields[1] == (ga_files.results[0].stat.checksum)
+        fail_msg: >-
+          The provenance record must read "<source> <sha256-of-current-file>".
+          Got: {{ ga_record_fields }}
+
+    # --- Secret hygiene --------------------------------------------------------------
+    - name: Register the secret-token absence across non-secret files
+      ansible.builtin.command:
+        cmd: grep -Rq molecule-test-token {{ item }}
+      changed_when: false
+      failed_when: false
+      loop:
+        - /etc/systemd/system/alloy.service
+        - /etc/alloy/config.alloy
+      register: ga_leak_probe
+
+    - name: Assert no secret literal leaked into non-secret artifacts
+      ansible.builtin.assert:
+        that:
+          - ga_leak_probe.results | selectattr('rc', 'equalto', 0) | list | length == 0
+        fail_msg: >-
+          The GC_API_TOKEN literal appears outside the 0600 env file — config or
+          unit rendering stopped using sys.env() indirection.
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert alloy picked up the authored credentials (running, not crash-looping)
+      ansible.builtin.assert:
+        that:
+          - "'alloy.service' in ansible_facts.services"
+          - ansible_facts.services['alloy.service'].state == 'running'
+
+# Mutates the converged host deliberately (like ../grafana-cloud's disable checks),
+# so it runs AFTER every assertion above: rotating the token must update both the
+# authored file and the provenance record atomically-ish, and leave the agent up.
+- name: Rotate
+  hosts: all
+  become: true
+  tasks:
+    - name: Snapshot the pre-rotation record
+      ansible.builtin.slurp:
+        src: /etc/grafana-alloy.env.sha256
+      register: ga_record_pre
+
+    - name: Re-run the role with a rotated token
+      ansible.builtin.include_role:
+        name: grafana_alloy
+      vars:
+        decdn_grafana_cloud_enabled: true
+        grafana_alloy_install_method: manual
+        grafana_alloy_manual_bin_src: >-
+          {{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/files/alloy-stub
+        grafana_alloy_deployment_environment: production
+        grafana_alloy_region: US
+        grafana_alloy_api_token: molecule-rotated-token
+        grafana_alloy_prom_url: https://prometheus-prod-xx.molecule.invalid/api/prom/push
+        grafana_alloy_prom_username: "1234567"
+        grafana_alloy_otlp_endpoint: https://otlp-gateway-prod-xx.molecule.invalid/otlp
+        grafana_alloy_loki_url: https://logs-prod-xx.molecule.invalid/loki/api/v1/push
+        grafana_alloy_loki_username: "7654321"
+
+    - name: Read the rotated artifacts
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: ga_rotated
+      loop:
+        - /etc/grafana-alloy.env
+        - /etc/grafana-alloy.env.sha256
+
+    - name: Stat the rotated credential file for its fresh checksum
+      ansible.builtin.stat:
+        path: /etc/grafana-alloy.env
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: ga_rotated_stat
+
+    - name: Assert rotation landed in both the file and the record
+      ansible.builtin.assert:
+        that:
+          # Untracked-before-warn semantics do not apply here: the record EXISTS
+          # (seeded by the converge), source='inventory' and checksum matched, so
+          # no collision assert can fire. Verify content + provenance both moved.
+          - (ga_rotated.results[0].content | b64decode) is search('molecule-rotated-token')
+          - (ga_rotated.results[0].content | b64decode) is not search('molecule-test-token')
+          - ((ga_rotated.results[1].content | b64decode | trim).split()[0]) == 'inventory'
+          - ((ga_rotated.results[1].content | b64decode | trim).split()[1])
+            == (ga_rotated_stat.stat.checksum)
+          - ((ga_rotated.results[1].content | b64decode | trim).split()[1])
+            != (ga_record_pre.content | b64decode | trim).split()[1]
+        fail_msg: >-
+          Token rotation did not propagate: either the env file kept the old
+          value, or the provenance record does not match the freshly authored
+          file (a stale record would trip the adoption guard next converge).
+
+    - name: Gather service facts after rotation
+      ansible.builtin.service_facts:
+
+    - name: Assert alloy restarted onto the rotated credential
+      ansible.builtin.assert:
+        that:
+          - "'alloy.service' in ansible_facts.services"
+          - ansible_facts.services['alloy.service'].state == 'running'

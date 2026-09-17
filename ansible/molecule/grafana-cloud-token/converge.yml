@@ -1,0 +1,35 @@
+---
+# Token-via-inventory converge: every non-secret connection setting comes from
+# this playbook's vars (the normal committed inventory half) and the token rides
+# grafana_alloy_api_token — in a real deployment it would live in git-ignored
+# inventory/host_vars/<node>/secret.yml, exactly like decdn_rpc_url. Nothing
+# stages /etc/grafana-alloy.env; the role must author it itself.
+#
+# Logs stay enabled with BOTH Loki knobs supplied from inventory so the authored
+# file needs zero GC_* keys beyond the token — the all-or-nothing contract has
+# nothing to clobber on these throwaway containers.
+- name: Converge
+  hosts: all
+  become: true
+  vars:
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/files/alloy-stub"
+    decdn_grafana_cloud_enabled: true
+    grafana_alloy_install_method: manual
+    grafana_alloy_manual_bin_src: "{{ stub_bin }}"
+    grafana_alloy_deployment_environment: production
+    grafana_alloy_region: US
+
+    # --- The point of this scenario -------------------------------------------------
+    grafana_alloy_api_token: molecule-test-token
+
+    # All six non-secret settings satisfied by inventory, so preflight requires no
+    # env-file key but GC_API_TOKEN... which the variable now covers too.
+    grafana_alloy_prom_url: https://prometheus-prod-xx.molecule.invalid/api/prom/push
+    grafana_alloy_prom_username: "1234567"
+    grafana_alloy_otlp_endpoint: https://otlp-gateway-prod-xx.molecule.invalid/otlp
+    grafana_alloy_loki_url: https://logs-prod-xx.molecule.invalid/loki/api/v1/push
+    grafana_alloy_loki_username: "7654321"
+
+  roles:
+    - role: grafana_alloy
+      tags: [observability]

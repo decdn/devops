@@ -220,6 +220,13 @@ Each of those variables is optional: left empty, the value is read from the matc
 `GC_…` key in that file instead (`roles/grafana_alloy/files/grafana-alloy.env.example`
 lists them all; URLs must be https).
 
+Alternatively the token itself can ride git-ignored inventory — set
+`grafana_alloy_api_token: "glc_…"` in `host_vars/<node>/secret.yml`, same channel as
+`decdn_rpc_url`, and the role authors `/etc/grafana-alloy.env` for you (token-only,
+root 0600). The authoring rewrites the file wholesale, so any hand-added `GC_*` keys
+must move to their inventory variables first; provenance guards fail loud on silent
+adoption or clobbering. See "The API token has two homes now" in the role README.
+
 **Upgrading a host deployed before machine monitoring existed:** journald shipping is on
 by default and needs a Loki endpoint + instance ID the old four-key file does not carry,
 so preflight fails until you either set `grafana_alloy_loki_url` / `_loki_username` in
@@ -254,9 +261,11 @@ make lint-alloy     # render grafana_alloy's templates, then `alloy validate` th
 `make molecule` runs every scenario under `molecule/`: **`default`** (described below),
 `schema` (config key-set drift against the upstream field list), `validation` (bad knobs,
 for both roles, must be rejected by their own asserts), `generate-keystore` (opt-in
-host-side wallet), `host-env` (host-provisioned `/etc/decdn/decdn.env`) and
+host-side wallet), `host-env` (host-provisioned `/etc/decdn/decdn.env`),
 `slow-readiness` (advisory `/metrics` probe timeout), `grafana-cloud` (the opt-in
-observability wiring — see [Grafana Cloud observability](#grafana-cloud-observability-opt-in)).
+observability wiring — see [Grafana Cloud observability](#grafana-cloud-observability-opt-in))
+and `grafana-cloud-token` (the same wiring with the API token carried through
+git-ignored inventory instead: role-authored env file + provenance record).
 They are independent, so they run concurrently —
 ~151s instead of ~595s — and each line of output is prefixed with its scenario name
 because the runs interleave. `make molecule-serial` is the escape hatch when that
@@ -301,7 +310,8 @@ the RPC URL when it is not provisioned on the host instead). Highlights:
 | `decdn_rpc_url` + 3 contract addresses | `""` | **required** per node — `rpc_url` from a host-provisioned `0600 /etc/decdn/decdn.env` (preferred) *or* `host_vars/<node>/secret.yml`, addresses in `main.yml`; sourced from an ADR/deployment. |
 | `decdn_region` / `decdn_bind_port` / `decdn_rate_per_mb` | `""` / `4433` / `10` | node identity, QUIC port, USDC base units/MB. |
 | `decdn_env_checksum_file` / `decdn_env_overwrite_host_file` | `/etc/decdn/.decdn.env.sha256` / `false` | Provenance record for the secret env file (`0600 root`), and the opt-in that lets an inventory `decdn_rpc_url` overwrite a host-edited one. |
-| `decdn_grafana_cloud_enabled` | `false` | ONE mirrored knob (identical default in both roles) wiring on Grafana Cloud observability: installs + configures `grafana_alloy` — node metrics, machine metrics, journald, agent health — AND injects `otlp_endpoint` into `node.toml`. Only the API token is provisioned per host; the rest are inventory variables. Label/cost guardrails in the role README. |
+| `decdn_grafana_cloud_enabled` | `false` | ONE mirrored knob (identical default in both roles) wiring on Grafana Cloud observability: installs + configures `grafana_alloy` — node metrics, machine metrics, journald, agent health — AND injects `otlp_endpoint` into `node.toml`. Only the API token is provisioned per host *or* carried by `grafana_alloy_api_token` in git-ignored inventory; the rest are inventory variables. Label/cost guardrails in the role README. |
+| `grafana_alloy_api_token` / `_env_checksum_file` / `_overwrite_host_file` | `""` / `/etc/grafana-alloy.env.sha256` / `false` | The dual-homed Grafana Cloud token and its provenance machinery (`#39` parity with the row above); see [`roles/grafana_alloy/README.md`](roles/grafana_alloy/README.md). |
 
 ---
 

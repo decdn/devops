@@ -76,6 +76,43 @@ matching `GC_…` key in the env file exactly as before, and preflight requires 
 key only then. Any mix of the two halves is valid.
 `roles/grafana_alloy/files/grafana-alloy.env.example` shows the full key set.
 
+### The API token has two homes now
+
+The token may also ride **git-ignored inventory**, mirroring how `decdn_rpc_url`
+works:
+
+```yaml
+# host_vars/<node>/secret.yml — git-ignored; see secret.yml.example
+grafana_alloy_api_token: "glc_…"
+```
+
+With it set, the role authors `/etc/grafana-alloy.env` itself — as a **token-only**
+file (`GC_API_TOKEN="…"` at `root:root 0600`, JSON-encoded so quotes/backslashes
+survive), rewritten wholesale on every converge. Runtime behaviour is identical:
+`config.alloy` still reads `sys.env("GC_API_TOKEN")`; only who fills the file
+changes. Rotation is an inventory edit + deploy instead of per-host shell work,
+and provenance tracking (a `<source> <sha256>` record next to the file) catches
+the classic failure modes loud:
+
+- **Token vanished from the control machine** while a role-authored file exists
+  → the run refuses to adopt its own file as operator-provisioned ("restore the
+  variable or discard the record explicitly").
+- **Untracked hand-edited file** meeting an inventory token → refused unless
+  `grafana_alloy_overwrite_host_file: true`.
+
+The authoring is all-or-nothing: any hand-added `GC_*` lines beyond the token are
+DISCARDED by a rewrite — migrate them to their inventory variables first
+(preflight's per-key gates then verify nothing was lost). An out-of-band edit on
+the host-provisioned path restarts the agent with a note, same as `decdn_node`.
+Returning a host to hand-provisioned mode: clear the variable, then discard the
+provenance record (`sudo rm /etc/grafana-alloy.env.sha256`). The Helm chart is
+unaffected (it was Secret-oriented from the start).
+
+`GC_API_TOKEN` values in plain committed inventory remain rejected: the rendered
+`/etc/alloy/config.alloy` is world-readable, and preflight rejects a value that
+looks like a token (or a URL with embedded credentials) in any of the six
+variables above.
+
 > **Upgrading an existing host.** Logs are on by default, and Loki needs an
 > endpoint + instance ID that the pre-existing four-key env file does not have.
 > Preflight fails loudly, naming both the missing key and the inventory variable
@@ -98,11 +135,6 @@ key only then. Any mix of the two halves is valid.
 > `GC_OTLP_USERNAME` is the one credential key that may be absent — but if it is
 > present, preflight checks its shape, because a malformed value outranks the
 > Prometheus fallback at runtime and 401s traces just the same.
-
-`GC_API_TOKEN` has **no** inventory variable by design: the rendered
-`/etc/alloy/config.alloy` is world-readable, and preflight rejects a value that
-looks like a token (or a URL with embedded credentials) in any of the six
-variables above.
 
 The credential path is intentionally restricted to a **direct child of `/etc`**. A
 nested override (including the old `/etc/decdn/grafana-alloy.env`) is rejected:
@@ -200,6 +232,9 @@ upstream version/sha256). Highlights:
 | `grafana_alloy_logs_max_age` | `12h` | Bounds the catch-up burst after an outage |
 | `grafana_alloy_self_metrics_enabled` | `true` | Alloy's own health |
 | `grafana_alloy_prom_url` / `_prom_username` / `_otlp_endpoint` / `_otlp_username` / `_loki_url` / `_loki_username` | `""` | Non-secret connection settings; empty ⇒ read the matching `GC_…` env key (`_otlp_username` then falls back to the Prometheus ID) |
+| `grafana_alloy_api_token` | `""` | **SENSITIVE** — the API token (git-ignored `secret.yml`). Empty ⇒ operator-provisioned `/etc/grafana-alloy.env`; set ⇒ the role authors that file token-only, root 0600. See "The API token has two homes now". |
+| `grafana_alloy_env_checksum_file` | `/etc/grafana-alloy.env.sha256` | Provenance record (`<source> <sha256>`) enabling the adoption/overwrite guards below |
+| `grafana_alloy_overwrite_host_file` | `false` | Explicit opt-in letting an inventory token rewrite a hand-edited/untracked env file (all-or-nothing: extra `GC_*` lines are discarded) |
 | `grafana_alloy_node_job` / `_host_job` / `_self_job` / `_logs_job` | see table above | Job labels; the `integrations/…` ones are what Grafana Cloud's dashboards match |
 
 Label variables (`service_name`, `service_namespace`, `instance_id`,

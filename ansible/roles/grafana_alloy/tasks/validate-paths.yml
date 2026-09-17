@@ -42,6 +42,13 @@
       value: "{{ grafana_alloy_secret_file }}"
       under: /etc
       regex: '^/etc/[A-Za-z0-9._-]+$'
+    # Not removed on disable UNLESS this role authored the unit (see teardown),
+    # but it is both written and deleted by root-owned `copy`/`file` tasks, so it
+    # gets the same anchored single-segment treatment as the secret file.
+    - name: grafana_alloy_env_checksum_file
+      value: "{{ grafana_alloy_env_checksum_file }}"
+      under: /etc
+      regex: '^/etc/[A-Za-z0-9._-]+$'
   loop_control:
     label: "{{ item.name }}"
 
