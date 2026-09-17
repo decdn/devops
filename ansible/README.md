@@ -201,7 +201,7 @@ control machine):
 
 ```bash
 umask 077
-sudo install -m 600 -o root -g root grafana-alloy.env /etc/decdn/grafana-alloy.env
+sudo install -m 600 -o root -g root grafana-alloy.env /etc/grafana-alloy.env
 ```
 
 with `roles/grafana_alloy/files/grafana-alloy.env.example` as the template (remote-write

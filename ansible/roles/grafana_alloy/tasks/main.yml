@@ -17,6 +17,38 @@
       string — it gates this entire role and the otlp_endpoint injection in
       roles/decdn_node/templates/node.toml.j2.
 
+# Global, not preflight-only: the disabled path can delete the configured account
+# after recognizing a managed unit, so root/0 must be refused before EITHER path.
+- name: Resolve an existing Alloy service user
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ grafana_alloy_user }}"
+    fail_key: false
+  changed_when: false
+
+- name: Resolve an existing Alloy service group
+  ansible.builtin.getent:
+    database: group
+    key: "{{ grafana_alloy_group }}"
+    fail_key: false
+  changed_when: false
+
+- name: Require an unprivileged Alloy identity
+  ansible.builtin.assert:
+    that:
+      - (grafana_alloy_user | string) not in ['root', '0']
+      - (grafana_alloy_group | string) not in ['root', '0']
+      - >-
+        (ansible_facts.getent_passwd | default({})).get(grafana_alloy_user) is none
+        or (ansible_facts.getent_passwd[grafana_alloy_user][1] | int) != 0
+      - >-
+        (ansible_facts.getent_group | default({})).get(grafana_alloy_group) is none
+        or (ansible_facts.getent_group[grafana_alloy_group][1] | int) != 0
+    fail_msg: >-
+      grafana_alloy_user and grafana_alloy_group must be dedicated unprivileged
+      identities, not root/0 and not aliases resolving to UID/GID 0; both service
+      startup and teardown rely on that privilege boundary.
+
 # --- Disabled path: stop + uninstall ONLY what this role installed, so flipping -
 # --- the flag off is a complete rollback and a no-op for anything else --------
 - name: Tear down a prior installation by this role (flag off)
@@ -48,7 +80,8 @@
     - name: Decide whether the leftover install is ours to remove
       ansible.builtin.set_fact:
         _ga_ours: "{{ _ga_leftover_unit.stat.exists
-                      and _ga_managed_marker in (_ga_leftover_unit_body.content | b64decode) }}"
+                      and (_ga_leftover_unit_body.content | default('') | b64decode).split('\n')[0]
+                          == _ga_managed_marker }}"
 
     - name: Report that an unmanaged Alloy installation was left untouched
       ansible.builtin.debug:

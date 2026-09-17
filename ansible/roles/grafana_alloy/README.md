@@ -28,10 +28,13 @@ machine):
 
 ```bash
 umask 077
-sudo install -m 600 -o root -g root grafana-alloy.env /etc/decdn/grafana-alloy.env
+sudo install -m 600 -o root -g root grafana-alloy.env /etc/grafana-alloy.env
 ```
 
 using `roles/grafana_alloy/files/grafana-alloy.env.example` as the template. The
+credential path is intentionally restricted to a **direct child of `/etc`**. A
+nested override (including the old `/etc/decdn/grafana-alloy.env`) is rejected:
+write access to any ancestor is enough to replace a root-owned `0600` file.
 four required keys are `GC_PROM_REMOTE_WRITE_URL`, `GC_OTLP_ENDPOINT`,
 `GC_PROM_USERNAME` and `GC_API_TOKEN`; both URLs must be `https://`.
 `config.alloy` reads each of them at load time with `sys.env("GC_…")` — Alloy has

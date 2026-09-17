@@ -29,6 +29,20 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   a missing port, a path/query/fragment and userinfo are rejected at deploy time.
   OTLP export is always compiled in; no `--features otlp` build is needed.
 
+### Fixed
+
+- Grafana Alloy credentials now default to root-controlled
+  `/etc/grafana-alloy.env`; preflight also rejects a non-root-owned or writable
+  parent directory and a root service identity. Teardown requires the managed
+  stamp on the unit's first line, and destructive paths reject both `.` and `..`
+  segments.
+- `decdn config validate` no longer bash-sources `/etc/decdn/decdn.env`. It
+  loads the role-supported one-line EnvironmentFile assignment forms with a
+  non-expanding host-side parser, so `$VAR` / `$(...)` in an inventory-rendered
+  (`to_json`) RPC URL stay literal for both the gate and the daemon.
+- Manual dir-mode's read-only ELF probe runs under `--check` instead of being
+  skipped and feeding empty output into the architecture assertion.
+
 ## [0.1.0] — unreleased
 
 Initial packaging of the public deCDN node roles as a distributable collection.

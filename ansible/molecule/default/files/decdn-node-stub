@@ -17,7 +17,9 @@ can be exercised end-to-end without a published release or a live chain:
                      scenario uses this to prove the role's advisory probe warns
                      (not fails) on timeout while the unit stays `running`.
   * `config validate ...`
-                  -> parse the rendered node.toml as TOML and exit 0. A stub has no
+                  -> parse the rendered node.toml as TOML and exit 0. In the default
+                     scenario it also checks the exact literal DECDN_RPC_URL passed
+                     by the role's non-expanding EnvironmentFile loader. A stub has no
                      schema, so this checks syntax only; `molecule/schema` is what
                      covers key-level drift against the real upstream field list.
   * `key-gen ...` -> stand in for the CLI's wallet generator (exercised by the
@@ -128,6 +130,22 @@ def config_validate(args):
     if not os.path.isfile(config):
         print(f"stub config validate: no such config file: {config}", file=sys.stderr)
         return 1
+    if os.environ.get("DECDN_MOLECULE_ASSERT_RPC_LITERAL") == "1":
+        expected_rpc = (
+            "https://rpc.example.invalid/?token=$HOME"
+            "$(touch /tmp/decdn-rpc-expanded)&quote=o'brien"
+        )
+        expected_extra = 'a "quoted" \\ value'
+        if (
+            os.environ.get("DECDN_RPC_URL") != expected_rpc
+            or os.environ.get("DECDN_MOLECULE_EXTRA") != expected_extra
+        ):
+            print(
+                "stub config validate: an EnvironmentFile value was expanded or "
+                "decoded incorrectly",
+                file=sys.stderr,
+            )
+            return 1
     try:
         with open(config, "rb") as fh:
             tomllib.load(fh)

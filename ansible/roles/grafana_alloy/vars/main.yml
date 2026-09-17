@@ -7,4 +7,4 @@
 # teardown into a silent no-op, changing it independently turns teardown into a
 # destructive operation against an unrelated Alloy install.
 _ga_unit_path: /etc/systemd/system/alloy.service
-_ga_managed_marker: MANAGED BY the grafana_alloy role
+_ga_managed_marker: "# MANAGED BY the grafana_alloy role — do not edit by hand."

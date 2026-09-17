@@ -119,6 +119,69 @@
             decdn_cli_manual_bin_src: "{{ stub_bin }}"
             decdn_release_target_dir: ""
 
+    # A read-only `file -b` probe must still execute under --check. Before this
+    # regression guard it was skipped and the following ELF assert saw stdout="".
+    - name: "Case binary-check-mode — dir-mode format probe runs during dry-run"
+      vars:
+        _decdn_check_dir: >-
+          {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/.molecule-checkbin/target/release
+      block:
+        - name: Create the check-mode binary directory on the control machine
+          ansible.builtin.file:
+            path: "{{ _decdn_check_dir }}"
+            state: directory
+            mode: "0755"
+          delegate_to: localhost
+          become: false
+
+        - name: Stage a valid ELF pair for the check-mode probe
+          ansible.builtin.copy:
+            src: /bin/true
+            dest: "{{ _decdn_check_dir }}/{{ item }}"
+            mode: "0755"
+          loop: [decdn-node, decdn]
+          delegate_to: localhost
+          become: false
+
+        # Host facts, not include_role vars: include vars outrank the role's own
+        # set_fact that derives these paths, leaving them empty at the file probe.
+        - name: Activate dir-mode facts for the check-mode probe
+          ansible.builtin.set_fact:
+            decdn_node_manual_bin_src: ""
+            decdn_cli_manual_bin_src: ""
+            decdn_release_target_dir: "{{ _decdn_check_dir }}"
+            decdn_node_target: >-
+              {{ 'aarch64-unknown-linux-gnu'
+                 if ansible_facts.architecture in ['aarch64', 'arm64']
+                 else 'x86_64-unknown-linux-gnu' }}
+            decdn_rpc_url: ""
+
+        - name: Dry-run decdn_node in manual dir-mode
+          check_mode: true
+          block:
+            - name: Include decdn_node under check mode
+              ansible.builtin.include_role:
+                name: decdn_node
+      rescue:
+        - name: Record binary check-mode success at the next expected gate
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['binary-check-mode'] }}"
+          when: ansible_failed_task.name is match('^Require an RPC endpoint')
+      always:
+        - name: Remove the check-mode binary fixture
+          ansible.builtin.file:
+            path: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/.molecule-checkbin"
+            state: absent
+          delegate_to: localhost
+          become: false
+        - name: Restore binary-source facts after the check-mode probe
+          ansible.builtin.set_fact:
+            decdn_node_manual_bin_src: "{{ stub_bin }}"
+            decdn_cli_manual_bin_src: "{{ stub_bin }}"
+            decdn_release_target_dir: ""
+            decdn_node_target: x86_64-unknown-linux-gnu
+            decdn_rpc_url: "https://rpc.example.invalid/"
+
     # --- Case: range (numeric but below the daemon's minimum) ---------------------
     - name: "Case range — event_poll_interval_ms below 250"
       block:
@@ -386,6 +449,35 @@
             decdn_rejected: "{{ decdn_rejected + ['otlp-newline'] }}"
           when: ansible_failed_task.name == 'Validate optional string knobs (user_agent, otlp_endpoint)'
 
+    - name: "Case env-control-rpc — inventory RPC URL contains a tab"
+      block:
+        - name: Run decdn_node with control data in the inventory RPC URL
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            # Decode at runtime so the YAML source contains no literal tab (which
+            # ansible-lint's no-tabs rule correctly rejects).
+            decdn_rpc_url: "{{ 'aHR0cHM6Ly9ycGMuZXhhbXBsZS5pbnZhbGlkLwlzZWNyZXQ=' | b64decode }}"
+      rescue:
+        - name: Record inventory RPC control-character rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['env-control-rpc'] }}"
+          when: ansible_failed_task.name == 'Validate the inventory RPC URL is one-line EnvironmentFile data'
+
+    - name: "Case env-control-extra — extra environment value contains a tab"
+      block:
+        - name: Run decdn_node with control data in decdn_extra_env
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_extra_env:
+              DECDN_MOLECULE_BAD: "{{ 'bGVmdAlyaWdodA==' | b64decode }}"
+      rescue:
+        - name: Record extra environment control-character rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['env-control-extra'] }}"
+          when: ansible_failed_task.name == 'Validate decdn_extra_env keys and values'
+
     # --- Case: no RPC endpoint anywhere (#39) -------------------------------------
     # decdn_rpc_url may now be empty — but ONLY when the operator has provisioned
     # /etc/decdn/decdn.env on the host. Nothing has staged that file yet at this
@@ -533,15 +625,16 @@
 
     # --- Cases: grafana_alloy preflight gates (#55) --------------------------------
     # The opt-in Grafana Cloud role's OWN fail-loud gates get the same treatment.
-    # All seven broken configs abort inside preflight-imported tasks BEFORE any
+    # Broken configs abort inside preflight-imported tasks BEFORE any
     # host mutation (user/package/config), so they cannot interfere with the other
-    # cases or start services. Tag deduping at the bottom handles two cases per
-    # gate. Fixtures are staged/restored per case; none of this touches decdn.env.
-    - name: "Case ga-no-secret — enabled without /etc/decdn/grafana-alloy.env"
+    # cases or start services. Repeated tags are preserved in the final multiset,
+    # so every sibling case must fail independently. Fixtures are staged/restored
+    # per case; none of this touches decdn.env.
+    - name: "Case ga-no-secret — enabled without /etc/grafana-alloy.env"
       block:
         - name: Stage only a placeholder credential path (absent file)
           ansible.builtin.file:
-            path: /etc/decdn/grafana-alloy.env
+            path: /etc/grafana-alloy.env
             state: absent
 
         - name: Run grafana_alloy with its credential file absent
@@ -572,7 +665,7 @@
         - name: Point the credential path at the out-of-tree symlink target
           ansible.builtin.file:
             src: /var/lib/grafana-alloy-fixture.env
-            dest: /etc/decdn/grafana-alloy.env
+            dest: /etc/grafana-alloy.env
             state: link
             force: true
 
@@ -592,14 +685,14 @@
             path: "{{ item }}"
             state: absent
           loop:
-            - /etc/decdn/grafana-alloy.env
+            - /etc/grafana-alloy.env
             - /var/lib/grafana-alloy-fixture.env
 
     - name: "Case ga-missing-key — GC_API_TOKEN line dropped"
       block:
         - name: Stage an otherwise-complete credential file without the token
           ansible.builtin.copy:
-            dest: /etc/decdn/grafana-alloy.env
+            dest: /etc/grafana-alloy.env
             owner: root
             group: root
             mode: "0600"
@@ -621,14 +714,14 @@
       always:
         - name: Remove the partial credential fixture
           ansible.builtin.file:
-            path: /etc/decdn/grafana-alloy.env
+            path: /etc/grafana-alloy.env
             state: absent
 
     - name: "Case ga-http-url — cleartext remote-write endpoint"
       block:
         - name: Stage a credential file with an http:// push URL
           ansible.builtin.copy:
-            dest: /etc/decdn/grafana-alloy.env
+            dest: /etc/grafana-alloy.env
             owner: root
             group: root
             mode: "0600"
@@ -651,7 +744,7 @@
       always:
         - name: Remove the http-url credential fixture
           ansible.builtin.file:
-            path: /etc/decdn/grafana-alloy.env
+            path: /etc/grafana-alloy.env
             state: absent
 
     - name: "Case ga-ratio — trace sampler keep-ratio above 1"
@@ -668,6 +761,84 @@
             decdn_rejected: "{{ decdn_rejected + ['pipeline-knobs'] }}"
           when: ansible_failed_task.name is match('^Validate the pipeline knobs')
 
+    - name: "Case ga-root-user — Alloy cannot run as root"
+      block:
+        - name: Run disabled grafana_alloy with root as its service user
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            # The disabled path can delete a recognized installation's account.
+            decdn_grafana_cloud_enabled: false
+            grafana_alloy_user: root
+      rescue:
+        - name: Record ga-root-user rejection (only if the identity gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['alloy-root-user'] }}"
+          when: ansible_failed_task.name is match('^Require an unprivileged Alloy identity')
+
+    - name: "Case ga-root-group — Alloy cannot run with root group"
+      block:
+        - name: Run disabled grafana_alloy with numeric root as its service group
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: false
+            grafana_alloy_group: "0"
+      rescue:
+        - name: Record ga-root-group rejection (only if the identity gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['alloy-root-group'] }}"
+          when: ansible_failed_task.name is match('^Require an unprivileged Alloy identity')
+
+    - name: "Case ga-root-user-alias — named account resolves to UID 0"
+      block:
+        - name: Stage a root-UID alias account
+          ansible.builtin.user:
+            name: alloy-root-alias
+            uid: 0
+            group: root
+            non_unique: true
+            create_home: false
+            shell: /usr/sbin/nologin
+
+        - name: Run disabled grafana_alloy with the root-UID alias
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: false
+            grafana_alloy_user: alloy-root-alias
+      rescue:
+        - name: Record root-UID alias rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['alloy-root-user-alias'] }}"
+          when: ansible_failed_task.name is match('^Require an unprivileged Alloy identity')
+      # Do not remove this UID-0 fixture: in a container, userdel treats PID 1
+      # (root) as using every UID-0 alias and refuses deletion. Molecule destroys
+      # the entire test instance after this scenario, which safely removes it.
+
+    - name: "Case ga-root-group-alias — named group resolves to GID 0"
+      block:
+        - name: Stage a root-GID alias group
+          ansible.builtin.group:
+            name: alloy-root-group-alias
+            gid: 0
+            non_unique: true
+
+        - name: Run disabled grafana_alloy with the root-GID alias
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: false
+            grafana_alloy_group: alloy-root-group-alias
+      rescue:
+        - name: Record root-GID alias rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['alloy-root-group-alias'] }}"
+          when: ansible_failed_task.name is match('^Require an unprivileged Alloy identity')
+      # As with the UID-0 alias above, do not groupdel this fixture: GID 0 is
+      # root's primary group, so groupdel refuses the duplicate alias. Molecule
+      # destroys the whole validation container after the scenario.
+
     - name: "Case ga-path-traversal — state directory escaping /var/lib"
       block:
         - name: Run grafana_alloy with a traversing state directory
@@ -683,6 +854,63 @@
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
           when: ansible_failed_task.name is match('^Constrain the managed Alloy paths')
+
+    - name: "Case ga-dot-segment — disabled teardown path contains a normalising dot"
+      block:
+        - name: Run disabled grafana_alloy with a dot segment in its state directory
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: false
+            grafana_alloy_state_dir: /var/lib/alloy/.
+      rescue:
+        - name: Record ga-dot-segment rejection (only if the path gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
+          when: ansible_failed_task.name is match('^Constrain the managed Alloy paths')
+
+    - name: "Case ga-nested-secret-path — credentials are not directly under /etc"
+      block:
+        - name: Stage a root-controlled nested credential directory
+          ansible.builtin.file:
+            path: /etc/alloy-credentials
+            state: directory
+            owner: root
+            group: root
+            mode: "0750"
+
+        - name: Stage a root-owned credential file inside the nested directory
+          ansible.builtin.copy:
+            dest: /etc/alloy-credentials/grafana-alloy.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+              GC_API_TOKEN=molecule-test-token
+
+        # The fixture is deliberately root-owned and 0750 — the credential must
+        # still be refused purely on path shape, because auditing only the
+        # immediate parent cannot rule out a writable grandparent swapping it.
+        - name: Run grafana_alloy against a nested credential path
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_secret_file: /etc/alloy-credentials/grafana-alloy.env
+      rescue:
+        - name: Record nested secret-path rejection (only if its gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['secret-path-nested'] }}"
+          when: ansible_failed_task.name is match('^Constrain the managed Alloy paths')
+      always:
+        - name: Remove the nested credential directory fixture
+          ansible.builtin.file:
+            path: /etc/alloy-credentials
+            state: absent
+
 
     - name: "Case ga-config-outside-dir — rendered config outside the managed directory"
       block:
@@ -702,9 +930,9 @@
     - name: Confirm every bad value was rejected by the role's own validation
       ansible.builtin.assert:
         that:
-          # unique(): the grafana_alloy cases append the SAME tag for different
-          # inputs guarded by one shared gate (both bad file shapes -> 'secret-file').
-          - decdn_rejected | unique | sort == _decdn_expected | sort
+          # Keep duplicates: every case must contribute its own rejection. Deduping
+          # lets one broken sibling hide behind another case that uses the same gate.
+          - decdn_rejected | sort == _decdn_expected | sort
         fail_msg: >-
           Neither decdn_node nor grafana_alloy rejected every bad value at their
           validation asserts.
@@ -713,8 +941,12 @@
           the daemon/crash-loop it at config load, or ship credentials insecurely).
       vars:
         _decdn_expected:
-          ["cross-field", "binary-format", "range", "bounded-range", "shape", "bool",
+          ["cross-field", "binary-format", "binary-check-mode", "range", "bounded-range", "shape", "bool",
            "enum", "dict", "float", "list", "string", "string-newline", "otlp-https",
            "otlp-noport", "otlp-path", "otlp-userinfo", "otlp-colon", "otlp-port",
-           "otlp-newline", "env-gate", "env-extra", "env-content", "config-gate",
-           "secret-file", "secret-content", "pipeline-knobs", "managed-paths"]
+           "otlp-newline", "env-control-rpc", "env-control-extra", "env-gate",
+           "env-extra", "env-content", "config-gate",
+           "secret-file", "secret-file", "secret-path-nested", "secret-content",
+           "secret-content", "pipeline-knobs", "alloy-root-user", "alloy-root-group",
+           "alloy-root-user-alias", "alloy-root-group-alias",
+           "managed-paths", "managed-paths", "managed-paths"]
