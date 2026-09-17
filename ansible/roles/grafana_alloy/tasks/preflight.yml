@@ -207,11 +207,12 @@
       instance ID on Grafana Cloud, a tenant name on a self-hosted
       Mimir/Loki — so it is restricted to letters, digits, dot, underscore and
       dash, and must not be a token or carry whitespace. Got "{{ item.value }}".
-      NOTE the Loki instance ID differs from the Prometheus one; the
-      access-policy token is shared and stays in
+      NOTE the Loki and OTLP instance IDs are each their own number, distinct
+      from the Prometheus one; the access-policy token is shared and stays in
       {{ grafana_alloy_secret_file }} as GC_API_TOKEN.
   loop:
     - {name: grafana_alloy_prom_username, value: "{{ grafana_alloy_prom_username | string }}"}
+    - {name: grafana_alloy_otlp_username, value: "{{ grafana_alloy_otlp_username | string }}"}
     - {name: grafana_alloy_loki_username, value: "{{ grafana_alloy_loki_username | string }}"}
   loop_control:
     label: "{{ item.name }}"
@@ -233,6 +234,7 @@
     - "{{ grafana_alloy_prom_url | string }}"
     - "{{ grafana_alloy_prom_username | string }}"
     - "{{ grafana_alloy_otlp_endpoint | string }}"
+    - "{{ grafana_alloy_otlp_username | string }}"
     - "{{ grafana_alloy_loki_url | string }}"
     - "{{ grafana_alloy_loki_username | string }}"
   loop_control:
@@ -402,3 +404,53 @@
          | rejectattr('rc', 'equalto', 0)
          | map(attribute='item') | list }}
   when: _ga_missing | length > 0
+
+# GC_OTLP_USERNAME is the one credential key that is legitimately OPTIONAL: with
+# neither inventory nor env-file value, the rendered config resolves the OTLP
+# username at runtime to the Prometheus ID — exactly what every pre-existing
+# deployment used — so ABSENT is correct and must not be required. But
+# PRESENT-AND-MALFORMED is not harmless: coalesce() returns the first non-empty
+# argument, so a value carrying whitespace or a stray comment wins over the valid
+# Prometheus fallback and 401s the entire trace pipeline while metrics and logs
+# stay healthy. The required-key gate above cannot cover it (it only greps keys it
+# demands), hence this present-then-shaped pair. Skipped when inventory supplies
+# the ID, because the template then inlines it and emits no sys.env lookup at all.
+- name: Detect a host-provided OTLP instance ID
+  ansible.builtin.command:
+    cmd: grep -qE -- '^GC_OTLP_USERNAME=.*[^[:space:]]' {{ grafana_alloy_secret_file | quote }}
+  changed_when: false
+  check_mode: false               # read-only gate: must also run under make check
+  failed_when: false
+  register: _ga_otlp_user_present
+  when: grafana_alloy_otlp_username | string | length == 0
+
+# Same charset as the inventory instance-ID gate, plus the optional double quotes
+# systemd strips off an EnvironmentFile value.
+- name: Check the shape of a host-provided OTLP instance ID
+  ansible.builtin.command:
+    cmd: grep -qE -- '^GC_OTLP_USERNAME="?[A-Za-z0-9._-]{1,64}"?$' {{ grafana_alloy_secret_file | quote }}
+  changed_when: false
+  check_mode: false               # read-only gate: must also run under make check
+  failed_when: false
+  register: _ga_otlp_user_shape
+  when:
+    - grafana_alloy_otlp_username | string | length == 0
+    - (_ga_otlp_user_present.rc | default(1)) == 0
+
+- name: Refuse a malformed host-provided OTLP instance ID
+  ansible.builtin.assert:
+    that:
+      - (_ga_otlp_user_shape.rc | default(0)) == 0
+    fail_msg: >-
+      {{ grafana_alloy_secret_file }} sets GC_OTLP_USERNAME to a value that is
+      not an instance ID (letters, digits, dot, underscore, dash, ≤ 64 chars, no
+      whitespace and no trailing comment). The key is optional — drop the line
+      entirely and traces fall back to the Prometheus instance ID, which is what
+      this role used before the OTLP gateway got its own username — but a
+      malformed value is worse than none: it takes precedence over that fallback
+      and every span is rejected with a 401 while remote-write and Loki keep
+      flowing. Fix the line on the host, remove it, or set
+      grafana_alloy_otlp_username in inventory instead.
+  when:
+    - grafana_alloy_otlp_username | string | length == 0
+    - (_ga_otlp_user_present.rc | default(1)) == 0

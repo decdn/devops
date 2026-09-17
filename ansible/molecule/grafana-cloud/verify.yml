@@ -155,6 +155,11 @@
             'username = "1234567"' in ga_config
           - >-
             'sys.env("GC_PROM_USERNAME")' not in ga_config
+          # The OTLP gateway takes the STACK instance ID, which converge leaves
+          # unset: the config must defer to the host's GC_OTLP_USERNAME and only
+          # then reuse the Prometheus ID, rather than binding the latter outright.
+          - >-
+            'username = coalesce(sys.env("GC_OTLP_USERNAME"), "1234567")' in ga_config
         fail_msg: >-
           The inventory-vs-env credential split did not render as expected:
           grafana_alloy_loki_url and the numeric grafana_alloy_prom_username were
@@ -181,6 +186,11 @@
             'GC_OTLP_ENDPOINT=https://' in ga_env_body
           - >-
             'GC_LOKI_USERNAME=999888778' in ga_env_body
+          # Optional, and well-formed: proves preflight's present-then-shaped gate
+          # for the OTLP instance ID accepts a valid host value rather than only
+          # tolerating an absent key.
+          - >-
+            'GC_OTLP_USERNAME=999888779' in ga_env_body
           # Deliberately absent: converge supplies the Loki URL from inventory,
           # which is what makes preflight's conditional requirement meaningful.
           - >-

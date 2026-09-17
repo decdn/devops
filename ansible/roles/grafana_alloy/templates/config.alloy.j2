@@ -18,7 +18,7 @@
 // `--config.expand-env` flag — `${VAR}` inside a string is a literal, so
 // `sys.env("VAR")` is the only working indirection.
 //
-// The NON-secret half of the credentials (endpoint URLs, the two numeric
+// The NON-secret half of the credentials (endpoint URLs, the three numeric
 // instance IDs) may instead come from inventory; see the ga_endpoint macro.
 
 {# Renders a Grafana Cloud connection value as either an inline string literal
@@ -35,6 +35,19 @@
 {% macro ga_endpoint(value, env_key) -%}
 {% set ga_value = value | default('', true) | string %}
 {% if ga_value | length > 0 %}{{ ga_value | tojson }}{% else %}sys.env({{ env_key | tojson }}){% endif %}
+{%- endmacro %}
+
+{# The OTLP gateway's basic-auth username is the STACK instance ID, which is not
+   necessarily the Prometheus one — where they differ, reusing the Prometheus ID
+   401s the whole OTLP pipeline while remote-write and Loki stay healthy.
+   Inventory wins; otherwise the decision is deferred to RUNTIME, because whether
+   the host's env file carries GC_OTLP_USERNAME is not knowable at render time.
+   `coalesce` returns its first non-empty argument and sys.env yields "" for an
+   unset variable, so an existing host with only the Prometheus key keeps
+   resolving exactly the value it resolved before. #}
+{% macro ga_otlp_username() -%}
+{% set ga_otlp_user = grafana_alloy_otlp_username | default('', true) | string %}
+{% if ga_otlp_user | length > 0 %}{{ ga_otlp_user | tojson }}{% else %}coalesce(sys.env("GC_OTLP_USERNAME"), {{ ga_endpoint(grafana_alloy_prom_username, 'GC_PROM_USERNAME') }}){% endif %}
 {%- endmacro %}
 
 prometheus.scrape "decdn_node" {
@@ -421,6 +434,6 @@ otelcol.exporter.otlphttp "cloud" {
 }
 
 otelcol.auth.basic "cloud" {
-  username = {{ ga_endpoint(grafana_alloy_prom_username, 'GC_PROM_USERNAME') }}
+  username = {{ ga_otlp_username() }}
   password = sys.env("GC_API_TOKEN")
 }

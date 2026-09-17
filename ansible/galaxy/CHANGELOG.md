@@ -31,6 +31,13 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The OTLP gateway is authenticated with its own instance ID. The role reused
+  the Prometheus one, so a Grafana Cloud org whose stack ID differs 401s every
+  trace while metrics and logs keep flowing. New `grafana_alloy_otlp_username` /
+  `GC_OTLP_USERNAME`; when both are empty the rendered config still resolves the
+  Prometheus value, so an org where the IDs coincide is unaffected. The optional
+  host key is shape-checked whenever it is present, so a malformed value cannot
+  quietly outrank that fallback.
 - Grafana Alloy credentials now default to root-controlled
   `/etc/grafana-alloy.env`; preflight also rejects a non-root-owned or writable
   parent directory and a root service identity. Teardown requires the managed

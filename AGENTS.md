@@ -87,9 +87,9 @@ charts/
   the daemon's OTLP spans. Host metrics and logs carry `job="integrations/node_exporter"`
   so Grafana Cloud's prebuilt Linux Server dashboards work unmodified. Only the API token
   is host-provisioned (`0600 /etc/grafana-alloy.env`, read via `sys.env` — Alloy has no
-  `--config.expand-env`); the non-secret endpoints/instance IDs are inventory variables
-  that fall back to their `GC_…` env key when empty, and preflight refuses a token in any
-  of them. Two hardening relaxations are conditional on the signals being on
+  `--config.expand-env`); the non-secret endpoints and the three per-service instance IDs
+  are inventory variables that fall back to their `GC_…` env key when empty, and preflight
+  refuses a token in any of them. Two hardening relaxations are conditional on the signals being on
   (`ProtectHome=read-only` for correct filesystem metrics, `SupplementaryGroups=
   systemd-journal adm` for journal access — without which collection is silently empty);
   teardown is gated on the managed-by marker in the unit, so a foreign Alloy is never

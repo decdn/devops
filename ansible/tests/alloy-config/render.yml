@@ -182,7 +182,7 @@
         grafana_alloy_self_metrics_enabled: false
         grafana_alloy_logs_enabled: false
 
-    # The inventory-driven connection settings: all five non-secret values set,
+    # The inventory-driven connection settings: all six non-secret values set,
     # so every sys.env lookup EXCEPT the token must disappear.
     - name: Render the inventory-endpoint configuration
       ansible.builtin.template:
@@ -204,8 +204,33 @@
         # must coerce rather than emit a bare number.
         grafana_alloy_prom_username: 1234567
         grafana_alloy_otlp_endpoint: https://otlp-gateway-prod-99.render.invalid/otlp
+        # A THIRD distinct ID: the OTLP gateway authenticates with the stack
+        # instance ID, so an inventory value must win over the Prometheus one
+        # outright — no runtime fallback left in the rendered config.
+        grafana_alloy_otlp_username: 2345678
         grafana_alloy_loki_url: https://logs-prod-99.render.invalid/loki/api/v1/push
         grafana_alloy_loki_username: 7654321
+
+    # The upgrade shape: Prometheus settings in inventory, nothing for OTLP. The
+    # rendered config must defer to the host's GC_OTLP_USERNAME if it has one and
+    # only then reuse the Prometheus ID, which is what every pre-existing
+    # deployment resolved to.
+    - name: Render the OTLP-username-fallback configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/otlpfallback.{{ item.ext }}"
+        mode: "0644"
+      loop: *ga_render_pair
+      loop_control:
+        label: "otlpfallback.{{ item.ext }}"
+      vars:
+        _ga_instance_id: decdn-node-9
+        _ga_journal_groups: [systemd-journal, adm]
+        grafana_alloy_bin_effective: /usr/bin/alloy
+        grafana_alloy_deployment_environment: production
+        grafana_alloy_region: US
+        grafana_alloy_prom_url: https://prometheus-prod-99.render.invalid/api/prom/push
+        grafana_alloy_prom_username: 1234567
 
     # The two escape hatches an upgrading operator reaches for: vetoing a
     # collector must actually remove it (and its scoping block) rather than

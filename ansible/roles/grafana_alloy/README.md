@@ -42,7 +42,7 @@ Machine metrics, agent self-metrics and journald come with it (each has its own
 
 ### Credentials: one secret per host, the rest in inventory
 
-Only the **API token** is a secret. The endpoint URLs and the two numeric
+Only the **API token** is a secret. The endpoint URLs and the three numeric
 instance IDs are not, so they belong in inventory — written once for the fleet
 rather than typed on every host:
 
@@ -51,9 +51,16 @@ rather than typed on every host:
 grafana_alloy_prom_url: https://prometheus-prod-13-prod-us-east-0.grafana.net/api/prom/push
 grafana_alloy_prom_username: "1234567"          # Prometheus instance ID
 grafana_alloy_otlp_endpoint: https://otlp-gateway-prod-us-east-0.grafana.net/otlp
+grafana_alloy_otlp_username: "2345678"          # STACK instance ID, shown on the OTLP page
 grafana_alloy_loki_url: https://logs-prod-006.grafana.net/loki/api/v1/push
 grafana_alloy_loki_username: "7654321"          # Loki instance ID — a DIFFERENT number
 ```
+
+Each of those three IDs is its own number in the portal. Copy each from the page
+that names it (**Prometheus → Username / Instance ID**, **OTLP Endpoint →
+Instance ID**, **Loki → User**) rather than assuming one value covers all three:
+where the OTLP ID differs and is left unset, traces 401 while metrics and logs
+keep flowing, which reads as "tracing is broken" rather than "auth is wrong".
 
 Then the only thing to provision **on the target host** is the token (it never
 transits the control machine):
@@ -83,10 +90,18 @@ key only then. Any mix of the two halves is valid.
 > `job="decdn-node"` instead of the implicit `job="prometheus.scrape.decdn_node"`.
 > Set `grafana_alloy_node_job: ""` to keep the old value if dashboards or alert
 > rules already hard-code it.
+>
+> **Traces 401 after an upgrade?** The OTLP gateway wants the stack instance ID,
+> and earlier versions of this role reused the Prometheus one. Where your org's
+> two IDs differ, set `grafana_alloy_otlp_username` (or add `GC_OTLP_USERNAME` to
+> the env file); where they coincide, nothing changes and nothing is needed.
+> `GC_OTLP_USERNAME` is the one credential key that may be absent — but if it is
+> present, preflight checks its shape, because a malformed value outranks the
+> Prometheus fallback at runtime and 401s traces just the same.
 
 `GC_API_TOKEN` has **no** inventory variable by design: the rendered
 `/etc/alloy/config.alloy` is world-readable, and preflight rejects a value that
-looks like a token (or a URL with embedded credentials) in any of the five
+looks like a token (or a URL with embedded credentials) in any of the six
 variables above.
 
 The credential path is intentionally restricted to a **direct child of `/etc`**. A
@@ -184,7 +199,7 @@ upstream version/sha256). Highlights:
 | `grafana_alloy_logs_enabled` | `true` | journald → Grafana Cloud Loki |
 | `grafana_alloy_logs_max_age` | `12h` | Bounds the catch-up burst after an outage |
 | `grafana_alloy_self_metrics_enabled` | `true` | Alloy's own health |
-| `grafana_alloy_prom_url` / `_prom_username` / `_otlp_endpoint` / `_loki_url` / `_loki_username` | `""` | Non-secret connection settings; empty ⇒ read the matching `GC_…` env key |
+| `grafana_alloy_prom_url` / `_prom_username` / `_otlp_endpoint` / `_otlp_username` / `_loki_url` / `_loki_username` | `""` | Non-secret connection settings; empty ⇒ read the matching `GC_…` env key (`_otlp_username` then falls back to the Prometheus ID) |
 | `grafana_alloy_node_job` / `_host_job` / `_self_job` / `_logs_job` | see table above | Job labels; the `integrations/…` ones are what Grafana Cloud's dashboards match |
 
 Label variables (`service_name`, `service_namespace`, `instance_id`,

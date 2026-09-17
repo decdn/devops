@@ -205,9 +205,10 @@ dashboards and alert rules work unmodified.
 
 Only the API token is a secret. Put the non-secret connection settings in inventory
 once for the fleet (`grafana_alloy_prom_url`, `_prom_username`, `_otlp_endpoint`,
-`_loki_url`, `_loki_username` — note the Loki instance ID differs from the Prometheus
-one), and provision just the token **on each target host** (it never transits this repo
-or the control machine):
+`_otlp_username`, `_loki_url`, `_loki_username` — Prometheus, OTLP and Loki each have
+their **own** instance ID, so copy each from the portal page that names it), and
+provision just the token **on each target host** (it never transits this repo or the
+control machine):
 
 ```bash
 umask 077
@@ -225,7 +226,10 @@ so preflight fails until you either set `grafana_alloy_loki_url` / `_loki_userna
 inventory, add `GC_LOKI_URL` / `GC_LOKI_USERNAME` to the env file, or set
 `grafana_alloy_logs_enabled: false`. The daemon's own metrics also gain an explicit
 `job="decdn-node"` label (previously the implicit `prometheus.scrape.decdn_node`) —
-`grafana_alloy_node_job: ""` restores the old identity.
+`grafana_alloy_node_job: ""` restores the old identity. If traces start returning 401
+while metrics still flow, the stack's OTLP instance ID is not its Prometheus one: set
+`grafana_alloy_otlp_username` (or `GC_OTLP_USERNAME`), which earlier versions had no way
+to express.
 
 Setup, rotation, cost/cardinality guardrails, the two systemd-hardening relaxations
 machine monitoring requires, and rollback: see
