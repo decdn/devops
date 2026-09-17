@@ -1,0 +1,55 @@
+---
+# Validate the provenance record before any task reads it onto the controller or
+# trusts it as authorization to rewrite a root-only credential file. The path is
+# already constrained by validate-paths.yml to `<secret-file>.sha256`.
+
+- name: Inspect the env-file provenance record
+  ansible.builtin.stat:
+    path: "{{ grafana_alloy_env_checksum_file }}"
+    follow: false
+    get_checksum: false
+  register: _ga_record_stat
+
+- name: Require an existing provenance record to be a protected regular file
+  ansible.builtin.assert:
+    that:
+      - _ga_record_stat.stat.isreg | default(false)
+      - (_ga_record_stat.stat.pw_name | default('')) == 'root'
+      - (_ga_record_stat.stat.gr_name | default('')) == 'root'
+      - _ga_record_stat.stat.mode | string == '0600'
+    fail_msg: >-
+      {{ grafana_alloy_env_checksum_file }} exists but is not a root:root 0600
+      regular file (symlinks are refused). Move the unrelated file away or restore
+      the role-authored provenance record before deploying.
+  when: _ga_record_stat.stat.exists
+
+# Probe the complete byte stream on the target with no stdout before slurp. A
+# line-oriented or NUL-record grep can accept one valid prefix and ignore trailing
+# unrelated bytes; Python's fullmatch cannot. Ansible already requires Python on
+# every managed target, so this adds no runtime dependency.
+- name: Check the provenance record shape on the target
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - >-
+        import pathlib, re, sys;
+        raise SystemExit(0 if re.fullmatch(
+        rb'(inventory|host) [0-9a-f]{64}\n?',
+        pathlib.Path(sys.argv[1]).read_bytes()) else 1)
+      - "{{ grafana_alloy_env_checksum_file }}"
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: _ga_record_shape
+  when: _ga_record_stat.stat.exists
+
+- name: Require an existing provenance record to have the role-owned format
+  ansible.builtin.assert:
+    that:
+      - (_ga_record_shape.rc | default(1)) == 0
+    fail_msg: >-
+      {{ grafana_alloy_env_checksum_file }} exists but is not a role-owned
+      provenance record of the exact form "<inventory|host> <sha256>". Refusing
+      to read, overwrite, or trust an unrelated /etc file.
+  when: _ga_record_stat.stat.exists

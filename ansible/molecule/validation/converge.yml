@@ -927,6 +927,71 @@
             decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
           when: ansible_failed_task.name is match('^Require the rendered config to live inside')
 
+    # The provenance file is root-written, root-read and removed during teardown.
+    # It must be the fixed companion of the credential file, not an independently
+    # aimable path that can slurp/clobber/delete another file under /etc.
+    - name: "Case ga-provenance-path — checksum record is not beside the credential file"
+      block:
+        - name: Run grafana_alloy with an independently aimed provenance path
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_env_checksum_file: /etc/molecule-unrelated-root-file
+      rescue:
+        - name: Record ga-provenance-path rejection (only if the companion-path gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
+          when: ansible_failed_task.name is match('^Require the provenance record to sit beside')
+
+    - name: "Case ga-provenance-content — unrelated file occupies the record path"
+      block:
+        - name: Stage an unrelated root-only file at the provenance path
+          ansible.builtin.copy:
+            dest: /etc/grafana-alloy.env.sha256
+            owner: root
+            group: root
+            mode: "0600"
+            # A valid first NUL-delimited grep record followed by unrelated bytes:
+            # `grep -zq` accepts this unless validation full-matches the byte stream.
+            content: >-
+              {{ ('aG9zdCAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD'
+                  ~ 'AwMDAwMDAwMDAwMDAwMDAwMDAwAHVucmVsYXRlZC1zZW5zaXRpdmUtY29udGVudAo=')
+                 | b64decode }}
+
+        - name: Run grafana_alloy with the unrelated provenance-path occupant
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            # kics-scan ignore-line (fake fixture token, not a committed secret)
+            grafana_alloy_api_token: molecule-test-token
+      rescue:
+        - name: Record ga-provenance-content rejection (only if shape validation failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['provenance-record'] }}"
+          when: ansible_failed_task.name is match('^Require an existing provenance record to have')
+      always:
+        - name: Remove the unrelated provenance-path occupant
+          ansible.builtin.file:
+            path: /etc/grafana-alloy.env.sha256
+            state: absent
+
+    - name: "Case ga-config-record-collision — teardown directory contains retained provenance"
+      block:
+        - name: Run disabled grafana_alloy with config_dir aimed at the provenance file
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: false
+            grafana_alloy_config_dir: /etc/grafana-alloy.env.sha256
+            grafana_alloy_config_file: /etc/grafana-alloy.env.sha256/config.alloy
+      rescue:
+        - name: Record ga-config-record-collision rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
+          when: ansible_failed_task.name is match('^Keep destructive directories away')
+
     - name: "Case ga-collector — unknown node_exporter collector name"
       block:
         - name: Run grafana_alloy with a bogus host collector
@@ -1144,8 +1209,9 @@
             decdn_rejected: "{{ decdn_rejected + ['token-shape'] }}"
           when: ansible_failed_task.name is match('^Validate the shape of an inventory-provided API token')
 
-    # A tracked host-authored env file must not be silently clobbered by an
-    # inventory token; overwriting requires the explicit opt-in knob.
+    # An existing host-authored env file with NO provenance is the upgrade state
+    # of every pre-record deployment. It must not be silently clobbered by an
+    # inventory token; unknown provenance requires the explicit opt-in knob.
     - name: "Case ga-collision — inventory token aimed at an untracked host env file"
       block:
         - name: Stage a host-style credential fixture
@@ -1159,18 +1225,6 @@
               GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
               GC_PROM_USERNAME=999888777
               GC_API_TOKEN=molecule-test-token
-
-        # Seed a KNOWN-foreign provenance record: source says 'inventory' but the
-        # checksum no longer matches the staged file, which is exactly the
-        # role-didn't-last-write-this state the overwrite knob exists for.
-        - name: Seed a stale provenance record for the fixture
-          ansible.builtin.copy:
-            dest: /etc/grafana-alloy.env.sha256
-            owner: root
-            group: root
-            mode: "0600"
-            content: >-
-              inventory 0000000000000000000000000000000000000000000000000000000000000000
 
         - name: Run grafana_alloy with an inventory token against the foreign fixture
           ansible.builtin.include_role:
@@ -1219,4 +1273,5 @@
            "host-collectors", "host-collectors", "host-collectors",
            "endpoint-scheme", "inventory-token", "inventory-token", "instance-id",
            "otlp-username-env", "token-shape", "token-collision",
-           "managed-paths", "managed-paths", "managed-paths"]
+           "provenance-record",
+           "managed-paths", "managed-paths", "managed-paths", "managed-paths", "managed-paths"]

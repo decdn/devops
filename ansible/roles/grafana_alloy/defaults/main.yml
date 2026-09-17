@@ -54,9 +54,12 @@ grafana_alloy_api_token: ""
 # grafana_alloy_api_token authored it, "host" otherwise) into a root-owned 0600
 # record NEXT TO the secret file — deliberately NOT inside /etc/alloy or
 # /var/lib/alloy, because the disable path removes those directories wholesale.
+# Path validation requires this to remain exactly `<secret-file>.sha256`; it is
+# not an independently aimable root-write path.
 # Preflight uses the pair to fail loud on (a) adopting a role-authored file after
 # the secret went missing from the control machine and (b) clobbering an operator-
-# edited file without grafana_alloy_overwrite_host_file.
+# edited or untracked file without grafana_alloy_overwrite_host_file. Disable keeps
+# both file and record so a later re-enable cannot forget who authored the token.
 grafana_alloy_env_checksum_file: /etc/grafana-alloy.env.sha256
 
 # Explicit opt-in letting grafana_alloy_api_token rewrite an env file whose

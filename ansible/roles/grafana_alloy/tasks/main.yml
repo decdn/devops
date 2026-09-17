@@ -114,11 +114,12 @@
             - "{{ _ga_unit_path }}"
             - "{{ grafana_alloy_config_dir }}"
             - "{{ grafana_alloy_state_dir }}"
-            # Provenance metadata is ours whenever the unit is (the marker gates
-            # this whole block); dropping it makes a disable→enable cycle re-seed
-            # cleanly instead of carrying a stale checksum.
-            - "{{ grafana_alloy_env_checksum_file }}"
           notify: Reload systemd
+
+        # Keep both the credential file and its provenance record. If the install
+        # was inventory-authored, deleting only the record would make a later
+        # re-enable with a missing secret.yml adopt the stale token as host-owned.
+        # The documented explicit handoff removes the record deliberately.
 
         - name: Apply pending teardown notifications
           ansible.builtin.meta: flush_handlers
@@ -294,6 +295,27 @@
       notify: Restart alloy
       when: grafana_alloy_api_token | length > 0
 
+    # If a prior run wrote the desired token bytes and then failed before the
+    # final provenance write, copy is now idempotent and would not notify. Queue a
+    # restart explicitly so retry both repairs the record and moves the running
+    # process onto those bytes. The desired checksum proves this is our exact
+    # token-only payload, not an arbitrary foreign edit.
+    - name: Resume an interrupted inventory token rotation
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Would restart Alloy to resume an interrupted inventory-token rotation.'
+             if ansible_check_mode else
+             'Resuming interrupted inventory-token rotation; restart queued before provenance.' }}
+      changed_when: true
+      notify: Restart alloy
+      when:
+        - grafana_alloy_api_token | length > 0
+        - _ga_secret_stat.stat.exists
+        - _ga_desired_inventory_sum == (_ga_secret_stat.stat.checksum | default(''))
+        - >-
+          _ga_record_source != 'inventory'
+          or _ga_recorded_sum != (_ga_secret_stat.stat.checksum | default(''))
+
     # The copy above is no_log, so a run that replaced an existing file shows a bare
     # "changed" and nothing else. Say what was lost — but only for the UNKNOWABLE
     # case: a file whose known-foreign provenance already failed preflight loudly,
@@ -310,7 +332,24 @@
           this converge on, that file is tracked: an edit made outside Ansible fails
           the next deploy instead of being silently discarded. Clear
           grafana_alloy_api_token to hand the file back to the host.
+      register: _ga_untracked_overwrite_applied_report
       when:
+        - not ansible_check_mode
+        - grafana_alloy_api_token | length > 0
+        - _ga_secret_stat.stat.exists
+        - _ga_recorded_sum | length == 0
+        - _ga_env_copy.changed | default(false) | bool
+
+    - name: Warn what check mode would discard from an untracked env file
+      ansible.builtin.debug:
+        msg: >-
+          grafana_alloy_api_token is set and explicit overwrite permission was
+          supplied, so a real run WOULD rewrite {{ grafana_alloy_secret_file }} as
+          a token-only file. Any host-added KEY=value lines not represented by
+          inventory variables WOULD be discarded; check mode made no change.
+      register: _ga_untracked_overwrite_check_report
+      when:
+        - ansible_check_mode
         - grafana_alloy_api_token | length > 0
         - _ga_secret_stat.stat.exists
         - _ga_recorded_sum | length == 0

@@ -311,7 +311,7 @@ the RPC URL when it is not provisioned on the host instead). Highlights:
 | `decdn_region` / `decdn_bind_port` / `decdn_rate_per_mb` | `""` / `4433` / `10` | node identity, QUIC port, USDC base units/MB. |
 | `decdn_env_checksum_file` / `decdn_env_overwrite_host_file` | `/etc/decdn/.decdn.env.sha256` / `false` | Provenance record for the secret env file (`0600 root`), and the opt-in that lets an inventory `decdn_rpc_url` overwrite a host-edited one. |
 | `decdn_grafana_cloud_enabled` | `false` | ONE mirrored knob (identical default in both roles) wiring on Grafana Cloud observability: installs + configures `grafana_alloy` — node metrics, machine metrics, journald, agent health — AND injects `otlp_endpoint` into `node.toml`. Only the API token is provisioned per host *or* carried by `grafana_alloy_api_token` in git-ignored inventory; the rest are inventory variables. Label/cost guardrails in the role README. |
-| `grafana_alloy_api_token` / `_env_checksum_file` / `_overwrite_host_file` | `""` / `/etc/grafana-alloy.env.sha256` / `false` | The dual-homed Grafana Cloud token and its provenance machinery (`#39` parity with the row above); see [`roles/grafana_alloy/README.md`](roles/grafana_alloy/README.md). |
+| `grafana_alloy_api_token` / `_env_checksum_file` / `_overwrite_host_file` | `""` / `/etc/grafana-alloy.env.sha256` / `false` | The dual-homed Grafana Cloud token and its provenance machinery (`#39` parity with the row above); the record path is fixed to `<secret-file>.sha256` and survives disable with the secret. See [`roles/grafana_alloy/README.md`](roles/grafana_alloy/README.md). |
 
 ---
 

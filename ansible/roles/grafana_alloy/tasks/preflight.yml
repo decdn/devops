@@ -265,6 +265,22 @@
   # Empty keeps the host-provisioned posture; the gate only guards the inventory path.
   when: grafana_alloy_api_token | length > 0
 
+# A retry after the role wrote new token bytes but failed before recording their
+# checksum must be distinguishable from a foreign edit. Hash the exact bytes the
+# copy task will render; the secret itself stays suppressed and never enters task
+# output. An empty token has no desired inventory-authored file.
+- name: Resolve the desired inventory-authored env-file checksum
+  ansible.builtin.set_fact:
+    _ga_desired_inventory_sum: >-
+      {{ (_ga_desired_inventory_content | hash('sha256'))
+         if grafana_alloy_api_token | length > 0 else '' }}
+  vars:
+    # Keep this byte-for-byte identical to the copy task's block scalar, including
+    # its trailing newline. Jinja string literals preserve `\\n` as two bytes.
+    _ga_desired_inventory_content: |
+      GC_API_TOKEN={{ grafana_alloy_api_token | string | to_json(ensure_ascii=false) }}
+  no_log: true
+
 - name: Validate the loopback listener addresses
   ansible.builtin.assert:
     that:
@@ -388,25 +404,29 @@
 # next run can tell three states apart. Only this non-sensitive record is ever
 # read back — never the secret file itself.
 #
-# An absent/truncated record means "no post-relaxation converge yet" and is the
-# normal state, which is why both asserts below stay quiet for it.
+# An absent record means "no post-relaxation converge yet". A present malformed,
+# unsafe or unrelated file is rejected on the target before slurp, so an inventory
+# typo cannot copy arbitrary /etc content into controller memory.
+- name: Validate the env-file provenance record before reading it
+  ansible.builtin.import_tasks: validate-env-record.yml
+
 - name: Read the env-file checksum this role last recorded
   ansible.builtin.slurp:
     src: "{{ grafana_alloy_env_checksum_file }}"
   register: _ga_recorded
-  failed_when: false
-  changed_when: false
+  when: _ga_record_stat.stat.exists
 
-# Both fields default to "" — treated exactly like "no record", which also covers
-# a truncated or older single-field record.
+# Shape was proven before slurp, so an existing record always has exactly two
+# fields. Conditional expressions avoid indexing a skipped slurp result when the
+# record is absent.
 - name: Resolve the secret file's provenance
   ansible.builtin.set_fact:
     _ga_record_source: >-
-      {{ ((_ga_recorded.content | default('') | b64decode | trim).split() | length == 2)
-         | ternary((_ga_recorded.content | default('') | b64decode | trim).split()[0], '') }}
+      {{ (_ga_recorded.content | b64decode | trim).split()[0]
+         if _ga_record_stat.stat.exists else '' }}
     _ga_recorded_sum: >-
-      {{ ((_ga_recorded.content | default('') | b64decode | trim).split() | length == 2)
-         | ternary((_ga_recorded.content | default('') | b64decode | trim).split()[1], '') }}
+      {{ (_ga_recorded.content | b64decode | trim).split()[1]
+         if _ga_record_stat.stat.exists else '' }}
 
 # The dangerous half of inferring operator intent. With grafana_alloy_api_token
 # empty the operator-supplied file is adopted as-is — but that ALSO happens when
@@ -436,10 +456,11 @@
     - _ga_secret_stat.stat.exists
 
 # The mirror direction: an inventory token REWRITES the file wholesale (and
-# token-only), losing any GC_* lines added outside Ansible. Scoped to a KNOWN
-# foreign provenance — with no record this cannot distinguish anything, so it
-# stays quiet and the run seeds the record for next time (the warn-once task in
-# tasks/main.yml covers the unknowable case).
+# token-only), losing any GC_* lines added outside Ansible. Existing bytes are
+# safe without an opt-in only when (a) a matching inventory record proves this
+# role wrote them, or (b) they already equal the exact desired token-only bytes,
+# which is the retry state after a failed run wrote the file but not the record.
+# Missing provenance is unknown, not permission to destroy a pre-record host file.
 - name: Require confirmation to overwrite an env file this role did not write
   ansible.builtin.assert:
     that:
@@ -457,10 +478,13 @@
   when:
     - grafana_alloy_api_token | length > 0
     - _ga_secret_stat.stat.exists
-    - _ga_recorded_sum | length > 0
     - >-
-      _ga_record_source != 'inventory'
-      or _ga_recorded_sum != (_ga_secret_stat.stat.checksum | default(''))
+      not (
+        (_ga_record_source == 'inventory'
+         and _ga_recorded_sum == (_ga_secret_stat.stat.checksum | default('')))
+        or
+        (_ga_desired_inventory_sum == (_ga_secret_stat.stat.checksum | default('')))
+      )
 
 # Inventory-authoring mode makes the final env file TOKEN-ONLY, so everything
 # else MUST come from inventory — checked HERE (before any mutation) because the

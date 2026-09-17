@@ -324,6 +324,57 @@
             and ansible_facts.services['decdn-node.service'].state == 'running'
         fail_msg: "alloy or decdn-node is not running — journalctl -u alloy -e / -u decdn-node -e"
 
+# A host-managed env file is never rendered by the role, so only the provenance
+# checksum can notice an out-of-band rotation. Prove that signal restarts the
+# actual process; file/checksum assertions alone would stay green if the notify
+# disappeared and Alloy kept the old environment forever.
+- name: Verify a host-provisioned token edit restarts Alloy
+  hosts: all
+  become: true
+  tasks:
+    - name: Read Alloy's PID before the host-side credential edit
+      ansible.builtin.command:
+        cmd: pgrep -f '^sleep infinity$'
+      changed_when: false
+      register: ga_host_pid_before
+
+    - name: Require exactly one Alloy stub process before the edit
+      ansible.builtin.assert:
+        that:
+          - ga_host_pid_before.stdout_lines | length == 1
+
+    - name: Rotate the host-provisioned token out of band
+      ansible.builtin.replace:
+        path: /etc/grafana-alloy.env
+        regexp: '^GC_API_TOKEN=.*$'
+        # kics-scan ignore-line (fake fixture token, not a committed secret)
+        replace: GC_API_TOKEN=molecule-host-rotated-token
+
+    - name: Re-run grafana_alloy after the host-side edit
+      ansible.builtin.include_role:
+        name: grafana_alloy
+      vars:
+        decdn_grafana_cloud_enabled: true
+        grafana_alloy_install_method: manual
+        grafana_alloy_manual_bin_src: >-
+          {{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/files/alloy-stub
+        grafana_alloy_deployment_environment: production
+        grafana_alloy_region: US
+        grafana_alloy_loki_url: https://logs-prod-xx.molecule.invalid/loki/api/v1/push
+        grafana_alloy_prom_username: 1234567
+
+    - name: Read Alloy's PID after the host-side credential edit
+      ansible.builtin.command:
+        cmd: pgrep -f '^sleep infinity$'
+      changed_when: false
+      register: ga_host_pid_after
+
+    - name: Assert Alloy restarted onto the edited host environment
+      ansible.builtin.assert:
+        that:
+          - ga_host_pid_after.stdout_lines | length == 1
+          - ga_host_pid_after.stdout | trim != ga_host_pid_before.stdout | trim
+
 # Also mutates the converged host, so it runs after every assertion above and
 # before the teardown play below.
 - name: Verify turning logs off takes the journal grant back

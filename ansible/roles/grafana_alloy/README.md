@@ -98,7 +98,13 @@ the classic failure modes loud:
   → the run refuses to adopt its own file as operator-provisioned ("restore the
   variable or discard the record explicitly").
 - **Untracked hand-edited file** meeting an inventory token → refused unless
-  `grafana_alloy_overwrite_host_file: true`.
+  `grafana_alloy_overwrite_host_file: true`; the sole safe exception is a file
+  already byte-identical to the desired token-only payload, because no host bytes
+  would be discarded and it may be the residue of an interrupted first converge.
+- **Interrupted inventory rotation** (new env bytes landed, later validation or
+  restart failed before the record moved) → retry recognises the exact desired
+  token-only checksum, restarts Alloy, and completes the record without asking
+  for the destructive overwrite opt-in.
 
 The authoring is all-or-nothing: any hand-added `GC_*` lines beyond the token are
 DISCARDED by a rewrite — migrate them to their inventory variables first, and
@@ -106,6 +112,9 @@ with the token set preflight demands every remaining connection setting from
 inventory (the host file's current keys prove nothing once the rewrite lands).
 An out-of-band edit on
 the host-provisioned path restarts the agent with a note, same as `decdn_node`.
+Disabling the role intentionally retains both the secret env file **and** its
+provenance record; retaining only the file would let a later re-enable with a
+missing `secret.yml` misclassify the stale role-authored token as host-owned.
 Returning a host to hand-provisioned mode: clear the variable, then discard the
 provenance record (`sudo rm /etc/grafana-alloy.env.sha256`). The Helm chart is
 unaffected (it was Secret-oriented from the start).
@@ -235,7 +244,7 @@ upstream version/sha256). Highlights:
 | `grafana_alloy_self_metrics_enabled` | `true` | Alloy's own health |
 | `grafana_alloy_prom_url` / `_prom_username` / `_otlp_endpoint` / `_otlp_username` / `_loki_url` / `_loki_username` | `""` | Non-secret connection settings; empty ⇒ read the matching `GC_…` env key (`_otlp_username` then falls back to the Prometheus ID) |
 | `grafana_alloy_api_token` | `""` | **SENSITIVE** — the API token (git-ignored `secret.yml`). Empty ⇒ operator-provisioned `/etc/grafana-alloy.env`; set ⇒ the role authors that file token-only, root 0600. See "The API token has two homes now". |
-| `grafana_alloy_env_checksum_file` | `/etc/grafana-alloy.env.sha256` | Provenance record (`<source> <sha256>`) enabling the adoption/overwrite guards below |
+| `grafana_alloy_env_checksum_file` | `/etc/grafana-alloy.env.sha256` | Provenance record (`<source> <sha256>`) enabling the adoption/overwrite guards; must remain exactly `<grafana_alloy_secret_file>.sha256` |
 | `grafana_alloy_overwrite_host_file` | `false` | Explicit opt-in letting an inventory token rewrite a hand-edited/untracked env file (all-or-nothing: extra `GC_*` lines are discarded) |
 | `grafana_alloy_node_job` / `_host_job` / `_self_job` / `_logs_job` | see table above | Job labels; the `integrations/…` ones are what Grafana Cloud's dashboards match |
 
