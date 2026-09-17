@@ -27,9 +27,14 @@
    way — all keys in /etc/grafana-alloy.env — renders exactly the previous
    configuration, while a host driven from inventory needs only GC_API_TOKEN on
    disk. tojson does the quoting/escaping in both branches.
-   NEVER call this for the API token: config.alloy is 0644 on the host. #}
+   NEVER call this for the API token: config.alloy is 0644 on the host.
+   The `| string` is load-bearing: instance IDs are numeric, so an unquoted
+   `grafana_alloy_prom_username: 1234567` in inventory arrives as an int, which
+   has no length and which tojson would emit as a bare number — and Alloy's
+   basic_auth username is a string, so that is a config-load failure. #}
 {% macro ga_endpoint(value, env_key) -%}
-{% if value | default('', true) | length > 0 %}{{ value | tojson }}{% else %}sys.env({{ env_key | tojson }}){% endif %}
+{% set ga_value = value | default('', true) | string %}
+{% if ga_value | length > 0 %}{{ ga_value | tojson }}{% else %}sys.env({{ env_key | tojson }}){% endif %}
 {%- endmacro %}
 
 prometheus.scrape "decdn_node" {

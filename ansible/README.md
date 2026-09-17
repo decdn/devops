@@ -187,11 +187,11 @@ primitives underneath it. All take `--dry-run`. See
 ### Grafana Cloud observability (opt-in)
 
 The play ships a third role, `grafana_alloy`, that installs a loopback-only
-[Grafana Alloy](https://grafana.com/docs/alloy/) agent shipping four signals to your
+[Grafana Alloy](https://grafana.com/docs/alloy/) agent shipping five signals to your
 Grafana Cloud org — the node's `/metrics`, **the machine itself** (CPU/memory/disk/
 filesystem/network/load plus per-unit state, via Alloy's in-process `node_exporter`),
-**journald**, and the daemon's OTLP spans (`127.0.0.1:4317`) — off by default, driven
-by ONE mirrored inventory flag:
+**journald**, the agent's own health, and the daemon's OTLP spans (`127.0.0.1:4317`) —
+off by default, driven by ONE mirrored inventory flag:
 
 ```yaml
 # group_vars/host_vars — drives BOTH roles from one knob

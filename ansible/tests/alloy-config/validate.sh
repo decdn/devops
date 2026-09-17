@@ -108,8 +108,10 @@ for config in "${configs[@]}"; do
   fi
   # The non-secret endpoints may be inventory literals; the token may NOT. This
   # catches a token pasted into a group_vars file and rendered into the 0644
-  # config on the host.
-  if grep -qF 'glc_' "$config"; then
+  # config on the host. Patterns stay in lockstep with the preflight gate
+  # ("Refuse a Grafana Cloud token smuggled into inventory"): access-policy
+  # tokens, service-account tokens, and base64 JSON API keys.
+  if grep -qE 'glc_|glsa_|eyJ' "$config"; then
     fail "$name contains a literal Grafana Cloud token — it belongs only in the 0600 env file"
   fi
   echo "ok: $name"
@@ -155,6 +157,7 @@ assert_has legacy.alloy 'sys.env("GC_PROM_REMOTE_WRITE_URL")' "the env fallback 
 assert_has legacy.alloy 'sys.env("GC_PROM_USERNAME")' "the env fallback for the instance ID"
 assert_has legacy.alloy 'sys.env("GC_OTLP_ENDPOINT")' "the env fallback for OTLP"
 assert_lacks legacy.alloy 'GC_LOKI' "a Loki credential lookup while logs are disabled"
+assert_lacks legacy.alloy '"job"' "an explicit job label, which did not exist before this change"
 
 # Inventory-driven connection settings: every non-secret sys.env lookup is gone,
 # the token's is not.
@@ -164,6 +167,9 @@ done
 assert_has inventory.alloy 'https://prometheus-prod-99.render.invalid/api/prom/push' "the inventory remote-write URL"
 assert_has inventory.alloy 'https://logs-prod-99.render.invalid/loki/api/v1/push' "the inventory Loki URL"
 assert_has inventory.alloy 'sys.env("GC_API_TOKEN")' "the token env lookup, which must never move to inventory"
+# Numeric instance IDs arrive from YAML as ints; Alloy needs quoted strings.
+assert_has inventory.alloy 'username = "1234567"' "the Prometheus instance ID as a quoted string"
+assert_has inventory.alloy 'username = "7654321"' "the Loki instance ID as a quoted string"
 
 # Escape hatches: the collector veto must remove the collector AND its scoping
 # block from the rendered lists (upstream would otherwise re-enable it), and a

@@ -174,6 +174,10 @@
         grafana_alloy_bin_effective: /usr/bin/alloy
         grafana_alloy_deployment_environment: production
         grafana_alloy_region: US
+        # Blanked too: the explicit node job label is itself new, so leaving it
+        # at its default would change the daemon series' identity and this case
+        # would no longer be the old pipeline.
+        grafana_alloy_node_job: ""
         grafana_alloy_host_metrics_enabled: false
         grafana_alloy_self_metrics_enabled: false
         grafana_alloy_logs_enabled: false
@@ -195,10 +199,13 @@
         grafana_alloy_deployment_environment: production
         grafana_alloy_region: US
         grafana_alloy_prom_url: https://prometheus-prod-99.render.invalid/api/prom/push
-        grafana_alloy_prom_username: "1234567"
+        # DELIBERATELY UNQUOTED: instance IDs are numeric, so YAML hands these
+        # over as ints. Alloy's basic_auth username is a string, so the template
+        # must coerce rather than emit a bare number.
+        grafana_alloy_prom_username: 1234567
         grafana_alloy_otlp_endpoint: https://otlp-gateway-prod-99.render.invalid/otlp
         grafana_alloy_loki_url: https://logs-prod-99.render.invalid/loki/api/v1/push
-        grafana_alloy_loki_username: "7654321"
+        grafana_alloy_loki_username: 7654321
 
     # The two escape hatches an upgrading operator reaches for: vetoing a
     # collector must actually remove it (and its scoping block) rather than

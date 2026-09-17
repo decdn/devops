@@ -49,6 +49,10 @@
     # The Loki URL comes from inventory while its username stays in the host env
     # file (see prepare.yml): one converge exercises both credential paths.
     grafana_alloy_loki_url: https://logs-prod-xx.molecule.invalid/loki/api/v1/push
+    # DELIBERATELY UNQUOTED: a numeric instance ID arrives from YAML as an int,
+    # so every gate and the template must coerce it instead of taking its length
+    # or emitting a bare number into a string field.
+    grafana_alloy_prom_username: 1234567
   roles:
     - role: grafana_alloy
       tags: [observability]

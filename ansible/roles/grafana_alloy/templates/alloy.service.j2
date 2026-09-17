@@ -37,12 +37,13 @@ Restart=on-failure
 RestartSec=5
 {% if grafana_alloy_logs_enabled | default(false) | bool and (_ga_journal_groups | default([]) | length > 0) %}
 
-# Journal access. Reading the systemd journal as a non-root user requires
-# membership in systemd-journal AND adm — without them loki.source.journal starts
-# without error and collects NOTHING, which is the worst possible failure mode.
-# The role joins {{ grafana_alloy_user }} to these groups too; only groups that
-# actually exist on this host are listed, because systemd refuses to start a unit
-# naming a group that does not exist.
+# Journal access. A non-root reader needs a group that journald grants read to:
+# systemd-journal owns the journal files, and systemd-tmpfiles puts an ACL for
+# adm on /var/log/journal. Without at least one of them loki.source.journal
+# starts without error and collects NOTHING, which is the worst possible failure
+# mode, so the role joins {{ grafana_alloy_user }} to both and warns when either
+# is absent. Only groups that actually exist on this host are listed, because
+# systemd refuses to start a unit naming a group that does not exist.
 SupplementaryGroups={{ _ga_journal_groups | default([]) | join(' ') }}
 {% endif %}
 

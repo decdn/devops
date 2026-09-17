@@ -146,12 +146,14 @@
       ansible.builtin.import_tasks: preflight.yml
 
     # --- Journal access ---------------------------------------------------------
-    # Reading the systemd journal as a non-root user requires membership in
-    # systemd-journal AND adm. Without them loki.source.journal starts WITHOUT
-    # error and collects nothing, so this is a silent-failure guard, not a
-    # convenience. Detected rather than assumed: a container or a non-Debian host
-    # may ship neither, and systemd refuses to start a unit whose
-    # SupplementaryGroups names a group that does not exist.
+    # A non-root journal reader needs a group journald grants read to:
+    # systemd-journal owns the journal files, adm gets an ACL on /var/log/journal.
+    # With neither, loki.source.journal starts WITHOUT error and collects nothing,
+    # so this is a silent-failure guard, not a convenience. Detected rather than
+    # assumed: a container or a non-Debian host may ship neither, and systemd
+    # refuses to start a unit whose SupplementaryGroups names a group that does
+    # not exist. A partial set still works but is reported, since it means one of
+    # the two access paths is unavailable.
     - name: Detect which journal reader groups exist on this host
       ansible.builtin.command:
         cmd: getent group {{ item | quote }}
@@ -169,17 +171,23 @@
              | selectattr('rc', 'equalto', 0)
              | map(attribute='item') | list }}
 
-    - name: Report that journald collection will be silently empty
+    - name: Report that journald collection will be degraded or empty
       ansible.builtin.debug:
         msg: >-
-          Neither systemd-journal nor adm exists on this host, so
-          {{ grafana_alloy_user }} cannot read the journal: loki.source.journal
-          will run without error and ship no log lines. Expected inside
-          containers; on a real host, install systemd properly or set
+          {{ _ga_missing_journal_groups | join(' and ') }} missing on this host,
+          so {{ grafana_alloy_user }} gets
+          {{ (_ga_journal_groups | length == 0) | ternary('no journal access at
+          all: loki.source.journal will run without error and ship no log
+          lines', 'only partial journal access, which covers the common case but
+          not journal files whose ACL names only the missing group') }}. Expected
+          inside containers; on a real host, install systemd properly or set
           grafana_alloy_logs_enabled=false.
+      vars:
+        _ga_missing_journal_groups: >-
+          {{ ['systemd-journal', 'adm'] | difference(_ga_journal_groups) }}
       when:
         - grafana_alloy_logs_enabled | bool
-        - _ga_journal_groups | length == 0
+        - _ga_journal_groups | length < 2
 
     # --- User + directories ----------------------------------------------------
     - name: Create the alloy system group
@@ -192,8 +200,9 @@
         name: "{{ grafana_alloy_user }}"
         group: "{{ grafana_alloy_group }}"
         # Journal readers only, and only those that exist. append keeps any
-        # membership an operator added by hand; the disable path removes the
-        # account outright, so nothing is left behind either way.
+        # membership an operator added by hand; the task below revokes the
+        # journal grant again if logs are later turned off, and the full disable
+        # path removes the account outright.
         groups: "{{ _ga_journal_groups }}"
         append: true
         system: true
@@ -202,6 +211,36 @@
         shell: /usr/sbin/nologin
       # Group membership is applied at process start, so a membership change that
       # does not also change the unit or the config still needs a restart.
+      notify: Restart alloy
+
+    # Turning logs off drops SupplementaryGroups from the unit, but systemd then
+    # falls back to the ACCOUNT's supplementary groups — so a membership granted
+    # by an earlier logs-enabled run would silently keep journal read access. Take
+    # it back, preserving anything else the account belongs to.
+    - name: Read the alloy account's current supplementary groups
+      ansible.builtin.command:
+        cmd: id -nG {{ grafana_alloy_user | quote }}
+      changed_when: false
+      failed_when: false
+      check_mode: false               # read-only lookup; must also run under make check
+      register: _ga_current_groups
+      when: not grafana_alloy_logs_enabled | bool
+
+    - name: Revoke journal reader groups granted by an earlier logs-enabled run
+      ansible.builtin.user:
+        name: "{{ grafana_alloy_user }}"
+        groups: "{{ _ga_keep_groups }}"
+        append: false
+      vars:
+        # The primary group is set by `group:` above and must not be listed here.
+        _ga_keep_groups: >-
+          {{ (_ga_current_groups.stdout | default('')).split()
+             | difference(['systemd-journal', 'adm', grafana_alloy_group]) }}
+      when:
+        - not grafana_alloy_logs_enabled | bool
+        - _ga_current_groups.rc | default(1) == 0
+        - (_ga_current_groups.stdout | default('')).split()
+          | intersect(['systemd-journal', 'adm']) | length > 0
       notify: Restart alloy
 
     - name: Ensure config + state directories exist

@@ -203,10 +203,12 @@
       - item.value | length == 0 or item.value is match('^[A-Za-z0-9._-]{1,64}$')
     quiet: true
     fail_msg: >-
-      {{ item.name }} must be the numeric Grafana Cloud instance ID (letters,
-      digits, dot, underscore, dash), not a token and not a quoted string with
-      whitespace — got "{{ item.value }}". NOTE the Loki instance ID differs from
-      the Prometheus one; the access-policy token is shared and stays in
+      {{ item.name }} is the basic-auth username for the endpoint — the numeric
+      instance ID on Grafana Cloud, a tenant name on a self-hosted
+      Mimir/Loki — so it is restricted to letters, digits, dot, underscore and
+      dash, and must not be a token or carry whitespace. Got "{{ item.value }}".
+      NOTE the Loki instance ID differs from the Prometheus one; the
+      access-policy token is shared and stays in
       {{ grafana_alloy_secret_file }} as GC_API_TOKEN.
   loop:
     - {name: grafana_alloy_prom_username, value: "{{ grafana_alloy_prom_username | string }}"}
@@ -358,23 +360,23 @@
     - key: GC_PROM_REMOTE_WRITE_URL
       regex: ^GC_PROM_REMOTE_WRITE_URL=https://[^[:space:]]+$
       var: grafana_alloy_prom_url
-      required: "{{ grafana_alloy_prom_url | length == 0 }}"
+      required: "{{ grafana_alloy_prom_url | string | length == 0 }}"
     - key: GC_PROM_USERNAME
       regex: ^GC_PROM_USERNAME=[^[:space:]#][^[:space:]]*$
       var: grafana_alloy_prom_username
-      required: "{{ grafana_alloy_prom_username | length == 0 }}"
+      required: "{{ grafana_alloy_prom_username | string | length == 0 }}"
     - key: GC_OTLP_ENDPOINT
       regex: ^GC_OTLP_ENDPOINT=https://[^[:space:]]+$
       var: grafana_alloy_otlp_endpoint
-      required: "{{ grafana_alloy_otlp_endpoint | length == 0 }}"
+      required: "{{ grafana_alloy_otlp_endpoint | string | length == 0 }}"
     - key: GC_LOKI_URL
       regex: ^GC_LOKI_URL=https://[^[:space:]]+$
       var: grafana_alloy_loki_url
-      required: "{{ grafana_alloy_logs_enabled | bool and grafana_alloy_loki_url | length == 0 }}"
+      required: "{{ grafana_alloy_logs_enabled | bool and grafana_alloy_loki_url | string | length == 0 }}"
     - key: GC_LOKI_USERNAME
       regex: ^GC_LOKI_USERNAME=[^[:space:]#][^[:space:]]*$
       var: grafana_alloy_loki_username
-      required: "{{ grafana_alloy_logs_enabled | bool and grafana_alloy_loki_username | length == 0 }}"
+      required: "{{ grafana_alloy_logs_enabled | bool and grafana_alloy_loki_username | string | length == 0 }}"
   loop_control:
     label: "{{ item.key }}"
   when: item.required | bool

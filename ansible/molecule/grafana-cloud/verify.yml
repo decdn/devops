@@ -148,11 +148,19 @@
             'sys.env("GC_LOKI_URL")' not in ga_config
           - >-
             'sys.env("GC_LOKI_USERNAME")' in ga_config
+          # The unquoted numeric instance ID in converge must reach the config as
+          # a QUOTED string (Alloy's basic_auth username is a string) and must
+          # have survived every preflight gate that takes its length.
+          - >-
+            'username = "1234567"' in ga_config
+          - >-
+            'sys.env("GC_PROM_USERNAME")' not in ga_config
         fail_msg: >-
           The inventory-vs-env credential split did not render as expected:
-          grafana_alloy_loki_url was set in inventory (so its sys.env lookup must
-          be gone) while GC_LOKI_USERNAME was left to the host env file (so its
-          lookup must remain). Got: {{ ga_config }}
+          grafana_alloy_loki_url and the numeric grafana_alloy_prom_username were
+          set in inventory (so their sys.env lookups must be gone and the ID must
+          appear quoted) while GC_LOKI_USERNAME was left to the host env file (so
+          its lookup must remain). Got: {{ ga_config }}
 
     # --- Secret hygiene -------------------------------------------------------------
     - name: Read the credential fixture back
@@ -305,6 +313,56 @@
             'decdn-node.service' in ansible_facts.services
             and ansible_facts.services['decdn-node.service'].state == 'running'
         fail_msg: "alloy or decdn-node is not running — journalctl -u alloy -e / -u decdn-node -e"
+
+# Also mutates the converged host, so it runs after every assertion above and
+# before the teardown play below.
+- name: Verify turning logs off takes the journal grant back
+  hosts: all
+  become: true
+  tasks:
+    # Dropping SupplementaryGroups from the unit is not enough on its own:
+    # systemd then falls back to the ACCOUNT's supplementary groups, so a
+    # membership left over from the logs-enabled run would silently keep journal
+    # read access alive after the operator turned logs off.
+    - name: Re-run the role with only the logs signal disabled
+      ansible.builtin.include_role:
+        name: grafana_alloy
+      vars:
+        decdn_grafana_cloud_enabled: true
+        grafana_alloy_install_method: manual
+        grafana_alloy_manual_bin_src: >-
+          {{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/files/alloy-stub
+        grafana_alloy_deployment_environment: production
+        grafana_alloy_region: US
+        grafana_alloy_logs_enabled: false
+
+    - name: Read the group database back
+      ansible.builtin.getent:
+        database: group
+
+    - name: Read the unit and config back
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: ga_logs_off
+      loop:
+        - /etc/systemd/system/alloy.service
+        - /etc/alloy/config.alloy
+
+    - name: Assert the journal grant is gone from both the unit and the account
+      ansible.builtin.assert:
+        that:
+          - "'alloy' not in (ansible_facts.getent_group['systemd-journal'][2] | default('')).split(',')"
+          - "'alloy' not in (ansible_facts.getent_group['adm'][2] | default('')).split(',')"
+          - "'SupplementaryGroups' not in ga_unit_off"
+          - "'loki.' not in ga_config_off"
+        fail_msg: >-
+          Turning grafana_alloy_logs_enabled off left journal access behind:
+          SupplementaryGroups in the unit or a stale systemd-journal/adm
+          membership on the alloy account would keep the agent able to read the
+          journal after the signal it was granted for was switched off.
+      vars:
+        ga_unit_off: "{{ ga_logs_off.results[0].content | b64decode }}"
+        ga_config_off: "{{ ga_logs_off.results[1].content | b64decode }}"
 
 # Runs LAST, after the idempotence phase and the assertions above, because it
 # deliberately mutates the converged host: it exercises the disable path, whose

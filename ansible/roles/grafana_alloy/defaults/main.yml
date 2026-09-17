@@ -155,10 +155,11 @@ grafana_alloy_self_metrics_enabled: true
 grafana_alloy_self_job: integrations/alloy
 
 # --- Host + service logs (journald -> Grafana Cloud Loki) ---------------------
-# Reading the journal as a non-root user requires membership in systemd-journal
-# AND adm — without both the component starts cleanly and collects NOTHING, so
-# the role joins the alloy user to whichever of them exist on the host and the
-# unit lists them under SupplementaryGroups.
+# Reading the journal as a non-root user needs a group journald grants read to:
+# systemd-journal owns the journal files, adm gets an ACL on /var/log/journal.
+# With neither, the component starts cleanly and collects NOTHING, so the role
+# joins the alloy user to both where they exist, lists them under
+# SupplementaryGroups, and warns when either is missing.
 grafana_alloy_logs_enabled: true
 # Grafana Cloud's Linux Server integration uses the SAME job value for logs as
 # for host metrics; its logs dashboards key off job + instance.
