@@ -20,6 +20,9 @@
     grafana_alloy_region: US
 
     # --- The point of this scenario -------------------------------------------------
+    # Deliberately fake token literal below, not a committed secret — keep only
+    # KICS' hardcoded-credential query quiet about exactly that one line.
+    # kics-scan ignore-line
     grafana_alloy_api_token: molecule-test-token
 
     # All six non-secret settings satisfied by inventory, so preflight requires no

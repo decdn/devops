@@ -1136,6 +1136,7 @@
             name: grafana_alloy
           vars:
             decdn_grafana_cloud_enabled: true
+            # kics-scan ignore-line (fake fixture token, not a committed secret)
             grafana_alloy_api_token: "glc_molecule spaced"
       rescue:
         - name: Record ga-token-var-shape rejection (only if the token-shape gate failed)
@@ -1176,6 +1177,7 @@
             name: grafana_alloy
           vars:
             decdn_grafana_cloud_enabled: true
+            # kics-scan ignore-line (fake fixture token, not a committed secret)
             grafana_alloy_api_token: molecule-test-token
       rescue:
         - name: Record ga-collision rejection (only if the overwrite gate failed)

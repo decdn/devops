@@ -56,6 +56,7 @@
           The authored env file must be a single GC_API_TOKEN="<token>" line.
           Got: {{ ga_body }}
       vars:
+        # kics-scan ignore-line (fake fixture token, not a committed secret)
         ga_expected_token: molecule-test-token
         ga_body: "{{ ga_env_b64.content | b64decode }}"
         ga_lines: "{{ (ga_env_b64.content | b64decode).splitlines() }}"
@@ -129,6 +130,7 @@
           {{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/files/alloy-stub
         grafana_alloy_deployment_environment: production
         grafana_alloy_region: US
+        # kics-scan ignore-line (fake fixture token, not a committed secret)
         grafana_alloy_api_token: molecule-rotated-token
         grafana_alloy_prom_url: https://prometheus-prod-xx.molecule.invalid/api/prom/push
         grafana_alloy_prom_username: "1234567"
