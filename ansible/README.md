@@ -207,8 +207,9 @@ Only the API token is a secret. Put the non-secret connection settings in invent
 once for the fleet (`grafana_alloy_prom_url`, `_prom_username`, `_otlp_endpoint`,
 `_otlp_username`, `_loki_url`, `_loki_username` — Prometheus, OTLP and Loki each have
 their **own** instance ID, so copy each from the portal page that names it), and
-provision just the token **on each target host** (it never transits this repo or the
-control machine):
+provision just the token **on each target host** (on this path it never transits this
+repo or the control machine; the inventory alternative below trades that for a
+git-ignored `secret.yml`):
 
 ```bash
 umask 077
@@ -225,7 +226,10 @@ Alternatively the token itself can ride git-ignored inventory — set
 `decdn_rpc_url`, and the role authors `/etc/grafana-alloy.env` for you (token-only,
 root 0600). The authoring rewrites the file wholesale, so any hand-added `GC_*` keys
 must move to their inventory variables first; provenance guards fail loud on silent
-adoption or clobbering. See "The API token has two homes now" in the role README.
+adoption or clobbering. Migrating a host that already has a hand-provisioned file
+needs `grafana_alloy_overwrite_host_file: true` for exactly one converge — set it
+back to `false` afterwards, or the guard stays off on that host. See "The API token
+has two homes now" in the role README for the ordered procedure in both directions.
 
 **Upgrading a host deployed before machine monitoring existed:** journald shipping is on
 by default and needs a Loki endpoint + instance ID the old four-key file does not carry,

@@ -115,9 +115,36 @@ the host-provisioned path restarts the agent with a note, same as `decdn_node`.
 Disabling the role intentionally retains both the secret env file **and** its
 provenance record; retaining only the file would let a later re-enable with a
 missing `secret.yml` misclassify the stale role-authored token as host-owned.
-Returning a host to hand-provisioned mode: clear the variable, then discard the
-provenance record (`sudo rm /etc/grafana-alloy.env.sha256`). The Helm chart is
-unaffected (it was Secret-oriented from the start).
+The Helm chart ships no Alloy at all, so nothing changes there.
+
+#### Migrating an existing host ONTO the inventory path
+
+The overwrite guard refuses this by design, because the rewrite is token-only and
+the role cannot read the file to tell you what it would destroy. Do it in this
+order:
+
+1. Move every non-token `GC_*` key in `/etc/grafana-alloy.env` to its
+   `grafana_alloy_*` inventory variable. Preflight then stops demanding those keys
+   from the file, which is what makes the migration verifiable rather than hopeful.
+2. Set `grafana_alloy_api_token` in the git-ignored `host_vars/<node>/secret.yml`.
+3. Run `make check LIMIT=<host>` **first**. The dry run names exactly what a real
+   converge would discard, and changes nothing.
+4. Set `grafana_alloy_overwrite_host_file: true` and deploy once.
+5. Set it back to `false`. Leaving it `true` permanently disables the guard on that
+   host, so a future hand-edit is silently destroyed instead of stopping the deploy.
+
+#### Returning a host TO hand-provisioned mode
+
+Clear `grafana_alloy_api_token`, then discard the provenance record
+(`sudo rm /etc/grafana-alloy.env.sha256`) **before** the next converge — do it
+after and the adoption guard hard-fails the deploy. Any `GC_*` keys you want back
+on the host must be re-added by hand; the token-only file carries none of them.
+
+Note the one blind spot this leaves: with the record gone, the next converge has
+nothing to compare against, so a token you edit on the host *in the same change*
+is not detected and the running agent keeps the old credentials. The role warns
+when it hits that state — restart once (`sudo systemctl restart alloy`) if you
+rotated the token as part of the hand-back.
 
 `GC_API_TOKEN` values in plain committed inventory remain rejected: the rendered
 `/etc/alloy/config.alloy` is world-readable, and preflight rejects a value that
