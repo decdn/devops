@@ -106,8 +106,83 @@ for config in "${configs[@]}"; do
   if ! grep -qF 'sys.env("GC_API_TOKEN")' "$config"; then
     fail "$name does not read the API token via sys.env — credentials must never be literals"
   fi
+  # The non-secret endpoints may be inventory literals; the token may NOT. This
+  # catches a token pasted into a group_vars file and rendered into the 0644
+  # config on the host.
+  if grep -qF 'glc_' "$config"; then
+    fail "$name contains a literal Grafana Cloud token — it belongs only in the 0600 env file"
+  fi
   echo "ok: $name"
 done
+
+# --- Gate 1b: the machine-monitoring matrix renders what it claims ------------
+# `alloy validate` proves each file loads; these greps prove the Jinja branches
+# actually switched. Without them a knob could silently render nothing and still
+# pass every other gate.
+assert_has() {   # file, needle, why
+  grep -qF "$2" "$render_dir/$1" || fail "$1 is missing $3 ($2)"
+}
+assert_lacks() { # file, needle, why
+  ! grep -qF "$2" "$render_dir/$1" || fail "$1 unexpectedly contains $3 ($2)"
+}
+
+# Defaults: machine metrics, agent self-metrics and journald are all ON, and the
+# job labels Grafana Cloud's Linux Server integration dashboards key off.
+assert_has defaults.alloy 'prometheus.exporter.unix "host"' "the host metrics exporter"
+assert_has defaults.alloy 'prometheus.exporter.self "alloy"' "agent self-monitoring"
+assert_has defaults.alloy 'loki.source.journal "host"' "the journald source"
+assert_has defaults.alloy 'loki.write "cloud"' "the Loki writer"
+assert_has defaults.alloy '"job"' "an explicit job label"
+assert_has defaults.alloy 'integrations/node_exporter' "the Grafana Cloud integration job label"
+assert_has defaults.alloy '__journal__systemd_unit' "the journal field mapping"
+assert_has defaults.alloy 'systemd {' "the per-unit systemd collector"
+
+# Sub-knob isolation.
+assert_has hostonly.alloy 'prometheus.exporter.unix "host"' "the host metrics exporter"
+assert_lacks hostonly.alloy 'loki.' "log components while logs are disabled"
+assert_lacks hostonly.alloy 'prometheus.exporter.self' "self metrics while they are disabled"
+assert_lacks hostonly.alloy 'systemd {' "the systemd collector block with no systemd collector enabled"
+assert_has logsonly.alloy 'loki.source.journal "host"' "the journald source"
+assert_has logsonly.alloy 'path           = "/var/log/journal"' "the explicit journal path"
+assert_lacks logsonly.alloy 'prometheus.exporter' "any exporter while only logs are enabled"
+assert_lacks logsonly.alloy 'action        = "drop"' "a drop rule after both guardrail regexes were cleared"
+
+# BACKWARDS COMPATIBILITY: sub-knobs off == the pre-machine-monitoring pipeline.
+assert_lacks legacy.alloy 'prometheus.exporter' "any exporter"
+assert_lacks legacy.alloy 'discovery.relabel' "any target relabeller"
+assert_lacks legacy.alloy 'loki.' "any log component"
+assert_has legacy.alloy 'sys.env("GC_PROM_REMOTE_WRITE_URL")' "the env fallback for remote-write"
+assert_has legacy.alloy 'sys.env("GC_PROM_USERNAME")' "the env fallback for the instance ID"
+assert_has legacy.alloy 'sys.env("GC_OTLP_ENDPOINT")' "the env fallback for OTLP"
+assert_lacks legacy.alloy 'GC_LOKI' "a Loki credential lookup while logs are disabled"
+
+# Inventory-driven connection settings: every non-secret sys.env lookup is gone,
+# the token's is not.
+for key in GC_PROM_REMOTE_WRITE_URL GC_PROM_USERNAME GC_OTLP_ENDPOINT GC_LOKI_URL GC_LOKI_USERNAME; do
+  assert_lacks inventory.alloy "sys.env(\"$key\")" "an env lookup that inventory already supplies"
+done
+assert_has inventory.alloy 'https://prometheus-prod-99.render.invalid/api/prom/push' "the inventory remote-write URL"
+assert_has inventory.alloy 'https://logs-prod-99.render.invalid/loki/api/v1/push' "the inventory Loki URL"
+assert_has inventory.alloy 'sys.env("GC_API_TOKEN")' "the token env lookup, which must never move to inventory"
+
+# Escape hatches: the collector veto must remove the collector AND its scoping
+# block from the rendered lists (upstream would otherwise re-enable it), and a
+# blank node job must restore the implicit component-ID identity.
+assert_has vetoed.alloy 'prometheus.exporter.unix "host"' "the host metrics exporter"
+assert_lacks vetoed.alloy 'systemd {' "the systemd block for a vetoed collector"
+assert_lacks vetoed.alloy 'enable_collectors        =' "an enable list whose only entry was vetoed"
+assert_has vetoed.alloy 'disable_collectors       =' "the veto list itself"
+assert_has defaults.alloy 'enable_collectors        = ["systemd"]' "the systemd collector on the enable list"
+assert_lacks vetoed.alloy '"job"         = "decdn-node"' "a node job label that was explicitly blanked"
+assert_has vetoed.alloy 'replacement  = "integrations/node_exporter"' "the host job label"
+
+# Unit hardening follows the enabled signals.
+assert_has hostonly.service 'ProtectHome=read-only' "the ProtectHome relaxation host metrics require"
+assert_has legacy.service 'ProtectHome=true' "the strict ProtectHome used when host metrics are off"
+assert_has logsonly.service 'SupplementaryGroups=systemd-journal adm' "the journal reader groups"
+assert_lacks hostonly.service 'SupplementaryGroups' "journal groups while logs are disabled"
+assert_lacks legacy.service 'SupplementaryGroups' "journal groups while logs are disabled"
+echo "ok: machine-monitoring render matrix"
 
 # --- Gate 2: every ExecStart flag exists -------------------------------------
 # `alloy run` ignores nothing: an unknown flag exits non-zero, i.e. a systemd

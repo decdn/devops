@@ -1,7 +1,8 @@
 ---
 # Opt-in Grafana Cloud Application Observability for an Ansible-deployed deCDN
-# node: a loopback-only Grafana Alloy agent that scrapes the node's /metrics and
-# receives the daemon's OTLP traces, then ships both to Grafana Cloud.
+# node: a loopback-only Grafana Alloy agent that scrapes the node's /metrics, the
+# MACHINE itself (Alloy's in-process node_exporter) and Alloy's own health,
+# receives the daemon's OTLP traces, and ships journald to Grafana Cloud Loki.
 #
 # Gated by decdn_grafana_cloud_enabled (mirrored in roles/decdn_node/defaults —
 # ONE inventory knob drives both roles). When false this role does nothing except
@@ -144,6 +145,42 @@
     - name: Fail loud on preflight misconfiguration
       ansible.builtin.import_tasks: preflight.yml
 
+    # --- Journal access ---------------------------------------------------------
+    # Reading the systemd journal as a non-root user requires membership in
+    # systemd-journal AND adm. Without them loki.source.journal starts WITHOUT
+    # error and collects nothing, so this is a silent-failure guard, not a
+    # convenience. Detected rather than assumed: a container or a non-Debian host
+    # may ship neither, and systemd refuses to start a unit whose
+    # SupplementaryGroups names a group that does not exist.
+    - name: Detect which journal reader groups exist on this host
+      ansible.builtin.command:
+        cmd: getent group {{ item | quote }}
+      loop: "{{ ['systemd-journal', 'adm'] if grafana_alloy_logs_enabled | bool else [] }}"
+      changed_when: false
+      failed_when: false
+      check_mode: false               # read-only lookup; must also run under make check
+      register: _ga_journal_group_lookup
+
+    - name: Resolve the journal reader group list
+      ansible.builtin.set_fact:
+        _ga_journal_groups: >-
+          {{ _ga_journal_group_lookup.results | default([])
+             | selectattr('rc', 'defined')
+             | selectattr('rc', 'equalto', 0)
+             | map(attribute='item') | list }}
+
+    - name: Report that journald collection will be silently empty
+      ansible.builtin.debug:
+        msg: >-
+          Neither systemd-journal nor adm exists on this host, so
+          {{ grafana_alloy_user }} cannot read the journal: loki.source.journal
+          will run without error and ship no log lines. Expected inside
+          containers; on a real host, install systemd properly or set
+          grafana_alloy_logs_enabled=false.
+      when:
+        - grafana_alloy_logs_enabled | bool
+        - _ga_journal_groups | length == 0
+
     # --- User + directories ----------------------------------------------------
     - name: Create the alloy system group
       ansible.builtin.group:
@@ -154,10 +191,18 @@
       ansible.builtin.user:
         name: "{{ grafana_alloy_user }}"
         group: "{{ grafana_alloy_group }}"
+        # Journal readers only, and only those that exist. append keeps any
+        # membership an operator added by hand; the disable path removes the
+        # account outright, so nothing is left behind either way.
+        groups: "{{ _ga_journal_groups }}"
+        append: true
         system: true
         home: "{{ grafana_alloy_state_dir }}"
         create_home: false
         shell: /usr/sbin/nologin
+      # Group membership is applied at process start, so a membership change that
+      # does not also change the unit or the config still needs a restart.
+      notify: Restart alloy
 
     - name: Ensure config + state directories exist
       ansible.builtin.file:

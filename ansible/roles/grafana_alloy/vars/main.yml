@@ -8,3 +8,92 @@
 # destructive operation against an unrelated Alloy install.
 _ga_unit_path: /etc/systemd/system/alloy.service
 _ga_managed_marker: "# MANAGED BY the grafana_alloy role — do not edit by hand."
+
+# Every collector name prometheus.exporter.unix knows, from the Alloy 1.19
+# component reference (the "Collectors list" table), plus four that ship in
+# upstream node_exporter but are missing from that table (cgroups, selinux,
+# slabinfo, watchdog). Non-Linux names are kept so the gate never punishes a
+# copy-pasted example.
+#
+# WHY A COMMITTED INVENTORY: an unknown collector name is NOT a startup error.
+# Alloy builds the set by map lookup and silently drops anything it does not
+# recognise, so `diskstat` (missing the final s) validates clean, starts clean,
+# and ships no disk metrics forever. A charset check cannot catch that; only a
+# name list can. Re-sync when bumping grafana_alloy_version.
+_ga_known_collectors:
+  - arp
+  - bcache
+  - bonding
+  - boottime
+  - btrfs
+  - buddyinfo
+  - cgroups
+  - conntrack
+  - cpu
+  - cpufreq
+  - devstat
+  - diskstats
+  - dmi
+  - drbd
+  - drm
+  - edac
+  - entropy
+  - ethtool
+  - exec
+  - fibrechannel
+  - filefd
+  - filesystem
+  - hwmon
+  - infiniband
+  - interrupts
+  - ipvs
+  - ksmd
+  - lnstat
+  - loadavg
+  - logind
+  - mdadm
+  - meminfo
+  - meminfo_numa
+  - mountstats
+  - netclass
+  - netdev
+  - netisr
+  - netstat
+  - network_route
+  - nfs
+  - nfsd
+  - ntp
+  - nvme
+  - os
+  - perf
+  - powersupplyclass
+  - pressure
+  - processes
+  - qdisc
+  - rapl
+  - runit
+  - schedstat
+  - selinux
+  - slabinfo
+  - sockstat
+  - softirqs
+  - softnet
+  - stat
+  - supervisord
+  - sysctl
+  - systemd
+  - tapestats
+  - tcpstat
+  - textfile
+  - thermal
+  - thermal_zone
+  - time
+  - timex
+  - udp_queues
+  - uname
+  - vmstat
+  - watchdog
+  - wifi
+  - xfs
+  - zfs
+  - zoneinfo

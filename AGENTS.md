@@ -50,7 +50,7 @@ economic claims — those trace to the deCDN ADRs. If something here states a pr
 ```
 ansible/                # the deployment project (DevSec-hardened, lean roles)
   playbooks/            # site.yml (decdn node)
-  roles/                # baseline, decdn_node
+  roles/                # baseline, decdn_node, grafana_alloy
   inventory/ galaxy/ molecule/    # see ansible/README.md
 charts/
   decdn-node/           # Helm chart for the node on Kubernetes (see its README.md)
@@ -78,6 +78,24 @@ charts/
   `decdn config validate` against the real binary after templating, and the
   `molecule/schema` scenario checks the rendered key set against a committed inventory of
   upstream field names. Re-sync both when bumping the pinned decdn version.
+
+- **`ansible/roles/grafana_alloy`** — opt-in Grafana Cloud observability for that node,
+  one mirrored flag (`decdn_grafana_cloud_enabled`, `false` by default) driving a
+  loopback-only Grafana Alloy agent: the node's `/metrics`, the **machine** itself
+  (Alloy's in-process `node_exporter`, curated collector set, `systemd` collector scoped
+  to the units that matter), **journald** → Grafana Cloud Loki, Alloy's own health, and
+  the daemon's OTLP spans. Host metrics and logs carry `job="integrations/node_exporter"`
+  so Grafana Cloud's prebuilt Linux Server dashboards work unmodified. Only the API token
+  is host-provisioned (`0600 /etc/grafana-alloy.env`, read via `sys.env` — Alloy has no
+  `--config.expand-env`); the non-secret endpoints/instance IDs are inventory variables
+  that fall back to their `GC_…` env key when empty, and preflight refuses a token in any
+  of them. Two hardening relaxations are conditional on the signals being on
+  (`ProtectHome=read-only` for correct filesystem metrics, `SupplementaryGroups=
+  systemd-journal adm` for journal access — without which collection is silently empty);
+  teardown is gated on the managed-by marker in the unit, so a foreign Alloy is never
+  touched. **`make lint-alloy` is the gate that matters** — the molecule stub exits 0 for
+  everything, so only the real pinned binary proves the rendered config loads. See
+  `ansible/roles/grafana_alloy/README.md`.
 
 - **`charts/decdn-node/`** — the same node on Kubernetes: a one-replica StatefulSet (one
   release = one identity) on the upstream daemon-only image (`ghcr.io/decdn/decdn-node`;

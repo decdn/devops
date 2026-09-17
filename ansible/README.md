@@ -187,26 +187,48 @@ primitives underneath it. All take `--dry-run`. See
 ### Grafana Cloud observability (opt-in)
 
 The play ships a third role, `grafana_alloy`, that installs a loopback-only
-[Grafana Alloy](https://grafana.com/docs/alloy/) agent scraping the node's `/metrics`
-and receiving its OTLP span exports (`127.0.0.1:4317`), shipping both to your Grafana
-Cloud org — off by default, driven by ONE mirrored inventory flag:
+[Grafana Alloy](https://grafana.com/docs/alloy/) agent shipping four signals to your
+Grafana Cloud org — the node's `/metrics`, **the machine itself** (CPU/memory/disk/
+filesystem/network/load plus per-unit state, via Alloy's in-process `node_exporter`),
+**journald**, and the daemon's OTLP spans (`127.0.0.1:4317`) — off by default, driven
+by ONE mirrored inventory flag:
 
 ```yaml
 # group_vars/host_vars — drives BOTH roles from one knob
 decdn_grafana_cloud_enabled: true
 ```
 
-Provision the credentials **on the target host** (they never transit this repo or the
-control machine):
+Machine metrics, journald and Alloy's own health come with it (each has a
+`grafana_alloy_*_enabled` sub-knob, all defaulting to `true`). Host metrics and logs
+carry `job="integrations/node_exporter"`, so Grafana Cloud's prebuilt **Linux Server**
+dashboards and alert rules work unmodified.
+
+Only the API token is a secret. Put the non-secret connection settings in inventory
+once for the fleet (`grafana_alloy_prom_url`, `_prom_username`, `_otlp_endpoint`,
+`_loki_url`, `_loki_username` — note the Loki instance ID differs from the Prometheus
+one), and provision just the token **on each target host** (it never transits this repo
+or the control machine):
 
 ```bash
 umask 077
+printf 'GC_API_TOKEN=glc_…\n' > grafana-alloy.env
 sudo install -m 600 -o root -g root grafana-alloy.env /etc/grafana-alloy.env
 ```
 
-with `roles/grafana_alloy/files/grafana-alloy.env.example` as the template (remote-write
-URL, OTLP endpoint, instance id, API token — all four keys required, https only). Setup,
-rotation, cost/cardinality guardrails and rollback: see
+Each of those variables is optional: left empty, the value is read from the matching
+`GC_…` key in that file instead (`roles/grafana_alloy/files/grafana-alloy.env.example`
+lists them all; URLs must be https).
+
+**Upgrading a host deployed before machine monitoring existed:** journald shipping is on
+by default and needs a Loki endpoint + instance ID the old four-key file does not carry,
+so preflight fails until you either set `grafana_alloy_loki_url` / `_loki_username` in
+inventory, add `GC_LOKI_URL` / `GC_LOKI_USERNAME` to the env file, or set
+`grafana_alloy_logs_enabled: false`. The daemon's own metrics also gain an explicit
+`job="decdn-node"` label (previously the implicit `prometheus.scrape.decdn_node`) —
+`grafana_alloy_node_job: ""` restores the old identity.
+
+Setup, rotation, cost/cardinality guardrails, the two systemd-hardening relaxations
+machine monitoring requires, and rollback: see
 [`roles/grafana_alloy/README.md`](roles/grafana_alloy/README.md). The Helm chart path is
 separate and deliberately untouched.
 
@@ -239,7 +261,9 @@ interleaving gets in the way of reading a failure.
 `grafana-cloud` runs against a *stub* Alloy that exits 0 for every subcommand, so it
 proves the role's plumbing but cannot prove the rendered `config.alloy` is loadable.
 That gap is closed by `make lint-alloy` (repo root; CI job `alloy-config`), which renders
-the templates in several variable combinations and runs the **real**, digest-pinned Alloy
+the templates in eight variable combinations — including one with every observability
+sub-knob off, which must reproduce the pre-machine-monitoring pipeline exactly — and runs
+the **real**, digest-pinned Alloy
 binary's `alloy validate` over them plus a check that every `ExecStart` flag actually
 exists in `alloy run --help`. Re-run it when bumping `grafana_alloy_version`. See
 [`tests/alloy-config/`](tests/alloy-config/).
@@ -273,7 +297,7 @@ the RPC URL when it is not provisioned on the host instead). Highlights:
 | `decdn_rpc_url` + 3 contract addresses | `""` | **required** per node — `rpc_url` from a host-provisioned `0600 /etc/decdn/decdn.env` (preferred) *or* `host_vars/<node>/secret.yml`, addresses in `main.yml`; sourced from an ADR/deployment. |
 | `decdn_region` / `decdn_bind_port` / `decdn_rate_per_mb` | `""` / `4433` / `10` | node identity, QUIC port, USDC base units/MB. |
 | `decdn_env_checksum_file` / `decdn_env_overwrite_host_file` | `/etc/decdn/.decdn.env.sha256` / `false` | Provenance record for the secret env file (`0600 root`), and the opt-in that lets an inventory `decdn_rpc_url` overwrite a host-edited one. |
-| `decdn_grafana_cloud_enabled` | `false` | ONE mirrored knob (identical default in both roles) wiring on Grafana Cloud observability: installs + configures `grafana_alloy` AND injects `otlp_endpoint` into `node.toml`. Credentials are provisioned per role README; label/cost guardrails there too. |
+| `decdn_grafana_cloud_enabled` | `false` | ONE mirrored knob (identical default in both roles) wiring on Grafana Cloud observability: installs + configures `grafana_alloy` — node metrics, machine metrics, journald, agent health — AND injects `otlp_endpoint` into `node.toml`. Only the API token is provisioned per host; the rest are inventory variables. Label/cost guardrails in the role README. |
 
 ---
 

@@ -40,6 +40,12 @@
 
     # Values are throwaway; only the SHAPES matter to the role's greps (https://,
     # non-empty). Written directly at 0600 because preflight refuses anything else.
+    #
+    # Deliberately does NOT carry GC_LOKI_URL: converge supplies that one from
+    # inventory instead, so this fixture exercises BOTH halves of the credential
+    # split at once — the env-file path (token, prom, OTLP, Loki username) and
+    # the inventory path (Loki URL), including preflight's rule that a key is
+    # only required when its variable is empty.
     - name: Stage the Grafana Cloud credential fixture on the host
       ansible.builtin.copy:
         dest: /etc/grafana-alloy.env
@@ -50,4 +56,5 @@
           GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
           GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
           GC_PROM_USERNAME=999888777
+          GC_LOKI_USERNAME=999888778
           GC_API_TOKEN=molecule-test-token

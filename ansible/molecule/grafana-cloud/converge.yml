@@ -39,6 +39,16 @@
     # Sanity-coupling override: verify.yml greps the RENDERED config for this value,
     # proving template plumbing passes through rather than constants being checked.
     grafana_alloy_batch_send_size: 512
+
+    # Machine monitoring stays at its defaults (host metrics + agent self-metrics
+    # + journald all ON) so the positive path covers the shape a real deploy
+    # gets. The systemd collector and the journal itself collect nothing useful
+    # in a container — irrelevant here, since this scenario proves plumbing and
+    # `make lint-alloy` proves the config loads.
+    #
+    # The Loki URL comes from inventory while its username stays in the host env
+    # file (see prepare.yml): one converge exercises both credential paths.
+    grafana_alloy_loki_url: https://logs-prod-xx.molecule.invalid/loki/api/v1/push
   roles:
     - role: grafana_alloy
       tags: [observability]
