@@ -248,6 +248,10 @@
 # backslashes are deliberately NOT rejected here, to_json emits exactly the
 # double-quoted C-escaped form systemd's parser expects. A value with embedded
 # whitespace would arrive on the daemon side truncated at the first blank.
+#
+# no_log does not exist for asserts: their output lands in plain Ansible/CI logs,
+# so the failure message must carry NO part of the configured value — report only
+# which variable is wrong and why, never token-derived text.
 - name: Validate the shape of an inventory-provided API token
   ansible.builtin.assert:
     that:
@@ -255,10 +259,9 @@
     quiet: true
     fail_msg: >-
       grafana_alloy_api_token must be the bare token value (non-empty, no
-      whitespace, no newline) — it is written to {{ grafana_alloy_secret_file }}
-      as GC_API_TOKEN="{{ grafana_alloy_api_token | truncate(24, true) }}" in a
-      single line systemd parses before dropping privileges. Quotes/backslashes are
-      fine (JSON-encoded); spaces are not.
+      whitespace, no newline) — it becomes the single GC_API_TOKEN="…" line of
+      {{ grafana_alloy_secret_file }}, which systemd parses before dropping
+      privileges. Quotes/backslashes are fine (JSON-encoded); spaces are not.
   # Empty keeps the host-provisioned posture; the gate only guards the inventory path.
   when: grafana_alloy_api_token | length > 0
 
@@ -459,6 +462,30 @@
       _ga_record_source != 'inventory'
       or _ga_recorded_sum != (_ga_secret_stat.stat.checksum | default(''))
 
+# Inventory-authoring mode makes the final env file TOKEN-ONLY, so everything
+# else MUST come from inventory — checked HERE (before any mutation) because the
+# env-file greps below can only vouch for keys that this run is about to discard.
+- name: Demand every non-token connection setting from inventory for a token-authored env file
+  ansible.builtin.assert:
+    that:
+      - grafana_alloy_prom_url | string | length > 0
+      - grafana_alloy_prom_username | string | length > 0
+      - grafana_alloy_otlp_endpoint | string | length > 0
+      - not (grafana_alloy_logs_enabled | bool) or (grafana_alloy_loki_url | string | length > 0)
+      - not (grafana_alloy_logs_enabled | bool) or (grafana_alloy_loki_username | string | length > 0)
+    quiet: true
+    fail_msg: >-
+      With grafana_alloy_api_token set, {{ grafana_alloy_secret_file }} is
+      REWRITTEN as a token-only file, so a present GC_PROM_REMOTE_WRITE_URL /
+      GC_PROM_USERNAME / GC_OTLP_ENDPOINT / GC_LOKI_* line on the CURRENT copy of
+      the file cannot satisfy preflight — it would be discarded. Set the matching
+      inventory variables instead (grafana_alloy_prom_url, _prom_username,
+      _otlp_endpoint, _loki_url, _loki_username; the Loki pair only matters while
+      logs are enabled). grafana_alloy_otlp_username stays optional — without it
+      traces fall back to the Prometheus instance ID.
+  # Empty keeps the host-provisioned posture, where the greps below judge the file.
+  when: grafana_alloy_api_token | length > 0
+
 # systemd skips an EnvironmentFile line it cannot parse SILENTLY, so each required
 # key is grepped for presence + value shape directly on the host: grep keeps the
 # values off stdout AND off the control machine (slurping the file back would put
@@ -467,7 +494,9 @@
 # "Required" is now conditional: a key is only needed when nothing in inventory
 # supplies that value, and the Loki pair is only needed when logs are enabled.
 # That includes GC_API_TOKEN itself since the grafana_alloy_api_token relaxation:
-# the grep only fires when the variable is empty.
+# the grep only fires when the variable is empty. The whole loop is also scoped to
+# the HOST-PROVISIONED posture: with an inventory token the file below is replaced
+# wholesale moments after this runs, so its current contents prove nothing.
 - name: Confirm every required credential key is present and shaped correctly
   ansible.builtin.command:
     cmd: grep -qE -- '{{ item.regex }}' {{ grafana_alloy_secret_file | quote }}
@@ -506,7 +535,7 @@
       required: "{{ grafana_alloy_logs_enabled | bool and grafana_alloy_loki_username | string | length == 0 }}"
   loop_control:
     label: "{{ item.key }}"
-  when: item.required | bool
+  when: (grafana_alloy_api_token | length == 0) and (item.required | bool)
   register: _ga_secret_grep
 
 - name: Report which credential key was missing or malformed
@@ -538,7 +567,9 @@
 # Prometheus fallback and 401s the entire trace pipeline while metrics and logs
 # stay healthy. The required-key gate above cannot cover it (it only greps keys it
 # demands), hence this present-then-shaped pair. Skipped when inventory supplies
-# the ID, because the template then inlines it and emits no sys.env lookup at all.
+# the ID, because the template then inlines it and emits no sys.env lookup at all
+# — and likewise on the inventory-authoring path, where the rewrite guarantees no
+# GC_OTLP_USERNAME survives into the final file.
 - name: Detect a host-provided OTLP instance ID
   ansible.builtin.command:
     cmd: grep -qE -- '^GC_OTLP_USERNAME=.*[^[:space:]]' {{ grafana_alloy_secret_file | quote }}
@@ -546,7 +577,9 @@
   check_mode: false               # read-only gate: must also run under make check
   failed_when: false
   register: _ga_otlp_user_present
-  when: grafana_alloy_otlp_username | string | length == 0
+  when:
+    - grafana_alloy_otlp_username | string | length == 0
+    - grafana_alloy_api_token | length == 0
 
 # Same charset as the inventory instance-ID gate, plus the optional double quotes
 # systemd strips off an EnvironmentFile value.
@@ -577,4 +610,5 @@
       grafana_alloy_otlp_username in inventory instead.
   when:
     - grafana_alloy_otlp_username | string | length == 0
+    - grafana_alloy_api_token | length == 0
     - (_ga_otlp_user_present.rc | default(1)) == 0

@@ -101,8 +101,10 @@ the classic failure modes loud:
   `grafana_alloy_overwrite_host_file: true`.
 
 The authoring is all-or-nothing: any hand-added `GC_*` lines beyond the token are
-DISCARDED by a rewrite — migrate them to their inventory variables first
-(preflight's per-key gates then verify nothing was lost). An out-of-band edit on
+DISCARDED by a rewrite — migrate them to their inventory variables first, and
+with the token set preflight demands every remaining connection setting from
+inventory (the host file's current keys prove nothing once the rewrite lands).
+An out-of-band edit on
 the host-provisioned path restarts the agent with a note, same as `decdn_node`.
 Returning a host to hand-provisioned mode: clear the variable, then discard the
 provenance record (`sudo rm /etc/grafana-alloy.env.sha256`). The Helm chart is
