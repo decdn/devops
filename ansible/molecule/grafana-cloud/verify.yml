@@ -186,6 +186,11 @@
             'GC_OTLP_ENDPOINT=https://' in ga_env_body
           - >-
             'GC_LOKI_USERNAME=999888778' in ga_env_body
+          # Optional, and well-formed: proves preflight's present-then-shaped gate
+          # for the OTLP instance ID accepts a valid host value rather than only
+          # tolerating an absent key.
+          - >-
+            'GC_OTLP_USERNAME=999888779' in ga_env_body
           # Deliberately absent: converge supplies the Loki URL from inventory,
           # which is what makes preflight's conditional requirement meaningful.
           - >-

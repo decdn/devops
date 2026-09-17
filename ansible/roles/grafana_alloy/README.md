@@ -95,6 +95,9 @@ key only then. Any mix of the two halves is valid.
 > and earlier versions of this role reused the Prometheus one. Where your org's
 > two IDs differ, set `grafana_alloy_otlp_username` (or add `GC_OTLP_USERNAME` to
 > the env file); where they coincide, nothing changes and nothing is needed.
+> `GC_OTLP_USERNAME` is the one credential key that may be absent — but if it is
+> present, preflight checks its shape, because a malformed value outranks the
+> Prometheus fallback at runtime and 401s traces just the same.
 
 `GC_API_TOKEN` has **no** inventory variable by design: the rendered
 `/etc/alloy/config.alloy` is world-readable, and preflight rejects a value that

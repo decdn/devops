@@ -1090,6 +1090,43 @@
             path: /etc/grafana-alloy.env
             state: absent
 
+    - name: "Case ga-otlp-username-env — malformed GC_OTLP_USERNAME on the host"
+      block:
+        # The key is optional, so nothing above requires it — but a present,
+        # malformed value wins the rendered coalesce() over the valid Prometheus
+        # fallback and 401s every span, so it gets its own present-then-shaped
+        # gate.
+        - name: Stage a credential file whose OTLP instance ID carries a comment
+          ansible.builtin.copy:
+            dest: /etc/grafana-alloy.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+              GC_OTLP_USERNAME=1830557 # stack id
+              GC_LOKI_URL=https://logs-prod-xx.molecule.invalid/loki/api/v1/push
+              GC_LOKI_USERNAME=999888778
+              GC_API_TOKEN=molecule-test-token
+
+        - name: Run grafana_alloy with a malformed host OTLP instance ID
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+      rescue:
+        - name: Record ga-otlp-username-env rejection (only if the OTLP ID gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-username-env'] }}"
+          when: ansible_failed_task.name is match('^Refuse a malformed host-provided OTLP instance ID')
+      always:
+        - name: Remove the malformed OTLP-username fixture
+          ansible.builtin.file:
+            path: /etc/grafana-alloy.env
+            state: absent
+
     - name: Confirm every bad value was rejected by the role's own validation
       ansible.builtin.assert:
         that:
@@ -1115,4 +1152,5 @@
            "alloy-root-user-alias", "alloy-root-group-alias",
            "host-collectors", "host-collectors", "host-collectors",
            "endpoint-scheme", "inventory-token", "inventory-token", "instance-id",
+           "otlp-username-env",
            "managed-paths", "managed-paths", "managed-paths"]

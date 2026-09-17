@@ -56,5 +56,6 @@
           GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
           GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
           GC_PROM_USERNAME=999888777
+          GC_OTLP_USERNAME=999888779
           GC_LOKI_USERNAME=999888778
           GC_API_TOKEN=molecule-test-token
