@@ -67,6 +67,14 @@ grafana_alloy_server_http_addr: 127.0.0.1:12345
 grafana_alloy_prom_url: ""            # else sys.env("GC_PROM_REMOTE_WRITE_URL")
 grafana_alloy_prom_username: ""       # else sys.env("GC_PROM_USERNAME")
 grafana_alloy_otlp_endpoint: ""       # else sys.env("GC_OTLP_ENDPOINT")
+# The OTLP gateway authenticates with the STACK instance ID, which on many
+# Grafana Cloud orgs is a different number from the Prometheus one (portal:
+# "OTLP Endpoint" -> "Instance ID"). This role used to reuse the Prometheus
+# value, so a stack where the two differ 401s on traces while metrics keep
+# flowing — a silent half-outage. Left empty, the rendered config falls back at
+# RUNTIME to sys.env("GC_OTLP_USERNAME") and then to whatever the Prometheus
+# side resolves to, so an org where the IDs coincide keeps working untouched.
+grafana_alloy_otlp_username: ""       # else sys.env("GC_OTLP_USERNAME"), else the Prometheus ID
 # Grafana Cloud's Loki instance ID is a DIFFERENT number from the Prometheus one
 # (the same access-policy token authenticates both).
 grafana_alloy_loki_url: ""            # else sys.env("GC_LOKI_URL")

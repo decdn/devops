@@ -1026,6 +1026,23 @@
             decdn_rejected: "{{ decdn_rejected + ['inventory-token'] }}"
           when: ansible_failed_task.name is match('^Refuse a Grafana Cloud token smuggled into inventory')
 
+    - name: "Case ga-otlp-username-shape — malformed OTLP instance ID in inventory"
+      block:
+        # The OTLP gateway's username is the stack instance ID, not the
+        # Prometheus one, so it is its own variable — and must be covered by the
+        # same charset gate rather than silently reaching basic_auth.
+        - name: Run grafana_alloy with a whitespace-bearing OTLP instance ID
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_otlp_username: "2345678 # stack id"
+      rescue:
+        - name: Record ga-otlp-username-shape rejection (only if the ID validator failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['instance-id'] }}"
+          when: ansible_failed_task.name is match('^Validate any inventory-provided Grafana Cloud instance IDs')
+
     - name: "Case ga-max-age — malformed journal catch-up window"
       block:
         - name: Run grafana_alloy with a bad max_age suffix
@@ -1097,5 +1114,5 @@
            "alloy-root-user", "alloy-root-group",
            "alloy-root-user-alias", "alloy-root-group-alias",
            "host-collectors", "host-collectors", "host-collectors",
-           "endpoint-scheme", "inventory-token", "inventory-token",
+           "endpoint-scheme", "inventory-token", "inventory-token", "instance-id",
            "managed-paths", "managed-paths", "managed-paths"]

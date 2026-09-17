@@ -207,11 +207,12 @@
       instance ID on Grafana Cloud, a tenant name on a self-hosted
       Mimir/Loki — so it is restricted to letters, digits, dot, underscore and
       dash, and must not be a token or carry whitespace. Got "{{ item.value }}".
-      NOTE the Loki instance ID differs from the Prometheus one; the
-      access-policy token is shared and stays in
+      NOTE the Loki and OTLP instance IDs are each their own number, distinct
+      from the Prometheus one; the access-policy token is shared and stays in
       {{ grafana_alloy_secret_file }} as GC_API_TOKEN.
   loop:
     - {name: grafana_alloy_prom_username, value: "{{ grafana_alloy_prom_username | string }}"}
+    - {name: grafana_alloy_otlp_username, value: "{{ grafana_alloy_otlp_username | string }}"}
     - {name: grafana_alloy_loki_username, value: "{{ grafana_alloy_loki_username | string }}"}
   loop_control:
     label: "{{ item.name }}"
@@ -233,6 +234,7 @@
     - "{{ grafana_alloy_prom_url | string }}"
     - "{{ grafana_alloy_prom_username | string }}"
     - "{{ grafana_alloy_otlp_endpoint | string }}"
+    - "{{ grafana_alloy_otlp_username | string }}"
     - "{{ grafana_alloy_loki_url | string }}"
     - "{{ grafana_alloy_loki_username | string }}"
   loop_control:

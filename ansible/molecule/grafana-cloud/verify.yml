@@ -155,6 +155,11 @@
             'username = "1234567"' in ga_config
           - >-
             'sys.env("GC_PROM_USERNAME")' not in ga_config
+          # The OTLP gateway takes the STACK instance ID, which converge leaves
+          # unset: the config must defer to the host's GC_OTLP_USERNAME and only
+          # then reuse the Prometheus ID, rather than binding the latter outright.
+          - >-
+            'username = coalesce(sys.env("GC_OTLP_USERNAME"), "1234567")' in ga_config
         fail_msg: >-
           The inventory-vs-env credential split did not render as expected:
           grafana_alloy_loki_url and the numeric grafana_alloy_prom_username were
