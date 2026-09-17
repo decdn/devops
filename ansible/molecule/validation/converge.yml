@@ -927,6 +927,152 @@
             decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
           when: ansible_failed_task.name is match('^Require the rendered config to live inside')
 
+    - name: "Case ga-collector — unknown node_exporter collector name"
+      block:
+        - name: Run grafana_alloy with a bogus host collector
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            # An unknown collector is NOT a startup crash — Alloy resolves the
+            # set by map lookup and silently ignores what it does not know, so a
+            # typo ships fewer metrics forever. Only the committed name
+            # inventory in the role's vars/ can catch it, and only here.
+            grafana_alloy_host_collectors: [cpu, diskstat]
+      rescue:
+        - name: Record ga-collector rejection (only if the collector validator failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['host-collectors'] }}"
+          when: ansible_failed_task.name is match('^Validate the node_exporter collector names')
+
+    - name: "Case ga-no-collectors — host metrics on with every collector list empty"
+      block:
+        - name: Run grafana_alloy with an empty collector set
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_host_collectors: []
+            grafana_alloy_host_extra_collectors: []
+      rescue:
+        - name: Record ga-no-collectors rejection (only if the non-empty gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['host-collectors'] }}"
+          when: ansible_failed_task.name is match('^Require a non-empty effective host collector set')
+
+    # An empty set_collectors does NOT mean "measure nothing" to Alloy: it reads
+    # as unset and re-enables the full ~45-collector default set. Vetoing every
+    # collector must therefore be refused, not rendered.
+    - name: "Case ga-disable-all — every collector vetoed by the disable list"
+      block:
+        - name: Run grafana_alloy with the whole collector set disabled
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_host_collectors: [cpu]
+            grafana_alloy_host_extra_collectors: [systemd]
+            grafana_alloy_host_disable_collectors: [cpu, systemd]
+      rescue:
+        - name: Record ga-disable-all rejection (only if the non-empty gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['host-collectors'] }}"
+          when: ansible_failed_task.name is match('^Require a non-empty effective host collector set')
+
+    - name: "Case ga-loki-http — cleartext Loki endpoint from inventory"
+      block:
+        - name: Run grafana_alloy with a non-https Loki URL
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_loki_url: http://logs-prod-xx.molecule.invalid/loki/api/v1/push
+      rescue:
+        - name: Record ga-loki-http rejection (only if the endpoint validator failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['endpoint-scheme'] }}"
+          when: ansible_failed_task.name is match('^Validate any inventory-provided Grafana Cloud endpoints')
+
+    - name: "Case ga-inventory-token — access token smuggled into inventory"
+      block:
+        # config.alloy is 0644 on the host, so a token reaching an inventory
+        # variable would be rendered world-readable — the one thing the whole
+        # host-provisioned credential design exists to prevent.
+        - name: Run grafana_alloy with a token in a non-secret variable
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_prom_username: glc_eyJvIjoiMTIzNDU2NyJ9
+      rescue:
+        - name: Record ga-inventory-token rejection (only if the token gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['inventory-token'] }}"
+          when: ansible_failed_task.name is match('^Refuse a Grafana Cloud token smuggled into inventory')
+
+    - name: "Case ga-inventory-sa-token — service-account token smuggled into inventory"
+      block:
+        # glsa_ tokens carry no '@' and pass the instance-ID charset, so the
+        # gate must key off the prefix rather than shape alone.
+        - name: Run grafana_alloy with a service-account token in a non-secret variable
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_loki_username: glsa_AbCdEf0123456789_0a1b2c3d
+      rescue:
+        - name: Record ga-inventory-sa-token rejection (only if the token gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['inventory-token'] }}"
+          when: ansible_failed_task.name is match('^Refuse a Grafana Cloud token smuggled into inventory')
+
+    - name: "Case ga-max-age — malformed journal catch-up window"
+      block:
+        - name: Run grafana_alloy with a bad max_age suffix
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_logs_max_age: 12hours
+      rescue:
+        - name: Record ga-max-age rejection (only if the knob validator failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['pipeline-knobs'] }}"
+          when: ansible_failed_task.name is match('^Validate the pipeline knobs')
+
+    - name: "Case ga-loki-key — logs enabled with neither Loki key nor variable"
+      block:
+        # The Loki pair is required ONLY when logs are on and inventory supplies
+        # nothing: this proves the conditional gate still fires when it should.
+        - name: Stage a credential file with no Loki keys
+          ansible.builtin.copy:
+            dest: /etc/grafana-alloy.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+              GC_API_TOKEN=molecule-test-token
+
+        - name: Run grafana_alloy with logs enabled and no Loki credentials
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_logs_enabled: true
+      rescue:
+        - name: Record ga-loki-key rejection (only if the grep report gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['secret-content'] }}"
+          when: ansible_failed_task.name is match('^Report which credential key')
+      always:
+        - name: Remove the Loki-less credential fixture
+          ansible.builtin.file:
+            path: /etc/grafana-alloy.env
+            state: absent
+
     - name: Confirm every bad value was rejected by the role's own validation
       ansible.builtin.assert:
         that:
@@ -947,6 +1093,9 @@
            "otlp-newline", "env-control-rpc", "env-control-extra", "env-gate",
            "env-extra", "env-content", "config-gate",
            "secret-file", "secret-file", "secret-path-nested", "secret-content",
-           "secret-content", "pipeline-knobs", "alloy-root-user", "alloy-root-group",
+           "secret-content", "secret-content", "pipeline-knobs", "pipeline-knobs",
+           "alloy-root-user", "alloy-root-group",
            "alloy-root-user-alias", "alloy-root-group-alias",
+           "host-collectors", "host-collectors", "host-collectors",
+           "endpoint-scheme", "inventory-token", "inventory-token",
            "managed-paths", "managed-paths", "managed-paths"]

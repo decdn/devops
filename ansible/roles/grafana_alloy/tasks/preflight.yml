@@ -1,8 +1,10 @@
 ---
 # Fail-loud preflight, run BEFORE any host mutation. Mirrors decdn_node's
-# secret-file posture: this role never carries secrets in inventory and never
-# reads the env file's values onto the control machine — it only greps shapes on
-# the host itself.
+# secret-file posture: this role never carries the API TOKEN in inventory and
+# never reads the env file's values onto the control machine — it only greps
+# shapes on the host itself. The non-secret half of the connection settings
+# (endpoint URLs, instance IDs) MAY come from inventory; those are validated here
+# too, and each one that is set removes its key from the host-state gates below.
 #
 # Ordering matters for testability (molecule/validation): PURE-INVENTORY gates
 # run first so a bad knob rejects deterministically regardless of what fixtures
@@ -35,8 +37,92 @@
     - "{{ grafana_alloy_retry_initial_interval }}"
     - "{{ grafana_alloy_retry_max_elapsed_time }}"
     - "{{ grafana_alloy_scrape_interval }}"
+    - "{{ grafana_alloy_host_scrape_interval }}"
+    - "{{ grafana_alloy_host_mount_timeout }}"
+    - "{{ grafana_alloy_logs_max_age }}"
   loop_control:
     label: "{{ item }}"
+
+- name: Validate the observability sub-switches
+  ansible.builtin.assert:
+    that:
+      - grafana_alloy_host_metrics_enabled is boolean
+      - grafana_alloy_self_metrics_enabled is boolean
+      - grafana_alloy_logs_enabled is boolean
+      - grafana_alloy_host_include_exporter_metrics is boolean
+    fail_msg: >-
+      grafana_alloy_host_metrics_enabled, _self_metrics_enabled, _logs_enabled
+      and _host_include_exporter_metrics must be booleans (true/false), not
+      quoted strings — each gates whole component groups in config.alloy.
+
+# An unknown collector name is NOT a startup crash: Alloy resolves collectors by
+# map lookup and silently ignores names it does not know, so a typo ships an
+# exporter that quietly measures less than the operator thinks. A charset check
+# cannot catch `diskstat`; only the committed inventory in vars/main.yml can.
+- name: Validate the node_exporter collector names
+  ansible.builtin.assert:
+    that:
+      - item in _ga_known_collectors
+    quiet: true
+    fail_msg: >-
+      "{{ item }}" is not a node_exporter collector known to Alloy
+      {{ grafana_alloy_version }}. Check grafana_alloy_host_collectors /
+      _host_extra_collectors / _host_disable_collectors against the collector
+      table in the prometheus.exporter.unix reference. An unknown name is
+      silently ignored at runtime, so this gate is the only thing standing
+      between a typo and metrics that never arrive. (If upstream added a
+      collector, extend _ga_known_collectors in the role's vars/main.yml.)
+  loop: >-
+    {{ (grafana_alloy_host_collectors
+        + grafana_alloy_host_extra_collectors
+        + grafana_alloy_host_disable_collectors) | map('string') | list }}
+  loop_control:
+    label: "{{ item }}"
+  when: grafana_alloy_host_metrics_enabled | bool
+
+# NOTE the EFFECTIVE set, i.e. after the template subtracts
+# _host_disable_collectors from the other two lists. An empty set_collectors is
+# not "measure nothing" to Alloy — it reads as unset and re-enables the whole
+# ~45-collector default set, the exact opposite of what an operator who disabled
+# everything intended.
+- name: Require a non-empty effective host collector set
+  ansible.builtin.assert:
+    that:
+      - >-
+        ((grafana_alloy_host_collectors + grafana_alloy_host_extra_collectors)
+         | reject('in', grafana_alloy_host_disable_collectors) | list | length) > 0
+    fail_msg: >-
+      grafana_alloy_host_metrics_enabled is true but no collector survives
+      grafana_alloy_host_disable_collectors, which would silently fall back to
+      node_exporter's full default set instead of measuring nothing. Either
+      populate grafana_alloy_host_collectors or turn host metrics off with
+      grafana_alloy_host_metrics_enabled: false.
+  when: grafana_alloy_host_metrics_enabled | bool
+
+# job/instance are what Grafana Cloud's integration dashboards filter on, and
+# like the identity labels they ride on EVERY series and log line.
+- name: Validate the job labels
+  ansible.builtin.assert:
+    that:
+      - (item.allow_empty | bool and item.value | length == 0)
+        or item.value is match('^[A-Za-z0-9._/-]{1,63}$')
+    quiet: true
+    fail_msg: >-
+      Job labels are restricted to the same low-cardinality charset as the
+      identity labels (letters, digits, dot, underscore, slash, dash, ≤ 63
+      chars): "{{ item.value }}" does not fit {{ item.name }}.
+      {{ item.allow_empty | bool | ternary('It may also be "" (fall back to the
+      component-ID job Alloy used before this label existed).', '') }}
+  loop:
+    # Only the node job may be blanked: that restores the pre-existing
+    # job="prometheus.scrape.decdn_node" identity. The other three feed Grafana
+    # Cloud integration dashboards that filter on an exact job value.
+    - {name: grafana_alloy_node_job, value: "{{ grafana_alloy_node_job | string }}", allow_empty: true}
+    - {name: grafana_alloy_host_job, value: "{{ grafana_alloy_host_job | string }}", allow_empty: false}
+    - {name: grafana_alloy_self_job, value: "{{ grafana_alloy_self_job | string }}", allow_empty: false}
+    - {name: grafana_alloy_logs_job, value: "{{ grafana_alloy_logs_job | string }}", allow_empty: false}
+  loop_control:
+    label: "{{ item.name }}"
 
 - name: Validate integer pipeline knobs
   ansible.builtin.assert:
@@ -87,7 +173,72 @@
       grafana_alloy_deployment_environment and grafana_alloy_region are required
       identity attributes when Grafana Cloud observability is enabled.
 
-- name: Validate loopback listener addresses
+# --- Grafana Cloud connection settings (inventory half) -------------------------
+# These five are NON-secret and therefore inventory-settable; each one that is set
+# replaces its sys.env("GC_…") lookup in the rendered config and removes the
+# corresponding requirement from the host-state gates at the bottom of this file.
+# The API token has no variable by design: config.alloy is 0644 on the host.
+
+- name: Validate any inventory-provided Grafana Cloud endpoints
+  ansible.builtin.assert:
+    that:
+      # Empty == "fall back to the env file", which is the default and always OK.
+      - item.value | length == 0 or item.value is match('^https://[^\s]+$')
+    quiet: true
+    fail_msg: >-
+      {{ item.name }} must be an https:// URL (got "{{ item.value }}"). Plain
+      http would ship your Grafana Cloud API token in cleartext. Leave it empty
+      to keep reading the value from {{ item.key }} in
+      {{ grafana_alloy_secret_file }} instead.
+  loop:
+    - {name: grafana_alloy_prom_url, key: GC_PROM_REMOTE_WRITE_URL, value: "{{ grafana_alloy_prom_url | string }}"}
+    - {name: grafana_alloy_otlp_endpoint, key: GC_OTLP_ENDPOINT, value: "{{ grafana_alloy_otlp_endpoint | string }}"}
+    - {name: grafana_alloy_loki_url, key: GC_LOKI_URL, value: "{{ grafana_alloy_loki_url | string }}"}
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Validate any inventory-provided Grafana Cloud instance IDs
+  ansible.builtin.assert:
+    that:
+      - item.value | length == 0 or item.value is match('^[A-Za-z0-9._-]{1,64}$')
+    quiet: true
+    fail_msg: >-
+      {{ item.name }} is the basic-auth username for the endpoint — the numeric
+      instance ID on Grafana Cloud, a tenant name on a self-hosted
+      Mimir/Loki — so it is restricted to letters, digits, dot, underscore and
+      dash, and must not be a token or carry whitespace. Got "{{ item.value }}".
+      NOTE the Loki instance ID differs from the Prometheus one; the
+      access-policy token is shared and stays in
+      {{ grafana_alloy_secret_file }} as GC_API_TOKEN.
+  loop:
+    - {name: grafana_alloy_prom_username, value: "{{ grafana_alloy_prom_username | string }}"}
+    - {name: grafana_alloy_loki_username, value: "{{ grafana_alloy_loki_username | string }}"}
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Refuse a Grafana Cloud token smuggled into inventory
+  ansible.builtin.assert:
+    that:
+      # Access-policy tokens (glc_), service-account tokens (glsa_), API keys
+      # (eyJ… — base64 JSON), and any URL carrying user:pass@host.
+      - not (item is search('(glc_|glsa_|eyJ)'))
+      - "'@' not in item"
+    quiet: true
+    fail_msg: >-
+      A Grafana Cloud access token (or a URL with embedded credentials) appears
+      in an inventory variable. config.alloy is world-readable on the host and
+      inventory is committed: the token belongs ONLY in
+      {{ grafana_alloy_secret_file }} as GC_API_TOKEN.
+  loop:
+    - "{{ grafana_alloy_prom_url | string }}"
+    - "{{ grafana_alloy_prom_username | string }}"
+    - "{{ grafana_alloy_otlp_endpoint | string }}"
+    - "{{ grafana_alloy_loki_url | string }}"
+    - "{{ grafana_alloy_loki_username | string }}"
+  loop_control:
+    label: "{{ item | truncate(24, true) }}"
+
+- name: Validate the loopback listener addresses
   ansible.builtin.assert:
     that:
       - grafana_alloy_otlp_grpc_bind == '127.0.0.1'
@@ -185,6 +336,11 @@
 # key is grepped for presence + value shape directly on the host: grep keeps the
 # values off stdout AND off the control machine (slurping the file back would put
 # the API token there, defeating the point of the host-provisioned path).
+#
+# "Required" is now conditional: a key is only needed when nothing in inventory
+# supplies that value, and the Loki pair is only needed when logs are enabled.
+# GC_API_TOKEN is ALWAYS required — it is the one value that must never live in
+# inventory.
 - name: Confirm every required credential key is present and shaped correctly
   ansible.builtin.command:
     cmd: grep -qE -- '{{ item.regex }}' {{ grafana_alloy_secret_file | quote }}
@@ -192,34 +348,57 @@
   check_mode: false               # read-only gate: must also run under make check
   failed_when: false
   loop:
-    # The two cloud URLs must be https:// (plain http would ship the API token in
+    # The cloud URLs must be https:// (plain http would ship the API token in
     # cleartext); the credential values must be non-empty, non-comment text.
     # POSIX bracket classes only — grep -E does NOT interpret \r/\n escapes (they
     # become literal 'r'/'n', silently poisoning the class), and each grep line is
     # already newline-free by construction.
-    - key: GC_PROM_REMOTE_WRITE_URL
-      regex: ^GC_PROM_REMOTE_WRITE_URL=https://[^[:space:]]+$
-    - key: GC_PROM_USERNAME
-      regex: ^GC_PROM_USERNAME=[^[:space:]#][^[:space:]]*$
     - key: GC_API_TOKEN
       regex: ^GC_API_TOKEN=[^[:space:]#][^[:space:]]*$
+      var: "(none — the token must never be set in inventory)"
+      required: true
+    - key: GC_PROM_REMOTE_WRITE_URL
+      regex: ^GC_PROM_REMOTE_WRITE_URL=https://[^[:space:]]+$
+      var: grafana_alloy_prom_url
+      required: "{{ grafana_alloy_prom_url | string | length == 0 }}"
+    - key: GC_PROM_USERNAME
+      regex: ^GC_PROM_USERNAME=[^[:space:]#][^[:space:]]*$
+      var: grafana_alloy_prom_username
+      required: "{{ grafana_alloy_prom_username | string | length == 0 }}"
     - key: GC_OTLP_ENDPOINT
       regex: ^GC_OTLP_ENDPOINT=https://[^[:space:]]+$
+      var: grafana_alloy_otlp_endpoint
+      required: "{{ grafana_alloy_otlp_endpoint | string | length == 0 }}"
+    - key: GC_LOKI_URL
+      regex: ^GC_LOKI_URL=https://[^[:space:]]+$
+      var: grafana_alloy_loki_url
+      required: "{{ grafana_alloy_logs_enabled | bool and grafana_alloy_loki_url | string | length == 0 }}"
+    - key: GC_LOKI_USERNAME
+      regex: ^GC_LOKI_USERNAME=[^[:space:]#][^[:space:]]*$
+      var: grafana_alloy_loki_username
+      required: "{{ grafana_alloy_logs_enabled | bool and grafana_alloy_loki_username | string | length == 0 }}"
   loop_control:
     label: "{{ item.key }}"
+  when: item.required | bool
   register: _ga_secret_grep
 
 - name: Report which credential key was missing or malformed
   ansible.builtin.fail:
     msg: >-
       {{ grafana_alloy_secret_file }} does not carry a usable line for
-      {{ _ga_missing_keys | join(', ') }}. The file must contain exactly the four
-      KEY=value pairs shown in roles/grafana_alloy/files/grafana-alloy.env.example;
-      both cloud URLs must be https:// and each value non-empty (systemd silently
-      drops unparseable lines, so a quoting typo looks identical to a missing key).
+      {{ _ga_missing | map(attribute='key') | join(', ') }}. Either add the
+      KEY=value pair(s) on the host (see
+      roles/grafana_alloy/files/grafana-alloy.env.example) — URLs must be
+      https:// and every value non-empty, since systemd silently drops
+      unparseable lines so a quoting typo looks identical to a missing key — or,
+      for everything except the token, set the matching inventory variable
+      instead: {{ _ga_missing | map(attribute='var') | join(', ') }}.
   vars:
-    _ga_missing_keys: >-
-      {{ _ga_secret_grep.results
+    # Skipped loop items (key not required) carry no rc, so filter on rc being
+    # defined first: rejectattr alone would count every skipped key as missing.
+    _ga_missing: >-
+      {{ _ga_secret_grep.results | default([])
+         | selectattr('rc', 'defined')
          | rejectattr('rc', 'equalto', 0)
-         | map(attribute='item.key') | list }}
-  when: _ga_missing_keys | length > 0
+         | map(attribute='item') | list }}
+  when: _ga_missing | length > 0

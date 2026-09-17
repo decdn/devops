@@ -35,23 +35,45 @@ TimeoutStopSec={{ grafana_alloy_stop_timeout_sec }}
 
 Restart=on-failure
 RestartSec=5
+{% if grafana_alloy_logs_enabled | default(false) | bool and (_ga_journal_groups | default([]) | length > 0) %}
+
+# Journal access. A non-root reader needs a group that journald grants read to:
+# systemd-journal owns the journal files, and systemd-tmpfiles puts an ACL for
+# adm on /var/log/journal. Without at least one of them loki.source.journal
+# starts without error and collects NOTHING, which is the worst possible failure
+# mode, so the role joins {{ grafana_alloy_user }} to both and warns when either
+# is absent. Only groups that actually exist on this host are listed, because
+# systemd refuses to start a unit naming a group that does not exist.
+SupplementaryGroups={{ _ga_journal_groups | default([]) | join(' ') }}
+{% endif %}
 
 # --- Hardening ---------------------------------------------------------------
 # Mirrors decdn-node.service: strict filesystem, privilege boundary, syscall
 # filter. StateDirectory owns {{ grafana_alloy_state_dir }} (the only writable
-# path under ProtectSystem=strict): WAL/queue state lives there.
+# path under ProtectSystem=strict): WAL/queue state lives there, including
+# loki.source.journal's positions file.
 StateDirectory={{ grafana_alloy_state_dir | regex_replace('^/var/lib/', '') }}
 StateDirectoryMode=0750
 NoNewPrivileges=true
 ProtectSystem=strict
+{% if grafana_alloy_host_metrics_enabled | default(false) | bool %}
+# read-only, NOT true: ProtectHome=true replaces /home, /root and /run/user with
+# empty tmpfs mounts inside the unit's namespace, so node_exporter's filesystem
+# collector reports those mounts as the empty overlay instead of the real disk —
+# a full /home would never raise an alert. read-only keeps the privilege boundary
+# (the agent still cannot write there) while reporting true usage.
+ProtectHome=read-only
+{% else %}
 ProtectHome=true
+{% endif %}
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 ProtectClock=true
-# AF_INET/AF_INET6 for the loopback OTLP/scrape/remotes; AF_UNIX for journald.
+# AF_INET/AF_INET6 for the loopback OTLP/scrape/remotes; AF_UNIX for journald and
+# for the D-Bus system bus the node_exporter `systemd` collector queries.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 RestrictSUIDSGID=true

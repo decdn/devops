@@ -51,8 +51,132 @@ grafana_alloy_otlp_http_port: 4318          # gRPC value staying put (see node.t
 # --server.grpc.listen-addr flag, and passing one is an immediate crash-loop.
 grafana_alloy_server_http_addr: 127.0.0.1:12345
 
+# --- Grafana Cloud endpoints (NON-SECRET; optional inventory overrides) -------
+# Only the API TOKEN is a secret. The endpoint URLs and the two numeric instance
+# IDs are not, so they may be set here (group_vars/host_vars) instead of being
+# hand-typed into the root-owned env file on every host — which leaves
+# GC_API_TOKEN as the single value an operator must provision per host.
+#
+# Each of these is optional and falls back, when left EMPTY, to the matching
+# sys.env("GC_…") lookup the role has always used, so an existing deployment that
+# sets none of them renders byte-identical configuration. Setting one makes its
+# env key unnecessary, and preflight stops requiring that key.
+#
+# NEVER put the token here: config.alloy is world-readable 0644 on the host, and
+# inventory is committed. GC_API_TOKEN has no variable by design.
+grafana_alloy_prom_url: ""            # else sys.env("GC_PROM_REMOTE_WRITE_URL")
+grafana_alloy_prom_username: ""       # else sys.env("GC_PROM_USERNAME")
+grafana_alloy_otlp_endpoint: ""       # else sys.env("GC_OTLP_ENDPOINT")
+# Grafana Cloud's Loki instance ID is a DIFFERENT number from the Prometheus one
+# (the same access-policy token authenticates both).
+grafana_alloy_loki_url: ""            # else sys.env("GC_LOKI_URL")
+grafana_alloy_loki_username: ""       # else sys.env("GC_LOKI_USERNAME")
+
 # --- Metrics scrape (node /metrics -> Grafana Cloud Prometheus) ---------------
 grafana_alloy_scrape_interval: 30s
+# Explicit `job` label for the daemon's own series. Without it Prometheus derives
+# `job` from the scrape component's ID ("prometheus.scrape.decdn_node"), which is
+# an implementation detail no dashboard should hard-code.
+# UPGRADE NOTE: setting this changes the identity of already-existing series.
+# Hosts deployed before this label existed report job="prometheus.scrape.decdn_node";
+# set grafana_alloy_node_job: "" to keep that value instead of re-pointing
+# dashboards, recording rules and alerts.
+grafana_alloy_node_job: decdn-node
+
+# --- Host (machine) metrics ---------------------------------------------------
+# Alloy's built-in node_exporter. Runs IN-PROCESS: no extra listener, no extra
+# port, no firewall hole (AGENTS.md hard rule 2 is unaffected). Stamped with the
+# job label Grafana Cloud's prebuilt "Linux Server / node_exporter" integration
+# dashboards and alert rules key off, so they work with zero dashboard wiring.
+grafana_alloy_host_metrics_enabled: true
+# Host metrics do not need the node's resolution; 60s halves the series cost.
+grafana_alloy_host_scrape_interval: 60s
+# Changing this away from integrations/node_exporter silently un-wires the
+# Grafana Cloud integration dashboards. "integrations/unix" is also accepted.
+grafana_alloy_host_job: integrations/node_exporter
+# Hand-picked replacement for node_exporter's ~45-collector default set (Alloy's
+# `set_collectors`: anything absent here is off). The remote bill scales with
+# series count, so this covers the questions an operator actually asks — CPU,
+# memory, disk, filesystem, network, load, saturation — and nothing else.
+grafana_alloy_host_collectors:
+  - cpu
+  - diskstats
+  - filefd
+  - filesystem
+  - loadavg
+  - meminfo
+  - netdev
+  - os
+  - pressure        # PSI saturation; needs kernel 4.20+/CONFIG_PSI, absent = no series
+  - stat
+  - time
+  - uname
+  - vmstat
+# Added ON TOP of the list above (Alloy's `enable_collectors`). `systemd` is
+# registered defaultDisabled upstream and must be named here; it answers "is
+# decdn-node actually running", which the daemon's own /metrics cannot when the
+# daemon is down. It talks to the D-Bus system bus, so it collects nothing in a
+# container without one (molecule) — that is expected, not a failure.
+grafana_alloy_host_extra_collectors:
+  - systemd
+# Subtracted from BOTH lists above at render time; an escape hatch for a
+# collector that misbehaves on a specific fleet. (Doing it in the template is
+# deliberate: upstream applies disable_collectors BEFORE enable_collectors, so a
+# name in both would end up enabled — the opposite of a veto.)
+grafana_alloy_host_disable_collectors: []
+# Alloy's own exporter-internal metrics (scrape durations per collector). Off:
+# grafana_alloy_self_metrics_enabled covers agent health more cheaply.
+grafana_alloy_host_include_exporter_metrics: false
+# Filter regexes. Single-quoted YAML so backslashes stay literal; each is
+# JSON-encoded into the rendered config, so quotes/backslashes cannot break out
+# of the string. Defaults mirror upstream's, plus tmpfs (Grafana Cloud's own
+# snippet adds it) and the usual container/virtual interface noise.
+# NOTE the escaped line breaks: YAML double quotes join these back into ONE regex
+# with no whitespace. Single quotes cannot be used here (the line is too long for
+# yamllint) and a folded scalar would inject spaces into the pattern.
+grafana_alloy_host_fs_types_exclude: "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|\
+  fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|\
+  selinuxfs|squashfs|sysfs|tmpfs|tracefs)$"
+grafana_alloy_host_mount_points_exclude: '^/(dev|proc|run/credentials/.+|sys|var/lib/docker/.+)($|/)'
+grafana_alloy_host_mount_timeout: 5s
+grafana_alloy_host_netdev_device_exclude: '^(veth.*|cali.*|docker.*|br-.*|lo|[a-f0-9]{15})$'
+grafana_alloy_host_disk_device_exclude: '^(ram|loop|fd|(h|s|v|xv)d[a-z]|nvme\d+n\d+p)\d+$'
+# Per-unit state, deliberately scoped: one series set per unit on the box is a
+# real cost, and only these units matter. Units must match include AND NOT match
+# exclude.
+grafana_alloy_host_systemd_unit_include: '(decdn-node|alloy|ssh|sshd)\.service'
+grafana_alloy_host_systemd_unit_exclude: '.+\.(automount|device|mount|scope|slice)'
+
+# --- Agent self-monitoring ----------------------------------------------------
+# Alloy's own health (component evaluation, WAL, remote-write queue/failures).
+# Cheap, and the only way to tell "the node is silent" apart from "the agent that
+# reports on the node is wedged".
+grafana_alloy_self_metrics_enabled: true
+grafana_alloy_self_job: integrations/alloy
+
+# --- Host + service logs (journald -> Grafana Cloud Loki) ---------------------
+# Reading the journal as a non-root user needs a group journald grants read to:
+# systemd-journal owns the journal files, adm gets an ACL on /var/log/journal.
+# With neither, the component starts cleanly and collects NOTHING, so the role
+# joins the alloy user to both where they exist, lists them under
+# SupplementaryGroups, and warns when either is missing.
+grafana_alloy_logs_enabled: true
+# Grafana Cloud's Linux Server integration uses the SAME job value for logs as
+# for host metrics; its logs dashboards key off job + instance.
+grafana_alloy_logs_job: integrations/node_exporter
+# Bounds the catch-up burst after an outage or a fresh install: without it a
+# restart can replay days of journal into your bill in one go.
+grafana_alloy_logs_max_age: 12h
+# "" => Alloy reads both /var/log/journal and /run/log/journal (persistent and
+# volatile). Set a single path only if you know the host keeps just one.
+grafana_alloy_logs_journal_path: ""
+# Cost guardrails, applied while the __journal* fields still exist. Both are
+# anchored regexes matched against the whole value; "" disables that rule.
+# Priority keywords are emerg/alert/crit/error/warning/notice/info/debug
+# (journald's numeric priority 3 surfaces as "error", NOT "err").
+grafana_alloy_logs_drop_priority_regex: 'debug'
+grafana_alloy_logs_drop_unit_regex:
+  '(session-\d+\.scope|user@\d+\.service|systemd-timesyncd\.service|cron\.service|systemd-logind\.service)'
 
 # --- Resource identity labels (low-cardinality only!) --------------------------
 # These become metric labels and OTLP resource attributes shipped to your Grafana

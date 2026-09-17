@@ -10,13 +10,21 @@
 # shipped green by the stub. This harness closes that gap.
 #
 # Renders several variable combinations so the template's conditional branches
-# (omitted identity attributes, 0 and 1 sampling ratios, overridden ports) are
-# all parsed by the real binary, not just the default one.
+# (omitted identity attributes, 0 and 1 sampling ratios, overridden ports, each
+# machine-monitoring sub-knob, inventory-vs-env credentials) are all parsed by
+# the real binary, not just the default one.
+#
+# PRECEDENCE, and why every override lives on the TASK rather than the play:
+# `vars_files` (precedence 14) outranks play `vars` (12), so a play-level
+# override of anything defined in the role's defaults file is silently ignored —
+# it renders the default and the case proves nothing. Task `vars` (19) win, so
+# each combination below sets its knobs on the template task itself. Do not move
+# them up to the play.
 #
 # Not a deploy playbook: localhost only, writes only into $ALLOY_RENDER_DIR, and
 # `become: false` overrides ansible.cfg's project-wide privilege escalation.
 
-- name: Render the default-values Alloy configuration
+- name: Render the grafana_alloy templates in every interesting combination
   hosts: localhost
   connection: local
   gather_facts: false
@@ -25,21 +33,200 @@
     - ../../roles/grafana_alloy/defaults/main.yml
   vars:
     _ga_render_dir: "{{ lookup('ansible.builtin.env', 'ALLOY_RENDER_DIR') }}"
-    _ga_instance_id: decdn-node-1
-    grafana_alloy_bin_effective: /usr/bin/alloy
-    grafana_alloy_deployment_environment: production
-    grafana_alloy_region: US
   tasks:
-    - name: Render config.alloy and the systemd unit with default knobs
+    # Everything at its default: machine metrics, agent self-metrics and journald
+    # are all ON by default, so this is also the shape a fresh deploy gets.
+    - name: Render the default-values configuration
       ansible.builtin.template:
         src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
         dest: "{{ _ga_render_dir }}/defaults.{{ item.ext }}"
         mode: "0644"
-      loop:
+      loop: &ga_render_pair
         - {src: config.alloy.j2, ext: alloy}
         - {src: alloy.service.j2, ext: service}
       loop_control:
         label: "defaults.{{ item.ext }}"
+      vars:
+        _ga_instance_id: decdn-node-1
+        _ga_journal_groups: [systemd-journal, adm]
+        grafana_alloy_bin_effective: /usr/bin/alloy
+        grafana_alloy_deployment_environment: production
+        grafana_alloy_region: US
+
+    # Exercises the omit branches: an empty namespace/region must drop its relabel
+    # rule and its OTTL `set()` statement entirely rather than emit an empty value,
+    # and a 0 ratio must still render a valid float.
+    - name: Render the minimal-identity configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/minimal.{{ item.ext }}"
+        mode: "0644"
+      loop: *ga_render_pair
+      loop_control:
+        label: "minimal.{{ item.ext }}"
+      vars:
+        _ga_instance_id: decdn-node-2
+        grafana_alloy_bin_effective: /usr/local/bin/alloy
+        grafana_alloy_service_namespace: ""
+        grafana_alloy_deployment_environment: ""
+        grafana_alloy_region: ""
+        grafana_alloy_trace_sampling_ratio: 0
+
+    # Exercises the overridden branches: non-default ports, a keep-everything
+    # ratio, and pipeline knobs well away from their defaults.
+    - name: Render the fully-overridden configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/overridden.{{ item.ext }}"
+        mode: "0644"
+      loop: *ga_render_pair
+      loop_control:
+        label: "overridden.{{ item.ext }}"
+      vars:
+        _ga_instance_id: decdn-node-3
+        _ga_journal_groups: [systemd-journal]
+        grafana_alloy_bin_effective: /usr/bin/alloy
+        grafana_alloy_deployment_environment: staging
+        grafana_alloy_region: EU
+        grafana_alloy_trace_sampling_ratio: 1
+        grafana_alloy_scrape_interval: 15s
+        grafana_alloy_batch_timeout: 500ms
+        grafana_alloy_batch_send_size: 512
+        grafana_alloy_batch_max_size: 4096
+        grafana_alloy_queue_size: 100
+        grafana_alloy_retry_initial_interval: 1s
+        grafana_alloy_retry_max_elapsed_time: 1h
+        grafana_alloy_otlp_http_port: 14318
+        grafana_alloy_node_job: decdn-node-custom
+        decdn_metrics_port: 19090
+
+    # --- Machine-monitoring matrix ------------------------------------------
+    # The default case above already renders host metrics, self metrics and
+    # journald together; these four isolate the branches that would otherwise
+    # never be parsed by the real binary.
+
+    # Host metrics ONLY, hand-picked collectors, no journal groups on the host:
+    # proves the exporter/discovery.relabel/scrape trio stands alone, that the
+    # systemd sub-block disappears with its collector, and that ProtectHome
+    # relaxes to read-only.
+    - name: Render the host-metrics-only configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/hostonly.{{ item.ext }}"
+        mode: "0644"
+      loop: *ga_render_pair
+      loop_control:
+        label: "hostonly.{{ item.ext }}"
+      vars:
+        _ga_instance_id: decdn-node-4
+        _ga_journal_groups: []
+        grafana_alloy_bin_effective: /usr/bin/alloy
+        grafana_alloy_deployment_environment: production
+        grafana_alloy_region: US
+        grafana_alloy_host_metrics_enabled: true
+        grafana_alloy_self_metrics_enabled: false
+        grafana_alloy_logs_enabled: false
+        grafana_alloy_host_scrape_interval: 120s
+        grafana_alloy_host_collectors: [cpu, meminfo]
+        grafana_alloy_host_extra_collectors: []
+        grafana_alloy_host_disable_collectors: [hwmon]
+        grafana_alloy_host_include_exporter_metrics: true
+
+    # Logs ONLY, explicit journal path, both cost-guardrail drops cleared (the
+    # omit branches of the rules), journal groups present — the only combination
+    # that renders SupplementaryGroups.
+    - name: Render the logs-only configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/logsonly.{{ item.ext }}"
+        mode: "0644"
+      loop: *ga_render_pair
+      loop_control:
+        label: "logsonly.{{ item.ext }}"
+      vars:
+        _ga_instance_id: decdn-node-5
+        _ga_journal_groups: [systemd-journal, adm]
+        grafana_alloy_bin_effective: /usr/bin/alloy
+        grafana_alloy_deployment_environment: production
+        grafana_alloy_region: US
+        grafana_alloy_host_metrics_enabled: false
+        grafana_alloy_self_metrics_enabled: false
+        grafana_alloy_logs_enabled: true
+        grafana_alloy_logs_journal_path: /var/log/journal
+        grafana_alloy_logs_max_age: 30m
+        grafana_alloy_logs_drop_priority_regex: ""
+        grafana_alloy_logs_drop_unit_regex: ""
+
+    # BACKWARDS COMPATIBILITY: every sub-knob off must reproduce the
+    # pre-machine-monitoring pipeline exactly — node scrape + OTLP, all
+    # credentials via sys.env. validate.sh asserts the absence of every new
+    # component here.
+    - name: Render the legacy (sub-knobs off) configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/legacy.{{ item.ext }}"
+        mode: "0644"
+      loop: *ga_render_pair
+      loop_control:
+        label: "legacy.{{ item.ext }}"
+      vars:
+        _ga_instance_id: decdn-node-6
+        grafana_alloy_bin_effective: /usr/bin/alloy
+        grafana_alloy_deployment_environment: production
+        grafana_alloy_region: US
+        # Blanked too: the explicit node job label is itself new, so leaving it
+        # at its default would change the daemon series' identity and this case
+        # would no longer be the old pipeline.
+        grafana_alloy_node_job: ""
+        grafana_alloy_host_metrics_enabled: false
+        grafana_alloy_self_metrics_enabled: false
+        grafana_alloy_logs_enabled: false
+
+    # The inventory-driven connection settings: all five non-secret values set,
+    # so every sys.env lookup EXCEPT the token must disappear.
+    - name: Render the inventory-endpoint configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/inventory.{{ item.ext }}"
+        mode: "0644"
+      loop: *ga_render_pair
+      loop_control:
+        label: "inventory.{{ item.ext }}"
+      vars:
+        _ga_instance_id: decdn-node-7
+        _ga_journal_groups: [systemd-journal, adm]
+        grafana_alloy_bin_effective: /usr/bin/alloy
+        grafana_alloy_deployment_environment: production
+        grafana_alloy_region: US
+        grafana_alloy_prom_url: https://prometheus-prod-99.render.invalid/api/prom/push
+        # DELIBERATELY UNQUOTED: instance IDs are numeric, so YAML hands these
+        # over as ints. Alloy's basic_auth username is a string, so the template
+        # must coerce rather than emit a bare number.
+        grafana_alloy_prom_username: 1234567
+        grafana_alloy_otlp_endpoint: https://otlp-gateway-prod-99.render.invalid/otlp
+        grafana_alloy_loki_url: https://logs-prod-99.render.invalid/loki/api/v1/push
+        grafana_alloy_loki_username: 7654321
+
+    # The two escape hatches an upgrading operator reaches for: vetoing a
+    # collector must actually remove it (and its scoping block) rather than
+    # leaving it enabled-but-unscoped, and blanking the node job must restore the
+    # pre-existing component-ID identity for dashboards that hard-code it.
+    - name: Render the vetoed-collector configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/vetoed.{{ item.ext }}"
+        mode: "0644"
+      loop: *ga_render_pair
+      loop_control:
+        label: "vetoed.{{ item.ext }}"
+      vars:
+        _ga_instance_id: decdn-node-8
+        _ga_journal_groups: [systemd-journal, adm]
+        grafana_alloy_bin_effective: /usr/bin/alloy
+        grafana_alloy_deployment_environment: production
+        grafana_alloy_region: US
+        grafana_alloy_node_job: ""
+        grafana_alloy_host_disable_collectors: [systemd, netdev]
 
     # Hands validate.sh the release pin without making it parse YAML itself: the
     # values come from the role's own defaults, so the download it verifies is
@@ -52,70 +239,3 @@
           GRAFANA_ALLOY_VERSION={{ grafana_alloy_version }}
           GRAFANA_ALLOY_SHA256_AMD64={{ grafana_alloy_sha256.amd64 | default('') }}
           GRAFANA_ALLOY_SHA256_ARM64={{ grafana_alloy_sha256.arm64 | default('') }}
-
-# Exercises the omit branches: an empty namespace/region must drop its relabel
-# rule and its OTTL `set()` statement entirely rather than emit an empty value,
-# and a 0 ratio must still render a valid float.
-- name: Render the minimal-identity Alloy configuration
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  become: false
-  vars_files:
-    - ../../roles/grafana_alloy/defaults/main.yml
-  vars:
-    _ga_render_dir: "{{ lookup('ansible.builtin.env', 'ALLOY_RENDER_DIR') }}"
-    _ga_instance_id: decdn-node-2
-    grafana_alloy_bin_effective: /usr/local/bin/alloy
-    grafana_alloy_service_namespace: ""
-    grafana_alloy_deployment_environment: ""
-    grafana_alloy_region: ""
-    grafana_alloy_trace_sampling_ratio: 0
-  tasks:
-    - name: Render config.alloy and the systemd unit with minimal identity
-      ansible.builtin.template:
-        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
-        dest: "{{ _ga_render_dir }}/minimal.{{ item.ext }}"
-        mode: "0644"
-      loop:
-        - {src: config.alloy.j2, ext: alloy}
-        - {src: alloy.service.j2, ext: service}
-      loop_control:
-        label: "minimal.{{ item.ext }}"
-
-# Exercises the overridden branches: non-default ports, a keep-everything ratio,
-# and pipeline knobs well away from their defaults.
-- name: Render the fully-overridden Alloy configuration
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  become: false
-  vars_files:
-    - ../../roles/grafana_alloy/defaults/main.yml
-  vars:
-    _ga_render_dir: "{{ lookup('ansible.builtin.env', 'ALLOY_RENDER_DIR') }}"
-    _ga_instance_id: decdn-node-3
-    grafana_alloy_bin_effective: /usr/bin/alloy
-    grafana_alloy_deployment_environment: staging
-    grafana_alloy_region: EU
-    grafana_alloy_trace_sampling_ratio: 1
-    grafana_alloy_scrape_interval: 15s
-    grafana_alloy_batch_timeout: 500ms
-    grafana_alloy_batch_send_size: 512
-    grafana_alloy_batch_max_size: 4096
-    grafana_alloy_queue_size: 100
-    grafana_alloy_retry_initial_interval: 1s
-    grafana_alloy_retry_max_elapsed_time: 1h
-    grafana_alloy_otlp_http_port: 14318
-    decdn_metrics_port: 19090
-  tasks:
-    - name: Render config.alloy and the systemd unit with overridden knobs
-      ansible.builtin.template:
-        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
-        dest: "{{ _ga_render_dir }}/overridden.{{ item.ext }}"
-        mode: "0644"
-      loop:
-        - {src: config.alloy.j2, ext: alloy}
-        - {src: alloy.service.j2, ext: service}
-      loop_control:
-        label: "overridden.{{ item.ext }}"

@@ -5,9 +5,11 @@
 // file (and everything the Jinja layer emits) must stay `//`.
 //
 // Pipeline: scrape the node's /metrics and push it to Grafana Cloud Prometheus;
-// receive OTLP traces (plus any logs/metrics pushed over localhost) on gRPC 4317 /
-// HTTP 4318 bound to loopback only; stamp resource identity on everything,
-// probabilistically sample traces, batch, then export via OTLP/HTTP.
+// scrape the MACHINE (Alloy's in-process node_exporter) and Alloy itself; ship
+// journald to Grafana Cloud Loki; receive OTLP traces (plus any logs/metrics
+// pushed over localhost) on gRPC 4317 / HTTP 4318 bound to loopback only; stamp
+// resource identity on everything, probabilistically sample traces, batch, then
+// export via OTLP/HTTP.
 //
 // Secrets are NOT literals here: every credential is read at config-load time
 // with the `sys.env` stdlib function from the root-owned 0600 environment file
@@ -15,11 +17,35 @@
 // roles/grafana_alloy/files/grafana-alloy.env.example). Alloy has no
 // `--config.expand-env` flag — `${VAR}` inside a string is a literal, so
 // `sys.env("VAR")` is the only working indirection.
+//
+// The NON-secret half of the credentials (endpoint URLs, the two numeric
+// instance IDs) may instead come from inventory; see the ga_endpoint macro.
+
+{# Renders a Grafana Cloud connection value as either an inline string literal
+   (when inventory set it) or the sys.env lookup this role has always used (when
+   inventory left it empty). Keeping both shapes means a host provisioned the old
+   way — all keys in /etc/grafana-alloy.env — renders exactly the previous
+   configuration, while a host driven from inventory needs only GC_API_TOKEN on
+   disk. tojson does the quoting/escaping in both branches.
+   NEVER call this for the API token: config.alloy is 0644 on the host.
+   The `| string` is load-bearing: instance IDs are numeric, so an unquoted
+   `grafana_alloy_prom_username: 1234567` in inventory arrives as an int, which
+   has no length and which tojson would emit as a bare number — and Alloy's
+   basic_auth username is a string, so that is a config-load failure. #}
+{% macro ga_endpoint(value, env_key) -%}
+{% set ga_value = value | default('', true) | string %}
+{% if ga_value | length > 0 %}{{ ga_value | tojson }}{% else %}sys.env({{ env_key | tojson }}){% endif %}
+{%- endmacro %}
 
 prometheus.scrape "decdn_node" {
   targets = [
     { "__address__" = "127.0.0.1:{{ decdn_metrics_port | default(9090) }}",
-      "instance"    = "{{ _ga_instance_id }}" },
+      "instance"    = "{{ _ga_instance_id }}"{% if grafana_alloy_node_job | length > 0 %},
+      {# BREAKING-CHANGE ESCAPE HATCH: with no explicit job label Alloy falls back
+         to the component ID, so these series used to be job="prometheus.scrape.decdn_node".
+         Set grafana_alloy_node_job: "" to keep the old identity for dashboards
+         and alerts that already hard-code it. #}
+      "job"         = {{ grafana_alloy_node_job | tojson }}{% endif %} },
   ]
   forward_to      = [prometheus.relabel.decdn_identity.receiver]
   scrape_interval = {{ grafana_alloy_scrape_interval | to_json }}
@@ -48,14 +74,253 @@ prometheus.relabel "decdn_identity" {
 
 prometheus.remote_write "cloud" {
   endpoint {
-    url = sys.env("GC_PROM_REMOTE_WRITE_URL")
+    url = {{ ga_endpoint(grafana_alloy_prom_url, 'GC_PROM_REMOTE_WRITE_URL') }}
 
     basic_auth {
-      username = sys.env("GC_PROM_USERNAME")
+      username = {{ ga_endpoint(grafana_alloy_prom_username, 'GC_PROM_USERNAME') }}
       password = sys.env("GC_API_TOKEN")
     }
   }
 }
+
+{# ---------------------------------------------------------------------------
+   HOST (machine) METRICS — Alloy's in-process node_exporter.
+
+   Runs inside the agent: no extra listener and no extra port, so the
+   loopback-only posture is unchanged. Identity is applied with
+   discovery.relabel (TARGET labels — evaluated once per target, then attached to
+   every sample at scrape time) rather than prometheus.relabel (per SAMPLE, with
+   a cardinality-sized cache). The scrape forwards STRAIGHT to remote_write,
+   deliberately bypassing prometheus.relabel.decdn_identity: that component
+   stamps service_name=decdn-node, which is false for machine series.
+
+   `job` must stay integrations/node_exporter for Grafana Cloud's prebuilt Linux
+   Server dashboards and alert rules to find these series.
+   Every regex below is JSON-encoded, so no value can break out of its string. #}
+{% if grafana_alloy_host_metrics_enabled | bool %}
+{# Upstream applies disable_collectors FIRST and enable_collectors second, so a
+   name in both ends up ENABLED — the opposite of what an operator vetoing a
+   collector expects. Subtract the veto list here instead, so it really wins and
+   so the derived `systemd` block below agrees with what actually runs. #}
+{% set ga_host_set_collectors = grafana_alloy_host_collectors
+     | reject('in', grafana_alloy_host_disable_collectors) | list %}
+{% set ga_host_extra_collectors = grafana_alloy_host_extra_collectors
+     | reject('in', grafana_alloy_host_disable_collectors) | list %}
+{% set ga_host_enabled_collectors = ga_host_set_collectors + ga_host_extra_collectors %}
+
+prometheus.exporter.unix "host" {
+  // set_collectors REPLACES the default set (~45 collectors): anything not
+  // listed is off. enable_collectors adds on top (it is the only way to turn on
+  // an upstream-defaultDisabled collector such as systemd). Both lists already
+  // have grafana_alloy_host_disable_collectors subtracted at render time.
+  set_collectors           = {{ ga_host_set_collectors | tojson }}
+{% if ga_host_extra_collectors | length > 0 %}
+  enable_collectors        = {{ ga_host_extra_collectors | tojson }}
+{% endif %}
+{% if grafana_alloy_host_disable_collectors | length > 0 %}
+  disable_collectors       = {{ grafana_alloy_host_disable_collectors | tojson }}
+{% endif %}
+  include_exporter_metrics = {{ grafana_alloy_host_include_exporter_metrics | bool | tojson }}
+
+  filesystem {
+    fs_types_exclude     = {{ grafana_alloy_host_fs_types_exclude | tojson }}
+    mount_points_exclude = {{ grafana_alloy_host_mount_points_exclude | tojson }}
+    mount_timeout        = {{ grafana_alloy_host_mount_timeout | to_json }}
+  }
+
+  netdev {
+    device_exclude = {{ grafana_alloy_host_netdev_device_exclude | tojson }}
+  }
+
+  // `disk` is the block name for the diskstats collector.
+  disk {
+    device_exclude = {{ grafana_alloy_host_disk_device_exclude | tojson }}
+  }
+{% if 'systemd' in ga_host_enabled_collectors %}
+
+  // Per-unit state. Reaches systemd over the D-Bus SYSTEM bus (Alloy does not
+  // expose node_exporter's root-only private-socket mode), so it needs AF_UNIX
+  // and /run/dbus/system_bus_socket — both available to the hardened unit, and
+  // both absent in a bare container, where it simply reports nothing.
+  systemd {
+    unit_include = {{ grafana_alloy_host_systemd_unit_include | tojson }}
+    unit_exclude = {{ grafana_alloy_host_systemd_unit_exclude | tojson }}
+  }
+{% endif %}
+}
+
+{# Host series carry job/instance (what the Cloud dashboards filter on) plus the
+   fleet-identity labels, but NOT service_name: these describe the machine, not
+   the daemon. Empty values drop their rule entirely. #}
+{% set ga_host_labels = [
+     ["job", grafana_alloy_host_job],
+     ["instance", _ga_instance_id],
+     ["service_namespace", grafana_alloy_service_namespace],
+     ["deployment_environment", grafana_alloy_deployment_environment],
+     ["region", grafana_alloy_region],
+   ] %}
+discovery.relabel "host" {
+  targets = prometheus.exporter.unix.host.targets
+{% for name, value in ga_host_labels if value | length > 0 %}
+
+  rule {
+    target_label = {{ name | tojson }}
+    replacement  = {{ value | tojson }}
+  }
+{% endfor %}
+}
+
+prometheus.scrape "host" {
+  targets         = discovery.relabel.host.output
+  forward_to      = [prometheus.remote_write.cloud.receiver]
+  scrape_interval = {{ grafana_alloy_host_scrape_interval | to_json }}
+}
+{% endif %}
+{% if grafana_alloy_self_metrics_enabled | bool %}
+
+{# Alloy's own health: component evaluation, WAL, remote-write queue and
+   failures. This is what distinguishes "the node went quiet" from "the agent
+   that reports on the node is wedged", so it is cheap insurance. #}
+prometheus.exporter.self "alloy" {}
+
+{% set ga_self_labels = [
+     ["job", grafana_alloy_self_job],
+     ["instance", _ga_instance_id],
+     ["service_namespace", grafana_alloy_service_namespace],
+     ["deployment_environment", grafana_alloy_deployment_environment],
+     ["region", grafana_alloy_region],
+   ] %}
+discovery.relabel "alloy_self" {
+  targets = prometheus.exporter.self.alloy.targets
+{% for name, value in ga_self_labels if value | length > 0 %}
+
+  rule {
+    target_label = {{ name | tojson }}
+    replacement  = {{ value | tojson }}
+  }
+{% endfor %}
+}
+
+prometheus.scrape "alloy_self" {
+  targets         = discovery.relabel.alloy_self.output
+  forward_to      = [prometheus.remote_write.cloud.receiver]
+  scrape_interval = {{ grafana_alloy_host_scrape_interval | to_json }}
+}
+{% endif %}
+{% if grafana_alloy_logs_enabled | bool %}
+
+{# ---------------------------------------------------------------------------
+   HOST + SERVICE LOGS — journald to Grafana Cloud Loki.
+
+   Two relabel stages, and the split is not cosmetic: journald fields arrive as
+   __journal*-prefixed labels that are STRIPPED before entries reach any
+   downstream receiver, so anything reading them (the field mapping AND the
+   cost-guardrail drops) MUST live in the rules-only ruleset consumed by
+   loki.source.journal. Identity labels are applied afterwards, on the entries.
+
+   Reading the journal needs group membership (systemd-journal + adm), granted by
+   the role and pinned in the unit's SupplementaryGroups — without it the
+   component starts happily and collects nothing at all. The positions file lands
+   under --storage.path, i.e. inside the existing StateDirectory. #}
+loki.relabel "journal_rules" {
+  // Rules-only usage: the ruleset is consumed via .rules below, so nothing is
+  // forwarded from here. The argument is still required.
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+
+  rule {
+    source_labels = ["__journal__hostname"]
+    target_label  = "hostname"
+  }
+
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+
+  rule {
+    source_labels = ["__journal__transport"]
+    target_label  = "transport"
+  }
+
+  rule {
+    source_labels = ["__journal__boot_id"]
+    target_label  = "boot_id"
+  }
+{% if grafana_alloy_logs_drop_priority_regex | length > 0 %}
+
+  // Cost guardrail: the regex is anchored to the WHOLE value by Prometheus
+  // relabel semantics, so "debug" drops debug and nothing else.
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    regex         = {{ grafana_alloy_logs_drop_priority_regex | tojson }}
+    action        = "drop"
+  }
+{% endif %}
+{% if grafana_alloy_logs_drop_unit_regex | length > 0 %}
+
+  // Cost guardrail: chatty units nobody debugs from Loki. Entries with no unit
+  // (kernel, for example) have an empty value here and are kept.
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    regex         = {{ grafana_alloy_logs_drop_unit_regex | tojson }}
+    action        = "drop"
+  }
+{% endif %}
+}
+
+loki.source.journal "host" {
+{% if grafana_alloy_logs_journal_path | length > 0 %}
+  path           = {{ grafana_alloy_logs_journal_path | tojson }}
+{% else %}
+  // No path: Alloy reads both /var/log/journal and /run/log/journal.
+{% endif %}
+  // Bounds the catch-up burst after an outage or a fresh install.
+  max_age        = {{ grafana_alloy_logs_max_age | to_json }}
+  format_as_json = false
+  relabel_rules  = loki.relabel.journal_rules.rules
+  forward_to     = [loki.relabel.journal_identity.receiver]
+}
+
+{# Same job/instance pair as the host metrics above — Grafana Cloud's Linux
+   Server integration dashboards correlate logs and metrics on exactly these
+   two labels. Set here (not via the source's `labels` argument) so they
+   override the job label loki.source.journal adds on its own. #}
+{% set ga_log_labels = [
+     ["job", grafana_alloy_logs_job],
+     ["instance", _ga_instance_id],
+     ["service_namespace", grafana_alloy_service_namespace],
+     ["deployment_environment", grafana_alloy_deployment_environment],
+     ["region", grafana_alloy_region],
+   ] %}
+loki.relabel "journal_identity" {
+  forward_to = [loki.write.cloud.receiver]
+{% for name, value in ga_log_labels if value | length > 0 %}
+
+  rule {
+    target_label = {{ name | tojson }}
+    replacement  = {{ value | tojson }}
+  }
+{% endfor %}
+}
+
+loki.write "cloud" {
+  endpoint {
+    url = {{ ga_endpoint(grafana_alloy_loki_url, 'GC_LOKI_URL') }}
+
+    // Grafana Cloud's Loki instance ID is NOT the Prometheus one; the same
+    // access-policy token authenticates both.
+    basic_auth {
+      username = {{ ga_endpoint(grafana_alloy_loki_username, 'GC_LOKI_USERNAME') }}
+      password = sys.env("GC_API_TOKEN")
+    }
+  }
+}
+{% endif %}
 
 otelcol.receiver.otlp "local" {
   grpc {
@@ -141,7 +406,7 @@ otelcol.processor.batch "decdn" {
    `client` — nesting them inside `client` is rejected at config load. #}
 otelcol.exporter.otlphttp "cloud" {
   client {
-    endpoint = sys.env("GC_OTLP_ENDPOINT")
+    endpoint = {{ ga_endpoint(grafana_alloy_otlp_endpoint, 'GC_OTLP_ENDPOINT') }}
     auth     = otelcol.auth.basic.cloud.handler
   }
 
@@ -156,6 +421,6 @@ otelcol.exporter.otlphttp "cloud" {
 }
 
 otelcol.auth.basic "cloud" {
-  username = sys.env("GC_PROM_USERNAME")
+  username = {{ ga_endpoint(grafana_alloy_prom_username, 'GC_PROM_USERNAME') }}
   password = sys.env("GC_API_TOKEN")
 }
