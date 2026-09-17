@@ -1,0 +1,76 @@
+---
+# Validate the provenance record before any task reads it onto the controller or
+# trusts it as authorization to rewrite a root-only credential file. The path is
+# already constrained by validate-paths.yml to `<secret-file>.sha256`.
+
+- name: Inspect the env-file provenance record
+  ansible.builtin.stat:
+    path: "{{ grafana_alloy_env_checksum_file }}"
+    follow: false
+    get_checksum: false
+  register: _ga_record_stat
+
+- name: Require an existing provenance record to be a protected regular file
+  ansible.builtin.assert:
+    that:
+      - _ga_record_stat.stat.isreg | default(false)
+      - (_ga_record_stat.stat.pw_name | default('')) == 'root'
+      - (_ga_record_stat.stat.gr_name | default('')) == 'root'
+      - _ga_record_stat.stat.mode | string == '0600'
+    fail_msg: >-
+      {{ grafana_alloy_env_checksum_file }} exists but is not a root:root 0600
+      regular file (symlinks are refused). Move the unrelated file away or restore
+      the role-authored provenance record before deploying.
+  when: _ga_record_stat.stat.exists
+
+# Probe the complete byte stream on the target with no stdout before slurp. A
+# line-oriented or NUL-record grep can accept one valid prefix and ignore trailing
+# unrelated bytes; Python's fullmatch cannot.
+#
+# Use the interpreter Ansible already discovered for this host rather than a bare
+# `python3`: ansible.cfg sets interpreter_python = auto_silent, so a target whose
+# interpreter is /usr/bin/python3.11 or a venv has no guarantee of a `python3` on
+# the become shell's PATH — and rc=2 from a missing interpreter would otherwise be
+# reported below as "your record is corrupt".
+#
+# The script exits 0 (matches) or 1 (does not). ANY other rc is an execution
+# failure, not a verdict about the file, so it is not suppressed.
+- name: Check the provenance record shape on the target
+  vars:
+    # `.get()` on both, so neither an ungathered fact nor an unset inventory
+    # variable raises; the literal is the last resort, not the first choice.
+    _ga_python: >-
+      {{ ansible_facts.get('discovered_interpreter_python')
+         or hostvars[inventory_hostname].get('ansible_python_interpreter')
+         or '/usr/bin/python3' }}
+  ansible.builtin.command:
+    argv:
+      - "{{ _ga_python }}"
+      - -c
+      - >-
+        import pathlib, re, sys;
+        raise SystemExit(0 if re.fullmatch(
+        rb'(inventory|host) [0-9a-f]{64}\n?',
+        pathlib.Path(sys.argv[1]).read_bytes()) else 1)
+      - "{{ grafana_alloy_env_checksum_file }}"
+  changed_when: false
+  check_mode: false
+  # Only the two verdict codes are ours to interpret; anything else (interpreter
+  # missing, EACCES, OOM, rc=126/127) fails the task in its own voice, with the
+  # module's real error, instead of being laundered into a corruption claim.
+  failed_when: _ga_record_shape.rc not in [0, 1]
+  register: _ga_record_shape
+  when: _ga_record_stat.stat.exists
+
+- name: Require an existing provenance record to have the role-owned format
+  ansible.builtin.assert:
+    that:
+      - (_ga_record_shape.rc | default(1)) == 0
+    fail_msg: >-
+      {{ grafana_alloy_env_checksum_file }} exists but is not a role-owned
+      provenance record of the exact form "<inventory|host> <sha256>". Refusing
+      to read, overwrite, or trust an unrelated /etc file. If this file IS the
+      role's record, do not delete it blindly — a lost record disables the
+      adoption guard; check it with:
+      sudo cat {{ grafana_alloy_env_checksum_file }}
+  when: _ga_record_stat.stat.exists

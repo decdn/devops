@@ -85,11 +85,16 @@ charts/
   (Alloy's in-process `node_exporter`, curated collector set, `systemd` collector scoped
   to the units that matter), **journald** → Grafana Cloud Loki, Alloy's own health, and
   the daemon's OTLP spans. Host metrics and logs carry `job="integrations/node_exporter"`
-  so Grafana Cloud's prebuilt Linux Server dashboards work unmodified. Only the API token
-  is host-provisioned (`0600 /etc/grafana-alloy.env`, read via `sys.env` — Alloy has no
-  `--config.expand-env`); the non-secret endpoints and the three per-service instance IDs
-  are inventory variables that fall back to their `GC_…` env key when empty, and preflight
-  refuses a token in any of them. Two hardening relaxations are conditional on the signals being on
+  so Grafana Cloud's prebuilt Linux Server dashboards work unmodified. The API token is the
+  only credential, and it has two homes: operator-provisioned on the host
+  (`0600 /etc/grafana-alloy.env`) or carried by `grafana_alloy_api_token` from a git-ignored
+  `host_vars/<node>/secret.yml`, in which case the role authors that file itself as a
+  token-only `EnvironmentFile` and tracks who wrote it in `<secret-file>.sha256` (the same
+  `decdn_rpc_url` dual-home pattern). Either way `config.alloy` reads it as
+  `sys.env("GC_API_TOKEN")` — Alloy has no `--config.expand-env`. The non-secret endpoints
+  and the three per-service instance IDs are inventory variables that fall back to their
+  `GC_…` env key when empty, and preflight refuses a token in any of them; with an inventory
+  token it also requires all of them, since the authored file is token-only. Two hardening relaxations are conditional on the signals being on
   (`ProtectHome=read-only` for correct filesystem metrics, `SupplementaryGroups=
   systemd-journal adm` for journal access — without which collection is silently empty);
   teardown is gated on the managed-by marker in the unit, so a foreign Alloy is never
@@ -121,8 +126,10 @@ deploys (its targets must run from `ansible/`). `make help` lists root targets.
 make hooks            # one-time: install pre-commit git hook (pip install pre-commit first)
 make lint             # all pre-commit hooks on all files (hygiene, shellcheck, yamllint, markdown)
 make lint-ansible     # vendor collections + full ansible-lint (production profile)
-make molecule         # containerised converge/verify of the decdn_node role — all six
-                      # scenarios in parallel (needs Docker); cap with JOBS=<n>
+make molecule         # containerised converge/verify of the decdn_node + grafana_alloy
+                      # roles — every molecule/*/ scenario in parallel (the target
+                      # discovers them by glob, so adding one needs no edit here);
+                      # needs Docker, cap with JOBS=<n>
 make molecule-serial  # the same suite one scenario at a time (readable failure output)
 make lint-helm        # chart: helm lint + render tests + kubeconform + schema keys (needs helm, yq, Docker)
 make lint-alloy       # grafana_alloy: render its templates + `alloy validate` them with the real
@@ -137,7 +144,8 @@ make check / deploy   # deCDN node (site.yml): dry-run / provision
 make build / galaxy-check       # stage + build the decdn.node collection, then validate it
 ```
 
-**Galaxy collection (`decdn.node`).** The two roles (`baseline` + `decdn_node`) ship as a
+**Galaxy collection (`decdn.node`).** The three roles (`baseline` + `decdn_node` +
+`grafana_alloy`) ship as a
 distributable collection. The overlay lives in `ansible/galaxy/` and is staged into a clean
 collection tree by `galaxy/build.sh` — there is **no** `galaxy.yml` at the `ansible/` root
 (that would make ansible-lint treat the deploy project as a collection). Build/validate with

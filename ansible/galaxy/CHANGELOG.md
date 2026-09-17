@@ -8,6 +8,24 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- `grafana_alloy_api_token`: the Grafana Cloud API token may now come from a
+  git-ignored `host_vars/<node>/secret.yml` instead of only being operator-
+  provisioned on the host, the same dual-home pattern `decdn_rpc_url` uses. Set, the
+  role authors `/etc/grafana-alloy.env` itself as a **token-only** file at
+  `root:root 0600`; left empty (the default), behaviour is unchanged. Because the
+  authored file is token-only, every other connection setting must then come from
+  inventory — preflight demands them before any mutation.
+- `grafana_alloy_env_checksum_file` (default `/etc/grafana-alloy.env.sha256`): a
+  root-owned `0600` provenance record, `<source> <sha256>`, written after the agent
+  is running on that content. It lets a later converge tell an operator-owned file
+  from a role-authored one, and drives two fail-loud guards — refusing to adopt a
+  role-authored file as host-provisioned when the token goes missing from the
+  control machine, and refusing to clobber a file this role did not write. Must
+  remain exactly `<grafana_alloy_secret_file>.sha256`.
+- `grafana_alloy_overwrite_host_file` (default `false`): explicit opt-in to rewrite
+  an env file of foreign or unknown provenance. Required for one converge when
+  migrating an existing host onto the inventory path; set it back to `false`
+  afterwards or the guard stays disabled on that host.
 - `baseline_packages` now includes `acl`. `decdn_node` runs two tasks as the
   unprivileged `decdn` user (`decdn key-gen`, and the `decdn config validate` gate),
   and on Debian Ansible needs ACL support to hand the temp module file to that user.

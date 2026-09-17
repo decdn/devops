@@ -37,6 +37,45 @@ grafana_alloy_state_dir: /var/lib/alloy      # WAL/storage state, owned by the a
 # swap the root-owned EnvironmentFile before systemd reads it.
 grafana_alloy_secret_file: /etc/grafana-alloy.env
 
+# SENSITIVE — the Grafana Cloud access-policy/service-account token. EMPTY (the
+# default) keeps the host-provisioned posture: preflight requires a 0600 env file
+# on the target host and the value never transits the control machine. SETTING it
+# opts into the inventory path (#39 parity with decdn_rpc_url): this role then
+# authors {{ grafana_alloy_secret_file }} as a TOKEN-ONLY EnvironmentFile that is
+# rewritten wholesale on every converge, so any hand-added GC_* keys must migrate
+# to their inventory variables first (all-or-nothing authoring). Whether the value
+# arrives via this variable or was provisioned by hand, config.alloy reads it the
+# same way at runtime: sys.env("GC_API_TOKEN").
+grafana_alloy_api_token: ""
+
+# Provenance tracking for grafana_alloy_secret_file, mirroring roles/decdn_node's
+# #39 machinery. After every enabled converge the role records "<source> <sha256>"
+# of the env file the service is now running on ("inventory" when
+# grafana_alloy_api_token authored it, "host" otherwise) into a root-owned 0600
+# record NEXT TO the secret file — deliberately NOT inside /etc/alloy or
+# /var/lib/alloy, because the disable path removes those directories wholesale.
+# Path validation requires this to remain exactly `<secret-file>.sha256`; it is
+# not an independently aimable root-write path.
+# Preflight uses the pair to fail loud on (a) adopting a role-authored file after
+# the secret went missing from the control machine and (b) clobbering an operator-
+# edited or untracked file without grafana_alloy_overwrite_host_file. Disable keeps
+# both file and record so a later re-enable cannot forget who authored the token.
+grafana_alloy_env_checksum_file: /etc/grafana-alloy.env.sha256
+
+# Explicit opt-in letting grafana_alloy_api_token rewrite an env file whose
+# provenance record is missing or mismatched — i.e. something this role did not
+# last write. Identical contract to decdn_env_overwrite_host_file: because the
+# rewrite is token-only, any lines added outside Ansible are DISCARDED; migrate
+# them to their inventory variables BEFORE turning this on (preflight then stops
+# demanding them from the file, which also makes the migration verifiable).
+#
+# Turn it back to false after the one converge that needs it. Left true, this host
+# has NO clobber guard: the next hand-edit to the env file is silently destroyed
+# instead of stopping the deploy, which is the whole point of the record. It must
+# be a real boolean — preflight rejects "yes"/"on"/"1" rather than let YAML
+# truthiness grant an authorisation nobody typed.
+grafana_alloy_overwrite_host_file: false
+
 # --- Network (loopback-only; AGENTS.md hard rule 2) ---------------------------
 # OTLP receivers bound to loopback ONLY — the daemon accepts telemetry pushed
 # over localhost, never from the network; no firewall hole exists or is needed.
@@ -54,16 +93,21 @@ grafana_alloy_server_http_addr: 127.0.0.1:12345
 # --- Grafana Cloud endpoints (NON-SECRET; optional inventory overrides) -------
 # Only the API TOKEN is a secret. The endpoint URLs and the two numeric instance
 # IDs are not, so they may be set here (group_vars/host_vars) instead of being
-# hand-typed into the root-owned env file on every host — which leaves
-# GC_API_TOKEN as the single value an operator must provision per host.
+# hand-typed into the root-owned env file on every host — leaving GC_API_TOKEN
+# as the only credential, itself dually homeable: operator-provisioned per host,
+# or carried by grafana_alloy_api_token from git-ignored inventory (see below).
 #
 # Each of these is optional and falls back, when left EMPTY, to the matching
 # sys.env("GC_…") lookup the role has always used, so an existing deployment that
 # sets none of them renders byte-identical configuration. Setting one makes its
 # env key unnecessary, and preflight stops requiring that key.
 #
-# NEVER put the token here: config.alloy is world-readable 0644 on the host, and
-# inventory is committed. GC_API_TOKEN has no variable by design.
+# NEVER put a credential in THIS template: config.alloy is world-readable 0644 on
+# the host, and inventory is committed. The API token is the ONE value allowed to
+# ride through inventory — via grafana_alloy_api_token below, which is SENSITIVE
+# and belongs in a git-ignored secret.yml exactly like decdn_rpc_url (#39). Setting
+# it makes this role author /etc/grafana-alloy.env itself; leaving it "" keeps the
+# original operator-provisioned posture. See README.md §Credentials.
 grafana_alloy_prom_url: ""            # else sys.env("GC_PROM_REMOTE_WRITE_URL")
 grafana_alloy_prom_username: ""       # else sys.env("GC_PROM_USERNAME")
 grafana_alloy_otlp_endpoint: ""       # else sys.env("GC_OTLP_ENDPOINT")

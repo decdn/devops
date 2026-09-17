@@ -61,6 +61,18 @@
     - name: Validate the managed filesystem paths before removing them
       ansible.builtin.import_tasks: validate-paths.yml
 
+    # Deliberately placed a credential + a disabled flag is almost always a
+    # half-finished enablement, and every other task in this block is silent about
+    # it: the operator sees a clean run and assumes the token took effect.
+    - name: Note that a configured API token is inert while the flag is off
+      ansible.builtin.debug:
+        msg: >-
+          grafana_alloy_api_token is set, but decdn_grafana_cloud_enabled is false,
+          so this role tore its installation down and did NOT write
+          {{ grafana_alloy_secret_file }} — the token has no effect. Set
+          decdn_grafana_cloud_enabled: true to deploy the agent.
+      when: grafana_alloy_api_token | default('', true) | string | length > 0
+
     - name: Check for a leftover Alloy systemd unit
       ansible.builtin.stat:
         path: "{{ _ga_unit_path }}"
@@ -115,6 +127,11 @@
             - "{{ grafana_alloy_config_dir }}"
             - "{{ grafana_alloy_state_dir }}"
           notify: Reload systemd
+
+        # Keep both the credential file and its provenance record. If the install
+        # was inventory-authored, deleting only the record would make a later
+        # re-enable with a missing secret.yml adopt the stale token as host-owned.
+        # The documented explicit handoff removes the record deliberately.
 
         - name: Apply pending teardown notifications
           ansible.builtin.meta: flush_handlers
@@ -263,6 +280,106 @@
     - name: Install the Alloy binary
       ansible.builtin.import_tasks: install.yml
 
+    # --- Secret environment file --------------------------------------------------
+    # Two authoring paths for {{ grafana_alloy_secret_file }}, decided by the
+    # provenance gates in preflight exactly like decdn_node's #39:
+    #   * grafana_alloy_api_token set -> the copy below REWRITES the file from
+    #     control-machine values, token-only.
+    #   * empty -> the operator wrote the file on the host. The role never reads its
+    #     content back (that would put the secret on the control machine, which is
+    #     the whole point of the host path); it only enforces root 0600 and greps
+    #     shapes in preflight.
+    - name: Write the token-only secret environment file (inventory-supplied)
+      ansible.builtin.copy:
+        dest: "{{ grafana_alloy_secret_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+        # to_json rather than hand-rolled escaping: it supplies the surrounding
+        # double quotes and escapes " and \ — the only two escapes systemd's
+        # EnvironmentFile parser unescapes inside quotes, so a token containing
+        # either survives intact. ensure_ascii=false keeps UTF-8 literal.
+        #
+        # systemd's parser is shell-like, NOT a C-escape parser: \n / \t / \uXXXX
+        # would reach the daemon as literal backslash sequences. That is exactly
+        # why preflight's shape gate rejects whitespace (and, via \Z, a trailing
+        # newline) rather than trusting to_json to make anything safe.
+        #
+        # Keep this block scalar byte-identical to _ga_desired_inventory_content
+        # in preflight.yml — the interrupted-rotation branch hashes that one and
+        # compares it against this file. no_log because the token is secret.
+        content: |
+          GC_API_TOKEN={{ grafana_alloy_api_token | string | to_json(ensure_ascii=false) }}
+      no_log: true
+      register: _ga_env_copy
+      notify: Restart alloy
+      when: grafana_alloy_api_token | default('', true) | string | length > 0
+
+    # If a prior run wrote the desired token bytes and then failed before the
+    # final provenance write, copy is now idempotent and would not notify. Queue a
+    # restart explicitly so retry both repairs the record and moves the running
+    # process onto those bytes. The desired checksum proves this is our exact
+    # token-only payload, not an arbitrary foreign edit.
+    - name: Resume an interrupted inventory token rotation
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Would restart Alloy to resume an interrupted inventory-token rotation.'
+             if ansible_check_mode else
+             'Resuming interrupted inventory-token rotation; restart queued before provenance.' }}
+      changed_when: true
+      notify: Restart alloy
+      when:
+        - grafana_alloy_api_token | default('', true) | string | length > 0
+        - _ga_secret_stat.stat.exists
+        - _ga_desired_inventory_sum == (_ga_secret_stat.stat.checksum | default(''))
+        - >-
+          _ga_record_source != 'inventory'
+          or _ga_recorded_sum != (_ga_secret_stat.stat.checksum | default(''))
+
+    # The copy above is no_log, so a run that replaced an existing file shows a bare
+    # "changed" and nothing else. Say what was lost — but only for the UNKNOWABLE
+    # case: a file whose known-foreign provenance already failed preflight loudly,
+    # so what remains here is the first converge after a pre-provenance deploy.
+    # Gated on the task result too, so it speaks up once (when contents moved),
+    # not on every subsequent converge.
+    #
+    # Reaching this task at all means grafana_alloy_overwrite_host_file was set:
+    # preflight's overwrite gate demands it for ANY untracked file, so name it —
+    # otherwise the message reads as if the rewrite happened unprompted.
+    - name: Warn that an inventory grafana_alloy_api_token overwrote an untracked env file
+      ansible.builtin.debug:
+        msg: >-
+          grafana_alloy_api_token is set and grafana_alloy_overwrite_host_file
+          authorised the rewrite, so {{ grafana_alloy_secret_file }} was REWRITTEN
+          as a token-only file — any KEY=value lines added on the host that are not
+          covered by inventory variables are gone. From this converge on, that file
+          is tracked: an edit made outside Ansible fails the next deploy instead of
+          being silently discarded. Set grafana_alloy_overwrite_host_file back to
+          false now — leaving it true disables that guard permanently on this host.
+          Clear grafana_alloy_api_token to hand the file back to the host.
+      register: _ga_untracked_overwrite_applied_report
+      when:
+        - not ansible_check_mode
+        - grafana_alloy_api_token | default('', true) | string | length > 0
+        - _ga_secret_stat.stat.exists
+        - _ga_recorded_sum | length == 0
+        - _ga_env_copy.changed | default(false) | bool
+
+    - name: Warn what check mode would discard from an untracked env file
+      ansible.builtin.debug:
+        msg: >-
+          grafana_alloy_api_token is set and explicit overwrite permission was
+          supplied, so a real run WOULD rewrite {{ grafana_alloy_secret_file }} as
+          a token-only file. Any host-added KEY=value lines not represented by
+          inventory variables WOULD be discarded; check mode made no change.
+      register: _ga_untracked_overwrite_check_report
+      when:
+        - ansible_check_mode
+        - grafana_alloy_api_token | default('', true) | string | length > 0
+        - _ga_secret_stat.stat.exists
+        - _ga_recorded_sum | length == 0
+        - _ga_env_copy.changed | default(false) | bool
+
     # --- Configuration + hardened unit ------------------------------------------
     - name: Render the Alloy pipeline configuration
       ansible.builtin.template:
@@ -301,17 +418,110 @@
       failed_when: false
       when: not ansible_check_mode
 
+    # `.msg` is included because failed_when: false also swallows MODULE-level
+    # failures — a missing or non-executable binary, ENOEXEC from a wrong-arch
+    # build. Those carry no stderr/stdout at all, so without it this message
+    # renders an empty reason next to a diagnosis ("template regression") that is
+    # actively wrong for that case.
     - name: Report the configuration-validation failure
       ansible.builtin.fail:
         msg: >-
           `alloy validate` rejected {{ grafana_alloy_config_file }}
           (rc={{ _ga_config_check.rc | default('?') }}):
           {{ (_ga_config_check.stderr | default('', true))
-             or (_ga_config_check.stdout | default('', true)) }} — fix the
-          template regression before deploying.
+             or (_ga_config_check.stdout | default('', true))
+             or (_ga_config_check.msg | default('', true))
+             or 'no output' }} — fix the template regression, or the binary at
+          {{ grafana_alloy_bin_effective }} if the reason above is an exec error.
       when:
         - not ansible_check_mode
         - _ga_config_check.rc | default(1) != 0
+
+    # Restart on an OUT-OF-BAND edit to a HOST-provisioned env file. The copy above
+    # already notifies when the role itself authors a changed file, so this covers
+    # only the host path, where nothing else would notice that the operator edited
+    # /etc/grafana-alloy.env between converges — the agent would keep running on
+    # the previous credentials behind a fully green deploy.
+    #
+    # An ABSENT record is deliberately not a change: it means this host has never
+    # run a provenance-tracked converge, and treating "not tracked yet" as "edited"
+    # would bounce every node in the fleet on the upgrade run for no functional
+    # reason. Handlers dedupe, and the flush below executes this BEFORE start and
+    # before the record, so the record always trails the restart it owes.
+    - name: Restat the secret environment file before recording its checksum
+      ansible.builtin.stat:
+        path: "{{ grafana_alloy_secret_file }}"
+        follow: false
+        # sha256 to match the algorithm named by the record's own filename; stat's
+        # default is sha1, which would make the .sha256 extension a lie. NOTE the
+        # record is "<source> <sha256>", so `sha256sum -c` cannot read it — verify
+        # by hand with:
+        #   sudo sha256sum /etc/grafana-alloy.env
+        #   sudo cut -d' ' -f2 /etc/grafana-alloy.env.sha256
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: _ga_env_post_stat
+
+    - name: Note an out-of-band change to the host-provisioned env file
+      ansible.builtin.debug:
+        msg: >-
+          {{ grafana_alloy_secret_file }} has changed since the last converge
+          recorded it — restarting alloy so the agent picks the new credentials up.
+      changed_when: true
+      notify: Restart alloy
+      when:
+        - grafana_alloy_api_token | default('', true) | string | length == 0
+        - _ga_recorded_sum | length > 0
+        - (_ga_env_post_stat.stat.checksum | default('')) != _ga_recorded_sum
+
+    # The blind spot the gate above leaves open, made audible.
+    #
+    # With no record there is nothing to compare, so a host-side token edit cannot
+    # be detected: `state: started` below is a no-op on an already-running unit and
+    # the record is then seeded from the NEW bytes, making that edit undetectable
+    # on every future converge too. Staying silent about it is what turns a
+    # credential rotation into a green deploy that ships nothing.
+    #
+    # This is not only the fleet-upgrade run. The documented hand-back procedure
+    # (clear grafana_alloy_api_token, `sudo rm` the record — see the adoption
+    # guard's fail_msg in preflight.yml) lands an operator in exactly this state,
+    # and writing a fresh token is the natural next step.
+    #
+    # Deliberately a warning, not a restart: bouncing every node in the fleet on
+    # the upgrade run is the cost the gate above exists to avoid. Scoped to an
+    # agent that was ALREADY RUNNING before this converge, because a fresh install
+    # starts on the current file anyway and needs no warning.
+    # Only gathered on the narrow path that needs it — the unit is already
+    # templated by now, so on a fresh install this correctly reports not-running
+    # (the config/unit handlers start it moments later, on the current file).
+    - name: Check whether Alloy predates its first provenance record
+      ansible.builtin.service_facts:
+      when:
+        - grafana_alloy_api_token | default('', true) | string | length == 0
+        - _ga_env_post_stat.stat.exists
+        - _ga_recorded_sum | length == 0
+
+    - name: Warn that out-of-band edit detection is not armed on this host yet
+      ansible.builtin.debug:
+        msg: >-
+          {{ grafana_alloy_secret_file }} is host-provisioned and carries no
+          provenance record yet, so this converge CANNOT tell whether its contents
+          changed since Alloy started, and will not restart the agent on that
+          basis. This run seeds the record; from the next converge on, an
+          out-of-band edit is detected and restarts Alloy automatically. If you
+          changed GC_API_TOKEN (or any GC_* value) as part of THIS change, the
+          running agent is still on the old credentials — every push will 401 while
+          the deploy stays green. Restart it once, now:
+          sudo systemctl restart alloy
+      when:
+        - grafana_alloy_api_token | default('', true) | string | length == 0
+        - _ga_env_post_stat.stat.exists
+        - _ga_recorded_sum | length == 0
+        # Total expression: `services` is absent when the gather above was skipped,
+        # and the unit key is absent on a host that has never run Alloy.
+        - >-
+          (ansible_facts.services | default({}, true)).get('alloy.service', {})
+          .get('state', '') == 'running'
 
     - name: Apply pending Alloy changes
       ansible.builtin.meta: flush_handlers
@@ -336,3 +546,46 @@
           - ansible_facts.services['alloy.service'].state == 'running'
         fail_msg: "alloy is not running — check: journalctl -u alloy -e"
       when: not ansible_check_mode
+
+    # Record the env file's hash LAST — deliberately after the handler flush and
+    # start above, so the record means "the agent is running on this content", not
+    # "Ansible saw this content". Writing it earlier looks equivalent and is not:
+    # the handlers acting on detected changes do not flush until after the config
+    # template and the `alloy validate` gate, both of which can abort the play; a
+    # record written before that abort would say "already handled" on the NEXT
+    # converge, silently burning the one signal a secret rotation gives.
+    #
+    # No notify: by the time this runs, any restart this converge owed — including
+    # the out-of-band-edit one queued just above — has already been flushed.
+    - name: Record the env-file checksum (the agent is now running on it)
+      ansible.builtin.copy:
+        dest: "{{ grafana_alloy_env_checksum_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+        # "<source> <sha256>" — the source token is what a later converge uses to
+        # tell "the operator owns this file" from "I rendered this from inventory".
+        # Parenthesised: filters bind tighter than comparisons, so an unbracketed
+        # ternary parses wrong.
+        content: >
+          {{ (grafana_alloy_api_token | default('', true) | string | length > 0) | ternary('inventory', 'host') }}
+          {{ _ga_env_post_stat.stat.checksum }}
+      # Under `--check` on an unprovisioned host the env-file copy only SIMULATES
+      # the write, so there is nothing to hash and stat.checksum is undefined.
+      when: (_ga_env_post_stat.stat.checksum | default('')) | length > 0
+
+    # …but outside check mode a missing checksum on an existing file means stat
+    # could not READ it, and skipping in silence would leave the host permanently
+    # untracked: no adoption guard, no out-of-band detection, nothing to say why.
+    - name: Fail when the env file exists but could not be hashed for the record
+      ansible.builtin.fail:
+        msg: >-
+          {{ grafana_alloy_secret_file }} exists but could not be hashed, so the
+          provenance record was NOT written — the next converge would silently lose
+          both the adoption guard and out-of-band edit detection on this host. This
+          means the file is unreadable to this connection; run the role with become
+          (the shipped playbooks do).
+      when:
+        - not ansible_check_mode
+        - _ga_env_post_stat.stat.exists
+        - (_ga_env_post_stat.stat.checksum | default('')) | length == 0

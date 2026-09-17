@@ -42,8 +42,54 @@
       value: "{{ grafana_alloy_secret_file }}"
       under: /etc
       regex: '^/etc/[A-Za-z0-9._-]+$'
+    # Written by the enabled path and retained beside the secret across disable.
+    # It authorizes later adoption/overwrite decisions, so keep the same anchored
+    # single-segment treatment as the secret file.
+    - name: grafana_alloy_env_checksum_file
+      value: "{{ grafana_alloy_env_checksum_file }}"
+      under: /etc
+      regex: '^/etc/[A-Za-z0-9._-]+$'
   loop_control:
     label: "{{ item.name }}"
+
+# This root-written record is read onto the controller and used to authorize a
+# later rewrite. Letting inventory aim it independently at any direct child of
+# /etc would turn a typo into an arbitrary-file read/overwrite. Keep it coupled to
+# the already-constrained credential path as its literal `.sha256` companion.
+- name: Require the provenance record to sit beside the credential file
+  ansible.builtin.assert:
+    that:
+      - grafana_alloy_env_checksum_file == grafana_alloy_secret_file ~ '.sha256'
+    quiet: true
+    fail_msg: >-
+      grafana_alloy_env_checksum_file must be exactly grafana_alloy_secret_file +
+      ".sha256" (expected {{ grafana_alloy_secret_file }}.sha256, got
+      {{ grafana_alloy_env_checksum_file }}). The record is root-read, rewritten,
+      and trusted as overwrite authorization, so it cannot be aimed independently
+      at another file under /etc.
+
+# The disable path recursively removes config_dir. It must never be equal to, or
+# an ancestor of, either retained secret artifact or the systemd unit used as the
+# ownership marker; otherwise a valid-looking override can erase the evidence that
+# prevents stale-token adoption (or an entire systemd directory).
+- name: Keep destructive directories away from retained Alloy files
+  ansible.builtin.assert:
+    that:
+      - grafana_alloy_config_dir != grafana_alloy_secret_file
+      - grafana_alloy_config_dir != grafana_alloy_env_checksum_file
+      - not grafana_alloy_secret_file.startswith(grafana_alloy_config_dir ~ '/')
+      - not grafana_alloy_env_checksum_file.startswith(grafana_alloy_config_dir ~ '/')
+      - grafana_alloy_config_dir != _ga_unit_path
+      - not _ga_unit_path.startswith(grafana_alloy_config_dir ~ '/')
+      - grafana_alloy_config_file not in
+        [grafana_alloy_secret_file, grafana_alloy_env_checksum_file, _ga_unit_path]
+    quiet: true
+    fail_msg: >-
+      grafana_alloy_config_dir/config_file must not equal or contain the retained
+      credential ({{ grafana_alloy_secret_file }}), provenance record
+      ({{ grafana_alloy_env_checksum_file }}), or managed unit ({{ _ga_unit_path }}).
+      The disable path removes config_dir recursively, so overlapping paths would
+      delete security evidence or unrelated system files.
 
 # The role templates the config INTO the directory it creates and chowns; a file
 # outside it would be written to an unmanaged (possibly unsafe) location and

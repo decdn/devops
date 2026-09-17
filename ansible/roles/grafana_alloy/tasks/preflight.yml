@@ -1,9 +1,11 @@
 ---
 # Fail-loud preflight, run BEFORE any host mutation. Mirrors decdn_node's
-# secret-file posture: this role never carries the API TOKEN in inventory and
-# never reads the env file's values onto the control machine — it only greps
-# shapes on the host itself. The non-secret half of the connection settings
-# (endpoint URLs, instance IDs) MAY come from inventory; those are validated here
+# secret-file posture: this role keeps the API token OFF inventory-committed,
+# world-readable surfaces and never reads the env file's values onto the control
+# machine — it only greps shapes on the host itself. The token MAY now ride a
+# git-ignored secret.yml via grafana_alloy_api_token (the #39 relaxation); the
+# non-secret half of the connection settings
+# (endpoint URLs, instance IDs) MAY come from plain committed inventory; those are validated here
 # too, and each one that is set removes its key from the host-state gates below.
 #
 # Ordering matters for testability (molecule/validation): PURE-INVENTORY gates
@@ -177,7 +179,7 @@
 # These five are NON-secret and therefore inventory-settable; each one that is set
 # replaces its sys.env("GC_…") lookup in the rendered config and removes the
 # corresponding requirement from the host-state gates at the bottom of this file.
-# The API token has no variable by design: config.alloy is 0644 on the host.
+# The API token is now dually homeable too (grafana_alloy_api_token below).
 
 - name: Validate any inventory-provided Grafana Cloud endpoints
   ansible.builtin.assert:
@@ -208,8 +210,9 @@
       Mimir/Loki — so it is restricted to letters, digits, dot, underscore and
       dash, and must not be a token or carry whitespace. Got "{{ item.value }}".
       NOTE the Loki and OTLP instance IDs are each their own number, distinct
-      from the Prometheus one; the access-policy token is shared and stays in
-      {{ grafana_alloy_secret_file }} as GC_API_TOKEN.
+      from the Prometheus one; the access-policy token is shared and lives either
+      in {{ grafana_alloy_secret_file }} as GC_API_TOKEN or in
+      grafana_alloy_api_token in a git-ignored secret.yml — never in one of these.
   loop:
     - {name: grafana_alloy_prom_username, value: "{{ grafana_alloy_prom_username | string }}"}
     - {name: grafana_alloy_otlp_username, value: "{{ grafana_alloy_otlp_username | string }}"}
@@ -226,10 +229,13 @@
       - "'@' not in item"
     quiet: true
     fail_msg: >-
-      A Grafana Cloud access token (or a URL with embedded credentials) appears
-      in an inventory variable. config.alloy is world-readable on the host and
-      inventory is committed: the token belongs ONLY in
-      {{ grafana_alloy_secret_file }} as GC_API_TOKEN.
+      A Grafana Cloud access token (or a URL with embedded credentials) appears in
+      one of these six inventory variables. They are non-secret by design and are
+      rendered verbatim into config.alloy, which is world-readable 0644 on the
+      host — and unlike host_vars/<node>/secret.yml they are normally committed.
+      The token has exactly two homes: GC_API_TOKEN in
+      {{ grafana_alloy_secret_file }} on the host, or grafana_alloy_api_token in a
+      git-ignored secret.yml. Neither is one of these variables.
   loop:
     - "{{ grafana_alloy_prom_url | string }}"
     - "{{ grafana_alloy_prom_username | string }}"
@@ -239,6 +245,95 @@
     - "{{ grafana_alloy_loki_username | string }}"
   loop_control:
     label: "{{ item | truncate(24, true) }}"
+
+# Type gates for the two credential-path knobs, in the same spirit as the
+# observability sub-switches above. grafana_alloy_overwrite_host_file is the one
+# flag in this role that authorises DESTROYING an operator-provisioned credential
+# file, so it must not be reachable through YAML truthiness: `| bool` turns "yes",
+# "on" and "1" into an authorisation the operator never typed, and silently reads
+# any typo ("treu", "Flase") as false — producing a refusal whose message cannot
+# explain itself. Require a real boolean, exactly like decdn_grafana_cloud_enabled.
+#
+# The token is checked for type but never for value here; its shape gate is below
+# and its content never reaches an assert message.
+- name: Validate the credential-path knobs
+  ansible.builtin.assert:
+    that:
+      - grafana_alloy_overwrite_host_file is boolean
+      - grafana_alloy_api_token is none or grafana_alloy_api_token is string
+    fail_msg: >-
+      grafana_alloy_overwrite_host_file must be a real boolean (true/false), not a
+      quoted string — it authorises rewriting {{ grafana_alloy_secret_file }} over
+      whatever the host currently has, so "yes"/"on"/"1" must not be able to grant
+      it by coercion. grafana_alloy_api_token must be a string (quote it: an
+      all-digit token reads as an int, and a `|` block scalar appends a newline).
+
+# The mirror image of the guard above (and the #39 relaxation): when
+# grafana_alloy_api_token is SET it must be whitespace/newline-free, because the
+# role JSON-encodes it into a single systemd EnvironmentFile line. Quotes and
+# backslashes are deliberately NOT rejected: systemd's EnvironmentFile parser
+# strips the surrounding double quotes and unescapes \" and \\ — exactly the two
+# escapes JSON emits for the whitespace-free tokens this gate admits.
+#
+# It is NOT a C-escape parser (env-file.c is shell-like): \n, \t and \uXXXX would
+# arrive at the daemon as literal backslash sequences, and an embedded blank would
+# truncate the value. That is why rejecting whitespace here is load-bearing rather
+# than cosmetic — do not relax it on the assumption that to_json will save you.
+#
+# \Z, not $: Python's $ also matches just before a trailing newline, so `^[^\s]+$`
+# accepts "glc_abc\n" — the exact shape a YAML block scalar (`grafana_alloy_api_token: |`)
+# produces — and the fail_msg below would be lying about newlines. roles/decdn_node
+# uses \Z throughout for this reason; keep the two in step.
+#
+# no_log does not exist for asserts: their output lands in plain Ansible/CI logs,
+# so the failure message must carry NO part of the configured value — report only
+# which variable is wrong and why, never token-derived text.
+- name: Validate the shape of an inventory-provided API token
+  ansible.builtin.assert:
+    that:
+      - grafana_alloy_api_token | string is match('^[^\s]+\Z')
+      # A placeholder copied out of the .example templates is shaped exactly like a
+      # real token, so nothing downstream can catch it: the file is authored, the
+      # config validates, the unit starts, and every push 401s behind a green
+      # deploy. These are the literals this repo itself ships, so matching them is
+      # free of false positives. Case-insensitive, substring — "glc_example_token_replace_me"
+      # and a hand-typed "CHANGEME" are the same mistake.
+      - not (grafana_alloy_api_token | string | lower
+             is search('replace_me|replaceme|changeme|example_token|your_token|xxxxx'))
+    quiet: true
+    fail_msg: >-
+      grafana_alloy_api_token must be the bare token value (non-empty, no
+      whitespace, no newline) — it becomes the single GC_API_TOKEN="…" line of
+      {{ grafana_alloy_secret_file }}, which systemd parses before dropping
+      privileges. Quotes/backslashes are fine (JSON-encoded); spaces are not, and
+      neither is a trailing newline — set it as an ordinary quoted scalar rather
+      than a `|` block scalar, which appends one. A placeholder value carried over
+      from one of the *.example templates is rejected too: it is shaped like a real
+      token, so nothing after this gate could tell the difference and every push
+      would 401 behind a green deploy.
+  # Empty keeps the host-provisioned posture; the gate only guards the inventory path.
+  when: grafana_alloy_api_token | default('', true) | string | length > 0
+
+# A retry after the role wrote new token bytes but failed before recording their
+# checksum must be distinguishable from a foreign edit. Hash the exact bytes the
+# copy task will render; the secret itself stays suppressed and never enters task
+# output. An empty token has no desired inventory-authored file.
+- name: Resolve the desired inventory-authored env-file checksum
+  ansible.builtin.set_fact:
+    _ga_desired_inventory_sum: >-
+      {{ (_ga_desired_inventory_content | hash('sha256'))
+         if grafana_alloy_api_token | default('', true) | string | length > 0 else '' }}
+  vars:
+    # Keep this byte-for-byte identical to the copy task's block scalar in
+    # main.yml, including its trailing newline — the interrupted-rotation branch
+    # compares this hash against the file's, so any drift between the two makes
+    # every converge spuriously demand grafana_alloy_overwrite_host_file.
+    # A literal-clip block scalar (`|`) is used on BOTH sides rather than a quoted
+    # one-liner, so both render the same single trailing \n; molecule's
+    # grafana-cloud-token rotation case is the regression guard.
+    _ga_desired_inventory_content: |
+      GC_API_TOKEN={{ grafana_alloy_api_token | string | to_json(ensure_ascii=false) }}
+  no_log: true
 
 - name: Validate the loopback listener addresses
   ansible.builtin.assert:
@@ -309,8 +404,34 @@
   ansible.builtin.stat:
     path: "{{ grafana_alloy_secret_file }}"
     follow: false
+    # sha256, matching what the record task writes into .sha256 — with stat's
+    # default (sha1) an operator cross-checking `sha256sum` would see a mismatch.
+    get_checksum: true
+    checksum_algorithm: sha256
   register: _ga_secret_stat
 
+- name: Require the Grafana Cloud secret environment file to exist
+  ansible.builtin.assert:
+    that:
+      - _ga_secret_stat.stat.exists
+    fail_msg: >-
+      {{ grafana_alloy_secret_file }} is missing, and neither credential path is
+      taken: grafana_alloy_api_token is empty, so this role expects an
+      operator-provisioned env file. Provision it on the target host per
+      roles/grafana_alloy/files/grafana-alloy.env.example:
+        umask 077
+        sudo install -m 600 -o root -g root grafana-alloy.env {{ grafana_alloy_secret_file }}
+      or set grafana_alloy_api_token in a git-ignored secret.yml and let this
+      role author the file (token-only) for you.
+  # The inventory path authors the file itself, so absence is fine there; only
+  # the host-provisioned posture demands an operator-created file up front.
+  when: grafana_alloy_api_token | default('', true) | string | length == 0
+
+# Kept as its own gate even though absence was just handled above: with
+# grafana_alloy_api_token set an ABSENT file is legitimate (the role authors it),
+# but a PRESENT one must still be a real root-owned 0600 regular file — systemd
+# reads EnvironmentFile= as root before dropping privileges.
+#
 # stat.exists alone cannot see the difference between a regular file and a
 # symlink planted at the credential path that later passes a root chown/chmod
 # would harden whatever TARGET it points at — exactly what the secret-file gate
@@ -318,21 +439,143 @@
 - name: Assert the secret file is a real root-owned 0600 file
   ansible.builtin.assert:
     that:
-      - _ga_secret_stat.stat.exists
       - _ga_secret_stat.stat.isreg | default(false)
       - (_ga_secret_stat.stat.pw_name | default('')) == 'root'
       - (_ga_secret_stat.stat.gr_name | default('')) == 'root'
       - _ga_secret_stat.stat.mode | string == '0600'
+      # stat omits `checksum` entirely when the file is not READABLE to this
+      # connection (it still reports exists/isreg/owner/mode). Every provenance
+      # comparison below is `<recorded> == stat.checksum`, so a missing checksum
+      # defaulted to '' would make the adoption guard — the one gate whose whole
+      # job is catching a vanished secret.yml — pass vacuously. Fail closed here
+      # instead, so the comparisons downstream can index it unguarded.
+      - _ga_secret_stat.stat.checksum is defined
     fail_msg: >-
-      {{ grafana_alloy_secret_file }} is missing, not a regular file (symlink?
-      directory?), or not owned root:root 0600 (found owner
+      {{ grafana_alloy_secret_file }} is not a regular file (symlink? directory?),
+      not owned root:root 0600 (found owner
       {{ _ga_secret_stat.stat.pw_name | default('?') }}, mode
-      {{ _ga_secret_stat.stat.mode | default('?') }}). Provision it on the target
-      host per roles/grafana_alloy/files/grafana-alloy.env.example:
-        umask 077
-        sudo install -m 600 -o root -g root grafana-alloy.env {{ grafana_alloy_secret_file }}
-      systemd expands its KEY=value pairs into the unit before dropping
-      privileges, so root ownership is sufficient — do not relax it.
+      {{ _ga_secret_stat.stat.mode | default('?') }}), or could not be hashed —
+      the last means it is unreadable to this connection, so run the role with
+      become (the playbooks do). Fix it on the target host; systemd expands its
+      KEY=value pairs into the unit before dropping privileges, so root ownership
+      is sufficient — do not relax it.
+  when: _ga_secret_stat.stat.exists
+
+# --- Secret-file provenance -------------------------------------------------------
+# Mirrors decdn_node's #39 machinery (roles/decdn_node/tasks/main.yml): the role
+# records "<source> <sha256>" of the env file after every enabled converge, so the
+# next run can tell three states apart. Only this non-sensitive record is ever
+# read back — never the secret file itself.
+#
+# An absent record means "no post-relaxation converge yet". A present malformed,
+# unsafe or unrelated file is rejected on the target before slurp, so an inventory
+# typo cannot copy arbitrary /etc content into controller memory.
+- name: Validate the env-file provenance record before reading it
+  ansible.builtin.import_tasks: validate-env-record.yml
+
+- name: Read the env-file checksum this role last recorded
+  ansible.builtin.slurp:
+    src: "{{ grafana_alloy_env_checksum_file }}"
+  register: _ga_recorded
+  when: _ga_record_stat.stat.exists
+
+# Shape was proven before slurp, so an existing record always has exactly two
+# fields. Conditional expressions avoid indexing a skipped slurp result when the
+# record is absent.
+- name: Resolve the secret file's provenance
+  ansible.builtin.set_fact:
+    _ga_record_source: >-
+      {{ (_ga_recorded.content | b64decode | trim).split()[0]
+         if _ga_record_stat.stat.exists else '' }}
+    _ga_recorded_sum: >-
+      {{ (_ga_recorded.content | b64decode | trim).split()[1]
+         if _ga_record_stat.stat.exists else '' }}
+
+# The dangerous half of inferring operator intent. With grafana_alloy_api_token
+# empty the operator-supplied file is adopted as-is — but that ALSO happens when
+# the git-ignored secret.yml carrying the token went missing (fresh clone, new
+# control machine, undecrypted vault) AFTER an earlier inventory-path deploy: the
+# role would adopt its OWN previously-written file as host-provisioned and a
+# ROTATED token in the missing secret.yml would silently never land. Fail loud
+# instead, exactly like the decdn_node adoption guard.
+- name: Refuse to adopt a role-authored env file as host-provisioned
+  ansible.builtin.assert:
+    that:
+      # stat.checksum is proven defined by the 0600 gate above, which shares this
+      # task's `_ga_secret_stat.stat.exists` guard — no default() to fail open on.
+      - _ga_record_source != 'inventory'
+        or _ga_recorded_sum != _ga_secret_stat.stat.checksum
+    fail_msg: >-
+      grafana_alloy_api_token is empty, but {{ grafana_alloy_secret_file }} is
+      byte-for-byte the file THIS ROLE last wrote from inventory — so the token
+      has gone missing from the control machine (an absent
+      host_vars/<node>/secret.yml, a fresh clone, an undecrypted vault) rather
+      than being deliberately handed to the host. Treating it as
+      host-provisioned would deploy green while silently keeping the old token.
+      Restore grafana_alloy_api_token, or — if you really are migrating this node
+      to the host-provisioned path — hand the file over explicitly by discarding
+      the role's provenance record:
+      sudo rm {{ grafana_alloy_env_checksum_file }}
+  when:
+    - grafana_alloy_api_token | default('', true) | string | length == 0
+    - _ga_secret_stat.stat.exists
+
+# The mirror direction: an inventory token REWRITES the file wholesale (and
+# token-only), losing any GC_* lines added outside Ansible. Existing bytes are
+# safe without an opt-in only when (a) a matching inventory record proves this
+# role wrote them, or (b) they already equal the exact desired token-only bytes,
+# which is the retry state after a failed run wrote the file but not the record.
+# Missing provenance is unknown, not permission to destroy a pre-record host file.
+- name: Require confirmation to overwrite an env file this role did not write
+  ansible.builtin.assert:
+    that:
+      - grafana_alloy_overwrite_host_file | bool
+    fail_msg: >-
+      grafana_alloy_api_token is set, but {{ grafana_alloy_secret_file }} on this
+      host is not a file this role authored — the provenance record reads
+      "{{ _ga_record_source }}" and/or its checksum no longer matches, so it was
+      written or edited by someone else. Authoring it token-only from inventory
+      would DISCARD those lines, and because this role never reads the file it
+      cannot tell you what would be lost. Fold any extra GC_* keys into their
+      matching inventory variables first, then either clear
+      grafana_alloy_api_token to keep the host's copy or set
+      grafana_alloy_overwrite_host_file: true to confirm the rewrite.
+  when:
+    - grafana_alloy_api_token | default('', true) | string | length > 0
+    - _ga_secret_stat.stat.exists
+    # Same as the adoption guard: stat.checksum is guaranteed defined here by the
+    # 0600 gate, which runs under the same exists condition.
+    - >-
+      not (
+        (_ga_record_source == 'inventory'
+         and _ga_recorded_sum == _ga_secret_stat.stat.checksum)
+        or
+        (_ga_desired_inventory_sum == _ga_secret_stat.stat.checksum)
+      )
+
+# Inventory-authoring mode makes the final env file TOKEN-ONLY, so everything
+# else MUST come from inventory — checked HERE (before any mutation) because the
+# env-file greps below can only vouch for keys that this run is about to discard.
+- name: Demand every non-token connection setting from inventory for a token-authored env file
+  ansible.builtin.assert:
+    that:
+      - grafana_alloy_prom_url | string | length > 0
+      - grafana_alloy_prom_username | string | length > 0
+      - grafana_alloy_otlp_endpoint | string | length > 0
+      - not (grafana_alloy_logs_enabled | bool) or (grafana_alloy_loki_url | string | length > 0)
+      - not (grafana_alloy_logs_enabled | bool) or (grafana_alloy_loki_username | string | length > 0)
+    quiet: true
+    fail_msg: >-
+      With grafana_alloy_api_token set, {{ grafana_alloy_secret_file }} is
+      REWRITTEN as a token-only file, so a present GC_PROM_REMOTE_WRITE_URL /
+      GC_PROM_USERNAME / GC_OTLP_ENDPOINT / GC_LOKI_* line on the CURRENT copy of
+      the file cannot satisfy preflight — it would be discarded. Set the matching
+      inventory variables instead (grafana_alloy_prom_url, _prom_username,
+      _otlp_endpoint, _loki_url, _loki_username; the Loki pair only matters while
+      logs are enabled). grafana_alloy_otlp_username stays optional — without it
+      traces fall back to the Prometheus instance ID.
+  # Empty keeps the host-provisioned posture, where the greps below judge the file.
+  when: grafana_alloy_api_token | default('', true) | string | length > 0
 
 # systemd skips an EnvironmentFile line it cannot parse SILENTLY, so each required
 # key is grepped for presence + value shape directly on the host: grep keeps the
@@ -341,8 +584,10 @@
 #
 # "Required" is now conditional: a key is only needed when nothing in inventory
 # supplies that value, and the Loki pair is only needed when logs are enabled.
-# GC_API_TOKEN is ALWAYS required — it is the one value that must never live in
-# inventory.
+# That includes GC_API_TOKEN itself since the grafana_alloy_api_token relaxation:
+# the grep only fires when the variable is empty. The whole loop is also scoped to
+# the HOST-PROVISIONED posture: with an inventory token the file below is replaced
+# wholesale moments after this runs, so its current contents prove nothing.
 - name: Confirm every required credential key is present and shaped correctly
   ansible.builtin.command:
     cmd: grep -qE -- '{{ item.regex }}' {{ grafana_alloy_secret_file | quote }}
@@ -357,8 +602,8 @@
     # already newline-free by construction.
     - key: GC_API_TOKEN
       regex: ^GC_API_TOKEN=[^[:space:]#][^[:space:]]*$
-      var: "(none — the token must never be set in inventory)"
-      required: true
+      var: grafana_alloy_api_token
+      required: "{{ grafana_alloy_api_token | default('', true) | string | length == 0 }}"
     - key: GC_PROM_REMOTE_WRITE_URL
       regex: ^GC_PROM_REMOTE_WRITE_URL=https://[^[:space:]]+$
       var: grafana_alloy_prom_url
@@ -381,7 +626,7 @@
       required: "{{ grafana_alloy_logs_enabled | bool and grafana_alloy_loki_username | string | length == 0 }}"
   loop_control:
     label: "{{ item.key }}"
-  when: item.required | bool
+  when: (grafana_alloy_api_token | default('', true) | string | length == 0) and (item.required | bool)
   register: _ga_secret_grep
 
 - name: Report which credential key was missing or malformed
@@ -393,8 +638,7 @@
       roles/grafana_alloy/files/grafana-alloy.env.example) — URLs must be
       https:// and every value non-empty, since systemd silently drops
       unparseable lines so a quoting typo looks identical to a missing key — or,
-      for everything except the token, set the matching inventory variable
-      instead: {{ _ga_missing | map(attribute='var') | join(', ') }}.
+      set the matching inventory variable instead: {{ _ga_missing | map(attribute='var') | join(', ') }}.
   vars:
     # Skipped loop items (key not required) carry no rc, so filter on rc being
     # defined first: rejectattr alone would count every skipped key as missing.
@@ -414,7 +658,9 @@
 # Prometheus fallback and 401s the entire trace pipeline while metrics and logs
 # stay healthy. The required-key gate above cannot cover it (it only greps keys it
 # demands), hence this present-then-shaped pair. Skipped when inventory supplies
-# the ID, because the template then inlines it and emits no sys.env lookup at all.
+# the ID, because the template then inlines it and emits no sys.env lookup at all
+# — and likewise on the inventory-authoring path, where the rewrite guarantees no
+# GC_OTLP_USERNAME survives into the final file.
 - name: Detect a host-provided OTLP instance ID
   ansible.builtin.command:
     cmd: grep -qE -- '^GC_OTLP_USERNAME=.*[^[:space:]]' {{ grafana_alloy_secret_file | quote }}
@@ -422,7 +668,9 @@
   check_mode: false               # read-only gate: must also run under make check
   failed_when: false
   register: _ga_otlp_user_present
-  when: grafana_alloy_otlp_username | string | length == 0
+  when:
+    - grafana_alloy_otlp_username | string | length == 0
+    - grafana_alloy_api_token | default('', true) | string | length == 0
 
 # Same charset as the inventory instance-ID gate, plus the optional double quotes
 # systemd strips off an EnvironmentFile value.
@@ -453,4 +701,5 @@
       grafana_alloy_otlp_username in inventory instead.
   when:
     - grafana_alloy_otlp_username | string | length == 0
+    - grafana_alloy_api_token | default('', true) | string | length == 0
     - (_ga_otlp_user_present.rc | default(1)) == 0

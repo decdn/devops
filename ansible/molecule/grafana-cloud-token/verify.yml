@@ -1,0 +1,512 @@
+---
+# Verify the inventory-path authoring: a role-authored token-only 0600 env file,
+# its provenance record, no secret literals outside it, and a running agent.
+# Content assertions are grep-shape only against values this repo already knew
+# (the molecule token) — mirroring how the role itself treats the host path.
+- name: Verify
+  hosts: all
+  become: true
+  tasks:
+    - name: Stat the artifacts the run must have produced
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+        # Must match the checksum algorithm the role records (stat defaults to sha1).
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: ga_files
+      # config.alloy is root:alloy by design (the agent user reads its own config);
+      # the credential file and its provenance record are strictly root:root.
+      loop:
+        - {path: /etc/grafana-alloy.env, mode: "0600", grp: root}
+        - {path: /etc/grafana-alloy.env.sha256, mode: "0600", grp: root}
+        - {path: /etc/alloy/config.alloy, mode: "0644", grp: alloy}
+
+    - name: Assert ownership/modes of the artifacts
+      ansible.builtin.assert:
+        that:
+          # exists-and-mode first so a missing file short-circuits to fail_msg
+          # instead of raising on absent stat fields.
+          - item.stat.exists and item.stat.mode == item.item.mode
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == item.item.grp
+          # Regular file: the authored credential must not be a symlink, same as
+          # preflight demands from operator-provisioned ones.
+          - item.stat.isreg | default(false)
+      loop: "{{ ga_files.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+
+    - name: Read the authored credential file back
+      ansible.builtin.slurp:
+        src: /etc/grafana-alloy.env
+      register: ga_env_b64
+
+    - name: Assert the env file is exactly one JSON-encoded token line
+      ansible.builtin.assert:
+        that:
+          # to_json always double-quotes a plain string; systemd strips the outer
+          # quotes when expanding EnvironmentFile=.
+          - >-
+            ga_lines | length == 1
+          - >-
+            ga_lines[0] == 'GC_API_TOKEN="' ~ (ga_expected_token) ~ '"'
+          - >-
+            ga_body.count('GC_') == 1
+        fail_msg: >-
+          The authored env file must be a single GC_API_TOKEN="<token>" line.
+          Got: {{ ga_body }}
+      vars:
+        # kics-scan ignore-line (fake fixture token, not a committed secret)
+        ga_expected_token: molecule-test-token
+        ga_body: "{{ ga_env_b64.content | b64decode }}"
+        ga_lines: "{{ (ga_env_b64.content | b64decode).splitlines() }}"
+
+    - name: Read the provenance record back
+      ansible.builtin.slurp:
+        src: /etc/grafana-alloy.env.sha256
+      register: ga_record_b64
+
+    - name: Resolve the record's two fields
+      ansible.builtin.set_fact:
+        ga_record_fields: "{{ (ga_record_b64.content | b64decode | trim).split() }}"
+
+    - name: Assert the record says inventory-authored and matches the live file
+      ansible.builtin.assert:
+        that:
+          - ga_record_fields | length == 2
+          - ga_record_fields[0] == 'inventory'
+          - ga_record_fields[1] == (ga_files.results[0].stat.checksum)
+        fail_msg: >-
+          The provenance record must read "<source> <sha256-of-current-file>".
+          Got: {{ ga_record_fields }}
+
+    # --- Secret hygiene --------------------------------------------------------------
+    - name: Register the secret-token absence across non-secret files
+      ansible.builtin.command:
+        cmd: grep -Rq molecule-test-token {{ item }}
+      changed_when: false
+      failed_when: false
+      loop:
+        - /etc/systemd/system/alloy.service
+        - /etc/alloy/config.alloy
+      register: ga_leak_probe
+
+    - name: Assert no secret literal leaked into non-secret artifacts
+      ansible.builtin.assert:
+        that:
+          - ga_leak_probe.results | selectattr('rc', 'equalto', 0) | list | length == 0
+        fail_msg: >-
+          The GC_API_TOKEN literal appears outside the 0600 env file — config or
+          unit rendering stopped using sys.env() indirection.
+
+    # The leak probe above only proves the token LITERAL is absent, which an empty
+    # or dropped credential reference satisfies just as well. On this path all five
+    # non-token settings are inlined from inventory and the token is the ONLY value
+    # still resolved through sys.env, so assert that indirection positively —
+    # otherwise a template regression that stopped reading GC_API_TOKEN would leave
+    # every assertion in this play green while all three pipelines 401.
+    - name: Read the rendered configuration
+      ansible.builtin.slurp:
+        src: /etc/alloy/config.alloy
+      register: ga_config_b64
+
+    - name: Assert the config still resolves the token through sys.env
+      ansible.builtin.assert:
+        that:
+          - ga_config is search('sys\.env\("GC_API_TOKEN"\)')
+          # The five inventory-supplied values are inlined, so their sys.env
+          # lookups must be gone — this is what makes the token-only file correct.
+          - ga_config is not search('sys\.env\("GC_PROM_REMOTE_WRITE_URL"\)')
+          - ga_config is not search('sys\.env\("GC_PROM_USERNAME"\)')
+          - ga_config is not search('sys\.env\("GC_OTLP_ENDPOINT"\)')
+          - ga_config is not search('sys\.env\("GC_LOKI_URL"\)')
+          - ga_config is not search('sys\.env\("GC_LOKI_USERNAME"\)')
+          # grafana_alloy_otlp_username is deliberately unset in this scenario, so
+          # traces authenticate via the Prometheus-ID fallback. With a token-only
+          # env file the sys.env side is guaranteed empty, making that fallback the
+          # only thing keeping the OTLP pipeline authenticated — pin it.
+          - ga_config is search('coalesce\(sys\.env\("GC_OTLP_USERNAME"\),\s*"1234567"\)')
+        fail_msg: >-
+          The rendered config no longer reads the token via sys.env("GC_API_TOKEN"),
+          or stopped inlining the inventory-supplied endpoints. Got:
+          {{ ga_config }}
+      vars:
+        ga_config: "{{ ga_config_b64.content | b64decode }}"
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Assert alloy picked up the authored credentials (running, not crash-looping)
+      ansible.builtin.assert:
+        that:
+          - "'alloy.service' in ansible_facts.services"
+          - ansible_facts.services['alloy.service'].state == 'running'
+
+# Mutates the converged host deliberately, after all baseline assertions above.
+# This is the provenance state-machine regression suite: unknown-file refusal,
+# explicit takeover, interrupted-rotation retry, process restart, and the
+# disable→enable missing-secret guard all need real host-side behavior.
+- name: Exercise token provenance recovery and teardown
+  hosts: all
+  become: true
+  vars:
+    ga_stub_bin: >-
+      {{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/files/alloy-stub
+    # kics-scan ignore-line (fake fixture token, not a committed secret)
+    ga_overwrite_token: molecule-overwrite-token
+    # kics-scan ignore-line (fake fixture token, not a committed secret)
+    ga_rotated_token: molecule-rotated-token
+    # kics-scan ignore-line (fake fixture token, not a committed secret)
+    ga_gate_token: molecule-gate-probe-token
+    ga_role_vars: &ga_role_vars
+      decdn_grafana_cloud_enabled: true
+      grafana_alloy_install_method: manual
+      grafana_alloy_manual_bin_src: "{{ ga_stub_bin }}"
+      grafana_alloy_deployment_environment: production
+      grafana_alloy_region: US
+      grafana_alloy_prom_url: https://prometheus-prod-xx.molecule.invalid/api/prom/push
+      grafana_alloy_prom_username: "1234567"
+      grafana_alloy_otlp_endpoint: https://otlp-gateway-prod-xx.molecule.invalid/otlp
+      grafana_alloy_loki_url: https://logs-prod-xx.molecule.invalid/loki/api/v1/push
+      grafana_alloy_loki_username: "7654321"
+  tasks:
+    # --- Unknown provenance: fail before destroying host-managed keys ----------
+    - name: Remove the provenance record to model a pre-record deployment
+      ansible.builtin.file:
+        path: /etc/grafana-alloy.env.sha256
+        state: absent
+
+    - name: Stage an untracked host-managed credential file
+      ansible.builtin.copy:
+        dest: /etc/grafana-alloy.env
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          GC_API_TOKEN=molecule-untracked-token
+          GC_OPERATOR_ONLY=must-survive-refusal
+
+    - name: Default to detecting no untracked-file rejection
+      ansible.builtin.set_fact:
+        ga_untracked_rejected: false
+
+    - name: Try an inventory token against the untracked host file
+      block:
+        - name: Include grafana_alloy without the overwrite opt-in
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            <<: *ga_role_vars
+            grafana_alloy_api_token: "{{ ga_overwrite_token }}"
+      rescue:
+        - name: Record the expected untracked-file rejection
+          ansible.builtin.set_fact:
+            ga_untracked_rejected: true
+          when: ansible_failed_task.name is match('^Require confirmation to overwrite an env file')
+
+    - name: Read the refused credential file back
+      ansible.builtin.slurp:
+        src: /etc/grafana-alloy.env
+      register: ga_refused_env
+
+    - name: Assert refusal happened before any host-managed content was lost
+      ansible.builtin.assert:
+        that:
+          - ga_untracked_rejected | bool
+          - (ga_refused_env.content | b64decode) is search('GC_OPERATOR_ONLY=must-survive-refusal')
+          - (ga_refused_env.content | b64decode) is search('molecule-untracked-token')
+          - (ga_refused_env.content | b64decode) is not search('molecule-overwrite-token')
+
+    - name: Re-run with explicit permission to take the untracked file over
+      ansible.builtin.include_role:
+        name: grafana_alloy
+      vars:
+        <<: *ga_role_vars
+        grafana_alloy_api_token: "{{ ga_overwrite_token }}"
+        grafana_alloy_overwrite_host_file: true
+
+    - name: Read the explicitly adopted credential file
+      ansible.builtin.slurp:
+        src: /etc/grafana-alloy.env
+      register: ga_adopted_env
+
+    - name: Assert explicit takeover produced the promised token-only file
+      ansible.builtin.assert:
+        that:
+          - >-
+            (ga_adopted_env.content | b64decode).splitlines()
+            == ['GC_API_TOKEN=' ~ (ga_overwrite_token | to_json)]
+
+    # --- Interrupted rotation: same desired bytes must be resumable ------------
+    - name: Read Alloy's PID before the interrupted rotation
+      ansible.builtin.command:
+        cmd: pgrep -f '^sleep infinity$'
+      changed_when: false
+      register: ga_pid_before_retry
+
+    - name: Require exactly one Alloy stub process before rotation
+      ansible.builtin.assert:
+        that:
+          - ga_pid_before_retry.stdout_lines | length == 1
+
+    # Model the precise failure window: the role wrote the new bytes, then a later
+    # validation/start task aborted before the old provenance record was replaced.
+    - name: Stage the token bytes left by an interrupted rotation
+      ansible.builtin.copy:
+        dest: /etc/grafana-alloy.env
+        owner: root
+        group: root
+        mode: "0600"
+        content: "GC_API_TOKEN={{ ga_rotated_token | to_json }}\n"
+
+    - name: Retry the interrupted rotation without the destructive overwrite knob
+      ansible.builtin.include_role:
+        name: grafana_alloy
+      vars:
+        <<: *ga_role_vars
+        grafana_alloy_api_token: "{{ ga_rotated_token }}"
+
+    - name: Read Alloy's PID after the recovered rotation
+      ansible.builtin.command:
+        cmd: pgrep -f '^sleep infinity$'
+      changed_when: false
+      register: ga_pid_after_retry
+
+    - name: Read the recovered rotation artifacts
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: ga_rotated
+      loop:
+        - /etc/grafana-alloy.env
+        - /etc/grafana-alloy.env.sha256
+
+    - name: Stat the recovered credential file
+      ansible.builtin.stat:
+        path: /etc/grafana-alloy.env
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: ga_rotated_stat
+
+    - name: Assert retry completed provenance and restarted onto the new token
+      ansible.builtin.assert:
+        that:
+          - ga_pid_after_retry.stdout_lines | length == 1
+          - ga_pid_after_retry.stdout | trim != ga_pid_before_retry.stdout | trim
+          - >-
+            (ga_rotated.results[0].content | b64decode).splitlines()
+            == ['GC_API_TOKEN=' ~ (ga_rotated_token | to_json)]
+          - ((ga_rotated.results[1].content | b64decode | trim).split()[0]) == 'inventory'
+          - ((ga_rotated.results[1].content | b64decode | trim).split()[1])
+            == ga_rotated_stat.stat.checksum
+
+    # Exercise the separate "would overwrite" wording and prove dry-run leaves
+    # both secret and provenance bytes alone. The record is temporarily removed
+    # outside check mode solely to recreate the untracked-upgrade branch.
+    - name: Save the recovered provenance record for the dry-run fixture
+      ansible.builtin.set_fact:
+        ga_record_before_check: "{{ ga_rotated.results[1].content | b64decode }}"
+
+    - name: Remove provenance to model an untracked file during dry-run
+      ansible.builtin.file:
+        path: /etc/grafana-alloy.env.sha256
+        state: absent
+
+    - name: Dry-run an explicitly approved takeover of the untracked file
+      check_mode: true
+      block:
+        - name: Include grafana_alloy under check mode
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            <<: *ga_role_vars
+            # kics-scan ignore-line (fake fixture token, not a committed secret)
+            grafana_alloy_api_token: molecule-check-mode-token
+            grafana_alloy_overwrite_host_file: true
+
+    - name: Read the credential file after dry-run
+      ansible.builtin.slurp:
+        src: /etc/grafana-alloy.env
+      register: ga_after_check
+
+    - name: Stat provenance after dry-run
+      ansible.builtin.stat:
+        path: /etc/grafana-alloy.env.sha256
+      register: ga_record_after_check
+
+    # Assert the CONTRACT — that a dry run mutates NOTHING — not which task ran.
+    #
+    # Deliberately no assertions on the role's check-mode WORDING here. The role
+    # branches its two "would discard"/"did discard" messages on
+    # `ansible_check_mode`, and that magic variable reflects ONLY the `--check` CLI
+    # flag: the `check_mode: true` keyword above (block or play level, verified on
+    # ansible-core 2.21) suppresses module writes but leaves `ansible_check_mode`
+    # False inside an included role. So from a verify play the role always takes
+    # its real-run branch, and any predicate on those registers asserts the
+    # opposite of what it reads. Operators meet that branch through `make check`,
+    # which does pass --check.
+    #
+    # What IS proven below is the part that matters and is reachable: modules ran
+    # in check mode, so the credential bytes and the absent record are untouched.
+    - name: Assert dry-run changed neither the credential file nor the record
+      ansible.builtin.assert:
+        that:
+          - ga_after_check.content == ga_rotated.results[0].content
+          - not ga_record_after_check.stat.exists
+        fail_msg: >-
+          A check-mode converge mutated host state: the credential file or the
+          provenance record moved. Dry runs must never write either.
+
+    - name: Restore the saved provenance record after the dry-run fixture
+      ansible.builtin.copy:
+        dest: /etc/grafana-alloy.env.sha256
+        owner: root
+        group: root
+        mode: "0600"
+        content: "{{ ga_record_before_check }}"
+
+    # --- Overwrite gate: both halves of "this role wrote it" must be load-bearing -
+    # The gate allows an existing file through without the opt-in only when
+    #   (source == 'inventory' AND recorded == actual)  OR  desired == actual.
+    # The takeover case above covers an ABSENT record and the rotation case covers
+    # `desired == actual`. These two cover the remaining cells, each killing one
+    # half of the first disjunct: drop the source test and the "host" case below is
+    # silently adopted (clobbering a host-provisioned file that may carry GC_* keys
+    # the operator still needs); drop the checksum test and the "edited" case is.
+    #
+    # Both cases drive ga_gate_token, which is deliberately DIFFERENT from what the
+    # credential file holds at this point: the gate lets an existing file through
+    # when `desired == actual`, so a matching token would mask either regression.
+    - name: Stat the current credential file for the provenance fixtures
+      ansible.builtin.stat:
+        path: /etc/grafana-alloy.env
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: ga_gate_stat
+
+    # Case 1 — record says the OPERATOR owns this file: the normal host->inventory
+    # migration every existing deployment performs.
+    - name: Stage a host-owned provenance record for the current file
+      ansible.builtin.copy:
+        dest: /etc/grafana-alloy.env.sha256
+        owner: root
+        group: root
+        mode: "0600"
+        content: "host {{ ga_gate_stat.stat.checksum }}\n"
+
+    - name: Default to detecting no host-record rejection
+      ansible.builtin.set_fact:
+        ga_host_record_rejected: false
+
+    - name: Try an inventory token against a host-owned record
+      block:
+        - name: Include grafana_alloy against a host-owned record
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            <<: *ga_role_vars
+            grafana_alloy_api_token: "{{ ga_gate_token }}"
+      rescue:
+        - name: Record the expected host-record rejection
+          ansible.builtin.set_fact:
+            ga_host_record_rejected: true
+          when: ansible_failed_task.name is match('^Require confirmation to overwrite an env file')
+
+    # Case 2 — record says this role wrote it, but the bytes have moved since: an
+    # out-of-band edit to a role-authored file.
+    - name: Stage a role-authored record whose checksum no longer matches
+      ansible.builtin.copy:
+        dest: /etc/grafana-alloy.env.sha256
+        owner: root
+        group: root
+        mode: "0600"
+        content: "inventory {{ '0' * 64 }}\n"
+
+    - name: Default to detecting no stale-checksum rejection
+      ansible.builtin.set_fact:
+        ga_stale_sum_rejected: false
+
+    - name: Try an inventory token against a stale role-authored record
+      block:
+        - name: Include grafana_alloy against a stale checksum
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            <<: *ga_role_vars
+            grafana_alloy_api_token: "{{ ga_gate_token }}"
+      rescue:
+        - name: Record the expected stale-checksum rejection
+          ansible.builtin.set_fact:
+            ga_stale_sum_rejected: true
+          when: ansible_failed_task.name is match('^Require confirmation to overwrite an env file')
+
+    - name: Read the credential file after both refusals
+      ansible.builtin.slurp:
+        src: /etc/grafana-alloy.env
+      register: ga_gate_env
+
+    - name: Assert both foreign-provenance cells refused before touching the file
+      ansible.builtin.assert:
+        that:
+          - ga_host_record_rejected | bool
+          - ga_stale_sum_rejected | bool
+          # Refusal happens in preflight, before any mutation — the bytes the
+          # rotation case left behind must still be there, untouched by either run.
+          - >-
+            (ga_gate_env.content | b64decode).splitlines()
+            == ['GC_API_TOKEN=' ~ (ga_rotated_token | to_json)]
+        fail_msg: >-
+          The overwrite gate must demand grafana_alloy_overwrite_host_file for a
+          record that reads "host", and for one whose checksum no longer matches
+          the file. host-record refused={{ ga_host_record_rejected }},
+          stale-checksum refused={{ ga_stale_sum_rejected }}.
+
+    - name: Restore the inventory provenance record after the gate fixtures
+      ansible.builtin.copy:
+        dest: /etc/grafana-alloy.env.sha256
+        owner: root
+        group: root
+        mode: "0600"
+        content: "{{ ga_record_before_check }}"
+
+    # --- Disable/re-enable: keep evidence that the stale file was role-authored --
+    - name: Disable the role after an inventory-authored deployment
+      ansible.builtin.include_role:
+        name: grafana_alloy
+      vars:
+        decdn_grafana_cloud_enabled: false
+
+    - name: Stat the secret and provenance retained across disable
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: ga_retained
+      loop:
+        - /etc/grafana-alloy.env
+        - /etc/grafana-alloy.env.sha256
+
+    - name: Assert disable retained both halves of the provenance evidence
+      ansible.builtin.assert:
+        that:
+          - ga_retained.results | rejectattr('stat.exists') | list | length == 0
+
+    - name: Default to detecting no missing-token rejection
+      ansible.builtin.set_fact:
+        ga_missing_token_rejected: false
+
+    - name: Try to re-enable after the inventory token disappeared
+      block:
+        - name: Include grafana_alloy with the API token missing
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            <<: *ga_role_vars
+            grafana_alloy_api_token: ""
+      rescue:
+        - name: Record the expected missing-token rejection
+          ansible.builtin.set_fact:
+            ga_missing_token_rejected: true
+          when: ansible_failed_task.name is match('^Refuse to adopt a role-authored env file')
+
+    - name: Assert re-enable did not adopt the stale role-authored token
+      ansible.builtin.assert:
+        that:
+          - ga_missing_token_rejected | bool
