@@ -197,7 +197,7 @@ Binary/package removal is manual.
 | --- | --- | --- |
 | Node `/metrics` | `decdn-node` | your own dashboards/queries |
 | Machine metrics | `integrations/node_exporter` | Grafana Cloud's **Linux Server** integration dashboards + alerts, unmodified |
-| journald | `integrations/node_exporter` | the same integration's logs dashboards (correlated by `instance`) |
+| journald | `integrations/node_exporter` | the same integration's logs dashboards (correlated by `instance`); the daemon's own unit (`decdn-node.service`) also carries `service_name=<grafana_alloy_service_name>` (default `decdn-node`) |
 | Alloy self-metrics | `integrations/alloy` | agent health |
 | Traces | — | Application Observability |
 
@@ -276,11 +276,29 @@ upstream version/sha256). Highlights:
 | `grafana_alloy_node_job` / `_host_job` / `_self_job` / `_logs_job` | see table above | Job labels; the `integrations/…` ones are what Grafana Cloud's dashboards match |
 
 Label variables (`service_name`, `service_namespace`, `instance_id`,
-`deployment_environment`, `region`) ship on EVERY series/span/log line — keep
-them low-cardinality; unique label sets are what your Grafana Cloud bill scales
-with. Guardrails: one scrape interval per fleet (`30s` node / `60s` host),
+`deployment_environment`, `region`) ship on most series, spans and log lines —
+keep them low-cardinality; unique label sets are what your Grafana Cloud bill
+scales with. Guardrails: one scrape interval per fleet (`30s` node / `60s` host),
 sampling above zero for spans, the curated collector set, the journald drops, and
 no per-request/per-hash label values.
+
+Alloy sets `service_name` in exactly three places, and never on machine series,
+its own self-metrics or host-unit log streams:
+
+- the node's `/metrics` series, as the `service_name` label;
+- everything received on the local OTLP endpoint (spans, and any logs/metrics
+  pushed there), as the `service.name` resource attribute — overwriting whatever
+  the sender set;
+- the `decdn-node.service` journald stream, as the `service_name` label. This
+  covers only lines the daemon process writes: systemd's own start/stop/crash
+  messages about it are logged by PID 1 under `unit="init.scope"`, so query that
+  stream too when chasing a crash loop.
+
+Loki in Grafana Cloud may derive a `service_name` for streams that arrive
+without one (from labels such as `job`), so host-unit streams can still show one
+in the UI — that value comes from Loki, not from this role. Setting
+`grafana_alloy_service_name: ""` stops Alloy stamping it: the node-metric label
+and the journald rule disappear, and OTLP data keeps its sender's `service.name`.
 
 ## Couplings & guards
 

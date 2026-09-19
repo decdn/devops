@@ -231,10 +231,14 @@ grafana_alloy_logs_drop_unit_regex:
   '(session-\d+\.scope|user@\d+\.service|systemd-timesyncd\.service|cron\.service|systemd-logind\.service)'
 
 # --- Resource identity labels (low-cardinality only!) --------------------------
-# These become metric labels and OTLP resource attributes shipped to your Grafana
-# Cloud org for EVERY series/span/log line: never add high-cardinality values
-# (hashes, per-request ids, timestamps) — the remote bill scales with unique
-# label sets (see README cost guardrails).
+# These become identity labels and OTLP resource attributes shipped to your
+# Grafana Cloud org (which signal carries which: README "Label variables"): never
+# add high-cardinality values (hashes, per-request ids, timestamps) — the remote
+# bill scales with unique label sets (see README cost guardrails).
+# service_name also names the daemon's own journald stream in Loki (unit
+# "decdn-node.service" only; Alloy never sets it on host-unit streams). "" stops
+# Alloy stamping it: the node-metric label and the journald rule disappear, and
+# OTLP data keeps whatever service.name its sender set.
 grafana_alloy_service_name: decdn-node
 grafana_alloy_service_namespace: decdn
 grafana_alloy_instance_id: ""            # "" => derive from inventory_hostname

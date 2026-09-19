@@ -53,7 +53,7 @@
         grafana_alloy_deployment_environment: production
         grafana_alloy_region: US
 
-    # Exercises the omit branches: an empty namespace/region must drop its relabel
+    # Exercises the omit branches: an empty service_name/namespace/region must drop its relabel
     # rule and its OTTL `set()` statement entirely rather than emit an empty value,
     # and a 0 ratio must still render a valid float.
     - name: Render the minimal-identity configuration
@@ -67,6 +67,7 @@
       vars:
         _ga_instance_id: decdn-node-2
         grafana_alloy_bin_effective: /usr/local/bin/alloy
+        grafana_alloy_service_name: ""
         grafana_alloy_service_namespace: ""
         grafana_alloy_deployment_environment: ""
         grafana_alloy_region: ""

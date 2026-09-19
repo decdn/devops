@@ -102,7 +102,7 @@
   when: grafana_alloy_host_metrics_enabled | bool
 
 # job/instance are what Grafana Cloud's integration dashboards filter on, and
-# like the identity labels they ride on EVERY series and log line.
+# like the identity labels they ride on most series and log lines.
 - name: Validate the job labels
   ansible.builtin.assert:
     that:
@@ -150,7 +150,7 @@
     quiet: true
     fail_msg: >-
       Identity label values are shipped to Grafana Cloud as metric labels and OTLP
-      resource attributes on EVERY series/span, so they are restricted to a
+      resource attributes on most series/spans/log lines, so they are restricted to a
       low-cardinality charset (letters, digits, dot, underscore, slash, ≤ 63
       chars): {{ item }} does not fit. Offending variables:
       grafana_alloy_service_name / service_namespace / instance_id /

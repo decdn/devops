@@ -105,7 +105,7 @@ prometheus.remote_write "cloud" {
    every sample at scrape time) rather than prometheus.relabel (per SAMPLE, with
    a cardinality-sized cache). The scrape forwards STRAIGHT to remote_write,
    deliberately bypassing prometheus.relabel.decdn_identity: that component
-   stamps service_name=decdn-node, which is false for machine series.
+   stamps service_name (default decdn-node), which is false for machine series.
 
    `job` must stay integrations/node_exporter for Grafana Cloud's prebuilt Linux
    Server dashboards and alert rules to find these series.
@@ -319,6 +319,25 @@ loki.relabel "journal_identity" {
     replacement  = {{ value | tojson }}
   }
 {% endfor %}
+{% if grafana_alloy_service_name | length > 0 %}
+{# service_name describes the daemon, not the machine (the same reason host
+   metrics above omit it), so only the daemon's own unit gets it; every other
+   unit is unaffected by this rule. `job` stays whatever the identity rules above
+   set (by default the integration value), so the Linux Server log dashboards
+   still match this stream too. A replace rule whose regex does not match leaves
+   the stream unchanged. `unit` comes from journal_rules (__journal__systemd_unit),
+   so this catches only lines the daemon process writes: systemd's own
+   start/stop/crash messages about it come from PID 1 as unit="init.scope". The
+   name is the unit decdn_node installs, /etc/systemd/system/decdn-node.service
+   — a rename there must be mirrored here (validate.sh pins it). #}
+
+  rule {
+    source_labels = ["unit"]
+    regex         = "decdn-node\\.service"
+    target_label  = "service_name"
+    replacement   = {{ grafana_alloy_service_name | tojson }}
+  }
+{% endif %}
 }
 
 loki.write "cloud" {
