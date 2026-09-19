@@ -296,7 +296,50 @@ loki.source.journal "host" {
   max_age        = {{ grafana_alloy_logs_max_age | to_json }}
   format_as_json = false
   relabel_rules  = loki.relabel.journal_rules.rules
-  forward_to     = [loki.relabel.journal_identity.receiver]
+  forward_to     = [loki.process.daemon_level.receiver]
+}
+
+{# The daemon's own severity. decdn-node logs JSON to stdout, and journald gives
+   every stdout line priority 6, so the journal_rules mapping above labels all of
+   them level="info" — WARN and ERROR included. The real level is the `level`
+   field of the tracing-subscriber JSON body, e.g. {"level":"WARN",...}.
+
+   This runs after loki.source.journal, where the __journal* fields are already
+   gone, so it keys off the `unit` label journal_rules produced (the same unit
+   name the service_name rule below pins — a rename must be mirrored in both).
+   The value is normalised to journald's own keywords (WARN -> warning), so one
+   `level` vocabulary spans every unit. A line that is not JSON (log_format =
+   "text", or a panic written raw to stderr) extracts nothing; the template then
+   renders empty, which removes the key, and the journald level stands. #}
+loki.process "daemon_level" {
+  forward_to = [loki.relabel.journal_identity.receiver]
+
+  stage.match {
+    selector = `{unit="decdn-node.service"}`
+
+    stage.json {
+      expressions = { decdn_level = "level" }
+    }
+
+    stage.template {
+      source   = "decdn_level"
+      template = {% raw %}`{{ with .Value }}{{ if eq (ToUpper .) "WARN" }}warning{{ else }}{{ ToLower . }}{{ end }}{{ end }}`{% endraw %}
+    }
+
+    stage.labels {
+      values = { level = "decdn_level" }
+    }
+{% if grafana_alloy_logs_drop_priority_regex | length > 0 %}
+
+    // The priority guardrail again, for the daemon's DEBUG lines: journald
+    // reported them as info, so the journal_rules drop never saw them. Unlike
+    // relabel regexes, stage.drop is NOT anchored, hence the explicit ^...$.
+    stage.drop {
+      source     = "decdn_level"
+      expression = {{ ('^(?:' ~ grafana_alloy_logs_drop_priority_regex ~ ')$') | tojson }}
+    }
+{% endif %}
+  }
 }
 
 {# Same job/instance pair as the host metrics above — Grafana Cloud's Linux

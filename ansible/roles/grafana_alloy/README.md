@@ -230,6 +230,10 @@ deliberately lean and every lever is a variable:
   (`grafana_alloy_logs_drop_priority_regex` / `_drop_unit_regex`, `""` disables
   either), and `grafana_alloy_logs_max_age` bounds the catch-up burst after an
   outage — without it a restart can replay days of journal in one go.
+- decdn-node's `level` label comes from its JSON `level` field, not the journald
+  priority (journald reports every stdout line as `info`). It uses journald's
+  keywords, so query `level="warning"`, not `warn`. Lines that are not JSON keep
+  the journald level.
 
 ## Hardening: the two relaxations machine monitoring requires
 
