@@ -137,6 +137,8 @@ assert_has defaults.alloy 'loki.write "cloud"' "the Loki writer"
 assert_has defaults.alloy '"job"' "an explicit job label"
 assert_has defaults.alloy 'integrations/node_exporter' "the Grafana Cloud integration job label"
 assert_has defaults.alloy '__journal__systemd_unit' "the journal field mapping"
+assert_has defaults.alloy 'target_label  = "service_name"' "the daemon log-stream service_name rule"
+assert_has defaults.alloy 'regex         = "decdn-node\\.service"' "the daemon unit match"
 assert_has defaults.alloy 'systemd {' "the per-unit systemd collector"
 
 # Sub-knob isolation.

@@ -235,6 +235,8 @@ grafana_alloy_logs_drop_unit_regex:
 # Cloud org for EVERY series/span/log line: never add high-cardinality values
 # (hashes, per-request ids, timestamps) — the remote bill scales with unique
 # label sets (see README cost guardrails).
+# service_name also names the daemon's journald stream in Loki (unit
+# "decdn-node.service" only; host units never get it). "" drops it everywhere.
 grafana_alloy_service_name: decdn-node
 grafana_alloy_service_namespace: decdn
 grafana_alloy_instance_id: ""            # "" => derive from inventory_hostname

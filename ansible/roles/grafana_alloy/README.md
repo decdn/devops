@@ -197,7 +197,7 @@ Binary/package removal is manual.
 | --- | --- | --- |
 | Node `/metrics` | `decdn-node` | your own dashboards/queries |
 | Machine metrics | `integrations/node_exporter` | Grafana Cloud's **Linux Server** integration dashboards + alerts, unmodified |
-| journald | `integrations/node_exporter` | the same integration's logs dashboards (correlated by `instance`) |
+| journald | `integrations/node_exporter` | the same integration's logs dashboards (correlated by `instance`); the daemon's own unit (`decdn-node.service`) also carries `service_name=decdn-node` |
 | Alloy self-metrics | `integrations/alloy` | agent health |
 | Traces | — | Application Observability |
 
@@ -280,7 +280,9 @@ Label variables (`service_name`, `service_namespace`, `instance_id`,
 them low-cardinality; unique label sets are what your Grafana Cloud bill scales
 with. Guardrails: one scrape interval per fleet (`30s` node / `60s` host),
 sampling above zero for spans, the curated collector set, the journald drops, and
-no per-request/per-hash label values.
+no per-request/per-hash label values. `service_name` never lands on machine
+series or host-unit log streams — only on the daemon's metrics, its spans, and
+its own `decdn-node.service` journald stream.
 
 ## Couplings & guards
 
