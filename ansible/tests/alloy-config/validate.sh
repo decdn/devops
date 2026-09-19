@@ -137,8 +137,14 @@ assert_has defaults.alloy 'loki.write "cloud"' "the Loki writer"
 assert_has defaults.alloy '"job"' "an explicit job label"
 assert_has defaults.alloy 'integrations/node_exporter' "the Grafana Cloud integration job label"
 assert_has defaults.alloy '__journal__systemd_unit' "the journal field mapping"
-assert_has defaults.alloy 'target_label  = "service_name"' "the daemon log-stream service_name rule"
+# Daemon log-stream service_name rule. ALIGNMENT-SENSITIVE needles: the
+# one-space `target_label = "service_name"` / `replacement = …` forms belong to
+# the node-metric identity rule, so only these column-aligned spellings pin the
+# journald rule.
+assert_has defaults.alloy 'source_labels = ["unit"]' "the unit scoping of the daemon log-stream rule"
 assert_has defaults.alloy 'regex         = "decdn-node\\.service"' "the daemon unit match"
+assert_has defaults.alloy 'target_label  = "service_name"' "the daemon log-stream service_name rule"
+assert_has defaults.alloy 'replacement   = "decdn-node"' "the daemon log-stream service_name value"
 assert_has defaults.alloy 'systemd {' "the per-unit systemd collector"
 
 # Sub-knob isolation.
@@ -150,6 +156,13 @@ assert_has logsonly.alloy 'loki.source.journal "host"' "the journald source"
 assert_has logsonly.alloy 'path           = "/var/log/journal"' "the explicit journal path"
 assert_lacks logsonly.alloy 'prometheus.exporter' "any exporter while only logs are enabled"
 assert_lacks logsonly.alloy 'action        = "drop"' "a drop rule after both guardrail regexes were cleared"
+
+# A blank service_name switches the whole identity off together: metric rule,
+# journald rule and OTTL statement. The has-check keeps the lacks-checks honest
+# (they must not pass merely because logs went missing).
+assert_has minimal.alloy 'loki.relabel "journal_identity"' "the journal identity relabeller, which must survive a blank service_name"
+assert_lacks minimal.alloy '"service_name"' "any service_name rule (metric or log) once it was blanked"
+assert_lacks minimal.alloy 'service.name' "the OTLP service.name attribute once it was blanked"
 
 # BACKWARDS COMPATIBILITY: sub-knobs off == the pre-machine-monitoring pipeline.
 assert_lacks legacy.alloy 'prometheus.exporter' "any exporter"
