@@ -146,6 +146,25 @@ assert_has defaults.alloy 'regex         = "decdn-node\\.service"' "the daemon u
 assert_has defaults.alloy 'target_label  = "service_name"' "the daemon log-stream service_name rule"
 assert_has defaults.alloy 'replacement   = "decdn-node"' "the daemon log-stream service_name value"
 assert_has defaults.alloy 'systemd {' "the per-unit systemd collector"
+# The daemon-level stage: present, WIRED IN (an orphaned loki.process still
+# loads, so Gate 1c alone could not tell), scoped to the daemon's unit, and the
+# guardrail anchored with its alternation grouped. Each unit-name needle is one
+# of the three sites a decdn-node.service rename must touch.
+assert_has defaults.alloy 'loki.process "daemon_level"' "the daemon JSON-level stage"
+assert_has defaults.alloy 'forward_to     = [loki.process.daemon_level.receiver]' "the journal source feeding the daemon-level stage"
+assert_has defaults.alloy 'forward_to = [loki.relabel.journal_identity.receiver]' "the daemon-level stage feeding the identity relabeller"
+# shellcheck disable=SC2016  # literal backticks: Alloy's raw-string syntax
+assert_has defaults.alloy 'selector = `{unit="decdn-node.service"}`' "the daemon unit scoping of the level stage"
+assert_has defaults.alloy 'target_label  = "__priority_guardrail"' "the daemon's exemption from the journald priority drop"
+assert_has defaults.alloy 'expression = "^(?:debug|trace)$"' "the anchored, grouped daemon level drop"
+# trim_blocks eats the newline after a bare {% endraw %}; the stage's closing
+# brace must stay on its own line.
+# shellcheck disable=SC2016  # literal backtick
+grep -qE '^      template = `.*`$' "$render_dir/defaults.alloy" \
+  || fail "defaults.alloy: the stage.template line does not end at its closing backtick"
+assert_has logsonly.alloy 'loki.process "daemon_level"' "the daemon JSON-level stage"
+assert_lacks logsonly.alloy 'stage.drop' "a daemon level drop after the priority guardrail was cleared"
+assert_lacks logsonly.alloy '__priority_guardrail' "a priority exemption after the priority guardrail was cleared"
 
 # Sub-knob isolation.
 assert_has hostonly.alloy 'prometheus.exporter.unix "host"' "the host metrics exporter"
@@ -216,6 +235,160 @@ assert_has logsonly.service 'SupplementaryGroups=systemd-journal adm' "the journ
 assert_lacks hostonly.service 'SupplementaryGroups' "journal groups while logs are disabled"
 assert_lacks legacy.service 'SupplementaryGroups' "journal groups while logs are disabled"
 echo "ok: machine-monitoring render matrix"
+
+# --- Gate 1c: the daemon's level comes from its JSON body ----------------------
+# Loading proves syntax, not behaviour. Run the RENDERED journal_rules and
+# loki.process "daemon_level" blocks in the real Alloy, fed sample lines through
+# loki.source.api, and read what loki.echo prints. loki.source.api strips
+# __-prefixed labels on push, so the lifted rules read journal_* instead of
+# __journal_* (the only edit), and a final labeldrop removes those raw labels
+# so the exact label set can be asserted.
+harness="$work/level-harness"
+mkdir -p "$harness"
+harness_log=""
+harness_fail() { # why — dumps the Alloy log, which the EXIT trap deletes
+  if [ -n "$harness_log" ] && [ -f "$harness_log" ]; then cat "$harness_log" >&2; fi
+  fail "level harness ($harness_log): $1"
+}
+
+# Each stream shares one journald priority. Within a stream the lines that
+# must be DROPPED come first, and the drop-only streams come first, so by the
+# time the last kept line is echoed every dropped one has been processed.
+samples_json() { # nanosecond timestamp
+  cat <<JSON
+{"streams":[
+  {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"debug"},"values":[
+    ["$1","m-other-debug"]]},
+  {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"info"},"values":[
+    ["$1","{\"level\":\"ERROR\",\"fields\":{\"message\":\"m-other-info\"}}"]]},
+  {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"error"},"values":[
+    ["$1","m-other-error"]]},
+  {"stream":{"journal__systemd_unit":"decdn-node.service","journal_priority_keyword":"info"},"values":[
+    ["$1","{\"level\":\"TRACE\",\"fields\":{\"message\":\"m-trace\"}}"],
+    ["$1","{\"level\":\" DEBUG\",\"fields\":{\"message\":\"m-debug\"}}"],
+    ["$1","{\"level\":\"INFO\",\"fields\":{\"message\":\"m-info\"}}"],
+    ["$1","{\"level\":\"WARN\",\"fields\":{\"message\":\"m-warn-uc\"}}"],
+    ["$1","{\"level\":\"warn\",\"fields\":{\"message\":\"m-warn-lc\"}}"],
+    ["$1","{\"level\":\"ERROR\",\"fields\":{\"message\":\"m-error\"}}"],
+    ["$1","{\"fields\":{\"message\":\"m-nolevel\"}}"],
+    ["$1","{\"level\":5,\"fields\":{\"message\":\"m-weird\"}}"],
+    ["$1","m-text is not json"]]}
+]}
+JSON
+}
+
+run_level_harness() { # rendered config, number of entries expected to survive
+  local src="$render_dir/$1" name="${1%.alloy}" expect="$2"
+  local config="$harness/$name.alloy" data="$harness/$name.data" ports api_port http_port
+  harness_log="$harness/$name.log"
+  mkdir -p "$data"
+  ports="$(python3 -c '
+import socket
+socks = [socket.socket() for _ in range(2)]
+for s in socks: s.bind(("127.0.0.1", 0))
+print(*(s.getsockname()[1] for s in socks))')" || fail "could not pick free ports (python3 is required)"
+  read -r api_port http_port <<<"$ports"
+  {
+    cat <<ALLOY
+loki.source.api "in" {
+  http {
+    listen_address = "127.0.0.1"
+    listen_port    = $api_port
+  }
+  relabel_rules = loki.relabel.journal_rules.rules
+  forward_to    = [loki.process.daemon_level.receiver]
+}
+
+loki.echo "out" { }
+
+ALLOY
+    awk '/^loki\.relabel "journal_rules" \{/ { on = 1 }
+         on && /^\}/ { print "\n  rule {\n    regex  = \"journal_.*\"\n    action = \"labeldrop\"\n  }"; print; exit }
+         on { print }' "$src" | sed 's/"__journal_/"journal_/g'
+    awk '/^loki\.process "daemon_level" \{/ { on = 1 } on { print } on && /^\}/ { exit }' "$src" \
+      | sed 's|forward_to = \[loki\.relabel\.journal_identity\.receiver\]|forward_to = [loki.echo.out.receiver]|'
+  } >"$config"
+  if ! grep -qF 'action = "labeldrop"' "$config" || ! grep -qF 'forward_to = [loki.echo.out.receiver]' "$config"; then
+    fail "could not lift journal_rules and daemon_level out of $1"
+  fi
+
+  "$alloy" run "$config" --storage.path="$data" \
+    --server.http.listen-addr="127.0.0.1:$http_port" >"$harness_log" 2>&1 &
+  alloy_pid=$!
+  trap 'kill "$alloy_pid" 2>/dev/null || true; cleanup' EXIT
+  local ready=""
+  for _ in $(seq 100); do
+    if curl -fs "http://127.0.0.1:$http_port/-/ready" >/dev/null; then ready=1; break; fi
+    kill -0 "$alloy_pid" 2>/dev/null || harness_fail "alloy run exited before becoming ready"
+    sleep 0.2
+  done
+  [ -n "$ready" ] || harness_fail "alloy never became ready"
+
+  # /-/ready means the graph is loaded; the API listener may bind a moment later.
+  samples_json "$(date +%s%N)" | curl -fsS --retry 10 --retry-connrefused --retry-delay 0 \
+    -H 'Content-Type: application/json' --data @- "http://127.0.0.1:$api_port/loki/api/v1/push" \
+    || harness_fail "pushing sample lines failed"
+
+  local got=0
+  for _ in $(seq 50); do
+    got="$(grep -c 'received log entry' "$harness_log" || true)"
+    [ "$got" -ge "$expect" ] && break
+    sleep 0.1
+  done
+  sleep 0.5 # let a (wrongly) undropped line land too
+  kill "$alloy_pid" 2>/dev/null || true
+  local rc=0
+  wait "$alloy_pid" || rc=$?
+  trap cleanup EXIT
+  # 143 = our SIGTERM; anything else means Alloy died on its own mid-run.
+  [ "$rc" -eq 143 ] || [ "$rc" -eq 0 ] || harness_fail "alloy run exited $rc"
+  got="$(grep -c 'received log entry' "$harness_log" || true)"
+  [ "$got" -eq "$expect" ] || harness_fail "expected $expect entries through the pipeline, got $got"
+}
+
+# loki.echo prints labels logfmt-escaped (labels="{level=\"info\", ...}"); an
+# Alloy bump that changes that format fails here loudly, never falsely passes.
+kept() { # marker, level, unit
+  grep -F "$1" "$harness_log" | grep -qF "labels=\"{level=\\\"$2\\\", unit=\\\"$3\\\"}\"" \
+    || harness_fail "$1 should be kept as level=\"$2\" unit=\"$3\""
+}
+dropped() { # marker
+  ! grep -qF "$1" "$harness_log" || harness_fail "$1 should have been dropped"
+}
+
+# Defaults (guardrail "debug|trace").
+run_level_harness defaults.alloy 9
+kept m-warn-uc warning decdn-node.service
+kept m-warn-lc warning decdn-node.service
+kept m-error error decdn-node.service
+kept m-info info decdn-node.service
+kept m-nolevel info decdn-node.service  # JSON without a level: journald's stands
+kept m-weird info decdn-node.service    # a non-string level is not a label value
+kept m-text info decdn-node.service     # not JSON: journald's stands
+kept m-other-info info other.service    # another unit's JSON is never re-levelled
+kept m-other-error error other.service
+dropped m-trace                          # TRACE is not a journald keyword, so listed
+dropped m-debug                          # padded + lower-cased before the drop
+dropped m-other-debug                    # the journald-priority drop, other units
+echo "ok: daemon log level follows the JSON body (defaults)"
+
+# Guardrail "info|debug|trace": the daemon's every line is journald-info, so it
+# must be judged by its JSON level — errors and warnings survive, and lines with
+# no JSON level are never dropped for a priority they did not choose.
+run_level_harness priorityinfo.alloy 7
+kept m-warn-uc warning decdn-node.service
+kept m-warn-lc warning decdn-node.service
+kept m-error error decdn-node.service
+kept m-nolevel info decdn-node.service
+kept m-weird info decdn-node.service
+kept m-text info decdn-node.service
+kept m-other-error error other.service
+dropped m-info
+dropped m-trace
+dropped m-debug
+dropped m-other-info
+dropped m-other-debug
+echo "ok: daemon log level follows the JSON body (info in the guardrail)"
 
 # --- Gate 2: every ExecStart flag exists -------------------------------------
 # `alloy run` ignores nothing: an unknown flag exits non-zero, i.e. a systemd

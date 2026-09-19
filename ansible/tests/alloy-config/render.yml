@@ -257,6 +257,24 @@
     # Hands validate.sh the release pin without making it parse YAML itself: the
     # values come from the role's own defaults, so the download it verifies is
     # byte-identical to the one the role installs.
+    # A priority guardrail that includes `info`: journald reports every
+    # decdn-node line as info, so this proves the daemon is judged by its JSON
+    # level instead (its warnings and errors must survive). validate.sh runs
+    # this file through the real pipeline.
+    - name: Render the info-dropping priority-guardrail configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/priorityinfo.{{ item.ext }}"
+        mode: "0644"
+      loop: *ga_render_pair
+      loop_control:
+        label: "priorityinfo.{{ item.ext }}"
+      vars:
+        _ga_instance_id: decdn-node-1
+        _ga_journal_groups: [systemd-journal, adm]
+        grafana_alloy_bin_effective: /usr/bin/alloy
+        grafana_alloy_logs_drop_priority_regex: 'info|debug|trace'
+
     - name: Export the pinned release for the validation script
       ansible.builtin.copy:
         dest: "{{ _ga_render_dir }}/pin.env"

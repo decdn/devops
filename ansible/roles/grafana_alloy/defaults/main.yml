@@ -226,7 +226,12 @@ grafana_alloy_logs_journal_path: ""
 # anchored regexes matched against the whole value; "" disables that rule.
 # Priority keywords are emerg/alert/crit/error/warning/notice/info/debug
 # (journald's numeric priority 3 surfaces as "error", NOT "err").
-grafana_alloy_logs_drop_priority_regex: 'debug'
+# decdn-node is judged by its JSON `level` instead of its journald priority
+# (always info), anchored the same way (^(?:...)$) and normalised to these
+# keywords: WARN -> warning, DEBUG/INFO/ERROR unchanged, TRACE -> trace. `trace`
+# is not a journald keyword, which is why the default lists it: without it the
+# daemon's most verbose level would bypass the guardrail.
+grafana_alloy_logs_drop_priority_regex: 'debug|trace'
 grafana_alloy_logs_drop_unit_regex:
   '(session-\d+\.scope|user@\d+\.service|systemd-timesyncd\.service|cron\.service|systemd-logind\.service)'
 

@@ -127,6 +127,10 @@
             'loki.relabel "journal_rules"' in ga_config
           - >-
             '__journal__systemd_unit' in ga_config
+          # The daemon's level from its JSON body, not journald's priority
+          # (which is info for every stdout line).
+          - >-
+            'loki.process "daemon_level"' in ga_config
           - >-
             'loki.write "cloud"' in ga_config
           # The node's own series carry an explicit job rather than inheriting
