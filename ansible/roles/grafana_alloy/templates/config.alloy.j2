@@ -268,8 +268,27 @@ loki.relabel "journal_rules" {
 
   // Cost guardrail: the regex is anchored to the WHOLE value by Prometheus
   // relabel semantics, so "debug" drops debug and nothing else.
+  //
+  // decdn-node is exempt: journald reports every line it writes as info, so
+  // judging it by priority would be judging it by a level it never set (a
+  // regex containing "info" would drop its errors). loki.process
+  // "daemon_level" below applies the same regex to its real, JSON level. The
+  // exemption blanks a scratch copy of the keyword for that one unit; like
+  // every __-prefixed label it never leaves this ruleset.
   rule {
     source_labels = ["__journal_priority_keyword"]
+    target_label  = "__priority_guardrail"
+  }
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    regex         = "decdn-node\\.service"
+    target_label  = "__priority_guardrail"
+    replacement   = ""
+  }
+
+  rule {
+    source_labels = ["__priority_guardrail"]
     regex         = {{ grafana_alloy_logs_drop_priority_regex | tojson }}
     action        = "drop"
   }
@@ -305,12 +324,19 @@ loki.source.journal "host" {
    field of the tracing-subscriber JSON body, e.g. {"level":"WARN",...}.
 
    This runs after loki.source.journal, where the __journal* fields are already
-   gone, so it keys off the `unit` label journal_rules produced (the same unit
-   name the service_name rule below pins — a rename must be mirrored in both).
-   The value is normalised to journald's own keywords (WARN -> warning), so one
-   `level` vocabulary spans every unit. A line that is not JSON (log_format =
-   "text", or a panic written raw to stderr) extracts nothing; the template then
-   renders empty, which removes the key, and the journald level stands. #}
+   gone, so it keys off the `unit` label journal_rules produced. The unit name
+   is the one decdn_node installs; it is also hard-coded in the journal_rules
+   priority exemption above and the service_name rule below — a rename must be
+   mirrored in all three (validate.sh pins them).
+
+   Only the five tracing levels are accepted, trimmed and case-folded, and WARN
+   becomes journald's `warning`; DEBUG/INFO/ERROR already match journald's
+   keywords. TRACE stays `trace`, which journald has no keyword for, so the
+   priority guardrail default lists it explicitly. Anything else — a line that
+   is not JSON (log_format = "pretty", or a panic written raw to stderr), JSON
+   with no level, or an unexpected value — leaves decdn_level unset (the
+   template stage deletes a key it renders empty), so stage.labels and
+   stage.drop skip the line and its journald level stands. #}
 loki.process "daemon_level" {
   forward_to = [loki.relabel.journal_identity.receiver]
 
@@ -323,7 +349,7 @@ loki.process "daemon_level" {
 
     stage.template {
       source   = "decdn_level"
-      template = {% raw %}`{{ with .Value }}{{ if eq (ToUpper .) "WARN" }}warning{{ else }}{{ ToLower . }}{{ end }}{{ end }}`{% endraw %}
+      template = {% raw %}`{{ $l := ToLower (TrimSpace (print .Value)) }}{{ if eq $l "warn" "warning" }}warning{{ else if eq $l "trace" "debug" "info" "error" }}{{ $l }}{{ end }}`{% endraw +%}
     }
 
     stage.labels {
@@ -331,8 +357,8 @@ loki.process "daemon_level" {
     }
 {% if grafana_alloy_logs_drop_priority_regex | length > 0 %}
 
-    // The priority guardrail again, for the daemon's DEBUG lines: journald
-    // reported them as info, so the journal_rules drop never saw them. Unlike
+    // The priority guardrail for the daemon, which journal_rules exempts: the
+    // same regex, applied to the level the daemon actually logged. Unlike
     // relabel regexes, stage.drop is NOT anchored, hence the explicit ^...$.
     stage.drop {
       source     = "decdn_level"
@@ -372,7 +398,9 @@ loki.relabel "journal_identity" {
    so this catches only lines the daemon process writes: systemd's own
    start/stop/crash messages about it come from PID 1 as unit="init.scope". The
    name is the unit decdn_node installs, /etc/systemd/system/decdn-node.service
-   — a rename there must be mirrored here (validate.sh pins it). #}
+   — a rename there must be mirrored here AND in the journal_rules priority
+   exemption and the loki.process "daemon_level" selector above (validate.sh
+   pins all three), plus grafana_alloy_host_systemd_unit_include. #}
 
   rule {
     source_labels = ["unit"]
