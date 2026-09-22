@@ -6,4 +6,6 @@
 # under ProtectSystem=strict. The role creates the directory on first converge.
 decdn_cache_origin_kind: fs
 decdn_cache_origin_path: /var/lib/decdn/origin
-# Seeds need disk for the origin copy (~352 GiB for the full set) AND the cache.
+# Seeds need disk for the origin copy (~352 GiB for the full set) AND the cache
+# (decdn_cache_size_mb) on the same volume, about 760 GiB with the template values.
+# See docs/launch-runbook.md §3. Lower decdn_cache_size_mb here for smaller seed disks.

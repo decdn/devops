@@ -18,8 +18,9 @@ default-deny inbound, DevSec host hardening.
 
 ## Release verification
 
-In `release` install mode the `decdn_node` role checks every downloaded
-tarball against the release's GPG-signed `SHA256SUMS`, using the maintainer key
+In `release` install mode, and while `decdn_verify_release_signature` keeps its
+default of `true`, the `decdn_node` role checks every downloaded tarball against the
+release's GPG-signed `SHA256SUMS`, using the maintainer key
 vendored at `ansible/roles/decdn_node/files/decdn-release-KEYS.asc`. That key is a
 copy of upstream's `KEYS`:
 
@@ -32,3 +33,7 @@ The same fingerprint is published in
 [decdn/decdn's SECURITY.md](https://github.com/decdn/decdn/blob/main/SECURITY.md).
 Check a new copy of the vendored key against it before trusting that copy, with
 `gpg --show-keys --with-fingerprint <file>`.
+
+Setting `decdn_verify_release_signature: false` (meant for an air-gapped mirror that
+strips signatures) drops that guarantee, and the role prints a warning when it's off.
+`manual` mode verifies nothing: it installs whatever binaries you point it at.

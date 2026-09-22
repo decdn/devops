@@ -40,11 +40,32 @@ so a key the binary doesn't know fails the deploy instead of crash-looping the n
 
 ## 2. Stake and register each node (manual)
 
-On-chain onboarding (ADR 019 Phase 2) is an operator step, not automated here. On
-each node, as the `decdn` user, run `decdn setup` and preview with `--dry-run` first.
-Fund the wallet, bond, register. The bond is sized by the capacity-bond curve in the
-tokenomics ADR, not a flat minimum. A node counts toward launch metrics only once it
-is registered and serving.
+On-chain onboarding ([ADR 019](https://github.com/decdn/decdn/blob/main/adr/019-node-onboarding.md)
+Phase 2) is an operator step, not automated here. Fund the node's eth address first
+(`key-gen` printed it). Then run `decdn setup` on the node. It reads the rendered
+config plus `DECDN_RPC_URL` from `decdn.env`, and `systemd-run` loads that file with
+the same parser the node's unit uses, so the RPC key never lands in argv:
+
+```bash
+# Preview first: pre-flight checks and the bond it would post, no transactions.
+sudo systemd-run --pty --wait --collect -p User=decdn \
+  -p EnvironmentFile=/etc/decdn/decdn.env \
+  /usr/local/bin/decdn --config /etc/decdn/node.toml setup \
+  --mbps <declared-capacity> --region <same code as decdn_region> \
+  --multiaddr /ip4/<public-ip>/udp/4433/quic-v1 \
+  --keystore-password-file /etc/decdn/keystore.password --dry-run
+# Then the same command without --dry-run. It shows the operator terms and the bond to confirm.
+```
+
+- `--region` is the on-chain `regionHint` ([ADR 030](https://github.com/decdn/decdn/blob/main/adr/030-node-region-self-attestation.md)).
+  It must match the host's `decdn_region`, since the stats map and takedown scope read it.
+- The bond is read from the on-chain `bondRequired(mbps)` curve
+  ([ADR 026](https://github.com/decdn/decdn/blob/main/adr/026-tokenomics.md)). Declare
+  `--mbps` for what the node can really serve; there's no flat minimum to quote.
+- The flags, the `node bond` / `node register` primitives and the exit path are in
+  [roles/decdn_node/README.md § On-chain onboarding](../roles/decdn_node/README.md#on-chain-onboarding).
+
+A node counts toward launch metrics only once it is registered and serving.
 
 ## 3. Seed the catalogue (seed nodes)
 
@@ -55,9 +76,13 @@ service user, writing into the fs origin that group_vars configure:
 sudo -u decdn OUT_DIR=/var/lib/decdn/origin ./seed-model.sh
 ```
 
-It needs the `hf` CLI and roughly the full catalogue's size free on the data volume
-(about 352 GiB for the current whole-repo set, measured 2026-09-22). Record every BLAKE3
-hash it prints: the bundle manifests plus the large blobs.
+It needs the `hf` CLI and disk for **both** the origin copy and the cache, on the same
+`/var/lib/decdn` volume. With the template values that's about 352 GiB of origin (the
+current whole-repo set, measured 2026-09-22), plus `decdn_cache_size_mb` (400 GiB), plus
+`decdn_disk_headroom_mb` (8 GiB): **about 760 GiB per seed**. `hf download` also stages
+a full copy before import, so allow for the largest model (~177 GiB, Mixtral) on top
+while seeding, or lower the seeds' `decdn_cache_size_mb` in `group_vars/decdn_seed.yml`.
+Record every BLAKE3 hash it prints: the bundle manifests plus the large blobs.
 
 ## 4. Pin and fill the edges
 

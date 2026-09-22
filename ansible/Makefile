@@ -40,6 +40,12 @@ limit_arg = $(if $(LIMIT),--limit '$(LIMIT)')
 # The overlay's own group_vars/ and host_vars/ must sit beside that hosts.yml, where
 # Ansible loads them automatically. See ansible/README.md "Private fleet inventory".
 INVENTORY ?= inventory/hosts.yml
+# A missing or unparseable inventory fails the run. Ansible's default only warns,
+# skips the `hosts: decdn_nodes` play and exits 0, so a mistyped INVENTORY= would
+# report a successful deploy that did nothing. This applies to check/deploy only:
+# ansible.cfg can't set it globally, because ansible-lint's own syntax checks run
+# with no inventory present.
+strict_inventory = ANSIBLE_INVENTORY_UNPARSED_FAILED=True
 
 # Fail loud on the two ways a run can look scoped but silently be fleet-wide. Scoped to
 # check/deploy via MAKECMDGOALS so an unrelated `make lint` is never blocked. NOTE: this
@@ -70,11 +76,11 @@ endif
 
 # Dry run against $(INVENTORY) — shows diffs, mutates nothing.
 check:
-	ansible-playbook -i '$(INVENTORY)' playbooks/site.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
+	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/site.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
 
 # Provision the deCDN node host(s) in $(INVENTORY) (default inventory/hosts.yml).
 deploy:
-	ansible-playbook -i '$(INVENTORY)' playbooks/site.yml $(limit_arg) $(ANSIBLE_ARGS)
+	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/site.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # --- Tests -------------------------------------------------------------------
 # Containerised converge + idempotence + verify of the decdn_node role against a

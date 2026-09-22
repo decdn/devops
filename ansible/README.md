@@ -94,7 +94,8 @@ make deploy INVENTORY=../../decdn-fleet/hosts.yml LIMIT=<host>
 ```
 
 Ansible loads `group_vars/` and `host_vars/` from beside whichever `hosts.yml` you pass, so
-the overlay carries its own copies. The public `inventory/group_vars/` and
+the overlay carries its own copies. The template's own `.gitignore` comes along too, so the
+private repo never tracks a `host_vars/*/secret.yml`. The public `inventory/group_vars/` and
 `inventory/host_vars/` are **not** loaded for it. Settings every node needs regardless of
 inventory, currently only the udp/4433 QUIC firewall hole, live in
 `playbooks/group_vars/decdn_nodes.yml`, so an overlay can't drop them. Override that per node
