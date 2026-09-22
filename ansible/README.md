@@ -96,14 +96,16 @@ bootstrap each new host once as a sudo-capable user (root, or the image's defaul
 as `ubuntu`):
 
 ```bash
-make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='-u root'   # first converge only
-make deploy LIMIT=decdn-node-1                          # every run after that
+make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='-u root'   # first converge only; swap root for your image's bootstrap user
+make deploy LIMIT=decdn-node-1                          # every run after that first converge succeeds
 ```
 
 Set a per-host `ansible_user` only when the admin account's name differs from your `$USER`
 (you listed a different name in `baseline_sudo_users`) or you set
 `baseline_sudo_autodetect_runner: false`. Never set it to the bootstrap user: an inventory
-`ansible_user` beats `-u`, and root login is gone after the first converge.
+`ansible_user` beats `-u`, and root login is gone after the first converge. For the same
+reason, add a per-host `ansible_user` only after that host's bootstrap run, or `-u` is
+ignored on the first converge.
 
 ---
 
