@@ -88,9 +88,22 @@ the one operator list, `baseline_sudo_users`. Add other admins there — list yo
 name) to override the auto-detected head with explicit keys. Set
 `baseline_sudo_autodetect_runner: false` to skip the runner and provision only the explicit
 list (e.g. from CI). baseline **asserts a non-root account with a key resolves** before
-`ssh_hardening` disables root + password login, so you can't lock yourself out. After the
-first deploy, switch each host's `ansible_user` to that admin account (your local username
-unless you listed one).
+`ssh_hardening` disables root + password login, so you can't lock yourself out.
+
+The inventory template sets **no `ansible_user`**, so Ansible connects as your local `$USER`
+— the same account baseline creates. That account doesn't exist yet on a fresh box, so
+bootstrap each new host once as a sudo-capable user (root, or the image's default user such
+as `ubuntu`):
+
+```bash
+make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='-u root'   # first converge only
+make deploy LIMIT=decdn-node-1                          # every run after that
+```
+
+Set a per-host `ansible_user` only when the admin account's name differs from your `$USER`
+(you listed a different name in `baseline_sudo_users`) or you set
+`baseline_sudo_autodetect_runner: false`. Never set it to the bootstrap user: an inventory
+`ansible_user` beats `-u`, and root login is gone after the first converge.
 
 ---
 
@@ -141,11 +154,11 @@ make deploy LIMIT='!decdn-node-2'                 # any ansible host pattern
 Quote the pattern at your own prompt — your shell runs before make does, and eats a bare
 `!decdn-node-2` (history expansion) or `decdn-node-*` (globbing).
 
-Use `LIMIT` when **bringing up a new node**: that host's first converge creates the
-operator account and then lets `ssh_hardening` disable root + password login — after which
-you switch its `ansible_user` by hand (see [Setup](#setup) above; the converge does not
-edit your inventory). You do not want that play re-converging nodes already serving
-paid traffic. Same when re-running a single node after a config change, a failed play, or a
+Use `LIMIT` when **bringing up a new node**: that host's first converge connects as the
+bootstrap user (`ANSIBLE_ARGS='-u root'`, see [Setup](#setup) above), creates the operator
+account and then lets `ssh_hardening` disable root + password login. Every later run
+connects as your `$USER` with no flag. You do not want that bootstrap play — or its `-u root`
+— reaching nodes already serving paid traffic. Same when re-running a single node after a config change, a failed play, or a
 binary bump.
 
 `make check`/`make deploy` refuse to run if `LIMIT` or `ANSIBLE_ARGS` reaches them from an
