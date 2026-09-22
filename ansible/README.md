@@ -79,8 +79,33 @@ when the two would collide: an inventory value that would discard a host-side ed
 empty `decdn_rpc_url` that turns out to mean "`secret.yml` went missing" rather than "the host
 owns this file".
 
-Your `hosts.yml` is no longer force-ignored — commit it in your fork if you want, or keep
-it local.
+`inventory/hosts.yml` is git-ignored. This repo is public, and real host IPs never belong in
+it.
+
+### Private fleet inventory
+
+To track a real fleet, keep its inventory in a **private overlay** outside this repo and
+point the deploy targets at it:
+
+```bash
+cp -r inventory/fleet.example ../../decdn-fleet     # into a PRIVATE repo/dir, then fill it in
+make check  INVENTORY=../../decdn-fleet/hosts.yml LIMIT=<host>
+make deploy INVENTORY=../../decdn-fleet/hosts.yml LIMIT=<host>
+```
+
+Ansible loads `group_vars/` and `host_vars/` from beside whichever `hosts.yml` you pass, so
+the overlay carries its own copies. The template's own `.gitignore` comes along too, so the
+private repo never tracks a `host_vars/*/secret.yml`. The public `inventory/group_vars/` and
+`inventory/host_vars/` are **not** loaded for it. Settings every node needs regardless of
+inventory, currently only the udp/4433 QUIC firewall hole, live in
+`playbooks/group_vars/decdn_nodes.yml`, so an overlay can't drop them. Override that per node
+in `host_vars` if you have to. Playbook group_vars beat inventory group_vars.
+
+[`inventory/fleet.example/`](inventory/fleet.example/hosts.yml) is the launch-fleet
+template. Hosts are grouped by role (`decdn_seed` holds the catalogue in an fs origin,
+`decdn_edge` pulls through) and by billing (`decdn_metered` gets an egress budget,
+`decdn_unmetered` does not). The group_vars size the cache for large model blobs. The
+launch sequence is in [`docs/launch-runbook.md`](docs/launch-runbook.md).
 
 By default baseline **deploys you as yourself**: the runner (your control-machine `$USER` +
 its autodetected `~/.ssh` key, `id_ed25519` > `ecdsa` > `rsa`) is prepended as the head of

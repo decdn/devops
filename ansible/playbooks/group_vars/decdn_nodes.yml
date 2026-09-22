@@ -1,0 +1,17 @@
+---
+# Playbook-adjacent group_vars for decdn_nodes: Ansible loads these for EVERY
+# inventory passed with -i / INVENTORY=, unlike inventory/group_vars/, which only
+# loads alongside inventory/hosts.yml. Only settings that every node needs no matter
+# which inventory drives the run belong here. A private fleet overlay (see
+# ansible/README.md "Private fleet inventory") must not be able to lose them.
+# Operator knobs go in the inventory's own group_vars / host_vars.
+#
+# Precedence: playbook group_vars beat inventory group_vars, so to change this
+# for a node, override it in that node's host_vars.
+
+# Open the node's public QUIC listener in the baseline firewall. Metrics (9090)
+# and admin RPC (9191) stay loopback and get NO hole.
+baseline_extra_inbound:
+  - proto: udp
+    port: "{{ decdn_bind_port }}"
+    comment: "decdn QUIC"

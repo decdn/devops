@@ -4,12 +4,9 @@
 # The sensitive rpc_url is provisioned as /etc/decdn/decdn.env on the host, or (if
 # you would rather the role authored that file) in a git-ignored secret.yml.
 
-# Open the node's public QUIC listener in the baseline firewall. Metrics (9090)
-# and admin RPC (9191) stay loopback and get NO hole.
-baseline_extra_inbound:
-  - proto: udp
-    port: "{{ decdn_bind_port }}"
-    comment: "decdn QUIC"
+# The node's public QUIC firewall hole (udp/4433) is NOT set here. It lives in
+# playbooks/group_vars/decdn_nodes.yml so it applies to every inventory, including a
+# private fleet overlay passed with INVENTORY=.
 
 # --- Grafana Cloud observability (opt-in) --------------------------------------
 # One mirrored flag drives BOTH roles (grafana_alloy install/config AND the

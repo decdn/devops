@@ -1,7 +1,8 @@
 ---
-# Copy to inventory/hosts.yml and fill in your hosts. This .example is the shipped
-# template; your real hosts.yml is yours — commit it in your fork if you like, or keep
-# it local. (Just never push real host IPs to the upstream template.)
+# Copy to inventory/hosts.yml and fill in your hosts. inventory/hosts.yml is
+# git-ignored: this repo is public, so real host IPs never belong in it. To track a
+# real fleet, keep its inventory in a private overlay and pass INVENTORY=<path>
+# (template: inventory/fleet.example/, see README.md "Private fleet inventory").
 #
 # No ansible_user by default: Ansible connects as your local $USER, which is the admin
 # account the baseline role creates (the auto-detected runner). A fresh box doesn't have

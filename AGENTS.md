@@ -140,9 +140,18 @@ make security         # = security-ansible + security-helm (KICS over the render
 cd ansible
 make deps             # vendor pinned Galaxy collections into ./collections
 make check / deploy   # deCDN node (site.yml): dry-run / provision
-                      # fleet-wide by default; LIMIT=<host> scopes, ANSIBLE_ARGS='…' passes through
+                      # fleet-wide by default; LIMIT=<host> scopes, ANSIBLE_ARGS='…' passes through;
+                      # INVENTORY=<path> targets a private fleet overlay (default inventory/hosts.yml)
 make build / galaxy-check       # stage + build the decdn.node collection, then validate it
 ```
+
+**Inventory is private; the firewall hole is not.** This repo is public, so
+`ansible/inventory/hosts.yml` is git-ignored and a real fleet lives in a private overlay
+(template: `ansible/inventory/fleet.example/`, launch sequence in
+`ansible/docs/launch-runbook.md`). Inventory-adjacent group_vars do not load for an
+overlay, so anything every node needs regardless of inventory (today only the udp/4433
+`baseline_extra_inbound` hole) lives in `ansible/playbooks/group_vars/decdn_nodes.yml`.
+Don't move it back under `inventory/`.
 
 **Galaxy collection (`decdn.node`).** The three roles (`baseline` + `decdn_node` +
 `grafana_alloy`) ship as a
