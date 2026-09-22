@@ -33,6 +33,14 @@ LIMIT ?=
 ANSIBLE_ARGS ?=
 limit_arg = $(if $(LIMIT),--limit '$(LIMIT)')
 
+# Which inventory check/deploy run against. The default is the git-ignored
+# inventory/hosts.yml (copy hosts.yml.example). A real fleet keeps its inventory in a
+# private overlay outside this public repo and points at it here:
+#   make deploy INVENTORY=../../decdn-fleet/hosts.yml LIMIT=<host>
+# The overlay's own group_vars/ and host_vars/ must sit beside that hosts.yml, where
+# Ansible loads them automatically. See ansible/README.md "Private fleet inventory".
+INVENTORY ?= inventory/hosts.yml
+
 # Fail loud on the two ways a run can look scoped but silently be fleet-wide. Scoped to
 # check/deploy via MAKECMDGOALS so an unrelated `make lint` is never blocked. NOTE: this
 # does not catch an argument that is well-formed but selects nothing — `--tags` with a
@@ -47,6 +55,12 @@ ifneq ($(filter check deploy,$(MAKECMDGOALS)),)
   ifeq ($(origin ANSIBLE_ARGS),environment)
     $(error ANSIBLE_ARGS is set in your environment and would silently alter this run. Unset it or pass it on the command line)
   endif
+  ifeq ($(origin INVENTORY),environment)
+    $(error INVENTORY is set in your environment ($(INVENTORY)) and would silently retarget this run. Unset it or pass it on the command line: make $(scoped_goal) INVENTORY=<path>)
+  endif
+  ifeq ($(strip $(INVENTORY)),)
+    $(error INVENTORY expanded empty (unset shell variable?) - refusing to guess which fleet to target)
+  endif
   ifeq ($(origin LIMIT),command line)
     ifeq ($(strip $(LIMIT)),)
       $(error LIMIT was supplied but expanded empty (unset shell variable?) - refusing to run fleet-wide by accident. Omit LIMIT entirely to mean "all hosts")
@@ -54,13 +68,13 @@ ifneq ($(filter check deploy,$(MAKECMDGOALS)),)
   endif
 endif
 
-# Dry run against the real inventory — shows diffs, mutates nothing.
+# Dry run against $(INVENTORY) — shows diffs, mutates nothing.
 check:
-	ansible-playbook playbooks/site.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
+	ansible-playbook -i '$(INVENTORY)' playbooks/site.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
 
-# Provision the deCDN node host(s) in inventory/hosts.yml.
+# Provision the deCDN node host(s) in $(INVENTORY) (default inventory/hosts.yml).
 deploy:
-	ansible-playbook playbooks/site.yml $(limit_arg) $(ANSIBLE_ARGS)
+	ansible-playbook -i '$(INVENTORY)' playbooks/site.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # --- Tests -------------------------------------------------------------------
 # Containerised converge + idempotence + verify of the decdn_node role against a

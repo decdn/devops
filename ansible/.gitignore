@@ -5,9 +5,19 @@ collections/
 # copy named secret.yaml or secret.json (Ansible loads .yml/.yaml/.json all the same)
 # can't leak; the committed secret.*.example template is re-included. Everything else in
 # host_vars — main.yml (contract addresses, region, cache origin, …) — is committable
-# template config. hosts.yml is committable too (your fork's inventory is yours to track).
+# template config.
 inventory/host_vars/*/secret.*
 !inventory/host_vars/*/secret.*.example
+# Same rule for inventory templates nested one level down (inventory/fleet.example/).
+inventory/*/host_vars/*/secret.*
+!inventory/*/host_vars/*/secret.*.example
+
+# The real inventory. This repo is PUBLIC, so real host IPs must never land here
+# (Launch/release-checklist.md §5). Copy hosts.yml.example to hosts.yml for a local
+# run, or keep a fleet's inventory in a private overlay and pass INVENTORY=<path>
+# (see README.md "Private fleet inventory"). The .example templates stay tracked.
+inventory/hosts.yml
+inventory/hosts.yaml
 
 # Ansible scratch
 *.retry

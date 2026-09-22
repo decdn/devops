@@ -1,0 +1,9 @@
+---
+# Metered nodes bill per TB of egress, so a model that trends on r/LocalLLaMA
+# must not run up the bill (Launch/fleet-plan.md). Cap their egress.
+# This is OPERATOR COST CONFIG, not a protocol fact. Size it from the provider's
+# per-TB price and the monthly spend you accept, e.g. 250 Mbps sustained is about
+# 81 TB/month.
+decdn_load_shed_egress_budget_mbps: 250
+# Also set a billing alert in the provider console (Hetzner / OVHcloud) for every
+# metered node. The budget above caps throughput, the alert makes the spend visible.
