@@ -10,9 +10,9 @@
 # dashboard ConfigMaps; Ansible/Grafana Cloud users import the same files by hand
 # (see that directory's README.md).
 #
-# --check copies into a scratch dir instead and exits 1 when the vendored files
-# differ from <ref> (the commit line in SOURCE is ignored, so an unrelated upstream
-# commit is not drift).
+# --check copies into a scratch dir instead and exits 1 when any vendored file's
+# bytes, or SOURCE's file list and hashes, differ from <ref> (the commit line in
+# SOURCE is ignored, so an unrelated upstream commit is not drift).
 set -euo pipefail
 
 usage() { echo "usage: $0 <decdn-checkout> [ref] [--check]" >&2; exit 2; }
@@ -55,8 +55,14 @@ for f in "${files[@]}"; do
 done
 
 if $check; then
-  # Vendored files present locally but gone upstream count as drift too.
   stale=0
+  # Byte-compare every vendored file with upstream, so a local hand-edit is drift
+  # even when SOURCE still matches.
+  for f in "${files[@]}"; do
+    name="$(basename "$f")"
+    cmp -s "$out/$name" "$dest/$name" || { echo "differs from upstream: $name"; stale=1; }
+  done
+  # Vendored files present locally but gone upstream count as drift too.
   for f in "$dest"/*.json "$dest"/*.yml "$dest"/*.yaml; do
     [[ -e "$f" ]] || continue
     [[ -e "$out/$(basename "$f")" ]] || { echo "removed upstream: $(basename "$f")"; stale=1; }

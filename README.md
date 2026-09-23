@@ -71,8 +71,10 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 
 - **Nothing secret is committed.** The eth keystore and the RPC URL (which may embed an
   API key) are **generated on, or operator-provisioned to, the target** and live in
-  `0600` files owned by the service account (Kubernetes: operator-created Secrets the
-  chart only references). The repo ships `*.example` templates for secret files only;
+  `0600` files readable only by whoever must read them: the service account for the
+  keystore and its password; the service account (Ansible) or root (Compose, where
+  Docker reads it before starting the container) for the RPC env file. On Kubernetes
+  they are operator-created Secrets the chart only references. The repo ships `*.example` templates for secret files only;
   non-secret config such as `host_vars/<node>/main.yml` is committed. The `.gitignore`
   is a backstop, not the mechanism. Backups are encrypted on the host to public keys
   you choose.
