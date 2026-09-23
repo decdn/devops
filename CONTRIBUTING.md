@@ -80,9 +80,3 @@ Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hoo
   themselves. It is a comment, but a load-bearing one: the cache key is that file's
   hash. Keeping it *in* the hashed file is deliberate — an epoch duplicated across
   both workflows could drift, since neither workflow runs on a change to the other.
-
-## Solidity
-
-There is no Foundry project in the repo yet. The `forge fmt` pre-commit hook and the
-CI `solidity` job are present but commented out; they self-activate once real sources
-land.
