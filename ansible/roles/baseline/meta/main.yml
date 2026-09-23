@@ -8,7 +8,7 @@ galaxy_info:
   galaxy_tags: [decdn, hardening, firewall, fail2ban, devsec, debian]
   platforms:
     - name: Debian
-      versions: [bookworm]
+      versions: [bookworm, trixie]
     - name: Ubuntu
-      versions: [jammy, noble]
+      versions: [noble, resolute]
 dependencies: []

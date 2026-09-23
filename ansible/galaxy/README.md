@@ -13,7 +13,9 @@ repository — three roles and nothing else:
 ## Requirements
 
 - **ansible-core ≥ 2.15** on the control machine.
-- Target: **Debian (bookworm)** or **Ubuntu (jammy/noble)** over SSH with a sudo user.
+- Target: **Debian 12/13** or **Ubuntu 24.04/26.04**, x86_64 or aarch64, over SSH with a
+  sudo user. Facts must be gathered (the node role derives the release target from
+  the host architecture), or set `decdn_node_target` explicitly.
 - Collection dependencies (installed automatically with this collection):
   `devsec.hardening (>=10.0.0)`, `ansible.posix (>=1.5.0)`.
 

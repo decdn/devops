@@ -40,7 +40,10 @@ baseline   host hardening — DevSec os/ssh, nftables default-deny inbound,
 ## Requirements
 
 - Control machine: **Ansible ≥ 2.15**, `ansible-lint`, `yamllint`.
-- Target: **Debian (bookworm)** host(s) reachable over SSH with a sudo-capable user.
+- Target: **Debian 12 (bookworm) / 13 (trixie)** or **Ubuntu 24.04 (noble) / 26.04
+  (resolute)** host(s), x86_64 or aarch64, reachable over SSH with a sudo-capable user.
+  `make molecule` converges the node roles on all four; `baseline` is verified on real
+  hosts (see `roles/baseline/README.md` § Platforms).
   - **Ubuntu sudo-rs note:** 25.10+ (and 26.04) ship `sudo-rs` as the default `sudo`,
     which doesn't honor the custom `-p` become prompt Ansible relies on — so
     `--ask-become-pass` hangs with "Timeout waiting for privilege escalation prompt". On

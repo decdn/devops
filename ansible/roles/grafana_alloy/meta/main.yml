@@ -10,7 +10,7 @@ galaxy_info:
   galaxy_tags: [decdn, cdn, observability, grafana, otlp, debian]
   platforms:
     - name: Debian
-      versions: [bookworm]
+      versions: [bookworm, trixie]
     - name: Ubuntu
-      versions: [jammy, noble]
+      versions: [noble, resolute]
 dependencies: []

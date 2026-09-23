@@ -24,6 +24,7 @@ tags:
   - systemd
   - hardening
   - debian
+  - ubuntu
   - devsec
   - web3
 # Collection-level dependencies — only what the SHIPPED roles use:
