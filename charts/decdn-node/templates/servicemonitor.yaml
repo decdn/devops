@@ -24,4 +24,24 @@ spec:
       path: /metrics
       interval: {{ .Values.metrics.serviceMonitor.interval }}
       scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout }}
+      # Target labels the upstream dashboards and alerts key on (the node does not
+      # emit them itself): a stable job, the node's region and an optional
+      # deployment_environment, plus instance = pod name so $instance reads as a
+      # node, not an IP:port. grafana_alloy stamps the same set on the Ansible path.
+      relabelings:
+        {{- with .Values.metrics.serviceMonitor.jobLabel }}
+        - targetLabel: job
+          replacement: {{ . | quote }}
+        {{- end }}
+        - targetLabel: region
+          replacement: {{ .Values.config.identity.region | quote }}
+        {{- with .Values.metrics.serviceMonitor.deploymentEnvironment }}
+        - targetLabel: deployment_environment
+          replacement: {{ . | quote }}
+        {{- end }}
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: instance
+        {{- with .Values.metrics.serviceMonitor.relabelings }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
 {{- end }}

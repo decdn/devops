@@ -286,6 +286,57 @@
             },
             "labels": {
               "$ref": "#/definitions/stringMap"
+            },
+            "jobLabel": {
+              "type": "string"
+            },
+            "deploymentEnvironment": {
+              "type": "string"
+            },
+            "relabelings": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "prometheusRule": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "labels": {
+              "$ref": "#/definitions/stringMap"
+            },
+            "ruleLabels": {
+              "$ref": "#/definitions/stringMap"
+            }
+          }
+        },
+        "grafanaDashboards": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "label": {
+              "type": "string",
+              "pattern": "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$",
+              "maxLength": 316
+            },
+            "labelValue": {
+              "type": "string",
+              "maxLength": 63
+            },
+            "namespace": {
+              "type": "string"
+            },
+            "annotations": {
+              "$ref": "#/definitions/stringMap"
             }
           }
         }

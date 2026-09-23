@@ -1,0 +1,33 @@
+{{- /*
+Upstream's Grafana dashboards (files/monitoring/*.json, vendored by
+scripts/sync-monitoring.sh), one ConfigMap each, labelled for the Grafana sidecar
+(kube-prometheus-stack's grafana.sidecar.dashboards). The dashboards pick their
+datasources through DS_PROMETHEUS / DS_LOKI / DS_TEMPO template variables, so
+nothing is rewritten here. Dashboard uids are fixed upstream: enable this on ONE
+release per Grafana.
+*/}}
+{{- if .Values.metrics.grafanaDashboards.enabled }}
+{{- $cfg := .Values.metrics.grafanaDashboards }}
+{{- range $path, $_ := .Files.Glob "files/monitoring/*.json" }}
+{{- $file := base $path }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-%s" (include "decdn-node.fullname" $) (trimSuffix ".json" $file) | trunc 63 | trimSuffix "-" }}
+  {{- with $cfg.namespace }}
+  namespace: {{ . }}
+  {{- end }}
+  labels:
+    {{- include "decdn-node.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+    {{ $cfg.label }}: {{ $cfg.labelValue | quote }}
+  {{- with $cfg.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  {{ $file }}: |-
+    {{- $.Files.Get $path | nindent 4 }}
+{{- end }}
+{{- end }}

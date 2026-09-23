@@ -33,7 +33,9 @@ image has no CLI.
 | `Service` (quic) | Public UDP. The type is `LoadBalancer`, `NodePort` or `ClusterIP`, with `externalTrafficPolicy: Local`. |
 | `Service` (metrics) | ClusterIP only, never public. |
 | `NetworkPolicy` | Ingress allows QUIC from anywhere and metrics only from `metrics.networkPolicy.from`. Egress is open unless `networkPolicy.egress` is set. |
-| `ServiceMonitor` | Optional (`metrics.serviceMonitor.enabled`). |
+| `ServiceMonitor` | Optional (`metrics.serviceMonitor.enabled`). Adds the `job`, `region`, `deployment_environment` and `instance` target labels the upstream dashboards and alerts select on. |
+| `PrometheusRule` | Optional (`metrics.prometheusRule.enabled`). Upstream's reference alert rules. |
+| `ConfigMap` × 4 (dashboards) | Optional (`metrics.grafanaDashboards.enabled`). Upstream's Grafana dashboards, labelled for the Grafana sidecar. |
 
 What it does **not** do:
 
@@ -230,6 +232,39 @@ their own token volume, so they should work with the chart's
   kubectl -n decdn port-forward pod/decdn-node-1-0 9191
   DECDN_ADMIN_URL=http://127.0.0.1:9191 decdn node health
   ```
+
+## Monitoring
+
+The chart vendors upstream's Grafana dashboards and Prometheus alert rules in
+[`files/monitoring/`](files/monitoring/README.md) (re-vendored by
+`scripts/sync-monitoring.sh`; a weekly CI job flags drift). With the Prometheus
+Operator and a Grafana sidecar (kube-prometheus-stack), turn them on next to the
+ServiceMonitor:
+
+```yaml
+metrics:
+  networkPolicy:
+    from:
+      - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: monitoring}}
+  serviceMonitor:
+    enabled: true
+    deploymentEnvironment: prod        # feeds the dashboards' $env variable
+    labels: {release: kube-prometheus-stack}   # whatever your serviceMonitorSelector needs
+  prometheusRule:
+    enabled: true
+    labels: {release: kube-prometheus-stack}   # ruleSelector
+  grafanaDashboards:
+    enabled: true                      # label/labelValue must match the sidecar's
+```
+
+- The alert rules and dashboards select across **every** node Prometheus scrapes, and
+  the dashboards have fixed uids. Enable `prometheusRule` and `grafanaDashboards` on
+  **one** release per Prometheus/Grafana, or alerts fire once per release and
+  dashboards collide.
+- `metrics.serviceMonitor.jobLabel` (default `decdn-node`) is the `job` the dashboards
+  and the `DecdnNodeDown` alert expect. `region` comes from `config.identity.region`.
+- Loki and Tempo panels stay empty unless the node's logs and traces reach those
+  backends; the chart ships neither.
 
 ## Probes and lifecycle
 
