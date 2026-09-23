@@ -1,0 +1,68 @@
+---
+name: Bug report
+description: A deploy path (Ansible, Helm, Compose) does something wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Thanks for reporting. **Redact before you paste**: RPC URLs (they often embed an
+        API key), Grafana Cloud tokens, keystore passwords and real host addresses must
+        not appear in a public issue.
+  - type: dropdown
+    id: path
+    attributes:
+      label: Deploy path
+      options:
+        - Ansible (this repo's playbooks)
+        - Ansible (decdn.node Galaxy collection)
+        - Helm chart
+        - Docker Compose
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      description: Ansible only.
+      options:
+        - release (signed tarball)
+        - manual (locally built binaries)
+        - not applicable
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: decdn version
+      description: "`decdn-node --version`, or the image digest."
+    validations:
+      required: true
+  - type: input
+    id: revision
+    attributes:
+      label: devops revision
+      description: Commit, tag or collection/chart version of this repo.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Target OS and architecture
+      placeholder: Ubuntu 26.04, aarch64
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Command run, relevant (redacted) inventory or values, and the failing task or error.
+      render: shell
+    validations:
+      required: true

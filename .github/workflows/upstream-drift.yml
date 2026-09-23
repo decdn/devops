@@ -1,0 +1,59 @@
+---
+name: Upstream drift
+
+# Three things in this repo mirror decdn/decdn and go stale when upstream moves:
+#   - roles/decdn_node/vars/main/networks.yml  (contract addresses; upstream
+#     redeploys change every one of them at once)
+#   - charts/decdn-node/files/monitoring/      (dashboards + alert rules)
+#   - ansible/molecule/schema/files/schema-keys.txt  (the node.toml key inventory)
+# This job regenerates each from upstream main and fails when a committed copy
+# differs. It is a scheduled early warning, not a PR gate: an upstream change must
+# not turn unrelated PRs red. Fix drift by re-running the generator it names.
+on:
+  schedule:
+    - cron: '17 6 * * 1'        # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-drift
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Public repo, default branch. The sync scripts read origin/main through git,
+      # which this checkout provides as a remote-tracking ref.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: decdn/decdn
+          ref: main
+          path: upstream
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Compare the mirrors with upstream main
+        run: |
+          rc=0
+          check() {
+            local name="$1"; shift
+            if out="$("$@" 2>&1)"; then
+              echo "- ✅ **$name**: current" >> "$GITHUB_STEP_SUMMARY"
+            else
+              rc=1
+              echo "::error title=$name drifted::$out"
+              { echo "- ❌ **$name**: stale"; echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          }
+          echo "### Upstream drift (decdn/decdn@$(git -C upstream rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
+          check "network profiles" python3 scripts/sync-network-profiles.py upstream --check
+          check "monitoring assets" scripts/sync-monitoring.sh upstream --check
+          check "config schema keys" bash -c \
+            'python3 ansible/molecule/schema/files/gen-schema-keys.py upstream | diff -u ansible/molecule/schema/files/schema-keys.txt -'
+          exit "$rc"

@@ -1,15 +1,23 @@
 ---
-# Dependabot — keeps the SHA-pinned GitHub Actions current (it rewrites
-# `uses: owner/repo@<sha> # vX.Y.Z` to the new sha + version comment).
+# Dependabot — keeps the SHA-pinned GitHub Actions and the pre-commit hook revs
+# current.
 #
-# github-actions is the only applicable ecosystem: the repo has no pip/npm/etc.
-# manifests, and `ansible/requirements.yml` is Ansible Galaxy, which Dependabot
-# does not support.
+#   github-actions  rewrites `uses: owner/repo@<sha> # vX.Y.Z` to the new sha + comment
+#   pre-commit      bumps the `rev:` of each repo in .pre-commit-config.yaml
 #
-# NOT covered here, bump manually:
-#   - the KICS engine image digest in the Makefile — see CONTRIBUTING.md
+# Considered and not applicable here, so not listed:
+#   docker-compose  compose/compose.yaml takes its image from ${DECDN_IMAGE}, which
+#                   the operator pins to a signed release digest; nothing to bump
+#   helm            the chart has no dependencies, and its image is operator-set
+#   pip             the repo has no pip manifest (CI installs are unpinned)
+# Ansible Galaxy (ansible/requirements.yml) is not a Dependabot ecosystem.
+#
+# NOT covered, bump manually (CONTRIBUTING.md § Supply-chain / pinning rules):
+#   - the KICS and kubeconform image digests in the Makefile
+#   - the molecule image digests in ansible/molecule/*/molecule.yml
+#   - both setup-helm `version:` inputs in ci.yml, and release.yml's
 #   - the Galaxy collections in ansible/requirements.yml
-#   - pre-commit hook revs — run `pre-commit autoupdate`
+#   - the local yamllint hook's `additional_dependencies` pin
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -22,4 +30,15 @@ updates:
       include: scope
     groups:
       actions:
+        patterns: ["*"]
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      pre-commit-hooks:
         patterns: ["*"]
