@@ -21,6 +21,18 @@ repository — three roles and nothing else:
 
 ## Install
 
+> **Not on Galaxy yet.** The first release (`v0.1.0`) has not been cut; see
+> [RELEASING.md](https://github.com/decdn/devops/blob/main/RELEASING.md). Until then,
+> build and install it from a checkout:
+>
+> ```bash
+> git clone https://github.com/decdn/devops && cd devops/ansible
+> make build
+> ansible-galaxy collection install build/decdn-node-*.tar.gz
+> ```
+
+Once published:
+
 ```bash
 ansible-galaxy collection install decdn.node
 ```

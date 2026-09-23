@@ -120,8 +120,12 @@ in the daemon.
 | `config.blockchain.chain_id` | For example, `421614` (Arbitrum Sepolia). |
 | `config.blockchain.{payment_pool,capacity_bond,slash_judge,content_blacklist}_address` | Non-zero `0x` addresses. |
 
-Take chain IDs and contract addresses from the deCDN ADRs and the deployment manifest for
-your chain. Never make them up. Values are validated by `values.schema.json` plus
+Take chain IDs and contract addresses from the deployment manifest for your chain. Never
+make them up. The quickest correct source is the CLI itself: `decdn config init --chain
+arbitrum-sepolia --output /tmp/node.toml` writes the manifest's `[blockchain]` section,
+and the Ansible role's mirror of the same manifest is
+[`networks.yml`](../../ansible/roles/decdn_node/vars/main/networks.yml). (The chart has
+no `network` shortcut yet; the addresses stay explicit in values.) Values are validated by `values.schema.json` plus
 template guards, so a missing or malformed value fails `helm install` with a message that
 names it.
 
@@ -143,8 +147,16 @@ config:
 ```
 
 ```bash
+# From a checkout of this repo:
 helm install decdn-node-1 charts/decdn-node -n decdn -f values-node-1.yaml
+
+# From the OCI registry, once the first release is published (RELEASING.md):
+helm install decdn-node-1 oci://ghcr.io/decdn/charts/decdn-node --version 0.1.0 \
+  -n decdn -f values-node-1.yaml
 ```
+
+Published charts are signed with cosign; [RELEASING.md](../../RELEASING.md#verifying-a-release)
+shows how to verify one.
 
 ## Configuration (`config`)
 
