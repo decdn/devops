@@ -147,8 +147,7 @@ make build / galaxy-check       # stage + build the decdn.node collection, then 
 
 **Inventory is private; the firewall hole is not.** This repo is public, so
 `ansible/inventory/hosts.yml` is git-ignored and a real fleet lives in a private overlay
-(template: `ansible/inventory/fleet.example/`, launch sequence in
-`ansible/docs/launch-runbook.md`). Inventory-adjacent group_vars do not load for an
+(template: `ansible/inventory/fleet.example/`). Inventory-adjacent group_vars do not load for an
 overlay, so anything every node needs regardless of inventory (today only the udp/4433
 `baseline_extra_inbound` hole) lives in `ansible/playbooks/group_vars/decdn_nodes.yml`.
 Don't move it back under `inventory/`.

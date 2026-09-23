@@ -1,4 +1,0 @@
----
-# Edge nodes have no origin of their own. With no decdn_cache_origin_kind set, the
-# role defaults node-to-node pull-through ON, so an edge fills a cache miss from
-# a seed or peer that holds the blob.

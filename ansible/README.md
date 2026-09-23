@@ -101,11 +101,10 @@ inventory, currently only the udp/4433 QUIC firewall hole, live in
 `playbooks/group_vars/decdn_nodes.yml`, so an overlay can't drop them. Override that per node
 in `host_vars` if you have to. Playbook group_vars beat inventory group_vars.
 
-[`inventory/fleet.example/`](inventory/fleet.example/hosts.yml) is the launch-fleet
-template. Hosts are grouped by role (`decdn_seed` holds the catalogue in an fs origin,
-`decdn_edge` pulls through) and by billing (`decdn_metered` gets an egress budget,
-`decdn_unmetered` does not). The group_vars size the cache for large model blobs. The
-launch sequence is in [`docs/launch-runbook.md`](docs/launch-runbook.md).
+[`inventory/fleet.example/`](inventory/fleet.example/hosts.yml) is the overlay
+template: every host in `decdn_nodes`, the chain from `decdn_network`, and the cache
+sizing knobs to fill per disk. Add child groups of your own when hosts differ by group
+(an origin, an egress cap on metered bandwidth); the template's header shows how.
 
 By default baseline **deploys you as yourself**: the runner (your control-machine `$USER` +
 its autodetected `~/.ssh` key, `id_ed25519` > `ecdsa` > `rsa`) is prepended as the head of
