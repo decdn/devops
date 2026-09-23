@@ -1,6 +1,6 @@
 ---
 # PRIMARY deployment: a hardened, public deCDN node.
-#   baseline -> decdn-node
+#   baseline -> grafana_alloy (opt-in, off by default) -> decdn-node
 # The node listens on public QUIC udp/4433; metrics + admin RPC stay loopback.
 # On-chain stake + registration (ADR 019 Phase 2) is an operator action, not
 # automated here — see roles/decdn_node/README.md.

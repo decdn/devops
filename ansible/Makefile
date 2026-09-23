@@ -163,9 +163,9 @@ molecule-serial: deps
 	molecule test --all
 
 # --- Galaxy collection (decdn.node) ------------------------------------------
-# Stage baseline + decdn_node into a clean collection tree and build the artifact
-# under build/. Only the three deployment roles ship; see galaxy/README.md. Publishing stays
-# a manual step (ansible-galaxy collection publish build/decdn-node-*.tar.gz).
+# Stage baseline + decdn_node + grafana_alloy into a clean collection tree and build the
+# artifact under build/. Only the three roles ship; see galaxy/README.md. Publishing
+# runs from a vX.Y.Z tag in .github/workflows/release.yml (see RELEASING.md).
 build:
 	./galaxy/build.sh
 

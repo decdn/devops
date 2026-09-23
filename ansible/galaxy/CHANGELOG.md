@@ -8,6 +8,25 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- `decdn_network` (default `""`): set it to `arbitrum-sepolia` and `decdn_chain_id`
+  plus every contract address default to upstream's deployment manifest, mirrored
+  into `roles/decdn_node/vars/main/networks.yml` by `scripts/sync-network-profiles.py`.
+  Inventory addresses still win (the role reports them); an unknown network or a
+  `decdn_chain_id` that disagrees with the profile fails the play.
+- arm64: `decdn_node_target` now derives from the host's architecture
+  (`x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu`), so aarch64 hosts get
+  the right release tarball and ELF check with no inventory change. An unsupported or
+  mismatching triple fails loud.
+- `tasks_from: backup` (`decdn_backup_*`): tars the node's identity (hot) or its full
+  state minus the cache (stopping the node for the copy), encrypts it on the host to
+  `decdn_backup_age_recipients` (age or SSH public keys, required) and fetches only
+  the ciphertext.
+- `tasks_from: decommission` (`decdn_decommission_*`): typed confirmation, one host by
+  default, stops the node with systemctl and removes its unit, keeps the identity,
+  prints the on-chain exit steps.
+- Tested on Debian 13 and Ubuntu 24.04/26.04 (molecule `os-matrix`) as well as
+  Debian 12.
+
 - `grafana_alloy_api_token`: the Grafana Cloud API token may now come from a
   git-ignored `host_vars/<node>/secret.yml` instead of only being operator-
   provisioned on the host, the same dual-home pattern `decdn_rpc_url` uses. Set, the
@@ -34,6 +53,8 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Removed
 
+- Ubuntu jammy from the roles' supported platforms: it was never tested.
+
 - `decdn_delivery_floor` and `decdn_rate_bounds_poll_interval_sec`: upstream
   (decdn/decdn @ d3bc7da7) removed `payment.delivery_floor` and
   `blockchain.rate_bounds_poll_interval_sec`, so emitting either is a startup
@@ -42,6 +63,9 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   is nothing left for either knob to tune.
 
 ### Changed
+
+- `grafana_alloy` fails loud on an architecture Alloy has no package for, instead of
+  a 404 at download time.
 
 - `decdn_otlp_endpoint` must be `http://host:port`, matching upstream: `https://`,
   a missing port, a path/query/fragment and userinfo are rejected at deploy time.
@@ -78,9 +102,10 @@ Not yet published to Galaxy (pre-1.0; the published shape may still change).
 - `decdn.node.baseline` — Debian/Ubuntu host baseline: nftables default-deny
   inbound, fail2ban, unattended-upgrades, chrony, an admin sudo account, and DevSec
   OS + SSH hardening applied last.
-- `decdn.node.decdn_node` — the `decdn-node` daemon, installed from a pinned GitHub
-  Release tarball under a hardened systemd unit; public QUIC udp/4433, loopback
-  metrics + admin RPC.
+- `decdn.node.decdn_node` — the `decdn-node` daemon under a hardened systemd unit,
+  from locally built binaries (`manual`, the default until upstream tags a release)
+  or a GPG-verified GitHub Release tarball (`release`); public QUIC udp/4433,
+  loopback metrics + admin RPC.
 - Release-integrity verification: `release` mode fetches the release's `SHA256SUMS`
   and `SHA256SUMS.asc`, verifies the detached signature against the maintainer
   keyring vendored at `roles/decdn_node/files/decdn-release-KEYS.asc`, then checks

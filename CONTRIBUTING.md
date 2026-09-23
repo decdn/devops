@@ -1,11 +1,12 @@
 # Contributing
 
-Two checks run on every change: **pre-commit** locally and **GitHub Actions** on
-push / PR. The repo's #1 rule still stands — **never commit secrets** (see
-[`AGENTS.md`](AGENTS.md)); secrets are generated on the target host and the repo
-ships `*.example` templates for them (never the real thing; non-secret config is
-committed directly). There is no dedicated secret-scanner in the
-pipeline — keep secrets out by design (and rely on GitHub's push protection).
+The repo's first rule: **never commit secrets** (see [`AGENTS.md`](AGENTS.md)). Secrets
+are generated on, or operator-provisioned to, the target host; the repo ships `*.example`
+templates for them and commits non-secret config directly. There is no dedicated
+secret scanner in the pipeline: keep secrets out by design (and rely on GitHub's push
+protection).
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org).
 
 ## One-time setup
 
@@ -14,45 +15,68 @@ pip install pre-commit      # or: pipx install pre-commit
 make hooks                  # installs the git pre-commit hook
 ```
 
-After this, every commit runs hygiene checks, `shellcheck`, `yamllint` (Ansible
-tree), and `markdownlint`.
+After this, every commit runs hygiene checks, `shellcheck`, `yamllint` (Ansible tree)
+and `markdownlint`. CI runs the same hooks on every file, so skipping this only moves
+the failure to the PR.
 
-## Useful targets (`make help`)
+## Make targets
+
+The root `Makefile` is the check driver (`make help` lists it); CI calls the same
+targets, so a local pass means a CI pass. Deploy targets live in
+[`ansible/Makefile`](ansible/README.md) and run from `ansible/`.
 
 | Target | What it does |
 |--------|--------------|
-| `make lint` | run all pre-commit hooks on every file (the full local hygiene gate) |
-| `make lint-ansible` | install Galaxy collections + run `ansible-lint` (its production profile includes the Ansible security rules) |
-| `make lint-helm` | Helm chart: `helm lint --strict`, positive/negative render tests, kubeconform (digest-pinned image), shared schema-key check and its fixtures (needs `helm`, `yq`, `python3` ≥ 3.11, Docker). Set `DECDN_CLI=<path to decdn>` to also run the real `decdn config validate` (CI can't). |
-| `make lint-alloy` | Renders `roles/grafana_alloy`'s templates and validates them with the **real** digest-pinned Grafana Alloy binary (`alloy validate` + an `ExecStart` flag check). The `grafana-cloud` molecule scenario uses a stub that exits 0 for every subcommand, so this is the only gate that proves the config loads. Set `ALLOY_BIN=<path>` to skip the download. |
-| `make security` | KICS IaC security scan of `ansible/` and the rendered Helm chart (digest-pinned engine image — CI runs this same target) |
+| `make lint` | every pre-commit hook on every file (CI job `pre-commit`) |
+| `make lint-ansible` | install Galaxy collections + `ansible-lint` (production profile, which includes the Ansible security rules) |
+| `make molecule` | every `ansible/molecule/*/` scenario in parallel, in privileged systemd containers (needs Docker; cap with `JOBS=<n>`). `make molecule-serial` runs them one at a time for readable failures. |
+| `make lint-helm` | chart: `helm lint --strict`, positive/negative render tests, kubeconform (digest-pinned image), the shared schema-key check (needs `helm`, `yq`, `python3` ≥ 3.11, Docker). Set `DECDN_CLI=<path to decdn>` to also run the real `decdn config validate` (CI can't). |
+| `make lint-alloy` | renders `roles/grafana_alloy`'s templates and validates them with the **real** digest-pinned Alloy binary. The molecule stub exits 0 for everything, so this is the only gate that proves the config loads. `ALLOY_BIN=<path>` skips the download. |
+| `make lint-compose` | renders `compose/compose.yaml` with its example env and asserts its security invariants |
+| `make security` | KICS IaC scan of `ansible/`, the rendered chart and `compose/` (digest-pinned engine, fail on HIGH) |
+| `make galaxy-check` | build the `decdn.node` collection and run galaxy-importer's checks |
 
-`ansible-lint` is **not** a per-commit hook (it needs the collections installed).
-Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hook-stage manual`.
+`ansible-lint` is **not** a per-commit hook (it needs the collections installed). Run it
+with `make lint-ansible`, or `pre-commit run ansible-lint --hook-stage manual`.
+
+### Upstream mirrors
+
+Three things here are generated from `decdn/decdn`; regenerate, never hand-edit:
+
+| Mirror | Regenerate with |
+|--------|-----------------|
+| `ansible/roles/decdn_node/vars/main/networks.yml` (contract addresses per network) | `scripts/sync-network-profiles.py <decdn-checkout>` |
+| `charts/decdn-node/files/monitoring/` (dashboards, alert rules) | `scripts/sync-monitoring.sh <decdn-checkout>` |
+| `ansible/molecule/schema/files/schema-keys.txt` (node.toml keys) | `ansible/molecule/schema/files/gen-schema-keys.py <decdn-checkout> > …` |
+
+The scripts read `origin/main` through git, so the checkout's own branch doesn't
+matter. The weekly `upstream-drift` workflow fails when any of them is stale.
 
 ## CI overview
 
-- **`ci.yml`** — `ansible-lint` + `galaxy-build` (on `ansible/**`), `helm` (on
-  `charts/**`, the shared schema inventory/checker, the root `Makefile` or `ci.yml`
-  itself), `kics` (on either) and `actionlint`. Bash-only PRs skip the Ansible jobs. Hygiene/shellcheck/markdownlint
-  run via **pre-commit locally only** (`make hooks` / `make lint`), not in CI.
-- **`molecule.yml`** — containerised converge + idempotence + verify of the `decdn_node`
-  role (privileged systemd Docker container; scoped to `ansible/**`). Run locally with
-  `make molecule` (needs Docker) — it runs all six scenarios in parallel, so reach for
-  `make molecule-serial` when you need to read a failure in order.
+- **`ci.yml`**, path-filtered so heavy jobs skip unrelated PRs:
+  - always: `pre-commit` (every hook, every file) and `actionlint`;
+  - on `ansible/**`: `ansible-lint` (plus a syntax-check of every playbook),
+    `galaxy-build` and `alloy-config` (`make lint-alloy`);
+  - on `charts/**` (or the shared schema files, the root `Makefile`, `ci.yml`): `helm`
+    (`make lint-helm`);
+  - on `compose/**` (or the root `Makefile`, `ci.yml`): `compose` (`make lint-compose`);
+  - on any of those: `kics` (`make security`).
+- **`molecule.yml`**: `make molecule JOBS=3` on `ansible/**` changes.
+- **`release.yml`**: on `vX.Y.Z` tags; see [RELEASING.md](RELEASING.md).
+- **`upstream-drift.yml`**: weekly, non-blocking; see "Upstream mirrors" above.
 - **Every job is bounded** by `timeout-minutes`. The values are bounds sized off
-  observed runtimes, not targets — without one a hung job burns the 360-minute
-  default, and combined with `cancel-in-progress` some branch-protection setups read
-  the resulting *cancelled* check as "not failed" rather than as a failure.
-- **Two caches.** `ansible/collections` is cached across `ansible-lint`,
-  `galaxy-build` and `molecule` under one shared key; a hit makes `make deps` a no-op
-  that never contacts `galaxy.ansible.com`, which is what keeps a transient Galaxy
-  error from failing an unrelated PR. pip is cached via `setup-python`, keyed on the
-  workflow file (the repo has no pip manifest, so the workflow *is* the package list);
-  the installs stay unpinned, so that saves the download but not the PyPI round trip.
-  Only the Galaxy cache is wired by hand — it uses `actions/cache`'s split
-  `restore`/`save` with `save` gated on success, so a part-way Galaxy failure can't
-  poison it. The pip cache is `setup-python`'s built-in one and manages itself.
+  observed runtimes, not targets. Without one a hung job burns the 360-minute default,
+  and combined with `cancel-in-progress` some branch-protection setups read the
+  resulting *cancelled* check as "not failed".
+- **Caches.** `ansible/collections` is cached across `ansible-lint`, `galaxy-build` and
+  `molecule` under one shared key; a hit makes `make deps` a no-op that never contacts
+  `galaxy.ansible.com`, which keeps a transient Galaxy error from failing an unrelated
+  PR. It uses `actions/cache`'s split `restore`/`save` with `save` gated on success, so a
+  part-way Galaxy failure can't poison it. pip is cached by `setup-python`, keyed on the
+  workflow file (the repo has no pip manifest; installs stay unpinned, so that saves the
+  download, not the PyPI round trip). pre-commit's hook environments are cached on
+  `.pre-commit-config.yaml`.
 
 ## Supply-chain / pinning rules
 
@@ -68,11 +92,14 @@ Run it on demand with `make lint-ansible`, or `pre-commit run ansible-lint --hoo
   drives the **Docker Hub** KICS engine image — a different artifact from the
   hijacked action — pinned by a digest verified against Docker Hub, currently
   `v2.1.20`. The engine's `--fail-on high` exit code is the gate.
-- **Dependabot** (`.github/dependabot.yml`) bumps the other action SHAs weekly.
-- **Bump manually** (Dependabot can't): the `KICS_IMAGE` and `KUBECONFORM_IMAGE` digests
-  in the `Makefile`, both `setup-helm` `version:` inputs in `ci.yml` (`helm` and `kics`
-  jobs), the collection versions in `ansible/requirements.yml`, and the pre-commit hook
-  revs via `pre-commit autoupdate`.
+- **Dependabot** (`.github/dependabot.yml`) bumps the action SHAs and the pre-commit
+  hook revs weekly.
+- **Bump manually** (Dependabot can't parse them): the `KICS_IMAGE` and
+  `KUBECONFORM_IMAGE` digests in the `Makefile`; the molecule image digests in
+  `ansible/molecule/*/molecule.yml` (all together, `docker buildx imagetools inspect`);
+  the `setup-helm` `version:` inputs in `ci.yml` (`helm` and `kics` jobs) and
+  `release.yml`; the collection versions in `ansible/requirements.yml`; and the local
+  yamllint hook's `additional_dependencies` pin.
 - **Bump the `cache-epoch:` counter in `ansible/requirements.yml` to make CI
   re-resolve the collections.** Those are `>=` ranges, so a warm cache pins the
   resolved set — transitive collections like `community.crypto` included — until the

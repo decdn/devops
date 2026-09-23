@@ -6,8 +6,8 @@ repository — three roles and nothing else:
 
 | Role | Purpose |
 |------|---------|
-| `decdn.node.baseline` | Debian host baseline — nftables default-deny inbound, fail2ban, unattended-upgrades, chrony, an admin sudo user, then DevSec OS + SSH hardening (applied last). |
-| `decdn.node.decdn_node` | The `decdn-node` daemon — installed from a pinned GitHub Release tarball under a hardened systemd unit; public QUIC udp/4433, loopback metrics + admin RPC. |
+| `decdn.node.baseline` | Debian/Ubuntu host baseline — nftables default-deny inbound, fail2ban, unattended-upgrades, chrony, an admin sudo user, then DevSec OS + SSH hardening (applied last). |
+| `decdn.node.decdn_node` | The `decdn-node` daemon under a hardened systemd unit — from locally built binaries (the default until upstream tags a release) or a GPG-verified release tarball; public QUIC udp/4433, loopback metrics + admin RPC. `decdn_network` sets the chain from upstream's manifest; `tasks_from: backup` / `decommission` for day 2. |
 | `decdn.node.grafana_alloy` | Opt-in Grafana Cloud observability agent — loopback-only Alloy receiver and hardened telemetry export. |
 
 ## Requirements
@@ -64,9 +64,12 @@ hardening), then the node:
         baseline_extra_inbound:
           - { proto: udp, port: 4433, comment: "deCDN QUIC" }
     - role: decdn.node.decdn_node
-      # decdn_node_version + rpc_url + the three contract addresses + region are
-      # REQUIRED — set them per host (host_vars). Contract addresses/chain-id are
-      # protocol facts: source them from the deployment / an ADR, never guess.
+      vars:
+        decdn_network: arbitrum-sepolia   # chain_id + every contract address, from upstream's manifest
+      # Also REQUIRED per host (host_vars): decdn_region, the binaries
+      # (decdn_release_target_dir, or decdn_node_install_method: release +
+      # decdn_node_version), and the RPC URL (host-provisioned /etc/decdn/decdn.env,
+      # or decdn_rpc_url in a git-ignored secret.yml).
 ```
 
 The node serves paid traffic only **after** on-chain stake + registration — an
