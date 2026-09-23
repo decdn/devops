@@ -1,0 +1,60 @@
+# deCDN node under Docker Compose: the same daemon, paths and hardening as the
+# Ansible role's systemd unit, for a single host without Ansible. See README.md.
+#
+#   cp .env.example .env && $EDITOR .env      # image digest + the decdn user's uid/gid
+#   sudo docker compose up -d
+#
+# Host networking, deliberately. The daemon binds metrics to 127.0.0.1 by default
+# and its admin RPC is hard-wired to 127.0.0.1, so on the host network both stay
+# loopback-only, exactly as on a systemd host, and the host's `decdn` CLI reaches
+# the admin RPC directly. There are no `ports:` for Docker to publish, which also
+# means Docker's own iptables rules never punch a hole past the host firewall. The
+# one public port is the node's QUIC udp/4433: open it in the host firewall.
+name: decdn
+
+services:
+  decdn-node:
+    # Pin by digest: the release's signed image-digest.txt names it. Upstream only
+    # tags an image after a maintainer signs the release, so a tag alone proves less.
+    image: ${DECDN_IMAGE:?set DECDN_IMAGE in .env to ghcr.io/decdn/decdn-node@sha256:<digest>}
+    network_mode: host
+    # A dedicated host account (see README.md), not the image's uid 1000, which on
+    # most hosts is the first human login.
+    user: "${DECDN_UID:?set DECDN_UID in .env}:${DECDN_GID:?set DECDN_GID in .env}"
+    # Mirrors the systemd unit's ExecStart.
+    command:
+      - run
+      - --config
+      - /etc/decdn/node.toml
+      - --keystore-password-file
+      - /etc/decdn/keystore.password
+    # The RPC URL (it may embed an API key) stays in a root-owned 0600 file on the
+    # host. DECDN_* variables override node.toml, so only put DECDN_RPC_URL (and
+    # e.g. AWS_* for an S3 origin) here.
+    env_file:
+      - path: ${DECDN_ENV_FILE:-/etc/decdn/decdn.env}
+        required: true
+    volumes:
+      - /etc/decdn:/etc/decdn:ro
+      - /var/lib/decdn:/var/lib/decdn
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # SIGTERM is the daemon's graceful drain. Docker's default 10 s grace would
+    # SIGKILL it mid-drain; this matches the unit's TimeoutStopSec.
+    stop_signal: SIGTERM
+    stop_grace_period: 300s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"
+    # Or send the daemon's JSON logs to the host journal, like the systemd unit:
+    #   driver: journald
+    #   options: {tag: decdn-node}
+    # No healthcheck: the image has no HTTP client, and the metrics listener only
+    # serves /metrics. Probe http://127.0.0.1:9090/metrics from the host instead.

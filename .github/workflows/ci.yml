@@ -18,7 +18,8 @@ concurrency:
 # malicious code — cf. the March 2026 KICS action compromise). The trailing
 # comment records the human-readable version; .github/dependabot.yml bumps them.
 jobs:
-  # Detect whether ansible/ or the Helm chart changed so heavy jobs skip unrelated PRs.
+  # Detect whether ansible/, the Helm chart or compose/ changed so heavy jobs skip
+  # unrelated PRs.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5          # ~5s in practice
@@ -28,6 +29,7 @@ jobs:
     outputs:
       ansible: ${{ steps.filter.outputs.ansible }}
       helm: ${{ steps.filter.outputs.helm }}
+      compose: ${{ steps.filter.outputs.compose }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -43,6 +45,11 @@ jobs:
             helm:
               - 'charts/**'
               - 'ansible/molecule/schema/files/**'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
+            # lint-compose and security-compose live in the root Makefile.
+            compose:
+              - 'compose/**'
               - 'Makefile'
               - '.github/workflows/ci.yml'
 
@@ -192,6 +199,20 @@ jobs:
         # DECDN_CLI=... before bumping the decdn version.
         run: make lint-helm
 
+  # Docker Compose path: render compose/compose.yaml with its example env files and
+  # assert the invariants its README promises (host network, no published ports,
+  # digest-pinned image, read-only rootfs, no capabilities, graceful stop). Runs
+  # only when compose/ or the root Makefile changed.
+  compose:
+    needs: changes
+    if: needs.changes.outputs.compose == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5          # docker compose + jq ship on ubuntu-latest; seconds in practice
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Compose invariants
+        run: make lint-compose
+
   # Render roles/grafana_alloy's templates and validate them with the REAL pinned
   # Grafana Alloy binary. The molecule `grafana-cloud` scenario deliberately runs
   # against a stub that exits 0 for every subcommand, so it proves plumbing but
@@ -222,8 +243,9 @@ jobs:
       - name: Validate the rendered Alloy configuration
         run: make lint-alloy
 
-  # Dedicated IaC security scan of the Ansible tree and the rendered Helm chart, driven straight from the
-  # digest-pinned KICS *engine* image by `make security` — the exact command
+  # Dedicated IaC security scan of the Ansible tree, the rendered Helm chart and
+  # compose/, driven straight from the digest-pinned KICS *engine* image by
+  # `make security` — the exact command
   # developers run locally, so CI and local results cannot drift. KICS severities
   # are CRITICAL/HIGH/MEDIUM/LOW/INFO; the engine's own `--fail-on high` exit
   # code is the gate.
@@ -241,7 +263,9 @@ jobs:
   # hijacked action). See CONTRIBUTING.md.
   kics:
     needs: changes
-    if: needs.changes.outputs.ansible == 'true' || needs.changes.outputs.helm == 'true'
+    if: >-
+      needs.changes.outputs.ansible == 'true' || needs.changes.outputs.helm == 'true'
+      || needs.changes.outputs.compose == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20         # pulls the KICS engine image; ~30s in practice
     steps:
@@ -249,15 +273,15 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.0
-      - name: KICS security scan of ansible/ + the rendered chart (fail on HIGH)
+      - name: KICS security scan of ansible/, the rendered chart and compose/ (fail on HIGH)
         run: make security
       # Replaces the action's `enable_jobs_summary`.
       - name: Summarise KICS findings
         if: always()
         run: |
-          for scan in ansible helm; do
+          for scan in ansible helm compose; do
           results=kics-results/results.json
-          [ "$scan" = helm ] && results=kics-results/helm/results.json
+          [ "$scan" != ansible ] && results="kics-results/$scan/results.json"
           {
             echo "### KICS IaC scan ($scan)"
             echo
