@@ -1,0 +1,85 @@
+---
+- name: Converge decdn_node from a network profile
+  hosts: all
+  become: true
+  vars:
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/default/files/decdn-node-stub"
+    decdn_node_install_method: manual
+    decdn_node_manual_bin_src: "{{ stub_bin }}"
+    decdn_cli_manual_bin_src: "{{ stub_bin }}"
+    decdn_rpc_url: "https://rpc.example.invalid/"
+    decdn_region: "US"
+    # The profile supplies chain_id and all eight addresses ...
+    decdn_network: arbitrum-sepolia
+    # ... and an explicit inventory value must still win over it.
+    decdn_slash_appeal_address: "0x5555555555555555555555555555555555555555"
+  roles:
+    - role: decdn_node
+  post_tasks:
+    - name: Read the backup recipient's public key
+      ansible.builtin.command:
+        cmd: age-keygen -y /root/molecule-age.key
+      register: _molecule_age_pub
+      changed_when: false
+
+    - name: Encrypt the backups to it
+      ansible.builtin.set_fact:
+        decdn_backup_age_recipients: ["{{ _molecule_age_pub.stdout | trim }}"]
+
+- name: Identity backup
+  ansible.builtin.import_playbook: ../../playbooks/backup.yml
+
+- name: Switch to a full backup
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Select the full scope
+      ansible.builtin.set_fact:
+        decdn_backup_scope: full
+
+- name: Full backup
+  ansible.builtin.import_playbook: ../../playbooks/backup.yml
+
+- name: Check the full backup restarted the node, and reject a wrong confirmation
+  hosts: all
+  become: true
+  tasks:
+    - name: Read service state after the full backup
+      ansible.builtin.service_facts:
+
+    - name: Require decdn-node to be running again
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['decdn-node.service'].state == 'running'
+        fail_msg: The full backup stopped decdn-node and did not restart it.
+
+    - name: Decommission with the wrong confirmation
+      block:
+        - name: Run decommission with a mistyped host list
+          ansible.builtin.include_role:
+            name: decdn_node
+            tasks_from: decommission
+          vars:
+            decdn_decommission_confirm: not-this-host
+        - name: Fail if decommission accepted a wrong confirmation
+          ansible.builtin.fail:
+            msg: decommission proceeded with a confirmation that did not match.
+      rescue:
+        - name: Require the confirmation assert to be what failed
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name is match('^Require the typed confirmation')
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the confirmation check."
+
+    - name: Require the unit to survive the rejected run
+      ansible.builtin.stat:
+        path: /etc/systemd/system/decdn-node.service
+      register: _molecule_unit
+      failed_when: not _molecule_unit.stat.exists
+
+    - name: Confirm the real decommission non-interactively
+      ansible.builtin.set_fact:
+        decdn_decommission_confirm: "{{ ansible_play_hosts_all | sort | join(',') }}"
+
+- name: Decommission
+  ansible.builtin.import_playbook: ../../playbooks/decommission.yml

@@ -21,3 +21,7 @@ inventory/hosts.yaml
 
 # Ansible scratch
 *.retry
+
+# Encrypted node backups fetched by `make backup` (decdn_backup_local_dir). Encrypted,
+# but still per-operator key material: never commit them.
+backups/

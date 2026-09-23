@@ -536,6 +536,10 @@ decdn node reload        # re-read node.toml, apply the five hot-reloadable sect
 decdn node drain --wait  # graceful shutdown. Without --wait it is fire-and-forget
                          # (the response means "asked to stop", not "stopped");
                          # --wait polls to completion (--wait-timeout-secs 30).
+                         # Under this role's unit (Restart=always) systemd starts
+                         # a drained daemon again 5 s later: to take the node
+                         # down, use `systemctl stop decdn-node` (same graceful
+                         # path, via SIGTERM) or `make decommission`.
 
 # Read-only chain query, not admin RPC: lists active registered nodes and maps
 # node-ids/regions to operator addresses. Loads no keystore and spends nothing.
@@ -546,6 +550,9 @@ decdn node lookup --region US --probe
 # node.toml (else pass --slash-appeal-address / DECDN_SLASH_APPEAL_ADDRESS):
 decdn appeal slash <SLASH_ID> <EVIDENCE_BUNDLE_HASH>
 ```
+
+Backups, restores, moving a node to a new host and decommissioning: `make backup`,
+`make decommission` and the procedures in [`docs/lifecycle.md`](../../../docs/lifecycle.md).
 
 Upgrades (`release` mode): bump `decdn_node_version` and re-deploy — the version stamp triggers re-install + restart; the persistent
 `node.secret` and `keystore.json` are untouched.

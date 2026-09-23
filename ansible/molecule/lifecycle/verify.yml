@@ -1,0 +1,127 @@
+---
+- name: Verify the lifecycle
+  hosts: all
+  become: true
+  vars:
+    _profile: >-
+      {{ (lookup('ansible.builtin.file',
+          lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') ~ '/roles/decdn_node/vars/main/networks.yml')
+          | from_yaml)._decdn_network_profiles['arbitrum-sepolia'] }}
+    _local_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/backups/{{ inventory_hostname }}"
+  tasks:
+    # --- Network profile ----------------------------------------------------------
+    - name: Read the rendered node.toml
+      ansible.builtin.slurp:
+        src: /etc/decdn/node.toml
+      register: _toml
+
+    - name: Require profile values, the inventory override and an integer chain_id
+      vars:
+        _t: "{{ _toml.content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - _t is search('(?m)^chain_id = ' ~ _profile.chain_id ~ '$')
+          - _t is search('(?m)^payment_pool_address = "' ~ _profile.payment_pool_address ~ '"$')
+          - _t is search('(?m)^content_blacklist_address = "' ~ _profile.content_blacklist_address ~ '"$')
+          - _t is search('(?m)^usdc_address = "' ~ _profile.usdc_address ~ '"$')
+          - _t is search('(?m)^slash_appeal_address = "0x5555555555555555555555555555555555555555"$')
+        fail_msg: node.toml does not carry the profile values with the inventory override on top.
+
+    # --- Backups --------------------------------------------------------------------
+    - name: Find the archives on the host
+      ansible.builtin.find:
+        paths: /var/backups/decdn
+        patterns: "*.tar.age"
+      register: _archives
+
+    - name: Require one identity and one full archive, root-only
+      ansible.builtin.assert:
+        that:
+          - _archives.files | length == 2
+          - _archives.files | map(attribute='path') | select('search', '-identity-') | list | length == 1
+          - _archives.files | map(attribute='path') | select('search', '-full-') | list | length == 1
+          - _archives.files | map(attribute='mode') | unique == ['0600']
+        fail_msg: "Unexpected archives: {{ _archives.files | map(attribute='path') | list }}"
+
+    - name: List each archive's members (decrypting with the throwaway key)
+      ansible.builtin.shell:
+        cmd: set -o pipefail; age -d -i /root/molecule-age.key {{ item.path | quote }} | tar -tzf -
+        executable: /bin/bash
+      loop: "{{ _archives.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: _members
+      changed_when: false
+
+    - name: Require the expected members
+      vars:
+        _list: "{{ item.stdout_lines }}"
+        _full: "{{ '-full-' in item.item.path }}"
+      ansible.builtin.assert:
+        that:
+          - "'var/lib/decdn/node.secret' in _list"
+          - "'var/lib/decdn/keystore.json' in _list"
+          - "'etc/decdn/keystore.password' in _list"
+          - "'etc/decdn/decdn.env' not in _list"
+          - (_list | select('match', '^var/lib/decdn/cache/') | list | length) == 0
+          - _full | bool or (_list | length == 3)
+        fail_msg: "{{ item.item.path | basename }} holds {{ _list }}"
+      loop: "{{ _members.results }}"
+      loop_control:
+        label: "{{ item.item.path | basename }}"
+
+    - name: Checksum the fetched copies on the control machine
+      ansible.builtin.stat:
+        path: "{{ _local_dir }}/{{ item.path | basename }}"
+        checksum_algorithm: sha256
+      loop: "{{ _archives.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: _local
+      delegate_to: localhost
+      become: false
+
+    - name: Checksum the archives on the host
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+        checksum_algorithm: sha256
+      loop: "{{ _archives.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: _remote
+
+    - name: Require the fetched copies to match the host
+      ansible.builtin.assert:
+        that:
+          - _local.results | map(attribute='stat.checksum') | list
+            == _remote.results | map(attribute='stat.checksum') | list
+          - _local.results | map(attribute='stat.exists') | unique == [true]
+        fail_msg: The encrypted archives on the control machine differ from the host's.
+
+    # --- Decommission -----------------------------------------------------------------
+    - name: Stat the unit and the identity
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/systemd/system/decdn-node.service
+        - /var/lib/decdn/node.secret
+        - /var/lib/decdn/keystore.json
+        - /etc/decdn/keystore.password
+      register: _after
+
+    - name: Require the unit gone and the identity kept
+      ansible.builtin.assert:
+        that:
+          - not _after.results[0].stat.exists
+          - _after.results[1:] | map(attribute='stat.exists') | unique == [true]
+        fail_msg: Decommission must remove the unit and keep node.secret, keystore.json and the password file.
+
+    - name: Read service state
+      ansible.builtin.service_facts:
+
+    - name: Require decdn-node to be gone
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['decdn-node.service'] is not defined
+            or ansible_facts.services['decdn-node.service'].state != 'running'
+        fail_msg: decdn-node is still running after decommission.

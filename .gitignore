@@ -15,6 +15,9 @@
 **/cert.pem
 **/*.pem
 
+# Encrypted node backups (`make backup`); they belong with the operator, not in git
+*.tar.age
+
 # Local, per-developer Claude Code settings (not shared)
 .claude/settings.local.json
 

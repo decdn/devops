@@ -1,0 +1,20 @@
+---
+# Placeholder identity (as in default), plus age and a throwaway age key pair the
+# backups are encrypted to. The private key never leaves the container.
+- name: Stage the placeholder identity
+  ansible.builtin.import_playbook: ../default/prepare.yml
+
+- name: Prepare an age key pair for the backup test
+  hosts: all
+  become: true
+  tasks:
+    - name: Install age
+      ansible.builtin.apt:
+        name: age
+        state: present
+        update_cache: true
+
+    - name: Generate a throwaway age identity
+      ansible.builtin.command:
+        cmd: age-keygen -o /root/molecule-age.key
+        creates: /root/molecule-age.key

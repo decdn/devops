@@ -1,0 +1,23 @@
+---
+# Take a node out of service: stop decdn-node, remove its unit, tear down the
+# opt-in Grafana Alloy agent. Keeps the identity (needed to withdraw the bond) and
+# does NOT touch the chain; the last task prints the deregister/unbond steps.
+#   make decommission LIMIT=<host>          # LIMIT is required; asks for typed confirmation
+# Take a backup first (make backup). See docs/lifecycle.md.
+- name: Decommission deCDN nodes
+  hosts: decdn_nodes
+  become: true
+  tasks:
+    - name: Stop and remove the node service
+      ansible.builtin.include_role:
+        name: decdn_node
+        tasks_from: decommission
+
+    # grafana_alloy's disabled path removes only an installation this role wrote
+    # (it checks the managed-by marker in the unit), so this is a no-op on a host
+    # that never enabled Grafana Cloud or runs a foreign Alloy.
+    - name: Tear down the Grafana Alloy agent this repo installed
+      ansible.builtin.include_role:
+        name: grafana_alloy
+      vars:
+        decdn_grafana_cloud_enabled: false

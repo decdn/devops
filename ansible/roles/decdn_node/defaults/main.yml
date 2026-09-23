@@ -405,3 +405,25 @@ decdn_cli_bin: /usr/local/bin/decdn
 # deliveries (a money-losing cut), so prefer waiting over cutting. See
 # templates/decdn-node.service.j2.
 decdn_node_stop_timeout_sec: 300
+
+# --- Lifecycle: backup + decommission (tasks_from: backup / decommission) -------
+# Only read by those entry points (playbooks/backup.yml, playbooks/decommission.yml);
+# a normal deploy ignores them. See docs/lifecycle.md.
+#
+# Backups are encrypted on the host to these PUBLIC keys, so plaintext key material
+# never leaves the node: age recipients (age1…, `age-keygen -y key.txt`) and/or SSH
+# public keys (ssh-ed25519 / ssh-rsa lines). REQUIRED for a backup. Keep the matching
+# private keys somewhere other than the node and the control machine's repo.
+decdn_backup_age_recipients: []
+decdn_backup_scope: identity        # "identity" (hot) | "full" (stops the node for the copy)
+decdn_backup_include_env: false     # also archive decdn.env (holds the RPC URL, maybe an API key)
+decdn_backup_leave_stopped: false   # "full": leave the node stopped afterwards (host migration)
+decdn_backup_dir: /var/backups/decdn   # on the host, root 0700
+decdn_backup_fetch: true            # copy the ENCRYPTED archive to the control machine
+decdn_backup_local_dir: "{{ playbook_dir }}/../backups"   # control machine; git-ignored in this repo
+#
+# Decommission refuses to touch more hosts than this in one run. Its typed
+# confirmation is interactive; a non-interactive run sets decdn_decommission_confirm
+# to the comma-joined, sorted host list (deliberately NOT defaulted here).
+decdn_decommission_max_hosts: 1
+decdn_decommission_purge_cache: false

@@ -108,10 +108,14 @@ jobs:
           key: galaxy-${{ runner.os }}-${{ hashFiles('ansible/requirements.yml') }}
       - name: Lint (yamllint + ansible-lint)
         run: make lint
-      - name: Syntax-check playbook
+      - name: Syntax-check playbooks
         # Dummy inventory: no real hosts.yml is committed upstream (only hosts.yml.example),
-        # and --syntax-check only parses, it never connects.
-        run: ansible-playbook playbooks/site.yml --syntax-check -i localhost,
+        # and --syntax-check only parses, it never connects. Every playbook, so a new
+        # one (backup, decommission, ...) is covered without editing this step.
+        run: |
+          for pb in playbooks/*.yml; do
+            ansible-playbook "$pb" --syntax-check -i localhost,
+          done
 
   # Build the public `decdn.node` collection and run galaxy-importer's checks —
   # the same validation Galaxy runs on upload (metadata, license, README, embedded
