@@ -1,10 +1,12 @@
 ---
 # Placeholder identity (as in default), plus age and a throwaway age key pair the
-# backups are encrypted to. The private key never leaves the container.
+# backups are encrypted to. The private key never leaves the container. Two marker
+# files let verify.yml tell the scopes apart: daemon state that only a full backup
+# may carry, and a cached blob that no backup may carry.
 - name: Stage the placeholder identity
   ansible.builtin.import_playbook: ../default/prepare.yml
 
-- name: Prepare an age key pair for the backup test
+- name: Prepare an age key pair and state markers for the backup test
   hosts: all
   become: true
   tasks:
@@ -18,3 +20,18 @@
       ansible.builtin.command:
         cmd: age-keygen -o /root/molecule-age.key
         creates: /root/molecule-age.key
+
+    - name: Create the cache directory
+      ansible.builtin.file:
+        path: /var/lib/decdn/cache
+        state: directory
+        mode: "0700"
+
+    - name: Stage daemon state and a cached blob
+      ansible.builtin.copy:
+        dest: "{{ item }}"
+        content: "molecule marker\n"
+        mode: "0600"
+      loop:
+        - /var/lib/decdn/molecule-state.redb
+        - /var/lib/decdn/cache/molecule-blob

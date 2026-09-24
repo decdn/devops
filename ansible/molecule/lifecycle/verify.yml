@@ -31,15 +31,17 @@
     - name: Find the archives on the host
       ansible.builtin.find:
         paths: /var/backups/decdn
-        patterns: "*.tar.age"
+        patterns: ["*.tar.age", "*.partial"]
       register: _archives
 
-    - name: Require one identity and one full archive, root-only
+    # One identity backup, two full ones (the plain one and leave_stopped); the
+    # failed run must have left nothing, not even a .partial.
+    - name: Require one identity and two full archives, root-only, no partials
       ansible.builtin.assert:
         that:
-          - _archives.files | length == 2
+          - _archives.files | map(attribute='path') | select('search', '\.partial$') | list | length == 0
           - _archives.files | map(attribute='path') | select('search', '-identity-') | list | length == 1
-          - _archives.files | map(attribute='path') | select('search', '-full-') | list | length == 1
+          - _archives.files | map(attribute='path') | select('search', '-full-') | list | length == 2
           - _archives.files | map(attribute='mode') | unique == ['0600']
         fail_msg: "Unexpected archives: {{ _archives.files | map(attribute='path') | list }}"
 
@@ -53,7 +55,7 @@
       register: _members
       changed_when: false
 
-    - name: Require the expected members
+    - name: Require each scope's members
       vars:
         _list: "{{ item.stdout_lines }}"
         _full: "{{ '-full-' in item.item.path }}"
@@ -63,23 +65,15 @@
           - "'var/lib/decdn/keystore.json' in _list"
           - "'etc/decdn/keystore.password' in _list"
           - "'etc/decdn/decdn.env' not in _list"
-          - (_list | select('match', '^var/lib/decdn/cache/') | list | length) == 0
-          - _full | bool or (_list | length == 3)
+          # The cache is in no backup ...
+          - _list | select('match', '^var/lib/decdn/cache/') | list | length == 0
+          # ... daemon state only in a full one, which is more than the identity.
+          - ('var/lib/decdn/molecule-state.redb' in _list) if _full | bool else (_list | length == 3)
+          - (_list | select('match', '^var/lib/decdn/') | list | length > 2) if _full | bool else true
         fail_msg: "{{ item.item.path | basename }} holds {{ _list }}"
       loop: "{{ _members.results }}"
       loop_control:
         label: "{{ item.item.path | basename }}"
-
-    - name: Checksum the fetched copies on the control machine
-      ansible.builtin.stat:
-        path: "{{ _local_dir }}/{{ item.path | basename }}"
-        checksum_algorithm: sha256
-      loop: "{{ _archives.files }}"
-      loop_control:
-        label: "{{ item.path | basename }}"
-      register: _local
-      delegate_to: localhost
-      become: false
 
     - name: Checksum the archives on the host
       ansible.builtin.stat:
@@ -90,13 +84,31 @@
         label: "{{ item.path | basename }}"
       register: _remote
 
-    - name: Require the fetched copies to match the host
+    - name: Checksum the copies on the control machine
+      ansible.builtin.stat:
+        path: "{{ _local_dir }}/{{ item.path | basename }}"
+        checksum_algorithm: sha256
+      loop: "{{ _archives.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: _local
+      delegate_to: localhost
+      become: false
+
+    # Identity archives are fetched by default; full ones are not (fetch would read
+    # them into memory on both ends).
+    - name: Require the identity archive fetched intact and full archives left on the host
+      vars:
+        _pairs: "{{ _remote.results | zip(_local.results) | list }}"
       ansible.builtin.assert:
         that:
-          - _local.results | map(attribute='stat.checksum') | list
-            == _remote.results | map(attribute='stat.checksum') | list
-          - _local.results | map(attribute='stat.exists') | unique == [true]
-        fail_msg: The encrypted archives on the control machine differ from the host's.
+          - >-
+            (item.1.stat.exists and item.1.stat.checksum == item.0.stat.checksum)
+            if '-identity-' in item.0.item.path else not item.1.stat.exists
+        fail_msg: "{{ item.0.item.path | basename }}: fetched copy wrong or unexpected."
+      loop: "{{ _pairs }}"
+      loop_control:
+        label: "{{ item.0.item.path | basename }}"
 
     # --- Decommission -----------------------------------------------------------------
     - name: Stat the unit and the identity
@@ -115,6 +127,21 @@
           - not _after.results[0].stat.exists
           - _after.results[1:] | map(attribute='stat.exists') | unique == [true]
         fail_msg: Decommission must remove the unit and keep node.secret, keystore.json and the password file.
+
+    - name: Stat the cache and the daemon state
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /var/lib/decdn/cache
+        - /var/lib/decdn/molecule-state.redb
+      register: _purge
+
+    - name: Require the cache purged and the rest of the data dir kept
+      ansible.builtin.assert:
+        that:
+          - not _purge.results[0].stat.exists
+          - _purge.results[1].stat.exists
+        fail_msg: decdn_decommission_purge_cache must delete the cache dir and nothing else.
 
     - name: Read service state
       ansible.builtin.service_facts:

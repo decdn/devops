@@ -2,14 +2,17 @@
 # Day-2 lifecycle, end to end against the stub daemon:
 #   1. converge decdn_node from a NETWORK PROFILE (decdn_network) plus one explicit
 #      address override, and prove the override wins and chain_id renders as an int;
-#   2. playbooks/backup.yml twice: an identity backup (hot) and a full one (stops
-#      the node, archives, restarts it), both encrypted on the host to a throwaway
-#      age key generated in prepare and fetched to the ephemeral dir;
-#   3. a decommission with the WRONG typed confirmation, which must fail without
-#      touching the host;
-#   4. playbooks/decommission.yml for real.
-# verify.yml decrypts both archives inside the container, checks their members and
-# the fetched copies' checksums, and that decommission removed the unit but kept the
+#   2. playbooks/backup.yml: an identity backup (hot, fetched) and a full one (the
+#      node is stopped for the copy and restarted: its InvocationID changes; not
+#      fetched by default), encrypted on the host to a throwaway age key;
+#   3. a full backup that fails at the archive step must restart the node and leave
+#      no .partial; one with decdn_backup_leave_stopped must leave it stopped;
+#   4. decommission must refuse two hosts, a missing confirmation and a wrong one,
+#      touching nothing; then playbooks/decommission.yml runs for real with a cache
+#      purge.
+# verify.yml decrypts every archive inside the container and checks each scope's
+# members (daemon state only in full, the cache in neither), the fetched copy's
+# checksum, and that decommission removed the unit and the cache but kept the
 # identity.
 #
 # No idempotence step: every backup run writes a new archive by design, and

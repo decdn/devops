@@ -24,17 +24,23 @@
       - decdn_decommission_max_hosts | int > 0
       - ansible_play_hosts_all | length <= decdn_decommission_max_hosts | int
       - decdn_decommission_purge_cache is boolean
+      - decdn_decommission_prompt_seconds | int > 0
     fail_msg: >-
       This run targets {{ ansible_play_hosts_all | length }} hosts
       ({{ ansible_play_hosts_all | sort | join(', ') }}), more than
       decdn_decommission_max_hosts ({{ decdn_decommission_max_hosts }}). Scope it
       with LIMIT, or raise decdn_decommission_max_hosts deliberately.
-      decdn_decommission_purge_cache must be a boolean.
+      decdn_decommission_purge_cache must be a boolean and
+      decdn_decommission_prompt_seconds a positive number of seconds.
+
+- name: Validate the lifecycle paths
+  ansible.builtin.import_tasks: validate-lifecycle-paths.yml
 
 # Typed confirmation (AGENTS.md hard rule 4). Interactive by default; a
 # non-interactive caller passes decdn_decommission_confirm explicitly. With no TTY
-# the prompt returns empty input, which fails the check below rather than
-# proceeding.
+# the prompt returns empty input, and an unanswered prompt times out after
+# decdn_decommission_prompt_seconds with empty input too; both fail the check below
+# rather than proceeding.
 - name: Ask for typed confirmation
   ansible.builtin.pause:
     prompt: >-
@@ -42,6 +48,8 @@
       {{ ansible_play_hosts_all | sort | join(',') }}.
       On-chain deregistration and unbonding are NOT done by this playbook.
       Type the host list above exactly to continue
+      (times out after {{ decdn_decommission_prompt_seconds }} s)
+    seconds: "{{ decdn_decommission_prompt_seconds | int }}"
   register: _decdn_decommission_typed
   run_once: true
   when: decdn_decommission_confirm is not defined
@@ -89,6 +97,10 @@
     msg:
       - "decdn-node is stopped and its unit removed on {{ inventory_hostname }}."
       - >-
+        A Grafana Alloy agent installed by this repo is removed separately:
+        playbooks/decommission.yml does it next; with the collection, include
+        grafana_alloy with decdn_grafana_cloud_enabled false.
+      - >-
         Kept: {{ decdn_home }} (node.secret, keystore.json{{ '' if decdn_decommission_purge_cache | bool
         else ', cache' }}), {{ decdn_etc }} and the binaries. Keep the keystore until
         the bond is withdrawn.
@@ -97,7 +109,8 @@
         `decdn node deregister` removes the node from the active set but does NOT
         return the bond, which stays deposited and slashable; then
         `decdn node unbond --all` starts the unbonding window; re-run it after the
-        window to withdraw (roles/decdn_node/README.md § On-chain onboarding).
+        window to withdraw. The CLI does not read decdn.env: pass the RPC URL with
+        --rpc-url, as in docs/lifecycle.md § Running on-chain commands.
       - >-
         The public udp/{{ decdn_bind_port }} firewall rule stays until you re-run
         baseline without it (e.g. after removing the host from decdn_nodes).

@@ -12,10 +12,11 @@
 #   identity  node.secret + keystore.json + the keystore password file. Taken hot:
 #             the daemon never rewrites them while running. Enough to bring the
 #             SAME on-chain identity up elsewhere.
-#   full      the whole data dir minus the cache, plus the password file. The
-#             daemon's redb stores (vouchers not yet redeemed live in them) are only
-#             consistent at rest, so the node is stopped for the copy and restarted
-#             afterwards if it was running. Use it before a host migration.
+#   full      the whole data dir minus the cache, plus the keystore (wherever it
+#             lives) and the password file. The daemon's redb stores (vouchers not
+#             yet redeemed live in them) are only consistent at rest, so the node is
+#             stopped for the copy and restarted afterwards if it was up. Use it
+#             before a host migration.
 
 - name: Refuse to take a backup in check mode
   ansible.builtin.assert:
@@ -31,6 +32,7 @@
       - decdn_backup_scope in ["identity", "full"]
       - decdn_backup_age_recipients is sequence
       - decdn_backup_age_recipients is not string
+      - decdn_backup_age_recipients is not mapping
       - decdn_backup_age_recipients | length > 0
       - >-
         decdn_backup_age_recipients
@@ -39,30 +41,40 @@
       - decdn_backup_include_env is boolean
       - decdn_backup_leave_stopped is boolean
       - decdn_backup_fetch is boolean
-      - decdn_backup_dir is match('^/[^\s]+$')
     fail_msg: >-
       decdn_backup_scope must be "identity" or "full". decdn_backup_age_recipients
       must be a non-empty LIST of public keys to encrypt to: age recipients
       (age1…, from `age-keygen -y`) or SSH public keys (ssh-ed25519 / ssh-rsa lines).
       Never a private key. decdn_backup_include_env, decdn_backup_leave_stopped and
-      decdn_backup_fetch must be booleans, decdn_backup_dir an absolute path.
+      decdn_backup_fetch must be booleans.
 
+- name: Validate the lifecycle paths
+  ansible.builtin.import_tasks: validate-lifecycle-paths.yml
+
+# The keystore is listed explicitly in both scopes: decdn_keystore_file may live
+# outside decdn_home, and a migration backup without the wallet strands the bond.
+# In the full scope it is only added when the data dir does not already cover it,
+# so tar does not store it twice.
 - name: Build the list of paths to archive
+  vars:
+    _keystore_in_home: "{{ decdn_keystore_file.startswith(decdn_home.rstrip('/') ~ '/') }}"
   ansible.builtin.set_fact:
     _decdn_backup_paths: >-
       {{ ([decdn_home ~ '/node.secret', decdn_keystore_file]
-          if decdn_backup_scope == 'identity' else [decdn_home])
+          if decdn_backup_scope == 'identity'
+          else [decdn_home] + ([] if _keystore_in_home | bool else [decdn_keystore_file]))
          + [decdn_keystore_password_file]
          + ([decdn_env_file] if decdn_backup_include_env | bool else []) }}
     _decdn_backup_file: >-
       {{ decdn_backup_dir }}/{{ inventory_hostname }}-{{ decdn_backup_scope }}-{{
          now(utc=true, fmt='%Y%m%dT%H%M%SZ') }}.tar.age
+    _decdn_backup_written: false
 
 - name: Check that every path to archive exists
   ansible.builtin.stat:
     path: "{{ item }}"
   register: _decdn_backup_stat
-  loop: "{{ _decdn_backup_paths }}"
+  loop: "{{ _decdn_backup_paths + [decdn_home ~ '/node.secret', decdn_keystore_file] }}"
 
 - name: Require every path to archive
   ansible.builtin.assert:
@@ -70,8 +82,8 @@
       - _decdn_backup_stat.results | rejectattr('stat.exists') | list | length == 0
     fail_msg: >-
       Missing on the host: {{ _decdn_backup_stat.results | rejectattr('stat.exists')
-      | map(attribute='item') | join(', ') }}. There is no identity to back up yet
-      (deploy and provision the keystore first), or a path variable does not match
+      | map(attribute='item') | unique | join(', ') }}. There is no identity to back up
+      yet (deploy and provision the keystore first), or a path variable does not match
       this host.
 
 - name: Install age
@@ -99,21 +111,37 @@
     group: root
     mode: "0600"
 
-- name: Record whether the node is running
-  ansible.builtin.service_facts:
+# The unit's ActiveState rather than service_facts: service_facts reports only the
+# "running" sub-state as running, so a Restart=always unit caught between restarts
+# (activating / auto-restart) would read as stopped and never be restarted.
+- name: Record whether the node is up
+  ansible.builtin.systemd_service:
+    name: decdn-node
+  register: _decdn_backup_active
+  failed_when: false
+
+- name: Decide whether to restart the node afterwards
+  ansible.builtin.set_fact:
+    _decdn_was_up: >-
+      {{ (_decdn_backup_active.status | default({})).get('ActiveState', '')
+         in ['active', 'activating', 'reloading'] }}
+
+- name: Check for the decdn-node unit
+  ansible.builtin.stat:
+    path: /etc/systemd/system/decdn-node.service
+  register: _decdn_backup_unit
 
 - name: Take the backup
-  vars:
-    _decdn_was_running: >-
-      {{ (ansible_facts.services['decdn-node.service'] | default({})).get('state', '') == 'running' }}
   block:
+    # Stopped whenever the unit exists, not only when it reads as up: a crash-looping
+    # node would otherwise be restarted by systemd mid-copy.
     - name: Stop the node for a consistent full backup
       ansible.builtin.systemd_service:
         name: decdn-node
         state: stopped
       when:
         - decdn_backup_scope == "full"
-        - _decdn_was_running | bool
+        - _decdn_backup_unit.stat.exists
 
     # tar reads the absolute paths relative to / (so a restore is `tar -C /`) and
     # stores numeric owners. The cache is excluded from a full backup: it is
@@ -132,15 +160,27 @@
           mv -- {{ (_decdn_backup_file ~ '.partial') | quote }} {{ _decdn_backup_file | quote }}
         executable: /bin/bash
       changed_when: true
+
+    - name: Mark the archive as written
+      ansible.builtin.set_fact:
+        _decdn_backup_written: true
   always:
+    - name: Remove a partial archive left by a failed run
+      ansible.builtin.file:
+        path: "{{ _decdn_backup_file }}.partial"
+        state: absent
+
+    # leave_stopped is honoured only when the archive was written: a failed backup
+    # must never leave the node down with nothing to show for it.
     - name: Restart the node after the full backup
       ansible.builtin.systemd_service:
         name: decdn-node
         state: started
       when:
         - decdn_backup_scope == "full"
-        - _decdn_was_running | bool
-        - not decdn_backup_leave_stopped | bool
+        - _decdn_backup_unit.stat.exists
+        - _decdn_was_up | bool
+        - not (decdn_backup_leave_stopped | bool and _decdn_backup_written | bool)
 
 - name: Checksum the archive
   ansible.builtin.stat:
@@ -148,6 +188,9 @@
     checksum_algorithm: sha256
   register: _decdn_backup_result
 
+# fetch is fine for identity archives (kilobytes). Under become it reads the whole
+# file into memory on both ends (base64, via slurp), so a full archive is not
+# fetched by default; the report prints a streaming copy command instead.
 - name: Create the local backup directory for this host
   ansible.builtin.file:
     path: "{{ decdn_backup_local_dir }}/{{ inventory_hostname }}"
@@ -171,8 +214,10 @@
       {{ decdn_backup_scope }} backup written to {{ _decdn_backup_file }}
       (sha256 {{ _decdn_backup_result.stat.checksum }}, {{ _decdn_backup_result.stat.size }} bytes)
       {{- (', fetched to ' ~ decdn_backup_local_dir ~ '/' ~ inventory_hostname ~ '/')
-          if decdn_backup_fetch | bool else '' }}.
+          if decdn_backup_fetch | bool
+          else ('. Not fetched; copy it off the host with: ssh ' ~ inventory_hostname
+                ~ ' sudo cat ' ~ _decdn_backup_file ~ ' > ' ~ (_decdn_backup_file | basename)) }}.
       Prove it restores before you rely on it:
       `age -d -i <your-identity> <file> | tar -tz`.
       {{- ' The node was left STOPPED (decdn_backup_leave_stopped).' if decdn_backup_scope == 'full'
-          and decdn_backup_leave_stopped | bool else '' }}
+          and decdn_backup_leave_stopped | bool and _decdn_was_up | bool else '' }}

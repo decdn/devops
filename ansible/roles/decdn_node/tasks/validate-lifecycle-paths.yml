@@ -1,0 +1,67 @@
+---
+# Path guards for the destructive lifecycle entry points (backup, decommission).
+# They run through tasks_from, so none of main.yml's asserts precede them, and they
+# act on paths an operator can override: backup excludes decdn_cache_dir from the
+# archive and makes decdn_backup_dir root-only; decommission can delete
+# decdn_cache_dir. A cache dir that equals or encloses the identity would empty
+# every backup and let the purge delete the keys that withdraw the bond, so refuse
+# those layouts before anything is touched. Same shape as grafana_alloy's
+# validate-paths.yml: segment checks, then `startswith` on '/'-terminated paths
+# (`a` encloses `b` when (b ~ '/').startswith(a ~ '/')).
+
+- name: Constrain the lifecycle paths (absolute, no traversal, no empty segments)
+  ansible.builtin.assert:
+    that:
+      - item.value is match('^/[A-Za-z0-9._/-]+$')
+      - "'.' not in item.value.split('/')"
+      - "'..' not in item.value.split('/')"
+      - "'' not in item.value.rstrip('/').split('/')[1:]"
+    quiet: true
+    fail_msg: >-
+      {{ item.name }} must be an absolute path whose segments use only
+      [A-Za-z0-9._-], with no '.', '..' or empty segments (got "{{ item.value }}").
+      Backup and decommission compare and delete these paths, so their shape is
+      enforced first.
+  loop:
+    - {name: decdn_home, value: "{{ decdn_home }}"}
+    - {name: decdn_etc, value: "{{ decdn_etc }}"}
+    - {name: decdn_cache_dir, value: "{{ decdn_cache_dir }}"}
+    - {name: decdn_keystore_file, value: "{{ decdn_keystore_file }}"}
+    - {name: decdn_keystore_password_file, value: "{{ decdn_keystore_password_file }}"}
+    - {name: decdn_backup_dir, value: "{{ decdn_backup_dir }}"}
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require the cache dir to hold no identity
+  ansible.builtin.assert:
+    that:
+      - not (item.rstrip('/') ~ '/').startswith(decdn_cache_dir.rstrip('/') ~ '/')
+    quiet: true
+    fail_msg: >-
+      decdn_cache_dir ({{ decdn_cache_dir }}) equals or encloses {{ item }}. The cache
+      is excluded from backups and deleted by decommission's cache purge, so it must
+      be a directory of its own, e.g. {{ decdn_home }}/cache.
+  loop:
+    - "{{ decdn_home }}"
+    - "{{ decdn_etc }}"
+    - "{{ decdn_home }}/node.secret"
+    - "{{ decdn_keystore_file }}"
+    - "{{ decdn_keystore_password_file }}"
+
+- name: Require the backup dir to stay clear of the node and system directories
+  vars:
+    _dir: "{{ decdn_backup_dir.rstrip('/') ~ '/' }}"
+  ansible.builtin.assert:
+    that:
+      - _dir not in ['/etc/', '/var/', '/var/lib/', '/usr/', '/root/', '/home/', '/opt/', '/srv/', '/boot/', '/tmp/']
+      # Not the data or config dir, nor anything enclosing them (the role makes it
+      # root 0700) ...
+      - not (decdn_home.rstrip('/') ~ '/').startswith(_dir)
+      - not (decdn_etc.rstrip('/') ~ '/').startswith(_dir)
+      # ... and not inside the data dir, or a full backup would archive itself.
+      - not _dir.startswith(decdn_home.rstrip('/') ~ '/')
+    quiet: true
+    fail_msg: >-
+      decdn_backup_dir ({{ decdn_backup_dir }}) must be a dedicated directory outside
+      {{ decdn_home }} and {{ decdn_etc }}, and not a system directory: the role makes
+      it root-only (0700) and writes archives into it. The default is /var/backups/decdn.

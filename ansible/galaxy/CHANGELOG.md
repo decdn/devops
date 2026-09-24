@@ -18,14 +18,19 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   the right release tarball and ELF check with no inventory change. An unsupported or
   mismatching triple fails loud.
 - `tasks_from: backup` (`decdn_backup_*`): tars the node's identity (hot) or its full
-  state minus the cache (stopping the node for the copy), encrypts it on the host to
-  `decdn_backup_age_recipients` (age or SSH public keys, required) and fetches only
-  the ciphertext.
-- `tasks_from: decommission` (`decdn_decommission_*`): typed confirmation, one host by
-  default, stops the node with systemctl and removes its unit, keeps the identity,
-  prints the on-chain exit steps.
-- Tested on Debian 13 and Ubuntu 24.04/26.04 (molecule `os-matrix`) as well as
-  Debian 12.
+  state minus the cache plus the keystore wherever it lives (stopping the node for the
+  copy and restarting it if it was up, even when the archive step fails), encrypts it
+  on the host to `decdn_backup_age_recipients` (age or SSH public keys, required), and
+  fetches the ciphertext of identity archives only (a full one would be read into
+  memory; the run prints a streaming copy command instead).
+- `tasks_from: decommission` (`decdn_decommission_*`): typed confirmation that fails
+  closed after `decdn_decommission_prompt_seconds`, one host by default, stops the
+  node with systemctl and removes its unit, optionally purges the cache, keeps the
+  identity, prints the on-chain exit steps.
+- Both lifecycle entry points refuse a `decdn_cache_dir` that equals or encloses the
+  identity and a `decdn_backup_dir` inside or around the node's directories.
+- `decdn_node` is tested on Debian 13 and Ubuntu 24.04/26.04 (molecule `os-matrix`)
+  as well as Debian 12; `grafana_alloy`'s install path still runs on Debian 12 only.
 
 - `grafana_alloy_api_token`: the Grafana Cloud API token may now come from a
   git-ignored `host_vars/<node>/secret.yml` instead of only being operator-

@@ -33,6 +33,11 @@
   hosts: all
   gather_facts: false
   tasks:
+    - name: Record the node's invocation before the full backup
+      ansible.builtin.systemd_service:
+        name: decdn-node
+      register: _molecule_inv_before
+
     - name: Select the full scope
       ansible.builtin.set_fact:
         decdn_backup_scope: full
@@ -40,18 +45,120 @@
 - name: Full backup
   ansible.builtin.import_playbook: ../../playbooks/backup.yml
 
-- name: Check the full backup restarted the node, and reject a wrong confirmation
+- name: Full-backup stop/restart, failure recovery and leave_stopped
   hosts: all
   become: true
   tasks:
-    - name: Read service state after the full backup
-      ansible.builtin.service_facts:
+    - name: Read the node's state after the full backup
+      ansible.builtin.systemd_service:
+        name: decdn-node
+      register: _molecule_inv_after
 
-    - name: Require decdn-node to be running again
+    - name: Require the node to have been stopped for the copy and started again
       ansible.builtin.assert:
         that:
-          - ansible_facts.services['decdn-node.service'].state == 'running'
-        fail_msg: The full backup stopped decdn-node and did not restart it.
+          - _molecule_inv_after.status.ActiveState == 'active'
+          - _molecule_inv_after.status.InvocationID != _molecule_inv_before.status.InvocationID
+        fail_msg: The full backup did not stop and restart decdn-node.
+
+    # A recipient that passes the role's shape check but that age rejects: the
+    # archive step fails after the node was stopped, and the always: block must
+    # restart it and remove the .partial.
+    - name: Full backup that fails at the archive step
+      block:
+        - name: Run a full backup with a recipient age rejects
+          ansible.builtin.include_role:
+            name: decdn_node
+            tasks_from: backup
+          vars:
+            decdn_backup_age_recipients: ["age1{{ 'q' * 58 }}"]
+        - name: Fail if the broken backup succeeded
+          ansible.builtin.fail:
+            msg: A backup with an unusable recipient reported success.
+      rescue:
+        - name: Require the archive step to be what failed
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name is match('^Write the encrypted archive')
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the archive step."
+
+    - name: Read the node's state after the failed backup
+      ansible.builtin.systemd_service:
+        name: decdn-node
+      register: _molecule_inv_failed
+
+    - name: Require the node to be back up after the failed backup
+      ansible.builtin.assert:
+        that:
+          - _molecule_inv_failed.status.ActiveState == 'active'
+          - _molecule_inv_failed.status.InvocationID != _molecule_inv_after.status.InvocationID
+        fail_msg: A failed full backup left decdn-node stopped (or never stopped it).
+
+    - name: Full backup that leaves the node stopped (host migration)
+      ansible.builtin.include_role:
+        name: decdn_node
+        tasks_from: backup
+      vars:
+        decdn_backup_leave_stopped: true
+
+    - name: Read the node's state after the leave_stopped backup
+      ansible.builtin.systemd_service:
+        name: decdn-node
+      register: _molecule_stopped
+
+    - name: Require the node to be stopped
+      ansible.builtin.assert:
+        that:
+          - _molecule_stopped.status.ActiveState != 'active'
+        fail_msg: decdn_backup_leave_stopped did not leave decdn-node stopped.
+
+- name: Decommission refuses more hosts than decdn_decommission_max_hosts
+  # localhost joins the play only to make it two hosts; the cap fails first.
+  hosts: decdn_nodes:localhost
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Decommission two hosts at once
+      block:
+        - name: Run decommission against two hosts
+          ansible.builtin.include_role:
+            name: decdn_node
+            tasks_from: decommission
+          vars:
+            decdn_decommission_confirm: "{{ ansible_play_hosts_all | sort | join(',') }}"
+        - name: Fail if decommission accepted two hosts
+          ansible.builtin.fail:
+            msg: decommission ran against more hosts than decdn_decommission_max_hosts.
+      rescue:
+        - name: Require the host cap to be what failed
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name is match('^Refuse to decommission more hosts')
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the host cap."
+
+- name: Decommission refuses a missing or wrong confirmation
+  hosts: all
+  become: true
+  tasks:
+    # Molecule has no TTY, and the 1 s timeout covers an interactive run: either way
+    # the prompt yields empty input, which must not count as confirmation.
+    - name: Decommission with no confirmation given
+      block:
+        - name: Run decommission without decdn_decommission_confirm
+          ansible.builtin.include_role:
+            name: decdn_node
+            tasks_from: decommission
+          vars:
+            decdn_decommission_prompt_seconds: 1
+        - name: Fail if decommission proceeded unconfirmed
+          ansible.builtin.fail:
+            msg: decommission proceeded without a typed confirmation.
+      rescue:
+        - name: Require the confirmation assert to be what failed (unconfirmed)
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name is match('^Require the typed confirmation')
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the confirmation check."
 
     - name: Decommission with the wrong confirmation
       block:
@@ -65,21 +172,22 @@
           ansible.builtin.fail:
             msg: decommission proceeded with a confirmation that did not match.
       rescue:
-        - name: Require the confirmation assert to be what failed
+        - name: Require the confirmation assert to be what failed (mistyped)
           ansible.builtin.assert:
             that:
               - ansible_failed_task.name is match('^Require the typed confirmation')
             fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the confirmation check."
 
-    - name: Require the unit to survive the rejected run
+    - name: Require the unit to survive the rejected runs
       ansible.builtin.stat:
         path: /etc/systemd/system/decdn-node.service
       register: _molecule_unit
       failed_when: not _molecule_unit.stat.exists
 
-    - name: Confirm the real decommission non-interactively
+    - name: Confirm the real decommission non-interactively, with a cache purge
       ansible.builtin.set_fact:
         decdn_decommission_confirm: "{{ ansible_play_hosts_all | sort | join(',') }}"
+        decdn_decommission_purge_cache: true
 
 - name: Decommission
   ansible.builtin.import_playbook: ../../playbooks/decommission.yml

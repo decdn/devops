@@ -419,7 +419,10 @@ decdn_backup_scope: identity        # "identity" (hot) | "full" (stops the node 
 decdn_backup_include_env: false     # also archive decdn.env (holds the RPC URL, maybe an API key)
 decdn_backup_leave_stopped: false   # "full": leave the node stopped afterwards (host migration)
 decdn_backup_dir: /var/backups/decdn   # on the host, root 0700
-decdn_backup_fetch: true            # copy the ENCRYPTED archive to the control machine
+# Copy the ENCRYPTED archive to the control machine. On for identity archives
+# (kilobytes); off for full ones, because fetch under become reads the whole file
+# into memory on both ends. The report prints a streaming `ssh … sudo cat` instead.
+decdn_backup_fetch: "{{ decdn_backup_scope == 'identity' }}"
 decdn_backup_local_dir: "{{ playbook_dir }}/../backups"   # control machine; git-ignored in this repo
 #
 # Decommission refuses to touch more hosts than this in one run. Its typed
@@ -427,3 +430,4 @@ decdn_backup_local_dir: "{{ playbook_dir }}/../backups"   # control machine; git
 # to the comma-joined, sorted host list (deliberately NOT defaulted here).
 decdn_decommission_max_hosts: 1
 decdn_decommission_purge_cache: false
+decdn_decommission_prompt_seconds: 300   # an unanswered confirmation prompt fails closed after this
