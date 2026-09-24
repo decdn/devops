@@ -29,7 +29,12 @@ decdn_release_target_dir: ""
 
 # --- Release to install (REQUIRED in "release" mode — a v<version> GitHub Release must exist) ---
 decdn_node_version: ""            # e.g. "0.1.1" (asserted non-empty in "release" mode)
-decdn_node_target: x86_64-unknown-linux-gnu
+# Release target triple. Derived from the host's gathered architecture (x86_64 or
+# aarch64, see vars/main/arch.yml), so arm64 hosts (Graviton, Ampere, Hetzner CAX)
+# get the aarch64 tarball with no inventory change. Needs facts: a play with
+# `gather_facts: false` must set this explicitly or gather `min`. The role fails
+# loud when it resolves to an unsupported value or disagrees with the host.
+decdn_node_target: "{{ _decdn_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
 decdn_node_release_base: "https://github.com/decdn/decdn/releases/download"
 # Release integrity. Upstream publishes a SHA256SUMS manifest covering every
 # archive, GPG-signed by a maintainer key from decdn/decdn's root KEYS file
@@ -42,10 +47,21 @@ decdn_verify_release_signature: true
 decdn_release_keyring: decdn-release-KEYS.asc
 
 # --- Identity / on-chain -----------------------------------------------------
-# The FOUR contract addresses and region are REQUIRED with no usable default
-# (empty → the asserts in tasks/main.yml fail loud). Supply via host_vars.
-# chain_id is the one exception: it defaults to the upstream binary's own default
-# (Arbitrum Sepolia) rather than being a deployment-specific fact to source.
+# Network profile. Set decdn_network to a chain upstream's `decdn config init
+# --chain <name>` knows (today only "arbitrum-sepolia") and chain_id plus every
+# contract address below default to that deployment's manifest values, mirrored
+# into vars/main/networks.yml by scripts/sync-network-profiles.py. Any address you
+# also set in inventory still wins (the role prints which ones differ). Leave it ""
+# to supply chain_id and the addresses yourself, e.g. for a private deployment.
+decdn_network: ""
+# The selected profile ({} when decdn_network is "" or unknown — the role asserts
+# the name before anything reads it). Internal: set decdn_network, not this.
+_decdn_profile: "{{ _decdn_network_profiles.get(decdn_network, {}) }}"
+#
+# Without a profile, the FOUR required contract addresses and region have no usable
+# default (empty → the asserts in tasks/main.yml fail loud). Supply via host_vars.
+# region is never in a profile: it is where the node is, not a chain fact.
+# chain_id falls back to the upstream binary's own default (Arbitrum Sepolia).
 #
 # rpc_url is required too, but has TWO sources. Leave it empty here and provision
 # a 0600 /etc/decdn/decdn.env on the target host instead (the preferred posture —
@@ -54,30 +70,32 @@ decdn_release_keyring: decdn-release-KEYS.asc
 # one. The role fails loud when NEITHER is present. See roles/decdn_node/README.md
 # ("Secrets") and roles/decdn_node/files/decdn.env.example.
 decdn_rpc_url: ""               # SENSITIVE; may embed an API key — or provision decdn.env on the host
-decdn_payment_pool_address: ""
-decdn_capacity_bond_address: ""
-decdn_slash_judge_address: ""
+decdn_payment_pool_address: "{{ _decdn_profile.get('payment_pool_address', '') }}"
+decdn_capacity_bond_address: "{{ _decdn_profile.get('capacity_bond_address', '') }}"
+decdn_slash_judge_address: "{{ _decdn_profile.get('slash_judge_address', '') }}"
 # REQUIRED (ADR 011/031). ContentBlacklist watcher — evicts blacklisted blobs in
 # your region scope. Upstream now refuses to resolve a config without it: an
 # absent or zero address is a fail-open compliance trap, and serving a
 # blacklisted hash past its compliance window is slashable.
-decdn_content_blacklist_address: ""
+decdn_content_blacklist_address: "{{ _decdn_profile.get('content_blacklist_address', '') }}"
 # Optional (ADR 028). SlashAppeal contract — only needed to file appeals with
-# `decdn appeal slash`; the daemon ignores it. Empty => key omitted from node.toml.
-decdn_slash_appeal_address: ""   # accepted but never read by the daemon; `decdn appeal slash` uses it
+# `decdn appeal slash`; the daemon accepts but never reads it. Empty => key
+# omitted from node.toml.
+decdn_slash_appeal_address: "{{ _decdn_profile.get('slash_appeal_address', '') }}"
 # Optional (ADR 022). Chain-backed origin directory. These are INDEPENDENTLY
 # optional upstream — the old "both or neither" rule is gone. The daemon reads
 # origin_assignment_address for cache-miss pull-through fallback; it only
 # validates publisher_registry_address, which `decdn publish` consumes.
 # Empty origin_assignment_address => the directory is empty (no authorized origins).
-decdn_origin_assignment_address: ""
-decdn_publisher_registry_address: ""
+decdn_origin_assignment_address: "{{ _decdn_profile.get('origin_assignment_address', '') }}"
+decdn_publisher_registry_address: "{{ _decdn_profile.get('publisher_registry_address', '') }}"
 # Origin-directory lookup cache ("" => daemon default).
 decdn_origin_directory_positive_ttl_sec: ""   # daemon dflt 300
 decdn_origin_directory_negative_ttl_sec: ""   # daemon dflt 30
 decdn_origin_directory_cache_capacity: ""     # daemon dflt 4096
 decdn_region: ""                # ISO 3166-1 alpha-2
-decdn_chain_id: 421614          # Arbitrum Sepolia (matches decdn-node's --chain-id default)
+# Arbitrum Sepolia (matches decdn-node's --chain-id default) unless a profile says otherwise.
+decdn_chain_id: "{{ _decdn_profile.get('chain_id', 421614) }}"
 
 # --- Network ------------------------------------------------------------------
 decdn_bind_port: 4433           # public QUIC (udp); opened in the baseline firewall
@@ -149,7 +167,7 @@ decdn_fee_shares_poll_interval_sec: ""   # daemon dflt 3600; > 0 — FeeRouter s
 # only `decdn setup` / `decdn pool` do. So nothing downstream catches a malformed
 # value, which is exactly why the role asserts its shape itself. (The former
 # decdn_swap_* knobs were removed upstream along with the on-chain swap path.)
-decdn_usdc_address: ""
+decdn_usdc_address: "{{ _decdn_profile.get('usdc_address', '') }}"
 
 # --- Cache --------------------------------------------------------------------
 decdn_cache_size_mb: 10240      # 10 GB
@@ -387,3 +405,29 @@ decdn_cli_bin: /usr/local/bin/decdn
 # deliveries (a money-losing cut), so prefer waiting over cutting. See
 # templates/decdn-node.service.j2.
 decdn_node_stop_timeout_sec: 300
+
+# --- Lifecycle: backup + decommission (tasks_from: backup / decommission) -------
+# Only read by those entry points (playbooks/backup.yml, playbooks/decommission.yml);
+# a normal deploy ignores them. See docs/lifecycle.md.
+#
+# Backups are encrypted on the host to these PUBLIC keys, so plaintext key material
+# never leaves the node: age recipients (age1…, `age-keygen -y key.txt`) and/or SSH
+# public keys (ssh-ed25519 / ssh-rsa lines). REQUIRED for a backup. Keep the matching
+# private keys somewhere other than the node and the control machine's repo.
+decdn_backup_age_recipients: []
+decdn_backup_scope: identity        # "identity" (hot) | "full" (stops the node for the copy)
+decdn_backup_include_env: false     # also archive decdn.env (holds the RPC URL, maybe an API key)
+decdn_backup_leave_stopped: false   # "full": leave the node stopped afterwards (host migration)
+decdn_backup_dir: /var/backups/decdn   # on the host, root 0700
+# Copy the ENCRYPTED archive to the control machine. On for identity archives
+# (kilobytes); off for full ones, because fetch under become reads the whole file
+# into memory on both ends. The report prints a streaming `ssh … sudo cat` instead.
+decdn_backup_fetch: "{{ decdn_backup_scope == 'identity' }}"
+decdn_backup_local_dir: "{{ playbook_dir }}/../backups"   # control machine; git-ignored in this repo
+#
+# Decommission refuses to touch more hosts than this in one run. Its typed
+# confirmation is interactive; a non-interactive run sets decdn_decommission_confirm
+# to the comma-joined, sorted host list (deliberately NOT defaulted here).
+decdn_decommission_max_hosts: 1
+decdn_decommission_purge_cache: false
+decdn_decommission_prompt_seconds: 300   # an unanswered confirmation prompt fails closed after this

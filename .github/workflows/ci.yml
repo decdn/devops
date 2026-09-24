@@ -18,7 +18,8 @@ concurrency:
 # malicious code — cf. the March 2026 KICS action compromise). The trailing
 # comment records the human-readable version; .github/dependabot.yml bumps them.
 jobs:
-  # Detect whether ansible/ or the Helm chart changed so heavy jobs skip unrelated PRs.
+  # Detect whether ansible/, the Helm chart or compose/ changed so heavy jobs skip
+  # unrelated PRs.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5          # ~5s in practice
@@ -28,6 +29,7 @@ jobs:
     outputs:
       ansible: ${{ steps.filter.outputs.ansible }}
       helm: ${{ steps.filter.outputs.helm }}
+      compose: ${{ steps.filter.outputs.compose }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -43,6 +45,11 @@ jobs:
             helm:
               - 'charts/**'
               - 'ansible/molecule/schema/files/**'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
+            # lint-compose and security-compose live in the root Makefile.
+            compose:
+              - 'compose/**'
               - 'Makefile'
               - '.github/workflows/ci.yml'
 
@@ -108,10 +115,14 @@ jobs:
           key: galaxy-${{ runner.os }}-${{ hashFiles('ansible/requirements.yml') }}
       - name: Lint (yamllint + ansible-lint)
         run: make lint
-      - name: Syntax-check playbook
+      - name: Syntax-check playbooks
         # Dummy inventory: no real hosts.yml is committed upstream (only hosts.yml.example),
-        # and --syntax-check only parses, it never connects.
-        run: ansible-playbook playbooks/site.yml --syntax-check -i localhost,
+        # and --syntax-check only parses, it never connects. Every playbook, so a new
+        # one (backup, decommission, ...) is covered without editing this step.
+        run: |
+          for pb in playbooks/*.yml; do
+            ansible-playbook "$pb" --syntax-check -i localhost,
+          done
 
   # Build the public `decdn.node` collection and run galaxy-importer's checks —
   # the same validation Galaxy runs on upload (metadata, license, README, embedded
@@ -175,7 +186,8 @@ jobs:
     timeout-minutes: 20         # pulls the kubeconform image; ~1m in practice
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Helm version is pinned here AND in the kics job below; bump both.
+      # Helm version is pinned here, in the kics job below and twice in release.yml;
+      # bump all four.
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.0
@@ -187,6 +199,20 @@ jobs:
         # the real `decdn config validate` step reports SKIPPED; run it locally with
         # DECDN_CLI=... before bumping the decdn version.
         run: make lint-helm
+
+  # Docker Compose path: render compose/compose.yaml with its example env files and
+  # assert the invariants its README promises (host network, no published ports,
+  # digest-pinned image, read-only rootfs, no capabilities, graceful stop). Runs
+  # only when compose/ or the root Makefile changed.
+  compose:
+    needs: changes
+    if: needs.changes.outputs.compose == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5          # docker compose + jq ship on ubuntu-latest; seconds in practice
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Compose invariants
+        run: make lint-compose
 
   # Render roles/grafana_alloy's templates and validate them with the REAL pinned
   # Grafana Alloy binary. The molecule `grafana-cloud` scenario deliberately runs
@@ -218,8 +244,9 @@ jobs:
       - name: Validate the rendered Alloy configuration
         run: make lint-alloy
 
-  # Dedicated IaC security scan of the Ansible tree and the rendered Helm chart, driven straight from the
-  # digest-pinned KICS *engine* image by `make security` — the exact command
+  # Dedicated IaC security scan of the Ansible tree, the rendered Helm chart and
+  # compose/, driven straight from the digest-pinned KICS *engine* image by
+  # `make security` — the exact command
   # developers run locally, so CI and local results cannot drift. KICS severities
   # are CRITICAL/HIGH/MEDIUM/LOW/INFO; the engine's own `--fail-on high` exit
   # code is the gate.
@@ -237,7 +264,9 @@ jobs:
   # hijacked action). See CONTRIBUTING.md.
   kics:
     needs: changes
-    if: needs.changes.outputs.ansible == 'true' || needs.changes.outputs.helm == 'true'
+    if: >-
+      needs.changes.outputs.ansible == 'true' || needs.changes.outputs.helm == 'true'
+      || needs.changes.outputs.compose == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20         # pulls the KICS engine image; ~30s in practice
     steps:
@@ -245,15 +274,15 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.0
-      - name: KICS security scan of ansible/ + the rendered chart (fail on HIGH)
+      - name: KICS security scan of ansible/, the rendered chart and compose/ (fail on HIGH)
         run: make security
       # Replaces the action's `enable_jobs_summary`.
       - name: Summarise KICS findings
         if: always()
         run: |
-          for scan in ansible helm; do
+          for scan in ansible helm compose; do
           results=kics-results/results.json
-          [ "$scan" = helm ] && results=kics-results/helm/results.json
+          [ "$scan" != ansible ] && results="kics-results/$scan/results.json"
           {
             echo "### KICS IaC scan ($scan)"
             echo
@@ -288,6 +317,41 @@ jobs:
       #   uses: github/codeql-action/upload-sarif@d77b13a0df3134d64a457ea9003f600b09fa1c8a # v3.36.1
       #   with:
       #     sarif_file: kics-results/results.sarif
+
+  # Every pre-commit hook on every file: hygiene, shellcheck, markdownlint and
+  # yamllint. The same gate `make lint` runs locally, so contributors who never
+  # installed the hook still meet it. The manual-stage ansible-lint hook is skipped
+  # (the ansible-lint job above covers it). Always runs: it is cheap and covers
+  # every path.
+  pre-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10         # hook environments are cached; ~1m cold
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install pre-commit
+        run: python -m pip install --upgrade pre-commit
+      # Hook environments (node for markdownlint, the shellcheck image, yamllint's
+      # virtualenv) keyed on the config that pins them.
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+      - name: Run every hook on every file
+        run: pre-commit run --all-files --show-diff-on-failure
+
+  # The repo's own guard rails: ansible/Makefile's scoping guards (dry runs), the
+  # release gate, and lint-compose's negative cases (tests/scripts-test.sh). Always
+  # runs: seconds, and it covers files every path filter above would miss.
+  scripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Script and guard tests
+        run: make test-scripts
 
   # Lint the workflow files themselves.
   actionlint:

@@ -1,0 +1,39 @@
+{{- /*
+Upstream's Grafana dashboards (files/monitoring/*.json, vendored by
+scripts/sync-monitoring.sh), one ConfigMap each, labelled for the Grafana sidecar
+(kube-prometheus-stack's grafana.sidecar.dashboards). The dashboards pick their
+datasources through DS_PROMETHEUS / DS_LOKI / DS_TEMPO template variables, so
+nothing is rewritten here. Dashboard uids are fixed upstream: enable this on ONE
+release per Grafana.
+*/}}
+{{- if .Values.metrics.grafanaDashboards.enabled }}
+{{- $cfg := .Values.metrics.grafanaDashboards }}
+{{- $dashboards := .Files.Glob "files/monitoring/*.json" }}
+{{- if not $dashboards }}
+{{- fail "metrics.grafanaDashboards.enabled, but files/monitoring/ holds no *.json dashboards; re-run scripts/sync-monitoring.sh" }}
+{{- end }}
+{{- range $path, $_ := $dashboards }}
+{{- $file := base $path }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  {{- /* No trunc 63: ConfigMap names may be 253 characters, and truncating the
+       suffix made dashboards collide once the fullname passed ~52 characters. */}}
+  name: {{ printf "%s-%s" (include "decdn-node.fullname" $) (trimSuffix ".json" $file) }}
+  {{- with $cfg.namespace }}
+  namespace: {{ . }}
+  {{- end }}
+  labels:
+    {{- include "decdn-node.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+    {{ $cfg.label }}: {{ $cfg.labelValue | quote }}
+  {{- with $cfg.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  {{ $file }}: |-
+    {{- $.Files.Get $path | nindent 4 }}
+{{- end }}
+{{- end }}

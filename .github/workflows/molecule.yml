@@ -23,10 +23,11 @@ concurrency:
 jobs:
   molecule:
     runs-on: ubuntu-latest      # Docker is preinstalled
-    # ~4m41s at JOBS=3. A bound, not a target: without one a wedged privileged
-    # systemd container burns the 360-minute default, and with cancel-in-progress
-    # above, some branch-protection setups read the resulting cancelled check as
-    # "not failed" rather than as a failure.
+    # ~4m41s at JOBS=3 with 8 scenarios. os-matrix (3 containers) and lifecycle took the
+    # suite to ~10m at JOBS=3 on a local 16-thread box; re-measure from CI's first run.
+    # A bound, not a target: without one a wedged privileged systemd container burns
+    # the 360-minute default, and with cancel-in-progress above, some branch-protection
+    # setups read the resulting cancelled check as "not failed" rather than as a failure.
     timeout-minutes: 45
     defaults:
       run:
@@ -66,8 +67,8 @@ jobs:
         # flaky galaxy.ansible.com, for no added coverage. The cache above wraps that
         # Make-owned invocation instead.
         #
-        # JOBS is capped at 3 rather than the default (one job per scenario, currently
-        # 7): every scenario is a privileged systemd container, and they share this
+        # JOBS is capped at 3 rather than the default (one job per scenario): every
+        # scenario is a privileged systemd container, and they share this
         # runner's cores and cgroup hierarchy. If this job turns flaky, drop to JOBS=1
         # or swap in `make molecule-serial` — the latter also serialises the output.
         run: make molecule JOBS=3

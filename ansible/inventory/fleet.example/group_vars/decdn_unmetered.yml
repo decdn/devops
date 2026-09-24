@@ -1,4 +1,0 @@
----
-# Unmetered nodes: flat-rate bandwidth, capped by port speed rather than billed per
-# TB. They take the hero and wow-factor traffic, so leave egress uncapped
-# (decdn_load_shed_egress_budget_mbps unset, the daemon default of no budget).

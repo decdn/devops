@@ -1,0 +1,26 @@
+---
+name: Feature request
+description: Something operators need from the deploy tooling.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The operator task, and where the current tooling gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?
+  - type: dropdown
+    id: path
+    attributes:
+      label: Deploy path
+      multiple: true
+      options:
+        - Ansible
+        - Helm chart
+        - Docker Compose
+        - All / not specific

@@ -1,0 +1,58 @@
+---
+# Day-2 lifecycle, end to end against the stub daemon:
+#   1. converge decdn_node from a NETWORK PROFILE (decdn_network) plus one explicit
+#      address override, and prove the override wins and chain_id renders as an int;
+#   2. playbooks/backup.yml: an identity backup (hot, fetched) and a full one (the
+#      node is stopped for the copy and restarted: its InvocationID changes; not
+#      fetched by default), encrypted on the host to a throwaway age key;
+#   3. a full backup that fails at the archive step must restart the node and leave
+#      no .partial; one with decdn_backup_leave_stopped must leave it stopped;
+#   4. decommission must refuse two hosts, a missing confirmation and a wrong one,
+#      touching nothing; then playbooks/decommission.yml runs for real with a cache
+#      purge.
+# verify.yml decrypts every archive inside the container and checks each scope's
+# members (daemon state only in full, the cache in neither), the fetched copy's
+# checksum, and that decommission removed the unit and the cache but kept the
+# identity.
+#
+# No idempotence step: every backup run writes a new archive by design, and
+# decommission is one-shot.
+driver:
+  name: docker
+platforms:
+  - name: decdn-node-lifecycle
+    # Same digest-pinned image as default (repo convention). Re-resolve together.
+    image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    # The lifecycle playbooks target decdn_nodes, like site.yml.
+    groups:
+      - decdn_nodes
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # See default/molecule.yml for why pipelining is on.
+    ANSIBLE_PIPELINING: "true"
+  inventory:
+    host_vars:
+      decdn-node-lifecycle:
+        # Fetched archives land in the scenario's ephemeral dir, never the repo, so
+        # parallel scenarios and repeat runs cannot collide.
+        decdn_backup_local_dir: "${MOLECULE_EPHEMERAL_DIRECTORY}/backups"
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    # Leading destroy: see default/molecule.yml.
+    - destroy
+    - create
+    - prepare
+    - converge
+    - verify
+    - destroy

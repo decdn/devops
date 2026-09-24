@@ -15,6 +15,9 @@
 **/cert.pem
 **/*.pem
 
+# Encrypted node backups (`make backup`); they belong with the operator, not in git
+*.tar.age
+
 # Local, per-developer Claude Code settings (not shared)
 .claude/settings.local.json
 
@@ -40,3 +43,7 @@ __pycache__/
 # Pinned third-party binaries downloaded by the test harnesses (`make lint-alloy`
 # caches the verified Grafana Alloy release here so repeat runs skip the fetch).
 ansible/.cache/
+
+# Release packaging output (the release workflow builds into dist/)
+dist/
+release-notes.md

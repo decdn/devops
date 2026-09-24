@@ -82,4 +82,12 @@ set `baseline_sudo_autodetect_runner: false` and list admins explicitly in that 
 
 ## Platforms
 
-Debian (bookworm), Ubuntu (jammy, noble).
+Debian 12 (bookworm) and 13 (trixie), Ubuntu 24.04 (noble) and 26.04 (resolute), on
+x86_64 or aarch64. Unlike `decdn_node`, which molecule converges on all four in
+containers (`grafana_alloy`'s install path runs on Debian 12 only), this role's
+hardening is **not container-testable** (only its admin-account tasks run there):
+nftables,
+DevSec `os_hardening`/`ssh_hardening` and fail2ban need a real machine. It is
+verified on real hosts (the deCDN team's own fleet runs Ubuntu 26.04) and with
+`make check` as a dry run. On Ubuntu 25.10+ note the sudo-rs become workaround in
+`inventory/hosts.yml.example`.

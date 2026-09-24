@@ -26,6 +26,15 @@ metrics:
             kubernetes.io/metadata.name: monitoring
   serviceMonitor:
     enabled: true
+    deploymentEnvironment: ci
+  prometheusRule:
+    enabled: true
+    ruleLabels:
+      team: node-ops
+      # Every vendored rule sets its own severity; it must win over this.
+      severity: overridden
+  grafanaDashboards:
+    enabled: true
 config:
   identity:
     region: DE

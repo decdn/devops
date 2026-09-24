@@ -15,7 +15,8 @@ default_install_hook_types: [pre-commit]
 exclude: >-
   (?x)^(
     ansible/collections/|
-    ansible/\.ansible/
+    ansible/\.ansible/|
+    charts/[^/]+/files/monitoring/[^/]+\.(json|ya?ml)$
   )
 
 repos:

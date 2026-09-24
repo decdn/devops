@@ -8,145 +8,110 @@
 [![shellcheck](https://img.shields.io/badge/shellcheck-passing-brightgreen)](https://www.shellcheck.net/)
 [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow.svg)](https://www.conventionalcommits.org)
 
-The official **DevOps repo** for deploying a deCDN node — infrastructure, deployment, and
-operational tooling: a declarative [Ansible](ansible/README.md) project for VMs and bare
-metal, and a [Helm chart](charts/decdn-node/README.md) for Kubernetes.
+The official **DevOps repo** for running a deCDN node: infrastructure, deployment and
+day-2 tooling for operators anywhere. Three ways to deploy the same node:
+
+| Path | For | Start here |
+|------|-----|------------|
+| **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published as the `decdn.node` Galaxy collection. | [`ansible/README.md`](ansible/README.md) |
+| **Docker Compose** (`compose/`) | One host that already runs Docker. | [`compose/README.md`](compose/README.md) |
+| **Helm** (`charts/decdn-node/`) | Kubernetes, one release per node. | [`charts/decdn-node/README.md`](charts/decdn-node/README.md) |
+
+Supported hosts: Debian 12/13 and Ubuntu 24.04/26.04 on x86_64 or aarch64. Network,
+disk and platform requirements, and how to choose a path:
+[`docs/requirements.md`](docs/requirements.md).
 
 This repo is **infrastructure only**. It is *not* a source of truth for protocol or
-economic facts (chain-id, token addresses, fee splits) — those trace to the deCDN ADRs.
-Anything here that states a protocol fact traces back to an ADR; nothing is invented in
-this repo.
+economic facts (chain-id, token addresses, fee splits): those trace to the deCDN ADRs
+and upstream's deployment manifests. Where this repo carries one (the contract addresses
+behind `decdn_network`), it is a generated mirror with its upstream commit recorded.
 
-## What it deploys
+## What every path gives you
 
-The same node, two ways:
+- **The node, hardened.** `decdn-node` as a non-root service with a minimal privilege
+  set: a hardened systemd unit, a locked-down container, or a restricted pod.
+- **One public port.** QUIC on **udp/4433**. Metrics (9090) and the admin RPC (9191)
+  stay on loopback (on Kubernetes, behind a ClusterIP Service and a NetworkPolicy).
+- **The right chain config.** Contract addresses come from upstream's deployment
+  manifest: `decdn_network: arbitrum-sepolia` on Ansible, `decdn config init --chain`
+  for Compose and Helm. Nothing is hand-copied.
+- **Signed installs.** Ansible verifies release tarballs against the GPG-signed
+  `SHA256SUMS`; Compose only takes the image by digest; Helm takes a digest
+  (recommended) or a tag.
+- **Monitoring.** Upstream's Grafana dashboards and alert rules, with the labels they
+  expect: opt-in Grafana Cloud shipping via `grafana_alloy` on Ansible, a
+  `ServiceMonitor` + `PrometheusRule` + dashboard ConfigMaps on Helm
+  ([`charts/decdn-node/files/monitoring/`](charts/decdn-node/files/monitoring/README.md)).
+- **Day 2.** Encrypted backups, restore and host migration, and a guarded
+  decommission: [`docs/lifecycle.md`](docs/lifecycle.md).
 
-| Path | Deploys | Exposure |
-|------|---------|----------|
-| **`ansible/playbooks/site.yml`** | A public **deCDN node** (`decdn-node`) — the product. Installed from a pinned GitHub release tarball under a hardened systemd unit, over a hardened host baseline. | Public QUIC **udp/4433** |
-| **`charts/decdn-node`** | The same node on Kubernetes: one-replica StatefulSet, PVC data dir, operator-provisioned Secrets, restricted pod security. | Public QUIC **udp/4433** (LoadBalancer/NodePort/hostPort); metrics ClusterIP + NetworkPolicy |
+On-chain stake and registration (ADR 019 Phase 2) is an **operator step** on every
+path: the node serves paid traffic only after it. Upstream's `decdn setup` walks it
+end to end (with `--dry-run`); this repo stops at host prep and startup.
 
-## Architecture
+## Quickstart (Ansible)
 
+```bash
+cd ansible
+make deps                                          # vendor pinned Galaxy collections
+cp inventory/hosts.yml.example inventory/hosts.yml
+$EDITOR inventory/hosts.yml                         # your hosts in decdn_nodes
+$EDITOR inventory/host_vars/decdn-node-1/main.yml   # binaries, region, origin; chain via decdn_network
+# RPC URL: provision 0600 /etc/decdn/decdn.env on the host (preferred), or secret.yml
+make check  LIMIT=decdn-node-1 ANSIBLE_ARGS='-u root'   # dry run; -u root only until the first converge
+make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='-u root'   # first converge creates your admin account
+make deploy LIMIT=decdn-node-1                          # every run after that
 ```
-baseline   host hardening — DevSec os/ssh, nftables default-deny inbound,
-           fail2ban, unattended-upgrades, chrony, an admin sudo user
-   │
-   └─ site.yml  → decdn-node      public QUIC udp/4433; metrics+admin loopback;
-                                  signed-tarball or local-build install;
-                                  hardened systemd unit
-```
 
-On-chain node stake + registration (ADR 019 Phase 2) is an **operator step**, not
-automated here — the node serves paid traffic only after it is staked and registered.
-Upstream's `decdn setup` walks that phase end to end (with `--dry-run`); this repo
-stops at host prep and startup.
+The full flow (bootstrap user, keystore, secrets, fleets in a private inventory) is in
+[`ansible/README.md`](ansible/README.md). Compose and Helm have their own quickstarts.
+
+## Security model
+
+This is the canonical statement; the per-path READMEs add only what is specific to them.
+
+- **Nothing secret is committed.** The eth keystore and the RPC URL (which may embed an
+  API key) are **generated on, or operator-provisioned to, the target** and live in
+  `0600` files readable only by whoever must read them: the service account for the
+  keystore and its password; the service account (Ansible) or root (Compose, where
+  Docker reads it before starting the container) for the RPC env file. On Kubernetes
+  they are operator-created Secrets the chart only references. The repo ships `*.example` templates for secret files only;
+  non-secret config such as `host_vars/<node>/main.yml` is committed. The `.gitignore`
+  is a backstop, not the mechanism. Backups are encrypted on the host to public keys
+  you choose.
+- **Localhost-only by default.** Backends bind `127.0.0.1`. A service that must accept
+  public traffic declares its port explicitly, and the node declares exactly one:
+  udp/4433. On Kubernetes, metrics bind `0.0.0.0` in the pod only behind a ClusterIP
+  Service and a NetworkPolicy.
+- **Default-deny inbound** (Ansible's `baseline`, nftables). SSH is the only
+  universally open port; extra public ports are declared via `baseline_extra_inbound`.
+- **DevSec host hardening** (`os_hardening` + `ssh_hardening`: key-only SSH, no root
+  login, kernel/sysctl/PAM hardening), applied last, after the admin key is in place, so
+  you can't lock yourself out.
+- **Pinned supply chain.** Release tarballs are GPG-verified; images, CI actions and
+  scanners are pinned by digest or commit SHA ([`SECURITY.md`](SECURITY.md),
+  [`CONTRIBUTING.md`](CONTRIBUTING.md#supply-chain--pinning-rules)).
 
 ## Repository layout
 
 | Path | What it is |
 |------|------------|
-| [`ansible/`](ansible/README.md) | The **declarative deployment project** — `inventory/`, `playbooks/`, `roles/` (baseline, decdn_node). The whole deploy surface lives here. |
-| [`charts/decdn-node/`](charts/decdn-node/README.md) | The **Helm chart** for running the node on Kubernetes. |
-| `Makefile` | Root hygiene/security/CI mirror — runs the same lint + IaC scans CI does. |
-| `ansible/Makefile` | The deploy driver — `make deps/check/deploy`. |
-| `.github/workflows/` | The blocking CI gate (`ansible-lint` + `helm` + KICS + `galaxy-build` + `molecule` + `actionlint`). |
+| [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
+| [`compose/`](compose/README.md) | The Docker Compose deploy path. |
+| [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart, with vendored dashboards and alert rules in `files/monitoring/`. |
+| [`docs/`](docs/requirements.md) | Cross-path operator docs: requirements, lifecycle. |
+| `scripts/` | Generators for the upstream mirrors (network profiles, monitoring) and the release gate. |
+| `Makefile` | Lint, test and security targets; CI runs the same ones. `make help` lists them. |
+| `.github/workflows/` | CI (`ci.yml`, `molecule.yml`), releases (`release.yml`), the weekly upstream drift check. |
 
-## Quickstart
+## Contributing and releases
 
-```bash
-cd ansible
-make deps                                      # vendor pinned Galaxy collections into ./collections
-cp inventory/hosts.yml.example inventory/hosts.yml
-$EDITOR inventory/hosts.yml                     # set hosts for decdn_nodes
-$EDITOR inventory/group_vars/all.yml            # optional: add admins to baseline_sudo_users (runner is auto-detected)
-cp inventory/host_vars/decdn-node-1/secret.yml.example inventory/host_vars/decdn-node-1/secret.yml
-$EDITOR inventory/host_vars/decdn-node-1/secret.yml   # set decdn_rpc_url (per-node config is in main.yml)
-make check                                     # dry run (--check --diff)
-make deploy                                    # provision the deCDN node
-```
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): local checks, every `make` target, what CI runs,
+  and the pinning rules.
+- [`RELEASING.md`](RELEASING.md): how a `vX.Y.Z` tag publishes the collection and the chart.
+- [`AGENTS.md`](AGENTS.md): the repo's hard rules (for humans and AI agents).
+- [`SECURITY.md`](SECURITY.md): reporting a vulnerability, verifying releases.
 
-See [`ansible/README.md`](ansible/README.md) for the full setup and the deCDN-node
-prerequisites (release tarball, per-node `host_vars`, operator-provisioned eth keystore).
-
-On Kubernetes, create the keystore and RPC Secrets out of band, then install the chart
-(see [`charts/decdn-node/README.md`](charts/decdn-node/README.md)):
-
-```bash
-helm install decdn-node-1 charts/decdn-node -n decdn -f values-node-1.yaml
-```
-
-## Security model
-
-- **Nothing secret is committed.** The eth keystore and `rpc_url` (which may embed an API
-  key) are **generated on — or operator-provisioned to — the target host**, never the repo.
-  Ansible roles render them on the host (`no_log`, `0600`); the repo ships a `*.example`
-  template for the one node secret (`rpc_url`) plus a `hosts.yml.example` starter, and commits
-  non-secret per-node config directly (`host_vars/<node>/main.yml`), with the root `.gitignore`
-  as a backstop.
-- **Localhost-only by default.** Backends bind `127.0.0.1`; a service that must accept
-  public traffic declares its port explicitly. The node host opens one extra hole
-  (udp/4433 QUIC); everything else (node metrics 9090, admin RPC 9191) stays loopback.
-- **Default-deny inbound (nftables).** SSH is the only universally-open port; extra public
-  ports are declared explicitly via `baseline_extra_inbound`.
-- **DevSec host hardening.** `os_hardening` + `ssh_hardening` (key-only SSH, no root login,
-  kernel/sysctl/PAM hardening) — applied last, after the admin key is in place, so you
-  can't lock yourself out.
-
-## Commands
-
-Two Makefiles, two jobs. The **root** Makefile mirrors CI's hygiene/security gates; the
-**`ansible/`** Makefile drives deploys (run its targets from `ansible/`).
-
-```bash
-# Root — lint & security (mirror CI)
-make hooks            # one-time: install the pre-commit git hook (pip install pre-commit first)
-make lint             # all pre-commit hooks on all files (hygiene, shellcheck, yamllint, markdown)
-make lint-ansible     # vendor collections + full ansible-lint (production profile)
-make lint-helm        # chart: helm lint + render tests + kubeconform + schema keys
-make lint-alloy       # grafana_alloy: render its templates, validate with the real Alloy binary
-make security         # KICS IaC scan of ansible/ + the rendered chart (pinned engine image)
-
-# Ansible deploys — run from ansible/
-cd ansible
-make deps                         # vendor pinned Galaxy collections into ./collections
-make check / deploy               # deCDN node (site.yml): dry-run / provision
-                                  # fleet-wide by default; LIMIT=<host> scopes, ANSIBLE_ARGS='…' passes through
-```
-
-**Gotcha — pre-commit is local-only.** Hygiene/shellcheck/yamllint/markdown run via
-`make hooks`/`make lint` on your machine, **not** in CI. The blocking gate is
-`.github/workflows/` (`ansible-lint` + KICS + `galaxy-build` + `molecule` on `ansible/**`,
-`helm` + KICS on `charts/**` and the shared schema checker, plus `actionlint`). `ansible-lint`
-is not a per-commit hook (it needs collections vendored) — run `make lint-ansible`.
-
-## CI & quality gates
-
-- **`ci.yml`** — path-filtered so heavy jobs skip unrelated PRs: `ansible-lint` (production
-  profile + playbook syntax-check), a `galaxy-build` readiness gate (builds the `decdn.node`
-  collection and runs galaxy-importer's checks), an `alloy-config` job (`make lint-alloy`: renders
-  the `grafana_alloy` templates and runs the real digest-pinned Alloy binary's `alloy validate`
-  over them — the molecule stub cannot), a `helm` job (`make lint-helm`: strict lint,
-  positive/negative render tests, kubeconform, and the upstream schema-key check shared with
-  molecule), **KICS** IaC scan of `ansible/` and the rendered chart (fail on HIGH), and
-  `actionlint` on the workflows themselves. The KICS engine is pinned by digest and every
-  third-party action by full commit SHA (a re-pointed tag can ship malicious code).
-- **`molecule.yml`** — a containerised converge + idempotence + verify of the `decdn_node`
-  role in a privileged systemd Docker container (scoped to `ansible/**` changes).
-
-## Conventions & source of truth
-
-- **ADRs are the only source of truth for protocol facts.** The deCDN ADRs cover, e.g.,
-  payments (ADR 003), node onboarding (ADR 019), and tokenomics (ADR 026). If a doc here
-  contradicts an ADR, fix the doc.
-- **Role templates render to their target paths.** Ansible roles template config directly
-  onto the host (e.g. `roles/decdn_node/templates/decdn-node.service.j2` →
-  `/etc/systemd/system/`), with secrets generated on the host at `0600`.
-
-## Further reading
-
-- [`ansible/README.md`](ansible/README.md) — full setup, security model, and deploy steps
-- [`ansible/roles/decdn_node/README.md`](ansible/roles/decdn_node/README.md) — the deCDN node role
-- [`charts/decdn-node/README.md`](charts/decdn-node/README.md) — the Helm chart
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — the local + CI check workflow
-- [`AGENTS.md`](AGENTS.md) — repo hard rules and conventions (for humans and AI agents)
+Conventions: commits follow Conventional Commits. The deCDN ADRs are the only source
+of truth for protocol facts (payments ADR 003, node onboarding ADR 019, tokenomics
+ADR 026); if a doc here contradicts an ADR, fix the doc.

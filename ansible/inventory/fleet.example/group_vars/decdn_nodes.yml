@@ -1,59 +1,34 @@
 ---
-# Settings shared by every launch node. Copied with the overlay; edit the private copy.
+# Settings shared by every node in the fleet. Copied with the overlay; edit the
+# private copy. Per-host differences go in host_vars/<host>/main.yml.
 
 # --- Binaries -----------------------------------------------------------------
-# Until upstream tags v0.1.0, install locally built binaries. Build them from a
-# decdn/decdn checkout on the release commit:
+# Until upstream tags a release, install locally built binaries. Build them from a
+# decdn/decdn checkout (cross-compile for aarch64 hosts; the role derives each
+# host's target from its architecture and checks the ELF before shipping):
 #   cargo build --release -p decdn-node -p decdn-cli
 decdn_node_install_method: manual
 decdn_release_target_dir: ""        # MUST-EDIT - control-machine path to decdn's target/release
-# Once the v0.1.0 release exists (Launch/release-checklist.md §1), switch to the
-# GPG-verified tarballs and drop the two lines above:
+# Once a release exists, switch to the GPG-verified tarballs and drop the two
+# lines above:
 # decdn_node_install_method: release
-# decdn_node_version: "0.1.0"
+# decdn_node_version: "X.Y.Z"
 
-# --- Contracts (Arbitrum Sepolia, 421614) ----------------------------------------
-# Protocol facts. Copy them VERBATIM from the upstream deployment manifest
-# decdn/contracts/deployments/421614.json. The public repo's
-# inventory/host_vars/decdn-node-1/main.yml carries the current copy with its sync
-# note. Never guess. Upstream redeploys change every address at once.
-decdn_chain_id: 421614
-decdn_payment_pool_address: ""        # MUST-EDIT
-decdn_capacity_bond_address: ""       # MUST-EDIT
-decdn_slash_judge_address: ""         # MUST-EDIT
-decdn_content_blacklist_address: ""   # MUST-EDIT
-decdn_slash_appeal_address: ""
-decdn_origin_assignment_address: ""
-decdn_publisher_registry_address: ""
-decdn_usdc_address: ""
+# --- Chain --------------------------------------------------------------------
+# Chain id and every contract address come from the role's mirror of upstream's
+# deployment manifest (roles/decdn_node/README.md § Network profiles). Nothing to
+# copy by hand, and an upstream redeploy is a role update, not an inventory edit.
+decdn_network: arbitrum-sepolia
 
-# --- Cache sizing for the launch model catalogue ---------------------------------
-# `decdn origin import` stores every file as ONE whole-file blob (--optimize only
-# adds chunk hints to the manifest), and a node rejects any blob over
-# max_blob_size_mb with BlobTooLarge on pull-through. The role default (1024) is far
-# too small for model weights. Measured from the Hugging Face file trees on
-# 2026-09-22 for the seed-model.sh set (whole repos, as that script downloads them):
-#   largest single file: 13.5 GiB  Mistral-7B-Instruct-v0.3 consolidated.safetensors
-#                        12.8 GiB  gpt-oss-20b original/model.safetensors
-#                        11.3 GiB  Mixtral-8x7B consolidated.02.pt
-#                         9.6 GiB  SDXL unet (fp32)
-#   whole set: ~352 GiB (Mixtral alone ~177 GiB)
-# Re-measure if the seed list or its --exclude patterns change.
-decdn_max_blob_size_mb: 16384         # 16 GiB: largest file 13.5 GiB, plus headroom
-# Must hold the catalogue you expect a node to serve, plus room for LRU churn, and
-# must be >= max_blob_size_mb. The daemon also keeps decdn_disk_headroom_mb (default
-# 8 GiB) free on the volume. Size it to each host's disk: 400 GiB covers the whole
-# set above. Override per host in host_vars if disks differ.
-decdn_cache_size_mb: 409600           # 400 GiB
-
-# --- Pinning the catalogue --------------------------------------------------------
-# Eviction-exempt pins. Fill these after seeding: the lowercase 64-hex BLAKE3 hashes
-# `decdn origin import` prints for each model's bundle manifest AND its large blobs.
-# A pin only stops eviction. The node still has to fetch the blob once before it
-# holds it.
-decdn_pinned_hashes: []
+# --- Cache sizing ---------------------------------------------------------------
+# Size to each host's disk and to the largest object you expect to serve; see
+# docs/requirements.md for the disk formula. A node rejects any blob larger than
+# decdn_max_blob_size_mb with BlobTooLarge, and decdn_cache_size_mb must be at
+# least that. Override per host in host_vars when disks differ.
+# decdn_max_blob_size_mb: 1024      # role default
+# decdn_cache_size_mb: 10240        # role default (10 GiB)
 
 # --- Observability ----------------------------------------------------------------
-# Recommended for launch: live metrics + journald per node (egress, errors).
-# Provision the token first (roles/grafana_alloy/README.md).
+# Opt-in Grafana Cloud metrics + journald per node. Provision the token first
+# (roles/grafana_alloy/README.md).
 # decdn_grafana_cloud_enabled: true

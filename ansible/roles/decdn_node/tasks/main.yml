@@ -40,6 +40,39 @@
       it off means the tarballs are taken on trust.
   when: decdn_node_install_method == "release"
 
+# The target triple picks the release tarball and, in manual dir-mode, the ELF
+# architecture the binaries must match. It is derived from gathered facts by
+# default; an explicit value that disagrees with the host would install binaries
+# the node cannot exec, so both cases are checked before anything is fetched.
+# Explicit *_manual_bin_src paths never consult the triple, so they skip this.
+- name: Resolve the node target triple
+  when: >-
+    decdn_node_install_method == "release"
+    or (decdn_release_target_dir | length > 0
+        and not (decdn_node_manual_bin_src | length > 0 and decdn_cli_manual_bin_src | length > 0))
+  block:
+    - name: Require a supported target triple
+      ansible.builtin.assert:
+        that:
+          - decdn_node_target in _decdn_arch_targets.values()
+        fail_msg: >-
+          decdn_node_target resolved to "{{ decdn_node_target }}", which is not one of
+          the Linux targets upstream releases ({{ _decdn_arch_targets.values() | join(', ') }}).
+          It is derived from the host's gathered architecture
+          ("{{ ansible_facts.get('architecture', 'not gathered') }}"): gather facts
+          (gather_subset: [min] is enough) or set decdn_node_target explicitly.
+
+    - name: Require the target triple to match the host architecture
+      ansible.builtin.assert:
+        that:
+          - _decdn_arch_targets[ansible_facts['architecture']] == decdn_node_target
+        fail_msg: >-
+          decdn_node_target is {{ decdn_node_target }}, but this host is
+          {{ ansible_facts['architecture'] }} and needs
+          {{ _decdn_arch_targets[ansible_facts['architecture']] }}. Drop the explicit
+          decdn_node_target (it is derived from the host) or fix it for this host.
+      when: ansible_facts.get('architecture', '') in _decdn_arch_targets
+
 # Resolve + validate the manual binary sources on the CONTROL MACHINE before they
 # are copied to the node. Two ways to point at them, in precedence order:
 #   1. both explicit *_manual_bin_src paths — the escape hatch, copied verbatim and
@@ -191,10 +224,9 @@
       loop_control:
         label: "{{ item.item }}"
       vars:
-        _decdn_arch_file_tokens:
-          x86_64-unknown-linux-gnu: x86-64
-          aarch64-unknown-linux-gnu: aarch64
-        _decdn_expect_arch: "{{ _decdn_arch_file_tokens[decdn_node_target] | default('x86-64') }}"
+        # Keyed lookup with no fallback: "Resolve the node target triple" above has
+        # already proved decdn_node_target is one of the map's keys.
+        _decdn_expect_arch: "{{ _decdn_arch_file_tokens[decdn_node_target] }}"
       when: _decdn_use_dir | bool
 
 - name: Validate decdn_node_generate_keystore is a real boolean
@@ -254,6 +286,49 @@
       {{ ((decdn_env_recorded.content | default('') | b64decode | trim).split() | length == 2)
          | ternary((decdn_env_recorded.content | default('') | b64decode | trim).split()[1], '') }}
 
+# Network profile (decdn_network). The profile only supplies defaults, so these
+# checks run before the address asserts below: an unknown name would otherwise
+# surface as "addresses missing", and an inventory chain_id pointing at another
+# chain would silently pair that chain with this profile's addresses.
+- name: Require a known decdn_network
+  ansible.builtin.assert:
+    that:
+      - decdn_network == "" or decdn_network in _decdn_network_profiles
+    fail_msg: >-
+      decdn_network "{{ decdn_network }}" is not a known network. Known:
+      {{ _decdn_network_profiles.keys() | join(', ') }} (the chains upstream's
+      `decdn config init --chain` supports). Leave it "" to set chain_id and the
+      contract addresses yourself.
+
+- name: Check inventory values against the network profile
+  when: decdn_network | length > 0
+  block:
+    - name: Require chain_id to match the network profile
+      ansible.builtin.assert:
+        that:
+          - decdn_chain_id | int == _decdn_profile.chain_id | int
+        fail_msg: >-
+          decdn_chain_id is {{ decdn_chain_id }}, but decdn_network "{{ decdn_network }}"
+          is chain {{ _decdn_profile.chain_id }}. Drop decdn_chain_id from inventory (the
+          profile supplies it) or clear decdn_network.
+
+    - name: Report contract addresses overridden in inventory
+      ansible.builtin.debug:
+        msg: >-
+          decdn_network "{{ decdn_network }}" is in use, but inventory overrides
+          {{ _decdn_diff | join(', ') }}. Those values win over the profile; make sure
+          that is deliberate (a stale hand-copied address is the usual cause).
+      vars:
+        _decdn_diff: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for k, v in _decdn_profile.items() if k is match('.*_address$') -%}
+          {%- if (lookup('ansible.builtin.vars', 'decdn_' ~ k) | lower) != (v | lower) -%}
+          {%- set ns.out = ns.out + ['decdn_' ~ k] -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ ns.out }}
+      when: _decdn_diff | length > 0
+
 - name: Require chain + contract configuration
   ansible.builtin.assert:
     that:
@@ -275,7 +350,9 @@
       ContentBlacklist, because an absent or zero address is a fail-open compliance
       trap — serving a blacklisted hash past its window is slashable. Source
       chain-id + contract addresses from the deCDN contract deployment manifest
-      (decdn/contracts/deployments/<chainId>.json) — never guess. Set them in host_vars.
+      (contracts/deployments/<chainId>.json in decdn/decdn) — never guess — or set
+      decdn_network (e.g. "arbitrum-sepolia") to take them from the role's mirror of
+      that manifest.
   vars:
     decdn_zero_address: "0x0000000000000000000000000000000000000000"
 

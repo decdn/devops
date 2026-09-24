@@ -8,11 +8,23 @@
 #     testing) straight to /usr/local/bin/alloy. No package is created.
 
 # Map Ansible's machine facts onto Debian arch names used by the asset set
-# (alloy-<version>-1.<arch>.deb). Unsupported architectures fail loud here so an
-# operator gets a clear message instead of a 404 mid-play.
+# (alloy-<version>-1.<arch>.deb). Unsupported architectures (or a play that did
+# not gather facts) fail loud below, so an operator gets a clear message instead
+# of a 404 mid-play.
 - name: Resolve the Debian package architecture
   ansible.builtin.set_fact:
-    _ga_deb_arch: "{{ ({'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] | default('unsupported')) }}"
+    _ga_deb_arch: >-
+      {{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(ansible_facts.get('architecture', ''), 'unsupported') }}
+
+- name: Require a supported host architecture for the Alloy package
+  ansible.builtin.assert:
+    that:
+      - _ga_deb_arch != "unsupported"
+    fail_msg: >-
+      Grafana Alloy ships .deb packages for x86_64 and aarch64 only; this host reports
+      "{{ ansible_facts.get('architecture', 'not gathered') }}". Gather facts
+      (gather_subset: [min] is enough), or use grafana_alloy_install_method "manual".
+  when: grafana_alloy_install_method == "release"
 
 - name: Name the .deb asset for this architecture
   # Reusable across the download + install tasks below.

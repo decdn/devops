@@ -1,0 +1,116 @@
+---
+# Take a node out of service: `include_role: {name: decdn_node, tasks_from:
+# decommission}` (playbooks/decommission.yml, `make decommission LIMIT=<host>`).
+#
+# What it does: stop the daemon, disable and remove its systemd unit, and
+# (opt-in) purge the cache. What it deliberately KEEPS: the identity (node.secret,
+# keystore.json, the password file), /etc/decdn and the binaries. The eth keystore
+# is what withdraws the bond after the unbonding window, so deleting it here would
+# strand the stake; remove it by hand once the withdrawal has landed.
+#
+# It does NOT touch the chain. Deregistering and unbonding are operator steps with
+# the decdn CLI; the final task prints them. Stop with systemctl, never `decdn node
+# drain`: the unit is Restart=always, so a drained daemon is simply restarted.
+
+- name: Refuse to decommission in check mode
+  ansible.builtin.assert:
+    that:
+      - not ansible_check_mode
+    fail_msg: Decommissioning has no dry run; run it without --check once you mean it.
+
+- name: Refuse to decommission more hosts than allowed at once
+  ansible.builtin.assert:
+    that:
+      - decdn_decommission_max_hosts | int > 0
+      - ansible_play_hosts_all | length <= decdn_decommission_max_hosts | int
+      - decdn_decommission_purge_cache is boolean
+      - decdn_decommission_prompt_seconds | int > 0
+    fail_msg: >-
+      This run targets {{ ansible_play_hosts_all | length }} hosts
+      ({{ ansible_play_hosts_all | sort | join(', ') }}), more than
+      decdn_decommission_max_hosts ({{ decdn_decommission_max_hosts }}). Scope it
+      with LIMIT, or raise decdn_decommission_max_hosts deliberately.
+      decdn_decommission_purge_cache must be a boolean and
+      decdn_decommission_prompt_seconds a positive number of seconds.
+
+- name: Validate the lifecycle paths
+  ansible.builtin.import_tasks: validate-lifecycle-paths.yml
+
+# Typed confirmation (AGENTS.md hard rule 4). Interactive by default; a
+# non-interactive caller passes decdn_decommission_confirm explicitly. With no TTY
+# the prompt returns empty input, and an unanswered prompt times out after
+# decdn_decommission_prompt_seconds with empty input too; both fail the check below
+# rather than proceeding.
+- name: Ask for typed confirmation
+  ansible.builtin.pause:
+    prompt: >-
+      About to STOP decdn-node and REMOVE its systemd unit on:
+      {{ ansible_play_hosts_all | sort | join(',') }}.
+      On-chain deregistration and unbonding are NOT done by this playbook.
+      Type the host list above exactly to continue
+      (times out after {{ decdn_decommission_prompt_seconds }} s)
+    seconds: "{{ decdn_decommission_prompt_seconds | int }}"
+  register: _decdn_decommission_typed
+  run_once: true
+  when: decdn_decommission_confirm is not defined
+
+- name: Require the typed confirmation to match the targeted hosts
+  ansible.builtin.assert:
+    that:
+      - (decdn_decommission_confirm | default(_decdn_decommission_typed.user_input | default('')) | trim)
+        == (ansible_play_hosts_all | sort | join(','))
+    fail_msg: >-
+      Confirmation did not match "{{ ansible_play_hosts_all | sort | join(',') }}".
+      Nothing was changed.
+
+- name: Check for the decdn-node unit
+  ansible.builtin.stat:
+    path: /etc/systemd/system/decdn-node.service
+  register: _decdn_decommission_unit
+
+# SIGTERM runs the daemon's graceful shutdown (the same path `decdn node drain`
+# takes); systemd waits up to decdn_node_stop_timeout_sec before escalating.
+- name: Stop and disable decdn-node
+  ansible.builtin.systemd_service:
+    name: decdn-node
+    state: stopped
+    enabled: false
+  when: _decdn_decommission_unit.stat.exists
+
+- name: Remove the decdn-node unit
+  ansible.builtin.file:
+    path: /etc/systemd/system/decdn-node.service
+    state: absent
+  notify: Reload systemd
+
+- name: Apply the systemd reload now
+  ansible.builtin.meta: flush_handlers
+
+- name: Purge the cache
+  ansible.builtin.file:
+    path: "{{ decdn_cache_dir }}"
+    state: absent
+  when: decdn_decommission_purge_cache | bool
+
+- name: Report what is left to do
+  ansible.builtin.debug:
+    msg:
+      - "decdn-node is stopped and its unit removed on {{ inventory_hostname }}."
+      - >-
+        A Grafana Alloy agent installed by this repo is removed separately:
+        playbooks/decommission.yml does it next; with the collection, include
+        grafana_alloy with decdn_grafana_cloud_enabled false.
+      - >-
+        Kept: {{ decdn_home }} (node.secret, keystore.json{{ '' if decdn_decommission_purge_cache | bool
+        else ', cache' }}), {{ decdn_etc }} and the binaries. Keep the keystore until
+        the bond is withdrawn.
+      - >-
+        On-chain, with the decdn CLI on this host (each takes --dry-run first):
+        `decdn node deregister` removes the node from the active set but does NOT
+        return the bond, which stays deposited and slashable; then
+        `decdn node unbond --all` starts the unbonding window; re-run it after the
+        window to withdraw. The CLI does not read decdn.env: pass the RPC URL with
+        --rpc-url, as in docs/lifecycle.md § Running on-chain commands.
+      - >-
+        The public udp/{{ decdn_bind_port }} firewall rule stays until you re-run
+        baseline without it (e.g. after removing the host from decdn_nodes).

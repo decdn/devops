@@ -53,14 +53,18 @@ for values in "$chart"/ci/*.yaml; do
   helm lint --strict --quiet "$chart" -f "$values" >/dev/null \
     || { helm lint --strict "$chart" -f "$values" >&2 || true; fail "helm lint ($name)"; }
   helm template t "$chart" -f "$values" > "$work/$name.yaml" || fail "helm template ($name)"
-  yq 'select(.kind == "ConfigMap") | .data["node.toml"]' "$work/$name.yaml" > "$work/$name.toml"
+  # Filter on the key, not just the kind: the dashboard ConfigMaps would otherwise
+  # contribute `null` documents here.
+  yq 'select(.kind == "ConfigMap" and .data["node.toml"] != null) | .data["node.toml"]' \
+    "$work/$name.yaml" > "$work/$name.toml"
   [ -s "$work/$name.toml" ] || fail "no node.toml in the rendered ConfigMap ($name)"
   python3 "$checker" "$work/$name.toml" >/dev/null 2>"$work/$name.err" \
     || { cat "$work/$name.err" >&2; fail "schema keys ($name)"; }
   if [ -n "$kubeconform" ]; then
-    # Only the ServiceMonitor CRD lacks a bundled schema; skip it by kind, so any
-    # other unrecognised resource (e.g. a typo'd kind) still fails.
-    $kubeconform -strict -summary -skip ServiceMonitor -kubernetes-version 1.30.0 \
+    # Only the Prometheus Operator CRDs (ServiceMonitor, PrometheusRule) lack a
+    # bundled schema; skip them by kind, so any other unrecognised resource (e.g. a
+    # typo'd kind) still fails. Their shape is checked in the invariants below.
+    $kubeconform -strict -summary -skip ServiceMonitor,PrometheusRule -kubernetes-version 1.30.0 \
       < "$work/$name.yaml" > "$work/$name.kc" 2>&1 \
       || { cat "$work/$name.kc" >&2; fail "kubeconform ($name)"; }
   fi
@@ -114,7 +118,7 @@ grep -qx 'node_to_node_pull_through_enabled = false' "$work/ci-origins.toml" || 
 grep -qx 'node_to_node_pull_through_enabled = true' "$work/ci-resolve-only.toml" || fail "pull-through without origin should derive true"
 helm template t "$chart" -f "$chart/ci/ci-resolve-only.yaml" \
   --set config.cache.node_to_node_pull_through_enabled=false \
-  | yq 'select(.kind == "ConfigMap") | .data["node.toml"]' \
+  | yq 'select(.kind == "ConfigMap" and .data["node.toml"] != null) | .data["node.toml"]' \
   | grep -qx 'node_to_node_pull_through_enabled = false' || fail "explicit pull-through=false should win"
 pass "pull-through derivation"
 
@@ -126,9 +130,12 @@ pass "resolve-only discovery"
 
 # --- workload and exposure invariants, per render --------------------------------
 # Explicit checks rather than `assert`, which PYTHONOPTIMIZE would turn into no-ops.
+# The vendored monitoring files the ci-values render must carry in full.
+yq -o=json '.' "$chart/files/monitoring/prometheus-alerts.yml" > "$work/alerts.json"
 for name in ci-values ci-origins ci-resolve-only; do
   yq ea -o=json '[.]' "$work/$name.yaml" > "$work/$name.json"
-  python3 - "$work/$name.json" "$work/$name.toml" "$chart/ci/$name.yaml" <<'PY' || fail "workload/exposure invariants ($name)"
+  python3 - "$work/$name.json" "$work/$name.toml" "$chart/ci/$name.yaml" \
+    "$work/alerts.json" "$chart/files/monitoring" <<'PY' || fail "workload/exposure invariants ($name)"
 import json, sys, tomllib
 docs = [d for d in json.load(open(sys.argv[1])) if d]
 cfg = tomllib.load(open(sys.argv[2], "rb"))
@@ -205,6 +212,41 @@ if name == "ci-values.yaml":
     check("hostPort" not in ports["quic"], "hostPort open by default")
     check(len(tcp_rules) == 1, "metrics rule missing although metrics.networkPolicy.from is set")
     check(one("ServiceMonitor") is not None, "ServiceMonitor missing")
+    # Target labels the upstream dashboards/alerts select on.
+    relabel = {r.get("targetLabel"): r for r in one("ServiceMonitor")["spec"]["endpoints"][0].get("relabelings", [])}
+    check(relabel.get("job", {}).get("replacement") == "decdn-node", "ServiceMonitor job relabel")
+    check(relabel.get("region", {}).get("replacement") == cfg["identity"]["region"], "ServiceMonitor region relabel")
+    check(relabel.get("deployment_environment", {}).get("replacement") == "ci", "ServiceMonitor deployment_environment relabel")
+    check(relabel.get("instance", {}).get("sourceLabels") == ["__meta_kubernetes_pod_name"], "ServiceMonitor instance relabel")
+    # PrometheusRule: every vendored rule, extras merged in, the rule's own labels kept.
+    vendored = [r for g in json.load(open(sys.argv[4]))["groups"] for r in g["rules"]]
+    pr = one("PrometheusRule", "alerts")
+    check(pr is not None, "PrometheusRule missing")
+    if pr:
+        rules = [r for g in pr["spec"]["groups"] for r in g["rules"]]
+        check(len(rules) == len(vendored) > 0, f"PrometheusRule has {len(rules)} rules, vendored file {len(vendored)}")
+        check(all(r["labels"].get("team") == "node-ops" for r in rules), "ruleLabels not merged into every rule")
+        # ci-values sets ruleLabels.severity: a rule's own severity must win, and
+        # only a rule without one may take the extra.
+        check([r["labels"].get("severity") for r in rules]
+              == [r.get("labels", {}).get("severity", "overridden") for r in vendored],
+              "ruleLabels overrode a rule's own labels")
+    # One sidecar-labelled ConfigMap per vendored dashboard, each valid JSON with a uid.
+    import pathlib
+    want = sorted(p.name for p in pathlib.Path(sys.argv[5]).glob("*.json"))
+    check(want, "no vendored dashboards in files/monitoring/")
+    cms = [d for d in docs if d["kind"] == "ConfigMap"
+           and d["metadata"]["labels"].get("app.kubernetes.io/component") == "dashboard"]
+    check(sorted(k for d in cms for k in d["data"]) == want, "dashboard ConfigMaps vs vendored files")
+    for d in cms:
+        check(d["metadata"]["labels"].get("grafana_dashboard") == "1", "dashboard sidecar label")
+        for v in d["data"].values():
+            check("uid" in json.loads(v), "dashboard without a uid")
+else:
+    check(not [d for d in docs if d["kind"] == "PrometheusRule"], "PrometheusRule rendered while disabled")
+    check(not [d for d in docs if d["kind"] == "ConfigMap"
+               and d["metadata"]["labels"].get("app.kubernetes.io/component") == "dashboard"],
+          "dashboard ConfigMaps rendered while disabled")
 if name == "ci-origins.yaml":
     check(ports["quic"].get("hostPort") == 5000, "hostPort")
     check(qsvc["spec"]["ports"][0].get("nodePort") == 30443, "nodePort")
@@ -283,6 +325,27 @@ expect_fail "writable root filesystem"     template 'readOnlyRootFilesystem must
 expect_fail "capabilities added"           template 'capabilities.add must be empty'             --set 'securityContext.capabilities.add[0]=NET_ADMIN'
 expect_fail "capabilities not dropped"     template 'capabilities.drop must include ALL'         --set-json 'securityContext.capabilities.drop=["NET_RAW"]'
 expect_fail "ServiceMonitor, policy blocks" template 'metrics.networkPolicy.from'                --set metrics.serviceMonitor.enabled=true --set networkPolicy.enabled=true
+expect_fail "non-string rule label"        schema   '/metrics/prometheusRule/ruleLabels'         --set-json 'metrics.prometheusRule.ruleLabels={"team":1}'
+expect_fail "invalid dashboard label key"  schema   '/metrics/grafanaDashboards/label'           --set 'metrics.grafanaDashboards.label=not a label'
+expect_fail "unknown monitoring knob"      schema   "additional propert(y|ies) 'rules'"          --set metrics.prometheusRule.rules=x
+
+# Long release names: every rendered object keeps a unique name. The dashboard
+# ConfigMaps used to truncate to 63 characters and collide.
+long="$(printf 'n%.0s' $(seq 1 63))"
+helm template t "$chart" -f "$chart/ci/ci-values.yaml" --set fullnameOverride="$long" \
+  | yq -N '.kind + "/" + .metadata.name' | grep -v '^null' | sort | uniq -d > "$work/dupes"
+[ ! -s "$work/dupes" ] || { cat "$work/dupes" >&2; fail "duplicate object names with a 63-character fullname"; }
+pass "unique object names with a 63-character fullname"
+
+# Dashboards enabled with none vendored must fail the render, not render nothing.
+nodash="$work/nodash"
+cp -r "$chart" "$nodash"
+rm -f "$nodash"/files/monitoring/*.json
+if out="$(helm template t "$nodash" -f "$chart/ci/ci-values.yaml" 2>&1)"; then
+  fail "render should fail: dashboards enabled, none vendored"
+fi
+grep -q 'holds no \*.json dashboards' <<<"$out" || { echo "$out" >&2; fail "wrong failure for missing dashboards"; }
+pass "rejects: dashboards enabled, none vendored"
 
 # --- optional: the real binary --------------------------------------------------
 if [ -n "${DECDN_CLI:-}" ]; then

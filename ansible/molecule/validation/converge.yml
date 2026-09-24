@@ -150,10 +150,6 @@
             decdn_node_manual_bin_src: ""
             decdn_cli_manual_bin_src: ""
             decdn_release_target_dir: "{{ _decdn_check_dir }}"
-            decdn_node_target: >-
-              {{ 'aarch64-unknown-linux-gnu'
-                 if ansible_facts.architecture in ['aarch64', 'arm64']
-                 else 'x86_64-unknown-linux-gnu' }}
             decdn_rpc_url: ""
 
         - name: Dry-run decdn_node in manual dir-mode
@@ -179,8 +175,185 @@
             decdn_node_manual_bin_src: "{{ stub_bin }}"
             decdn_cli_manual_bin_src: "{{ stub_bin }}"
             decdn_release_target_dir: ""
-            decdn_node_target: x86_64-unknown-linux-gnu
             decdn_rpc_url: "https://rpc.example.invalid/"
+
+    # --- Case: arch-mismatch (explicit triple for the wrong architecture) --------
+    # decdn_node_target is derived from the host's facts; an explicit value naming
+    # the OTHER architecture would ship binaries the node cannot exec. Release mode
+    # so the triple is consulted; the assert fires before any download.
+    - name: "Case arch-mismatch — explicit target triple for the other architecture"
+      block:
+        - name: Run decdn_node with a target triple that does not match the host
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_node_install_method: release
+            decdn_node_version: "0.0.0"
+            decdn_node_target: >-
+              {{ 'x86_64-unknown-linux-gnu'
+                 if ansible_facts.architecture == 'aarch64'
+                 else 'aarch64-unknown-linux-gnu' }}
+      rescue:
+        - name: Record arch-mismatch rejection (only if the arch assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['arch-mismatch'] }}"
+          when: ansible_failed_task.name is match('^Require the target triple to match')
+
+    # --- Case: network-unknown / network-chain (decdn_network profile guards) -----
+    - name: "Case network-unknown — decdn_network names no known deployment"
+      block:
+        - name: Run decdn_node with an unknown network profile
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_network: arbitrum-mainnet-typo
+      rescue:
+        - name: Record network-unknown rejection (only if the network assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['network-unknown'] }}"
+          when: ansible_failed_task.name is match('^Require a known decdn_network')
+
+    # An inventory chain_id for another chain would pair that chain with this
+    # profile's addresses; the profile guard refuses it.
+    - name: "Case network-chain — chain_id disagrees with the network profile"
+      block:
+        - name: Run decdn_node with a profile and a foreign chain_id
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_network: arbitrum-sepolia
+            decdn_chain_id: 1
+      rescue:
+        - name: Record network-chain rejection (only if the chain_id assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['network-chain'] }}"
+          when: ansible_failed_task.name is match('^Require chain_id to match the network profile')
+
+    # --- Lifecycle entry points (tasks_from: backup / decommission) --------------
+    # Each fails at its settings or path asserts, before anything on the host is
+    # touched. A pasted private key must never reach the host's recipients file.
+    - name: "Case backup-secret-key — an age SECRET key pasted as a recipient"
+      block:
+        - name: Run decdn_node for case backup-secret-key
+          ansible.builtin.include_role:
+            name: decdn_node
+            tasks_from: backup
+          vars:
+            decdn_backup_age_recipients: ["AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"]
+      rescue:
+        - name: Record backup-secret-key rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['backup-secret-key'] }}"
+          when: ansible_failed_task.name is match('^Validate the backup settings')
+
+    - name: "Case backup-bare-string — recipients given as a bare string, not a list"
+      block:
+        - name: Run decdn_node for case backup-bare-string
+          ansible.builtin.include_role:
+            name: decdn_node
+            tasks_from: backup
+          vars:
+            decdn_backup_age_recipients: "age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+      rescue:
+        - name: Record backup-bare-string rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['backup-bare-string'] }}"
+          when: ansible_failed_task.name is match('^Validate the backup settings')
+
+    - name: "Case backup-empty — no recipients"
+      block:
+        - name: Run decdn_node for case backup-empty
+          ansible.builtin.include_role:
+            name: decdn_node
+            tasks_from: backup
+          vars:
+            decdn_backup_age_recipients: []
+      rescue:
+        - name: Record backup-empty rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['backup-empty'] }}"
+          when: ansible_failed_task.name is match('^Validate the backup settings')
+
+    - name: "Case path-cache-home — cache dir is the data dir (backup)"
+      block:
+        - name: Run decdn_node for case path-cache-home
+          ansible.builtin.include_role:
+            name: decdn_node
+            tasks_from: backup
+          vars:
+            decdn_backup_age_recipients: ["age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"]
+            decdn_cache_dir: /var/lib/decdn
+      rescue:
+        - name: Record path-cache-home rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['path-cache-home'] }}"
+          when: ansible_failed_task.name is match('^Require the cache dir to hold no identity')
+
+    - name: "Case path-backup-home — backup dir is the data dir"
+      block:
+        - name: Run decdn_node for case path-backup-home
+          ansible.builtin.include_role:
+            name: decdn_node
+            tasks_from: backup
+          vars:
+            decdn_backup_age_recipients: ["age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"]
+            decdn_backup_dir: /var/lib/decdn
+      rescue:
+        - name: Record path-backup-home rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['path-backup-home'] }}"
+          when: ansible_failed_task.name is match('^Require the backup dir to stay clear')
+
+    - name: "Case path-decommission-cache — cache dir encloses the keystore (decommission purge)"
+      block:
+        - name: Run decdn_node for case path-decommission-cache
+          ansible.builtin.include_role:
+            name: decdn_node
+            tasks_from: decommission
+          vars:
+            decdn_decommission_confirm: "{{ ansible_play_hosts_all | sort | join(',') }}"
+            decdn_decommission_purge_cache: true
+            decdn_cache_dir: /var/lib
+      rescue:
+        - name: Record path-decommission-cache rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['path-decommission-cache'] }}"
+          when: ansible_failed_task.name is match('^Require the cache dir to hold no identity')
+
+    # --- Case: arch-unset (no facts / explicit empty triple) --------------------
+    - name: "Case arch-unset — release mode with no resolvable target triple"
+      block:
+        - name: Run decdn_node for case arch-unset
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_node_install_method: release
+            decdn_node_version: "0.0.0"
+            decdn_node_target: ""
+      rescue:
+        - name: Record arch-unset rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['arch-unset'] }}"
+          when: ansible_failed_task.name is match('^Require a supported target triple')
+
+    # The network assert must run before the address asserts: with a typo'd
+    # network and no explicit addresses, the error has to name the network.
+    - name: "Case network-unknown-noaddr — typo'd network with no explicit addresses"
+      block:
+        - name: Run decdn_node for case network-unknown-noaddr
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_network: arbitrum-sepoila
+            decdn_payment_pool_address: ""
+            decdn_capacity_bond_address: ""
+            decdn_slash_judge_address: ""
+            decdn_content_blacklist_address: ""
+      rescue:
+        - name: Record network-unknown-noaddr rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['network-unknown-noaddr'] }}"
+          when: ansible_failed_task.name is match('^Require a known decdn_network')
 
     # --- Case: range (numeric but below the daemon's minimum) ---------------------
     - name: "Case range — event_poll_interval_ms below 250"
@@ -1396,7 +1569,10 @@
           the daemon/crash-loop it at config load, or ship credentials insecurely).
       vars:
         _decdn_expected:
-          ["cross-field", "binary-format", "binary-check-mode", "range", "bounded-range", "shape", "bool",
+          ["cross-field", "binary-format", "binary-check-mode", "arch-mismatch", "arch-unset", "network-unknown",
+           "network-unknown-noaddr", "network-chain", "backup-secret-key", "backup-bare-string",
+           "backup-empty", "path-cache-home", "path-backup-home", "path-decommission-cache", "range", "bounded-range",
+           "shape", "bool",
            "enum", "dict", "float", "list", "string", "string-newline", "otlp-https",
            "otlp-noport", "otlp-path", "otlp-userinfo", "otlp-colon", "otlp-port",
            "otlp-newline", "env-control-rpc", "env-control-extra", "env-gate",

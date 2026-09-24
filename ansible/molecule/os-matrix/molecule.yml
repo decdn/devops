@@ -1,0 +1,72 @@
+---
+# The `default` scenario's converge + idempotence + verify, run on every other
+# distribution the roles' meta/main.yml claims: Debian 13 (trixie), Ubuntu 24.04
+# (noble) and Ubuntu 26.04 (resolute). `default` itself stays on Debian 12
+# (bookworm), so the four platforms together are exactly the supported set.
+# Nothing here is scenario-specific: the playbooks are default's, by path, so a
+# change to what `default` proves is proved on every distribution at once.
+#
+# A separate scenario rather than extra platforms in `default`: a failure names the
+# distribution in the scenario's own output, and `default` stays a fast single-host
+# loop for development. `make molecule` finds it by glob.
+#
+# Same boundary as `default`: decdn_node end to end, plus grafana_alloy's disabled
+# path and baseline's admin-account tasks, which default's converge includes.
+# grafana_alloy's install path (grafana-cloud*) and baseline's hardening are not
+# covered here: the former runs on Debian 12 only, the latter on real hosts.
+#
+# Images: digest-pinned multi-arch indexes (amd64 + arm64), :latest as of
+# 2026-09-24 (these images publish only :latest). Re-resolve with
+# `docker buildx imagetools inspect geerlingguy/docker-<distro>-ansible:latest`
+# and bump them together with the debian12 pin in the other scenarios.
+driver:
+  name: docker
+platforms:
+  - name: decdn-node-deb13
+    image: geerlingguy/docker-debian13-ansible@sha256:ba6fd5df5088d353e27c3e5f63b2631d2655d130bebf8c144e319213d3424098
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+  - name: decdn-node-u2404
+    image: geerlingguy/docker-ubuntu2404-ansible@sha256:3394e335df58c961c00b78ae601ef30cdd7463b112f21b0c5f78674a70526302
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+  - name: decdn-node-u2604
+    image: geerlingguy/docker-ubuntu2604-ansible@sha256:a81f2af83a18b609eabdc926d56bc4813d3d7558d60dc891db6056f868fe6054
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # See default/molecule.yml for why pipelining is on.
+    ANSIBLE_PIPELINING: "true"
+  playbooks:
+    prepare: ../default/prepare.yml
+    converge: ../default/converge.yml
+    verify: ../default/verify.yml
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    # Leading destroy: see default/molecule.yml (a reused orphan would make
+    # converge + idempotence pass trivially).
+    - destroy
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - destroy

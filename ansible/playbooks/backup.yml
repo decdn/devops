@@ -1,0 +1,18 @@
+---
+# Encrypted backup of each node's identity (default) or full state.
+#   make backup LIMIT=<host> ANSIBLE_ARGS='-e decdn_backup_scope=full'
+# decdn_backup_age_recipients (public keys) is required; set it in group_vars.
+# See roles/decdn_node/tasks/backup.yml for what is archived and docs/lifecycle.md
+# for restore and host migration.
+- name: Back up deCDN nodes
+  hosts: decdn_nodes
+  become: true
+  # One host at a time: a "full" backup stops the node for the copy, and a fleet
+  # should never lose every node at once.
+  serial: 1
+  gather_facts: false
+  tasks:
+    - name: Back up this node
+      ansible.builtin.include_role:
+        name: decdn_node
+        tasks_from: backup

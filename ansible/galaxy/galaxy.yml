@@ -3,7 +3,7 @@
 # slice of this DevOps repo: deploy + harden a deCDN node.
 #
 # This file is an OVERLAY, not the project root manifest. It is assembled into a
-# clean collection tree (with the baseline + decdn_node roles) by galaxy/build.sh;
+# clean collection tree (with the baseline, decdn_node and grafana_alloy roles) by galaxy/build.sh;
 # it is deliberately NOT placed at ansible/ root, so the deploy project stays a
 # plain Ansible project (bare role names, roles_path, production-profile
 # ansible-lint) rather than being reinterpreted as a collection. See galaxy/README.md.
@@ -13,7 +13,9 @@ version: 0.1.0                      # pre-1.0: published shape not yet stable
 readme: README.md
 authors:
   - deCDN Contributors
-description: Deploy and harden a public deCDN node — DevSec host baseline + decdn_node.
+description: >-
+  Deploy and harden a public deCDN node: DevSec host baseline, the decdn_node
+  daemon (with backup and decommission), and opt-in Grafana Cloud observability.
 license:
   - MIT
 # Galaxy tags must match ^[a-z0-9]+$ (no hyphens/underscores).
@@ -24,6 +26,7 @@ tags:
   - systemd
   - hardening
   - debian
+  - ubuntu
   - devsec
   - web3
 # Collection-level dependencies — only what the SHIPPED roles use:

@@ -91,6 +91,30 @@ metrics:
     interval: 30s
     scrapeTimeout: 10s
     labels: {}
+    # Target labels for the upstream dashboards/alerts (files/monitoring/): job is
+    # what they select on ("" keeps the operator's default, the Service name);
+    # region comes from config.identity.region; deployment_environment is omitted
+    # when empty. Extra relabelings are appended after these.
+    jobLabel: decdn-node
+    deploymentEnvironment: ""
+    relabelings: []
+  # Upstream's reference alert rules as a PrometheusRule (needs the Prometheus
+  # Operator CRDs). They select across every scraped node: enable on ONE release
+  # per Prometheus. ruleLabels are added to every rule (a rule's own labels win),
+  # e.g. to route them; labels go on the PrometheusRule object (ruleSelector).
+  prometheusRule:
+    enabled: false
+    labels: {}
+    ruleLabels: {}
+  # Upstream's Grafana dashboards, one ConfigMap each, labelled for the Grafana
+  # sidecar (label/labelValue must match its dashboards.label[Value]). Fixed uids:
+  # enable on ONE release per Grafana. namespace "" = the release namespace.
+  grafanaDashboards:
+    enabled: false
+    label: grafana_dashboard
+    labelValue: "1"
+    namespace: ""
+    annotations: {}
 
 networkPolicy:
   enabled: true

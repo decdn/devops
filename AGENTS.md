@@ -6,12 +6,16 @@ DevOps repo.
 ## What this repo is
 
 The official DevOps project for deploying a **deCDN node**: infrastructure, deployment,
-and operational tooling. There are two deploy paths: **Ansible** (`ansible/`, VMs/bare
-metal, the primary path) and a **Helm chart** (`charts/decdn-node/`, Kubernetes).
+and operational tooling, for node operators anywhere. There are three deploy paths:
+**Ansible** (`ansible/`, VMs/bare metal, the primary path, also the `decdn.node` Galaxy
+collection), **Docker Compose** (`compose/`, a single Docker host) and a **Helm chart**
+(`charts/decdn-node/`, Kubernetes).
 
 This repo is **infrastructure only**. It is *not* a source of truth for protocol or
 economic claims — those trace to the deCDN ADRs. If something here states a protocol fact
-(chain-id, token address, fee split), it must trace back to an ADR, not invent one.
+(chain-id, token address, fee split), it must trace back to an ADR or upstream's
+deployment manifest, not invent one; the contract addresses live only in the generated
+mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
 
 ## Hard rules
 
@@ -49,14 +53,25 @@ economic claims — those trace to the deCDN ADRs. If something here states a pr
 
 ```
 ansible/                # the deployment project (DevSec-hardened, lean roles)
-  playbooks/            # site.yml (decdn node)
+  playbooks/            # site.yml (decdn node), backup.yml, decommission.yml
   roles/                # baseline, decdn_node, grafana_alloy
   inventory/ galaxy/ molecule/    # see ansible/README.md
+compose/                # Docker Compose deploy path for a single host (see its README.md)
 charts/
   decdn-node/           # Helm chart for the node on Kubernetes (see its README.md)
     ci/                 # CI values files (mirror molecule/schema's three plays)
+    files/monitoring/   # GENERATED: upstream dashboards + alert rules (scripts/sync-monitoring.sh)
     tests/render-test.sh  # positive/negative render tests (`make lint-helm`)
+docs/                   # cross-path operator docs: requirements.md, lifecycle.md
+scripts/                # upstream-mirror generators + the release gate
 ```
+
+**Generated mirrors of upstream — regenerate, never hand-edit:**
+`ansible/roles/decdn_node/vars/main/networks.yml` (`scripts/sync-network-profiles.py`),
+`charts/decdn-node/files/monitoring/` (`scripts/sync-monitoring.sh`) and
+`ansible/molecule/schema/files/schema-keys.txt` (`gen-schema-keys.py`). The weekly
+`upstream-drift` workflow flags staleness. These are the only protocol facts (contract
+addresses) the repo carries, and they carry their upstream commit.
 
 ## Current services
 
@@ -65,8 +80,14 @@ charts/
   tarball — verified against the release's GPG-signed `SHA256SUMS` — or, while upstream
   has no release tag cut (the current default), from locally-built binaries; under a hardened
   systemd unit; public QUIC udp/4433, loopback metrics/admin, operator-provisioned eth
-  keystore, operator-provisionable secret env file, and required chain knobs (no baked
-  protocol facts — sourced from ADRs), over a shared DevSec-hardened `baseline`.
+  keystore, operator-provisionable secret env file, over a shared DevSec-hardened
+  `baseline`. The release target triple is derived from the host's architecture
+  (x86_64/aarch64). The chain comes from `decdn_network` (the generated manifest mirror
+  above; explicit inventory addresses still win) or from explicit variables.
+  `playbooks/backup.yml` / `decommission.yml` (`make backup` / `make decommission`) are
+  role entry points (`tasks_from: backup|decommission`): backups are encrypted on the host
+  to operator public keys; decommission needs `LIMIT` + typed confirmation, keeps the
+  identity and never touches the chain.
   Leaving `decdn_rpc_url` empty means the operator wrote `0600 /etc/decdn/decdn.env`
   on the host and the role only gates on it, so no secret transits the control machine. See `ansible/README.md`. (On-chain node
   stake/registration, ADR 019 Phase 2, is a manual operator step, driven by `decdn setup`.)
@@ -102,6 +123,14 @@ charts/
   everything, so only the real pinned binary proves the rendered config loads. See
   `ansible/roles/grafana_alloy/README.md`.
 
+- **`compose/`** — the same node under Docker Compose on one host: the upstream image,
+  always by digest (`compose.yaml` builds `DECDN_IMAGE_REPO@DECDN_IMAGE_DIGEST`), the
+  role's host layout (`/etc/decdn` read-only, `/var/lib/decdn`), host
+  networking (so loopback metrics/admin stay loopback and Docker publishes no ports),
+  read-only rootfs, no capabilities, 300 s SIGTERM grace. `make lint-compose` asserts
+  those invariants (and `make test-scripts` that it rejects broken variants);
+  `make security` scans it.
+
 - **`charts/decdn-node/`** — the same node on Kubernetes: a one-replica StatefulSet (one
   release = one identity) on the upstream daemon-only image (`ghcr.io/decdn/decdn-node`;
   unpublished, so `image.tag`/`image.digest` is required), PVC data dir, a `prepare` init
@@ -114,41 +143,37 @@ charts/
   above applies here too:** `make lint-helm` runs the same `check-schema-keys.py` +
   `schema-keys.txt` on the rendered ConfigMap, so a re-sync covers both paths. Unlike the
   role, CI has no real-binary `decdn config validate` for the chart — run
-  `DECDN_CLI=… make lint-helm` locally when bumping the decdn version.
+  `DECDN_CLI=… make lint-helm` locally when bumping the decdn version. Optional
+  `PrometheusRule` + dashboard ConfigMaps render the vendored `files/monitoring/` (never
+  through `tpl`: the alert annotations carry Prometheus templates).
 
 ## Commands
 
-Two Makefiles: the **root** is the hygiene/security/CI mirror; **`ansible/`** drives
-deploys (its targets must run from `ansible/`). `make help` lists root targets.
+Two Makefiles: the **root** is the check driver CI calls (`make help`); **`ansible/`**
+drives deploys (its targets must run from `ansible/`). The full target list is in
+[CONTRIBUTING.md](CONTRIBUTING.md#make-targets).
 
 ```bash
-# Root — lint & security (mirror CI)
-make hooks            # one-time: install pre-commit git hook (pip install pre-commit first)
-make lint             # all pre-commit hooks on all files (hygiene, shellcheck, yamllint, markdown)
-make lint-ansible     # vendor collections + full ansible-lint (production profile)
-make molecule         # containerised converge/verify of the decdn_node + grafana_alloy
-                      # roles — every molecule/*/ scenario in parallel (the target
-                      # discovers them by glob, so adding one needs no edit here);
-                      # needs Docker, cap with JOBS=<n>
-make molecule-serial  # the same suite one scenario at a time (readable failure output)
-make lint-helm        # chart: helm lint + render tests + kubeconform + schema keys (needs helm, yq, Docker)
-make lint-alloy       # grafana_alloy: render its templates + `alloy validate` them with the real
-                      # pinned binary (the molecule stub exits 0 for everything and cannot)
-make security         # = security-ansible + security-helm (KICS over the rendered chart; needs helm)
+# Root — the gates (CI runs the same)
+make lint             # every pre-commit hook, every file (also the CI `pre-commit` job)
+make lint-ansible     # vendor collections + ansible-lint (production profile)
+make molecule         # every ansible/molecule/*/ scenario in parallel (Docker; JOBS=<n>)
+make lint-helm        # chart: lint + render tests + kubeconform + schema keys
+make lint-alloy       # grafana_alloy config against the real pinned Alloy binary
+make lint-compose     # compose/ invariants
+make test-scripts     # Makefile guards, release gate, lint-compose negatives
+make security         # KICS over ansible/, the rendered chart and compose/
 
-# Ansible deploys — run from ansible/ (see ansible/README.md for the full flow)
-cd ansible
-make deps             # vendor pinned Galaxy collections into ./collections
-make check / deploy   # deCDN node (site.yml): dry-run / provision
-                      # fleet-wide by default; LIMIT=<host> scopes, ANSIBLE_ARGS='…' passes through;
-                      # INVENTORY=<path> targets a private fleet overlay (default inventory/hosts.yml)
-make build / galaxy-check       # stage + build the decdn.node collection, then validate it
+# Ansible — run from ansible/
+make deps                          # vendor pinned Galaxy collections
+make check / deploy                # site.yml; fleet-wide unless LIMIT=<host>; INVENTORY=<overlay>
+make backup / decommission LIMIT=… # lifecycle playbooks (decommission requires LIMIT)
+make build / galaxy-check          # the decdn.node collection
 ```
 
 **Inventory is private; the firewall hole is not.** This repo is public, so
 `ansible/inventory/hosts.yml` is git-ignored and a real fleet lives in a private overlay
-(template: `ansible/inventory/fleet.example/`, launch sequence in
-`ansible/docs/launch-runbook.md`). Inventory-adjacent group_vars do not load for an
+(template: `ansible/inventory/fleet.example/`). Inventory-adjacent group_vars do not load for an
 overlay, so anything every node needs regardless of inventory (today only the udp/4433
 `baseline_extra_inbound` hole) lives in `ansible/playbooks/group_vars/decdn_nodes.yml`.
 Don't move it back under `inventory/`.
@@ -158,14 +183,12 @@ Don't move it back under `inventory/`.
 distributable collection. The overlay lives in `ansible/galaxy/` and is staged into a clean
 collection tree by `galaxy/build.sh` — there is **no** `galaxy.yml` at the `ansible/` root
 (that would make ansible-lint treat the deploy project as a collection). Build/validate with
-`make build` / `make galaxy-check`; **publishing is a manual step**
-(`ansible-galaxy collection publish`), not automated.
+`make build` / `make galaxy-check`. **Publishing** is `release.yml` on a `vX.Y.Z` tag,
+together with the chart at the same version, and only while the `PUBLISH_ENABLED`
+repository variable is `true` (RELEASING.md). Log changes under `[Unreleased]` in
+`ansible/galaxy/CHANGELOG.md` and `charts/decdn-node/CHANGELOG.md`.
 
-**Gotcha — pre-commit is local-only.** Hygiene/shellcheck/yamllint/markdown run via
-`make hooks`/`make lint` on your machine, **not** in CI. CI (`.github/workflows/`) is the
-blocking gate and runs `ansible-lint` + `galaxy-build` (on `ansible/**`), `helm` (`make lint-helm`,
-on `charts/**`, the shared schema checker/inventory, `Makefile` or `ci.yml`), KICS (on either) +
-`actionlint`. `ansible-lint`
-is **not** a per-commit hook (it needs collections vendored) — run `make lint-ansible`.
-A separate `molecule.yml` workflow runs the containerised converge/verify in CI too, so
-`make molecule` is not purely local.
+**CI.** `ci.yml` is the blocking gate: `pre-commit`, `scripts` and `actionlint` on every PR, the
+Ansible, chart and compose jobs path-filtered, KICS on any of them; `molecule.yml` runs the
+molecule suite on `ansible/**`. `ansible-lint` is **not** a per-commit hook (it needs
+collections vendored): run `make lint-ansible`.

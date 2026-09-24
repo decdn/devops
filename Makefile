@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN DevOps monorepo.
 # Run from the repo root. Ansible-specific work is delegated to ansible/Makefile.
-.PHONY: help hooks lint lint-ansible lint-helm lint-alloy security security-ansible security-helm molecule molecule-serial galaxy-build galaxy-check
+.PHONY: help hooks lint lint-ansible lint-helm lint-alloy lint-compose test-scripts security security-ansible security-helm security-compose molecule molecule-serial galaxy-build galaxy-check
 SHELL := /bin/bash
 
 # KICS runs straight from the engine image, pinned by digest. This target IS the
@@ -30,9 +30,9 @@ lint-ansible:        ## full ansible-lint locally (installs collections first)
 	$(MAKE) -C ansible deps
 	$(MAKE) -C ansible lint
 
-# Both scans always run, so a finding in one never hides the other's results.
-security:            ## KICS IaC security scan of ansible/ and the Helm chart (CI runs this)
-	@rc=0; $(MAKE) security-ansible || rc=1; $(MAKE) security-helm || rc=1; exit $$rc
+# All three scans always run, so a finding in one never hides the others' results.
+security:            ## KICS IaC security scan of ansible/, the Helm chart and compose/ (CI runs this)
+	@rc=0; $(MAKE) security-ansible || rc=1; $(MAKE) security-helm || rc=1; $(MAKE) security-compose || rc=1; exit $$rc
 
 # -w /repo so findings carry repo-relative paths (not ../../repo/...), which is
 # what the CI job summary prints and what SARIF code-scanning uploads need.
@@ -55,6 +55,47 @@ security-helm:       ## KICS scan of the decdn-node chart's rendered manifests (
 		scan --path /repo/kics-results/helm-render --type Kubernetes \
 		--report-formats json,sarif --output-path /repo/kics-results/helm \
 		--no-progress --fail-on high
+
+# One query is excluded, deliberately: "Volume Has Sensitive Host Directory"
+# (1c1325ff-…) fires on the read-only /etc/decdn mount. That directory is the node's
+# own config dir, mounted :ro, and keeping the Ansible host layout is what lets the
+# host CLI, backups and restores (docs/lifecycle.md) work unchanged. The two MEDIUMs
+# (host network, no healthcheck) are the documented design; see compose/README.md.
+security-compose:    ## KICS scan of compose/ (pinned engine image)
+	mkdir -p kics-results
+	docker run --rm --user $(shell id -u):$(shell id -g) -w /repo -v "$(CURDIR):/repo" $(KICS_IMAGE) \
+		scan --path /repo/compose --type DockerCompose \
+		--exclude-queries 1c1325ff-831d-43a1-973e-839ae57dfcc0 \
+		--report-formats json,sarif --output-path /repo/kics-results/compose \
+		--no-progress --fail-on high
+
+# Renders compose/compose.yaml with the example env files and asserts the invariants
+# the README promises: host networking and no published ports (so metrics and the
+# admin RPC stay loopback), a digest-pinned image, read-only rootfs, every capability
+# dropped, no-new-privileges, and a stop grace long enough for the daemon's drain.
+COMPOSE_INVARIANTS := .services["decdn-node"] as $$s | \
+	($$s.network_mode == "host") and ($$s.ports == null) and \
+	($$s.image | test("@sha256:[0-9a-f]{64}$$")) and ($$s.read_only == true) and \
+	($$s.cap_drop == ["ALL"]) and ($$s.security_opt | index("no-new-privileges:true") != null) and \
+	($$s.stop_signal == "SIGTERM") and ($$s.stop_grace_period == "5m0s") and \
+	($$s.user | test("^[0-9]+:[0-9]+$$"))
+
+# COMPOSE_FILE is overridable so tests/scripts-test.sh can feed it broken variants.
+COMPOSE_FILE ?= compose/compose.yaml
+lint-compose:        ## render compose/ with its examples and check its security invariants (needs docker, jq)
+	@set -o pipefail; \
+	rendered="$$(DECDN_ENV_FILE=$(CURDIR)/compose/decdn.env.example docker compose -f '$(COMPOSE_FILE)' \
+		--env-file compose/.env.example config --format json)" \
+		|| { echo "lint-compose: docker compose could not render $(COMPOSE_FILE) (see above)" >&2; exit 2; }; \
+	jq -e '$(COMPOSE_INVARIANTS)' <<<"$$rendered" >/dev/null \
+		|| { echo "$(COMPOSE_FILE) violates an invariant (see the lint-compose comment in Makefile)" >&2; exit 1; }
+	@echo "compose invariants hold"
+
+# The guard rails nothing else exercises: ansible/Makefile's scoping guards, the
+# release gate, lint-compose's negative cases, and (with UPSTREAM=<decdn checkout>)
+# the upstream-mirror generators' exit codes. CI job `scripts`.
+test-scripts:        ## test the Makefile guards, release gate and lint-compose negatives (needs docker, jq)
+	tests/scripts-test.sh
 
 lint-helm:           ## helm lint + render tests + kubeconform + shared schema-key check (needs helm, yq, python3>=3.11, docker)
 	KUBECONFORM="docker run --rm -i $(KUBECONFORM_IMAGE)" $(CHART)/tests/render-test.sh

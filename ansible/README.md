@@ -1,38 +1,38 @@
 # ansible — deCDN deployment
 
-Declarative Ansible project for deploying a deCDN node. One deployment over a shared host
-baseline:
+Declarative Ansible project for deploying deCDN nodes, one or a fleet, over a
+hardened host baseline. The roles also ship as the `decdn.node` Galaxy collection.
 
-| Playbook | Purpose | Exposure |
-|----------|---------|----------|
-| **`site.yml`** | A public **deCDN node** (`decdn-node`) — the product. | Public QUIC udp/4433 |
+| Playbook | Purpose | Make target |
+|----------|---------|-------------|
+| **`site.yml`** | Harden the host and deploy the public **deCDN node** (`decdn-node`). | `make check` / `make deploy` |
+| `backup.yml` | Encrypted backup of a node's identity or full state. | `make backup` |
+| `decommission.yml` | Stop a node and remove its service (keeps the identity; no on-chain steps). | `make decommission` |
 
 ```
-baseline   host hardening — DevSec os/ssh, nftables default-deny inbound,
-           fail2ban, unattended-upgrades, chrony, an admin sudo user
-   │
-   └─ site.yml  → decdn-node   public QUIC udp/4433; metrics+admin loopback;
-                               release-tarball install; hardened systemd unit
+baseline        host hardening: DevSec os/ssh, nftables default-deny inbound,
+   │            fail2ban, unattended-upgrades, chrony, an admin sudo user
+   ├─ grafana_alloy   opt-in Grafana Cloud agent (metrics, journald, traces), loopback-only
+   └─ decdn_node      public QUIC udp/4433; metrics + admin loopback; signed-tarball or
+                      local-build install; hardened systemd unit; backup/decommission
 ```
 
 ## Security model
 
-- **Default-deny inbound (nftables).** SSH is the only universally-open port. The node host
-  additionally opens **udp/4433** (QUIC) via `baseline_extra_inbound`. Everything else
-  (node metrics 9090, admin RPC 9191) stays **loopback** with no hole. **nftables is the
-  firewall** — baseline turns off `os_hardening`'s ufw config template (`ufw_manage_defaults:
-  false`) so a misleading DROP-policy `/etc/default/ufw` is never written; and, separately,
-  operators must not install or enable ufw, which would replace the nftables ruleset and
-  drop QUIC/SSH.
-- **No secrets in the repo.** The node's eth keystore is **operator-provisioned** and never
-  generated here; its `rpc_url` (which may embed an API key) is provisioned the same way —
-  a `0600 /etc/decdn/decdn.env` written on the target host, which the role gates on but
-  never reads back — or, if you prefer, carried in a git-ignored
-  `host_vars/<node>/secret.yml` (the rest of `host_vars` is committed, non-secret config)
-  and rendered to that same `0600` file.
-- **Host hardening via DevSec** (`os_hardening` + `ssh_hardening`): key-only SSH, no root
-  login, kernel/sysctl/PAM hardening — applied last, after the admin key is in place.
-  baseline overrides a few `os_hardening` sysctls so hardening can't sever node
+The repo-wide model is in the [root README](../README.md#security-model). What is
+specific to this path:
+
+- **nftables is the firewall.** SSH plus the node's **udp/4433** (via
+  `baseline_extra_inbound`) are the only holes; metrics 9090 and the admin RPC 9191 stay
+  loopback. Baseline turns off `os_hardening`'s ufw config template
+  (`ufw_manage_defaults: false`) so a misleading DROP-policy `/etc/default/ufw` is never
+  written. Do not install or enable ufw: it would replace the nftables ruleset and drop
+  QUIC and SSH.
+- **Two homes for the RPC URL**: a `0600 /etc/decdn/decdn.env` written on the host
+  (preferred; the role gates on it but never reads it back), or a git-ignored
+  `host_vars/<node>/secret.yml` the role renders into that same file. Details:
+  [`roles/decdn_node/README.md` § Secrets](roles/decdn_node/README.md#secrets).
+- **DevSec hardening can't sever the node.** Baseline overrides a few `os_hardening` sysctls so hardening can't sever node
   connectivity: it preserves IPv6 RA/autoconf (`baseline_preserve_ipv6_autoconf`, so
   SLAAC-assigned addresses survive) and can loosen reverse-path filtering for multi-homed
   hosts (`baseline_rp_filter_loose`).
@@ -40,7 +40,11 @@ baseline   host hardening — DevSec os/ssh, nftables default-deny inbound,
 ## Requirements
 
 - Control machine: **Ansible ≥ 2.15**, `ansible-lint`, `yamllint`.
-- Target: **Debian (bookworm)** host(s) reachable over SSH with a sudo-capable user.
+- Target: **Debian 12 (bookworm) / 13 (trixie)** or **Ubuntu 24.04 (noble) / 26.04
+  (resolute)** host(s), x86_64 or aarch64, reachable over SSH with a sudo-capable user.
+  `make molecule` converges `decdn_node` on all four (`grafana_alloy`'s install path on
+  Debian 12 only); `baseline` is verified on real
+  hosts (see `roles/baseline/README.md` § Platforms).
   - **Ubuntu sudo-rs note:** 25.10+ (and 26.04) ship `sudo-rs` as the default `sudo`,
     which doesn't honor the custom `-p` become prompt Ansible relies on — so
     `--ask-become-pass` hangs with "Timeout waiting for privilege escalation prompt". On
@@ -101,11 +105,10 @@ inventory, currently only the udp/4433 QUIC firewall hole, live in
 `playbooks/group_vars/decdn_nodes.yml`, so an overlay can't drop them. Override that per node
 in `host_vars` if you have to. Playbook group_vars beat inventory group_vars.
 
-[`inventory/fleet.example/`](inventory/fleet.example/hosts.yml) is the launch-fleet
-template. Hosts are grouped by role (`decdn_seed` holds the catalogue in an fs origin,
-`decdn_edge` pulls through) and by billing (`decdn_metered` gets an egress budget,
-`decdn_unmetered` does not). The group_vars size the cache for large model blobs. The
-launch sequence is in [`docs/launch-runbook.md`](docs/launch-runbook.md).
+[`inventory/fleet.example/`](inventory/fleet.example/hosts.yml) is the overlay
+template: every host in `decdn_nodes`, the chain from `decdn_network`, and the cache
+sizing knobs to fill per disk. Add child groups of your own when hosts differ by group
+(an origin, an egress cap on metered bandwidth); the template's header shows how.
 
 By default baseline **deploys you as yourself**: the runner (your control-machine `$USER` +
 its autodetected `~/.ssh` key, `id_ed25519` > `ecdsa` > `rsa`) is prepended as the head of
@@ -138,22 +141,22 @@ ignored on the first converge.
 
 **Prerequisites** (see `roles/decdn_node/README.md` for the full flow):
 
-1. A published **`v<version>` release** exists and is **publicly downloadable** — the role
-   fetches the release tarball from `decdn_node_release_base`
-   (default `https://github.com/decdn/decdn/releases/download`). To install from a mirror,
-   override `decdn_node_release_base`; to deploy a locally-built binary with no release at
-   all, use the **`manual`** install method (`decdn_node_install_method: manual` +
-   `decdn_node_manual_bin_src` / `decdn_cli_manual_bin_src`).
-2. Per-node config in `inventory/host_vars/<node>/main.yml` (committed) —
-   the install method + binary sources, the **four** required contract addresses,
-   `decdn_region`, cache origin, … — plus the one secret, `decdn_rpc_url`, either
-   provisioned as `/etc/decdn/decdn.env` on the host (preferred — see
-   [Setup](#setup)) or in a sibling git-ignored `secret.yml` (copy the shipped
-   `host_vars/decdn-node-1/secret.yml.example`).
-   The committed `main.yml` already carries the current Arbitrum Sepolia addresses; edit
-   `decdn_region`, the binary paths and the cache origin for your node. Contract addresses
-   are protocol facts — copy them from the upstream deployment manifest
-   `decdn/contracts/deployments/<chainId>.json`, never guess.
+1. **Binaries.** Upstream has not tagged a release yet, so the default install method
+   is **`manual`**: build `decdn-node` and `decdn` from a `decdn/decdn` checkout and point
+   the role at them (`decdn_release_target_dir`, or both `decdn_node_manual_bin_src` and
+   `decdn_cli_manual_bin_src`). Cross-compile for aarch64 hosts; the role derives each
+   host's target from its architecture and checks the ELF before shipping. Once a
+   `v<version>` release exists, switch to `decdn_node_install_method: release` +
+   `decdn_node_version`; the role then downloads the tarballs from
+   `decdn_node_release_base` and verifies them against the GPG-signed `SHA256SUMS`.
+2. **Per-node config** in `inventory/host_vars/<node>/main.yml` (committed): the binary
+   sources, `decdn_region`, the cache origin, and the chain, as
+   `decdn_network: arbitrum-sepolia`. The network profile supplies `chain_id` and every
+   contract address from the role's mirror of upstream's deployment manifest
+   ([`roles/decdn_node/README.md` § Network profiles](roles/decdn_node/README.md#network-profiles-decdn_network)),
+   so nothing is hand-copied. Plus the one secret, the RPC URL: provisioned as
+   `/etc/decdn/decdn.env` on the host (preferred, see [Setup](#setup)) or in a sibling
+   git-ignored `secret.yml` (copy the shipped `host_vars/decdn-node-1/secret.yml.example`).
 3. The **eth keystore + password file** provisioned on the host (operator step — the wallet
    must be funded + staked per the deCDN node-onboarding ADR, 019). As the `decdn` user,
    create the password file FIRST (`key-gen` reads it, never creates it), then generate the
@@ -188,9 +191,10 @@ connects as your `$USER` with no flag. You do not want that bootstrap play — o
 — reaching nodes already serving paid traffic. Same when re-running a single node after a config change, a failed play, or a
 binary bump.
 
-`make check`/`make deploy` refuse to run if `LIMIT` or `ANSIBLE_ARGS` reaches them from an
-exported shell variable, or if `LIMIT` expands empty — both are ways a run looks scoped but
-is silently fleet-wide.
+`make check`, `deploy`, `backup` and `decommission` refuse to run if `LIMIT`,
+`ANSIBLE_ARGS` or `INVENTORY` reaches them from an exported shell variable, or if `LIMIT`
+or `INVENTORY` expands empty: all ways a run looks scoped but silently targets something
+else. `make decommission` additionally requires `LIMIT` on the command line.
 
 `ANSIBLE_ARGS` passes anything else straight through. Quote the whole value at your prompt,
 or make will read the extra words as its own goals and flags (a bare `-vv` is make's `-v`);
@@ -199,7 +203,7 @@ literal `$` as `$$`:
 
 ```bash
 make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='--tags decdn_node -vv'
-make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='--start-at-task="Install the decdn binaries"'
+make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='--start-at-task="Install decdn-node + decdn CLI"'
 ```
 
 > **Watch the PLAY RECAP.** A *well-formed* argument that selects nothing is not an error:
@@ -226,66 +230,32 @@ primitives underneath it. All take `--dry-run`. See
 
 ### Grafana Cloud observability (opt-in)
 
-The play ships a third role, `grafana_alloy`, that installs a loopback-only
-[Grafana Alloy](https://grafana.com/docs/alloy/) agent shipping five signals to your
-Grafana Cloud org — the node's `/metrics`, **the machine itself** (CPU/memory/disk/
-filesystem/network/load plus per-unit state, via Alloy's in-process `node_exporter`),
-**journald**, the agent's own health, and the daemon's OTLP spans (`127.0.0.1:4317`) —
-off by default, driven by ONE mirrored inventory flag:
+A third role, `grafana_alloy`, installs a loopback-only
+[Grafana Alloy](https://grafana.com/docs/alloy/) agent that ships the node's metrics, the
+machine's own metrics, journald, the agent's health and the daemon's OTLP traces to your
+Grafana Cloud org. One mirrored inventory flag drives both roles:
 
 ```yaml
-# group_vars/host_vars — drives BOTH roles from one knob
-decdn_grafana_cloud_enabled: true
+decdn_grafana_cloud_enabled: true   # group_vars or host_vars
 ```
 
-Machine metrics, journald and Alloy's own health come with it (each has a
-`grafana_alloy_*_enabled` sub-knob, all defaulting to `true`). Host metrics and logs
-carry `job="integrations/node_exporter"`, so Grafana Cloud's prebuilt **Linux Server**
-dashboards and alert rules work unmodified.
+Only the API token is secret. It lives on each host in `0600 /etc/grafana-alloy.env`, or
+in the git-ignored `secret.yml` as `grafana_alloy_api_token`. The endpoints and instance
+IDs are ordinary inventory variables. Setup, token handling, upgrade notes, cost
+guardrails and rollback: [`roles/grafana_alloy/README.md`](roles/grafana_alloy/README.md).
+To import upstream's decdn dashboards and alert rules into that stack, see
+[`charts/decdn-node/files/monitoring/`](../charts/decdn-node/files/monitoring/README.md).
 
-Only the API token is a secret. Put the non-secret connection settings in inventory
-once for the fleet (`grafana_alloy_prom_url`, `_prom_username`, `_otlp_endpoint`,
-`_otlp_username`, `_loki_url`, `_loki_username` — Prometheus, OTLP and Loki each have
-their **own** instance ID, so copy each from the portal page that names it), and
-provision just the token **on each target host** (on this path it never transits this
-repo or the control machine; the inventory alternative below trades that for a
-git-ignored `secret.yml`):
+### Backup and decommission
 
 ```bash
-umask 077
-printf 'GC_API_TOKEN=glc_…\n' > grafana-alloy.env
-sudo install -m 600 -o root -g root grafana-alloy.env /etc/grafana-alloy.env
+make backup LIMIT=<host>                                           # encrypted identity backup
+make backup LIMIT=<host> ANSIBLE_ARGS='-e decdn_backup_scope=full'  # full state (stops the node briefly; stays on the host)
+make decommission LIMIT=<host>                                     # typed confirmation; keeps the identity
 ```
 
-Each of those variables is optional: left empty, the value is read from the matching
-`GC_…` key in that file instead (`roles/grafana_alloy/files/grafana-alloy.env.example`
-lists them all; URLs must be https).
-
-Alternatively the token itself can ride git-ignored inventory — set
-`grafana_alloy_api_token: "glc_…"` in `host_vars/<node>/secret.yml`, same channel as
-`decdn_rpc_url`, and the role authors `/etc/grafana-alloy.env` for you (token-only,
-root 0600). The authoring rewrites the file wholesale, so any hand-added `GC_*` keys
-must move to their inventory variables first; provenance guards fail loud on silent
-adoption or clobbering. Migrating a host that already has a hand-provisioned file
-needs `grafana_alloy_overwrite_host_file: true` for exactly one converge — set it
-back to `false` afterwards, or the guard stays off on that host. See "The API token
-has two homes now" in the role README for the ordered procedure in both directions.
-
-**Upgrading a host deployed before machine monitoring existed:** journald shipping is on
-by default and needs a Loki endpoint + instance ID the old four-key file does not carry,
-so preflight fails until you either set `grafana_alloy_loki_url` / `_loki_username` in
-inventory, add `GC_LOKI_URL` / `GC_LOKI_USERNAME` to the env file, or set
-`grafana_alloy_logs_enabled: false`. The daemon's own metrics also gain an explicit
-`job="decdn-node"` label (previously the implicit `prometheus.scrape.decdn_node`) —
-`grafana_alloy_node_job: ""` restores the old identity. If traces start returning 401
-while metrics still flow, the stack's OTLP instance ID is not its Prometheus one: set
-`grafana_alloy_otlp_username` (or `GC_OTLP_USERNAME`), which earlier versions had no way
-to express.
-
-Setup, rotation, cost/cardinality guardrails, the two systemd-hardening relaxations
-machine monitoring requires, and rollback: see
-[`roles/grafana_alloy/README.md`](roles/grafana_alloy/README.md). The Helm chart path is
-separate and deliberately untouched.
+Backups need `decdn_backup_age_recipients` (public keys). Restore, host migration and
+the on-chain exit: [`docs/lifecycle.md`](../docs/lifecycle.md).
 
 ---
 
@@ -293,8 +263,8 @@ separate and deliberately untouched.
 
 ```bash
 make lint           # yamllint + ansible-lint (production profile)
-ansible-playbook playbooks/site.yml --syntax-check
-make molecule       # all seven molecule scenarios, in parallel (needs Docker)
+for pb in playbooks/*.yml; do ansible-playbook "$pb" --syntax-check -i localhost,; done
+make molecule       # every molecule scenario, in parallel (needs Docker)
 make molecule JOBS=2   # …capped to two at a time on a small machine
 make molecule-serial   # …one at a time, when a failure needs readable output
 
@@ -308,10 +278,12 @@ for both roles, must be rejected by their own asserts), `generate-keystore` (opt
 host-side wallet), `host-env` (host-provisioned `/etc/decdn/decdn.env`),
 `slow-readiness` (advisory `/metrics` probe timeout), `grafana-cloud` (the opt-in
 observability wiring — see [Grafana Cloud observability](#grafana-cloud-observability-opt-in))
-and `grafana-cloud-token` (the same wiring with the API token carried through
-git-ignored inventory instead: role-authored env file + provenance record).
-They are independent, so they run concurrently —
-~151s instead of ~595s — and each line of output is prefixed with its scenario name
+`grafana-cloud-token` (the same wiring with the API token carried through
+git-ignored inventory instead: role-authored env file + provenance record),
+`os-matrix` (default's plays on Debian 13, Ubuntu 24.04 and Ubuntu 26.04; `default`
+itself is Debian 12) and `lifecycle` (a `decdn_network` profile with an override, both
+backup scopes decrypted and checked, a rejected and a real decommission).
+They are independent, so they run concurrently, and each line of output is prefixed with its scenario name
 because the runs interleave. `make molecule-serial` is the escape hatch when that
 interleaving gets in the way of reading a failure.
 
@@ -350,37 +322,35 @@ the RPC URL when it is not provisioned on the host instead). Highlights:
 | `baseline_extra_inbound` | `[]` | public inbound ports; `decdn_nodes` opens udp/4433. |
 | `baseline_preserve_ipv6_autoconf` | `true` | Keep IPv6 RA/autoconf under hardening; set `false` for static-IPv6 hosts. |
 | `baseline_rp_filter_loose` | `false` | `true` loosens reverse-path filtering (`rp_filter=2`) for multi-homed nodes. |
-| `decdn_node_version` | `""` | **required**; a `v<version>` release must exist. |
-| `decdn_rpc_url` + 3 contract addresses | `""` | **required** per node — `rpc_url` from a host-provisioned `0600 /etc/decdn/decdn.env` (preferred) *or* `host_vars/<node>/secret.yml`, addresses in `main.yml`; sourced from an ADR/deployment. |
+| `decdn_node_install_method` | `manual` | `manual` (local build) until upstream tags a release, then `release` with `decdn_node_version`. |
+| `decdn_node_target` | from the host | The release target triple, derived from the host architecture (x86_64 or aarch64). |
+| `decdn_network` | `""` | `arbitrum-sepolia` sets `chain_id` and every contract address from the role's manifest mirror; inventory values still win. `""` = set them yourself. |
+| `decdn_rpc_url` | `""` | **required** per node, from a host-provisioned `0600 /etc/decdn/decdn.env` (preferred) *or* `host_vars/<node>/secret.yml`. |
 | `decdn_region` / `decdn_bind_port` / `decdn_rate_per_mb` | `""` / `4433` / `10` | node identity, QUIC port, USDC base units/MB. |
 | `decdn_env_checksum_file` / `decdn_env_overwrite_host_file` | `/etc/decdn/.decdn.env.sha256` / `false` | Provenance record for the secret env file (`0600 root`), and the opt-in that lets an inventory `decdn_rpc_url` overwrite a host-edited one. |
 | `decdn_grafana_cloud_enabled` | `false` | ONE mirrored knob (identical default in both roles) wiring on Grafana Cloud observability: installs + configures `grafana_alloy` — node metrics, machine metrics, journald, agent health — AND injects `otlp_endpoint` into `node.toml`. Only the API token is provisioned per host *or* carried by `grafana_alloy_api_token` in git-ignored inventory; the rest are inventory variables. Label/cost guardrails in the role README. |
 | `grafana_alloy_api_token` / `_env_checksum_file` / `_overwrite_host_file` | `""` / `/etc/grafana-alloy.env.sha256` / `false` | The dual-homed Grafana Cloud token and its provenance machinery (`#39` parity with the row above); the record path is fixed to `<secret-file>.sha256` and survives disable with the secret. See [`roles/grafana_alloy/README.md`](roles/grafana_alloy/README.md). |
+| `decdn_backup_age_recipients` / `decdn_backup_scope` | `[]` / `identity` | Public keys backups are encrypted to (required for `make backup`), and `identity` or `full`. See [`docs/lifecycle.md`](../docs/lifecycle.md). |
 
 ---
 
 ## Packaging as a Galaxy collection (`decdn.node`)
 
-The two roles (`baseline` + `decdn_node`) are also packaged as the distributable
-**`decdn.node`** collection — deployment options for external node operators.
+The three roles (`baseline`, `decdn_node`, `grafana_alloy`) are also packaged as the
+distributable **`decdn.node`** collection, for operators who bring their own playbooks.
 
 The collection overlay lives in [`galaxy/`](galaxy/) (`galaxy.yml`, the collection
 `README.md`/`CHANGELOG.md`, `meta/runtime.yml`, `build.sh`). It is deliberately **not**
-a `galaxy.yml` at the project root: `galaxy/build.sh` stages only the two roles into a
+a `galaxy.yml` at the project root: `galaxy/build.sh` stages only the three roles into a
 clean `ansible_collections/decdn/node/` tree and builds the artifact, so this project
-stays a plain Ansible project (the internal `make deploy`/`lint` flow is unchanged).
+stays a plain Ansible project (the `make deploy`/`lint` flow is unchanged).
 
 ```bash
 make build          # stage + build -> build/decdn-node-<version>.tar.gz
 make galaxy-check   # build + validate with galaxy-importer (the checks Galaxy runs)
 ```
 
-Publishing is a **manual** step (no auto-publish workflow, no token in CI yet):
-
-```bash
-ansible-galaxy collection publish build/decdn-node-*.tar.gz --api-key "$GALAXY_TOKEN"
-```
-
-Bump `version:` in `galaxy/galaxy.yml` and add a `galaxy/CHANGELOG.md` entry per release.
-CI's `galaxy-build` job builds + validates the collection on every `ansible/**` change but
-never publishes.
+CI's `galaxy-build` job builds and validates the collection on every `ansible/**` change.
+Publishing happens from a `vX.Y.Z` tag through `.github/workflows/release.yml`, together
+with the Helm chart at the same version: see [RELEASING.md](../RELEASING.md). Record every
+change under `[Unreleased]` in `galaxy/CHANGELOG.md`.

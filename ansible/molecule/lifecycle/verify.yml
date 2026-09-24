@@ -1,0 +1,154 @@
+---
+- name: Verify the lifecycle
+  hosts: all
+  become: true
+  vars:
+    _profile: >-
+      {{ (lookup('ansible.builtin.file',
+          lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') ~ '/roles/decdn_node/vars/main/networks.yml')
+          | from_yaml)._decdn_network_profiles['arbitrum-sepolia'] }}
+    _local_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/backups/{{ inventory_hostname }}"
+  tasks:
+    # --- Network profile ----------------------------------------------------------
+    - name: Read the rendered node.toml
+      ansible.builtin.slurp:
+        src: /etc/decdn/node.toml
+      register: _toml
+
+    - name: Require profile values, the inventory override and an integer chain_id
+      vars:
+        _t: "{{ _toml.content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - _t is search('(?m)^chain_id = ' ~ _profile.chain_id ~ '$')
+          - _t is search('(?m)^payment_pool_address = "' ~ _profile.payment_pool_address ~ '"$')
+          - _t is search('(?m)^content_blacklist_address = "' ~ _profile.content_blacklist_address ~ '"$')
+          - _t is search('(?m)^usdc_address = "' ~ _profile.usdc_address ~ '"$')
+          - _t is search('(?m)^slash_appeal_address = "0x5555555555555555555555555555555555555555"$')
+        fail_msg: node.toml does not carry the profile values with the inventory override on top.
+
+    # --- Backups --------------------------------------------------------------------
+    - name: Find the archives on the host
+      ansible.builtin.find:
+        paths: /var/backups/decdn
+        patterns: ["*.tar.age", "*.partial"]
+      register: _archives
+
+    # One identity backup, two full ones (the plain one and leave_stopped); the
+    # failed run must have left nothing, not even a .partial.
+    - name: Require one identity and two full archives, root-only, no partials
+      ansible.builtin.assert:
+        that:
+          - _archives.files | map(attribute='path') | select('search', '\.partial$') | list | length == 0
+          - _archives.files | map(attribute='path') | select('search', '-identity-') | list | length == 1
+          - _archives.files | map(attribute='path') | select('search', '-full-') | list | length == 2
+          - _archives.files | map(attribute='mode') | unique == ['0600']
+        fail_msg: "Unexpected archives: {{ _archives.files | map(attribute='path') | list }}"
+
+    - name: List each archive's members (decrypting with the throwaway key)
+      ansible.builtin.shell:
+        cmd: set -o pipefail; age -d -i /root/molecule-age.key {{ item.path | quote }} | tar -tzf -
+        executable: /bin/bash
+      loop: "{{ _archives.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: _members
+      changed_when: false
+
+    - name: Require each scope's members
+      vars:
+        _list: "{{ item.stdout_lines }}"
+        _full: "{{ '-full-' in item.item.path }}"
+      ansible.builtin.assert:
+        that:
+          - "'var/lib/decdn/node.secret' in _list"
+          - "'var/lib/decdn/keystore.json' in _list"
+          - "'etc/decdn/keystore.password' in _list"
+          - "'etc/decdn/decdn.env' not in _list"
+          # The cache is in no backup ...
+          - _list | select('match', '^var/lib/decdn/cache/') | list | length == 0
+          # ... daemon state only in a full one, which is more than the identity.
+          - ('var/lib/decdn/molecule-state.redb' in _list) if _full | bool else (_list | length == 3)
+          - (_list | select('match', '^var/lib/decdn/') | list | length > 2) if _full | bool else true
+        fail_msg: "{{ item.item.path | basename }} holds {{ _list }}"
+      loop: "{{ _members.results }}"
+      loop_control:
+        label: "{{ item.item.path | basename }}"
+
+    - name: Checksum the archives on the host
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+        checksum_algorithm: sha256
+      loop: "{{ _archives.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: _remote
+
+    - name: Checksum the copies on the control machine
+      ansible.builtin.stat:
+        path: "{{ _local_dir }}/{{ item.path | basename }}"
+        checksum_algorithm: sha256
+      loop: "{{ _archives.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: _local
+      delegate_to: localhost
+      become: false
+
+    # Identity archives are fetched by default; full ones are not (fetch would read
+    # them into memory on both ends).
+    - name: Require the identity archive fetched intact and full archives left on the host
+      vars:
+        _pairs: "{{ _remote.results | zip(_local.results) | list }}"
+      ansible.builtin.assert:
+        that:
+          - >-
+            (item.1.stat.exists and item.1.stat.checksum == item.0.stat.checksum)
+            if '-identity-' in item.0.item.path else not item.1.stat.exists
+        fail_msg: "{{ item.0.item.path | basename }}: fetched copy wrong or unexpected."
+      loop: "{{ _pairs }}"
+      loop_control:
+        label: "{{ item.0.item.path | basename }}"
+
+    # --- Decommission -----------------------------------------------------------------
+    - name: Stat the unit and the identity
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/systemd/system/decdn-node.service
+        - /var/lib/decdn/node.secret
+        - /var/lib/decdn/keystore.json
+        - /etc/decdn/keystore.password
+      register: _after
+
+    - name: Require the unit gone and the identity kept
+      ansible.builtin.assert:
+        that:
+          - not _after.results[0].stat.exists
+          - _after.results[1:] | map(attribute='stat.exists') | unique == [true]
+        fail_msg: Decommission must remove the unit and keep node.secret, keystore.json and the password file.
+
+    - name: Stat the cache and the daemon state
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /var/lib/decdn/cache
+        - /var/lib/decdn/molecule-state.redb
+      register: _purge
+
+    - name: Require the cache purged and the rest of the data dir kept
+      ansible.builtin.assert:
+        that:
+          - not _purge.results[0].stat.exists
+          - _purge.results[1].stat.exists
+        fail_msg: decdn_decommission_purge_cache must delete the cache dir and nothing else.
+
+    - name: Read service state
+      ansible.builtin.service_facts:
+
+    - name: Require decdn-node to be gone
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['decdn-node.service'] is not defined
+            or ansible_facts.services['decdn-node.service'].state != 'running'
+        fail_msg: decdn-node is still running after decommission.
