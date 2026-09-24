@@ -428,25 +428,43 @@ See `roles/decdn_node/defaults/main.yml` for the full knob list, defaults and un
 
 The role stops at ADR 019 Phase 1 (host prep) and Phase 3 (startup). Phase 2 — fund,
 bond, register — is the operator's, but it is **no longer a set of raw contract
-calls**: upstream ships a guided CLI. Every one of these takes `--dry-run`.
+calls**: upstream ships a guided CLI. Every one of these takes `--dry-run`. They need
+`--rpc-url` (see "The RPC URL is the exception" below), so on the node run them
+through the `decdn_chain` helper from
+[`docs/lifecycle.md` § Running on-chain commands](../../../docs/lifecycle.md#running-on-chain-commands),
+which runs as `decdn` with `/etc/decdn/decdn.env` and adds `--config`, `--rpc-url` and
+`--keystore-password-file`.
 
 ```bash
 # Guided path: pre-flight checks (clock skew, gas, balances), key generation,
 # bond and registration, ending in a readiness summary. Thin orchestration over
 # `key-gen` / `node bond` / `node register` — it submits no transaction they do
 # not. (The exit path below is NOT part of setup.)
-decdn setup --mbps 100 --region US \
+decdn_chain setup --mbps 100 --region US \
   --multiaddr /ip4/<public-ip>/udp/4433/quic-v1 --yes --accept-terms
 
 # Or drive the primitives directly:
-decdn node bond --mbps 100     # CapacityBond.bond + declareMbps (idempotent:
-                               # tops up only the shortfall, so a re-run after a
-                               # partial failure converges rather than over-bonding)
-decdn node register --region US \
+decdn_chain node bond --mbps 100   # CapacityBond.bond + declareMbps (idempotent:
+                                   # tops up only the shortfall, so a re-run after a
+                                   # partial failure converges rather than over-bonding)
+decdn_chain node register --region US \
   --multiaddr /ip4/<public-ip>/udp/4433/quic-v1 \
-  --accept-terms               # CapacityBond.registerNode — builds the EIP-712
-                               # binding + ed25519 ownership signatures locally.
-                               # --region is REQUIRED (no default).
+  --accept-terms                   # CapacityBond.registerNode — builds the EIP-712
+                                   # binding + ed25519 ownership signatures locally.
+                                   # --region is REQUIRED (no default).
+```
+
+On a dual-stack host, add `--multiaddr /ip6/<public-ipv6>/udp/4433/quic-v1` as well.
+Builds since decdn/decdn#2144 (`869141e9`) bind QUIC on both `0.0.0.0:4433` and
+`[::]:4433`; check `ss -ulpn` shows `[::]:4433` first. Older builds are IPv4-only on
+that port, so register `/ip4/` only there.
+To get the address to fund, run `whoami` as `decdn` (also in that section of
+`docs/lifecycle.md`). `keystore.json` has no plaintext address field.
+
+```bash
+sudo systemd-run --pty --wait --collect -p User=decdn \
+  /usr/local/bin/decdn --config /etc/decdn/node.toml whoami \
+  --keystore-password-file /etc/decdn/keystore.password
 ```
 
 Exiting is the reverse, in order: `decdn node deregister` (leaves the active set
@@ -469,7 +487,10 @@ renders (`--config /etc/decdn/node.toml`), so those only have to be right once.
 environment (only the daemon does), and this role keeps `rpc_url` out of `node.toml`
 because it may embed an API key. Pass it with `--rpc-url`. The `decdn_chain` helper in
 [`docs/lifecycle.md` § Running on-chain commands](../../../docs/lifecycle.md#running-on-chain-commands)
-does that from `/etc/decdn/decdn.env`, as the `decdn` user.
+does that from `/etc/decdn/decdn.env`, as the `decdn` user. The tradeoff: the URL sits
+in the `decdn` process's argv while the command runs, where other local users can see
+it with `ps`. The section there covers the shared-host workaround and the upstream fix
+(`env = "DECDN_RPC_URL"` on the CLI's `--rpc-url`).
 
 ## Network
 
