@@ -1,6 +1,6 @@
 ---
 name: Bug report
-description: A deploy path (Ansible, Helm, Compose) does something wrong.
+description: A deploy path (Ansible, cloud-init, Helm, Compose) does something wrong.
 labels: [bug]
 body:
   - type: markdown
@@ -16,6 +16,7 @@ body:
       options:
         - Ansible (this repo's playbooks)
         - Ansible (decdn.node Galaxy collection)
+        - cloud-init user-data
         - Helm chart
         - Docker Compose
     validations:
@@ -24,7 +25,7 @@ body:
     id: install
     attributes:
       label: Install method
-      description: Ansible only.
+      description: Ansible only (cloud-init is always release).
       options:
         - release (signed tarball)
         - manual (locally built binaries)

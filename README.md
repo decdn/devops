@@ -9,11 +9,12 @@
 [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow.svg)](https://www.conventionalcommits.org)
 
 The official **DevOps repo** for running a deCDN node: infrastructure, deployment and
-day-2 tooling for operators anywhere. Three ways to deploy the same node:
+day-2 tooling for operators anywhere. Four ways to deploy the same node:
 
 | Path | For | Start here |
 |------|-----|------------|
 | **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published as the `decdn.node` Galaxy collection. | [`ansible/README.md`](ansible/README.md) |
+| **cloud-init** (`cloud-init/`) | One VM, no control machine: paste the user-data into your provider's "create server" form. It runs the Ansible playbook on the host itself, hardening included. | [`cloud-init/README.md`](cloud-init/README.md) |
 | **Docker Compose** (`compose/`) | One host that already runs Docker. | [`compose/README.md`](compose/README.md) |
 | **Helm** (`charts/decdn-node/`) | Kubernetes, one release per node. | [`charts/decdn-node/README.md`](charts/decdn-node/README.md) |
 
@@ -64,7 +65,7 @@ make deploy LIMIT=decdn-node-1                          # every run after that
 ```
 
 The full flow (bootstrap user, keystore, secrets, fleets in a private inventory) is in
-[`ansible/README.md`](ansible/README.md). Compose and Helm have their own quickstarts.
+[`ansible/README.md`](ansible/README.md). cloud-init, Compose and Helm have their own quickstarts.
 
 ## Security model
 
@@ -97,6 +98,7 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 | Path | What it is |
 |------|------------|
 | [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
+| [`cloud-init/`](cloud-init/README.md) | The cloud-init deploy path: `user-data.yaml`, the on-host `bootstrap.sh`, and the pinned ansible-core and collections it installs. |
 | [`compose/`](compose/README.md) | The Docker Compose deploy path. |
 | [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart, with vendored dashboards and alert rules in `files/monitoring/`. |
 | [`docs/`](docs/requirements.md) | Cross-path operator docs: requirements, lifecycle. |

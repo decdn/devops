@@ -1,0 +1,47 @@
+---
+# One refusal case for ../side_effect.yml: write the broken bootstrap.env, run stage 1, and
+# check that it refused for the stated reason, recorded "failed" and did not move the
+# checkout.
+- name: "Write a bootstrap.env with {{ refusal.name }}"
+  ansible.builtin.copy:
+    dest: "{{ env_file }}"
+    content: "{{ refusal.content }}"
+    owner: root
+    group: root
+    mode: "{{ refusal.mode }}"
+
+- name: "Run stage 1 with {{ refusal.name }}"
+  ansible.builtin.command:
+    cmd: /usr/local/sbin/decdn-bootstrap
+  register: refused
+  changed_when: false
+  failed_when: false
+
+- name: "Read the state after {{ refusal.name }}"
+  ansible.builtin.slurp:
+    src: /var/lib/decdn-bootstrap/state
+  register: refused_state
+
+- name: "Run the login hint after {{ refusal.name }}"
+  ansible.builtin.command:
+    cmd: sh /etc/profile.d/decdn-bootstrap.sh
+  register: refused_hint
+  changed_when: false
+
+- name: "Read the checkout's commit after {{ refusal.name }}"
+  ansible.builtin.slurp:
+    src: /opt/decdn-devops/.git/HEAD
+  register: refused_head
+
+- name: "Assert stage 1 refused {{ refusal.name }}"
+  ansible.builtin.assert:
+    that:
+      - refused.rc == 1
+      - refused.stderr is search(refusal.expect, ignorecase=false)
+      - refused_state.content | b64decode | trim == 'failed'
+      - refused_hint.stdout is search('FAILED')
+      - refused_head.content | b64decode | trim == pinned_sha
+    fail_msg: >-
+      rc={{ refused.rc }} stderr={{ refused.stderr | to_json }}
+      state={{ refused_state.content | b64decode | trim }} hint={{ refused_hint.stdout | to_json }}
+      head={{ refused_head.content | b64decode | trim }} (pinned {{ pinned_sha }})

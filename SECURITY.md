@@ -8,7 +8,7 @@ reports. That includes a secret or real host address you find committed here.
 ## Scope
 
 This repo holds the deployment tooling for a deCDN node: the Ansible roles, the
-`decdn.node` Galaxy collection, the Docker Compose file, and the Helm chart. Reports about the node daemon or
+`decdn.node` Galaxy collection, the cloud-init user-data, the Docker Compose file, and the Helm chart. Reports about the node daemon or
 protocol belong to [decdn/decdn](https://github.com/decdn/decdn), but the same address
 reaches both.
 

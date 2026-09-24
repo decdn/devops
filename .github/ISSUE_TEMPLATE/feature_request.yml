@@ -21,6 +21,7 @@ body:
       multiple: true
       options:
         - Ansible
+        - cloud-init
         - Helm chart
         - Docker Compose
         - All / not specific

@@ -10,14 +10,20 @@
 #                   ${DECDN_IMAGE_DIGEST}, which the operator pins to a signed
 #                   release digest; nothing to bump
 #   helm            the chart has no dependencies, and its image is operator-set
-#   pip             the repo has no pip manifest (CI installs are unpinned)
+#   pip             CI installs are unpinned. The one pip manifest,
+#                   cloud-init/requirements.txt, pins ansible-core twice with Python
+#                   markers (2.19 for 3.11, 2.21 for 3.12+) and is compiled with uv;
+#                   an automated bump could move the 3.11 pin to a release that
+#                   drops 3.11
 # Ansible Galaxy (ansible/requirements.yml) is not a Dependabot ecosystem.
 #
 # NOT covered, bump manually (CONTRIBUTING.md § Supply-chain / pinning rules):
 #   - the KICS and kubeconform image digests in the Makefile
 #   - the molecule image digests in ansible/molecule/*/molecule.yml
 #   - the four setup-helm `version:` inputs (two in ci.yml, two in release.yml)
-#   - the Galaxy collections in ansible/requirements.yml
+#   - the Galaxy collections in ansible/requirements.yml, and their exact pins in
+#     cloud-init/collections.lock.yml
+#   - ansible-core in cloud-init/requirements.in (then recompile requirements.txt)
 #   - the local yamllint hook's `additional_dependencies` pin
 version: 2
 updates:

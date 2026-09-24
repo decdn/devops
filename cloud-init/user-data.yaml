@@ -1,0 +1,175 @@
+#cloud-config
+# deCDN node bootstrap for a fresh Debian 12/13 or Ubuntu 24.04/26.04 VM (x86_64 or
+# aarch64). Paste this into your provider's "user data" / "cloud-init" field when creating
+# the server. The full walkthrough is in cloud-init/README.md of github.com/decdn/devops.
+#
+# Edit every value marked MUST-EDIT first. The bootstrap refuses to run while any
+# CHANGE_ME is left.
+#
+# NEVER PUT A SECRET IN THIS FILE. Any local process can read user-data from the instance
+# metadata service, and your provider keeps a copy in its console and API. That rules out
+# the RPC URL (it may embed an API key), passwords, keystores and tokens. Everything below
+# is public: an SSH *public* key, a version, a region. The RPC URL is written over SSH after
+# the first boot, and the node's wallet is generated on the host.
+#
+# On first boot the host clones github.com/decdn/devops at DEVOPS_REF, installs a pinned
+# Ansible, and hardens itself (SSH, firewall, automatic patching). It then stops and waits
+# for /etc/decdn/decdn.env. `cloud-init status --wait` returns when it is done.
+---
+package_update: true
+packages:
+  - git
+  - python3-venv
+  - ca-certificates
+  - sudo
+
+write_files:
+  # Which revision of github.com/decdn/devops the host runs. Pin a full 40-character
+  # commit SHA (verified after checkout) or a release tag. Branch names are refused.
+  - path: /etc/decdn-bootstrap/bootstrap.env
+    owner: root:root
+    permissions: "0600"
+    content: |
+      DEVOPS_REPO=https://github.com/decdn/devops.git
+      DEVOPS_REF=CHANGE_ME
+
+  # The Ansible inventory for this host. Everything the playbook needs that is not a
+  # secret lives here. More knobs: ansible/roles/*/defaults/main.yml.
+  - path: /etc/decdn-bootstrap/inventory.yml
+    owner: root:root
+    permissions: "0600"
+    content: |
+      ---
+      decdn_nodes:
+        hosts:
+          localhost:
+            ansible_connection: local
+            ansible_python_interpreter: /usr/bin/python3
+        vars:
+          # Your admin account. Hardening disables root and password SSH logins, so this
+          # account and its key are how you log back in. Many providers inject their key
+          # for root only, so list the key here too.
+          baseline_sudo_users:
+            - name: CHANGE_ME                  # MUST-EDIT: login name, e.g. "alice"
+              keys:
+                - "CHANGE_ME"                  # MUST-EDIT: your SSH public key, "ssh-ed25519 AAAA… you@laptop"
+          # Under cloud-init the "runner" is root on this host, not you, so there is
+          # nobody to auto-detect.
+          baseline_sudo_autodetect_runner: false
+          # Optional: accept SSH only from these CIDRs.
+          # ssh_allow_cidrs: ["203.0.113.0/24"]
+
+          # The node, installed from the GPG-verified release tarballs.
+          decdn_node_install_method: release
+          decdn_node_version: "CHANGE_ME"      # MUST-EDIT: an upstream release, e.g. "0.2.0"
+          # Until upstream publishes a release, point this at a mirror that serves
+          # v<version>/{decdn-node,decdn}-<version>-<target>.tar.gz, SHA256SUMS and
+          # SHA256SUMS.asc. The signature is still checked against deCDN's release key.
+          # decdn_node_release_base: "https://mirror.example/decdn/releases/download"
+          decdn_node_generate_keystore: true   # the wallet is generated on the host
+          decdn_network: arbitrum-sepolia
+          decdn_region: "CHANGE_ME"            # MUST-EDIT: ISO 3166-1 alpha-2 of the VM's location, e.g. "DE"
+
+  # What an interactive login prints while the bootstrap is unfinished. It is written
+  # here, not by the bootstrap, so that it is in place even if stage 1 fails.
+  - path: /etc/profile.d/decdn-bootstrap.sh
+    owner: root:root
+    permissions: "0644"
+    content: |
+      # deCDN bootstrap status at login (cloud-init/README.md in decdn/devops).
+      log=/var/log/cloud-init-output.log
+      rerun="sudo decdn-bootstrap"
+      case "$(cat /var/lib/decdn-bootstrap/state 2>/dev/null)" in
+        complete) ;;
+        awaiting-secret)
+          echo "deCDN: hardened, waiting for its RPC secret. Write 0600 /etc/decdn/decdn.env, then run: $rerun" ;;
+        running)
+          if pgrep -f 'sbin/decdn-bootstrap|cloud-init/bootstrap[.]sh' >/dev/null 2>&1; then
+            echo "deCDN: the bootstrap is running (log: $log)"
+          else
+            echo "deCDN: the bootstrap was interrupted. Re-run it: $rerun"
+          fi ;;
+        failed)
+          echo "deCDN: the last bootstrap run FAILED (log: $log). Re-run it: $rerun" ;;
+        *)
+          echo "deCDN: the bootstrap has not run yet (cloud-init status --wait; log: $log)" ;;
+      esac
+
+  # Stage 1: fetch and verify the pinned checkout, then hand over to its
+  # cloud-init/bootstrap.sh. Re-run it by hand after writing /etc/decdn/decdn.env, or
+  # after changing DEVOPS_REF: `sudo decdn-bootstrap`.
+  - path: /usr/local/sbin/decdn-bootstrap
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # Stage 1 of the deCDN cloud-init bootstrap (cloud-init/README.md in decdn/devops).
+      set -euo pipefail
+      conf=/etc/decdn-bootstrap/bootstrap.env
+      checkout=/opt/decdn-devops
+      state_dir=/var/lib/decdn-bootstrap
+      die() { echo "decdn-bootstrap: $*" >&2; exit 1; }
+      # World-readable: the login hint reads it as the admin account.
+      set_state() {
+        install -d -m 0755 "$state_dir"
+        printf '%s\n' "$1" >"$state_dir/state.tmp"
+        chmod 0644 "$state_dir/state.tmp"
+        mv -f "$state_dir/state.tmp" "$state_dir/state"
+      }
+
+      [[ $EUID -eq 0 ]] || die "run as root (sudo decdn-bootstrap)"
+      # One run at a time. The lock is held until stage 2 exits (exec keeps fd 9).
+      exec 9>/run/decdn-bootstrap.lock
+      flock -n 9 || die "another decdn-bootstrap run is in progress"
+      # Any non-zero exit before the hand-over, a signal included, records "failed".
+      # exec replaces this process, so stage 2's own traps take over from there.
+      trap 'rc=$?; ((rc == 0)) || set_state failed' EXIT
+      trap 'exit 129' HUP
+      trap 'exit 130' INT
+      trap 'exit 143' TERM
+      set_state running
+
+      [[ $(stat -c '%u %a' "$conf") == "0 600" ]] || die "$conf must be owned by root, mode 0600"
+      # KEY=value lines, read literally: never sourced, so a value is data, not shell.
+      DEVOPS_REPO='' DEVOPS_REF=''
+      while IFS= read -r line || [[ -n $line ]]; do
+        [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
+        [[ $line =~ ^([A-Z_]+)=(.*)$ ]] || die "$conf: not a KEY=value line: $line"
+        case ${BASH_REMATCH[1]} in
+          DEVOPS_REPO) DEVOPS_REPO=${BASH_REMATCH[2]} ;;
+          DEVOPS_REF) DEVOPS_REF=${BASH_REMATCH[2]} ;;
+          *) die "$conf: unknown key ${BASH_REMATCH[1]}" ;;
+        esac
+      done <"$conf"
+      [[ -n $DEVOPS_REPO ]] || die "DEVOPS_REPO is empty in $conf"
+      [[ -n $DEVOPS_REF && $DEVOPS_REF != CHANGE_ME ]] \
+        || die "set DEVOPS_REF in $conf to a commit SHA or release tag of $DEVOPS_REPO"
+      export HOME="${HOME:-/root}"
+
+      if [[ ! -d $checkout/.git ]]; then
+        git clone --quiet --no-checkout "$DEVOPS_REPO" "$checkout"
+      fi
+      git -C "$checkout" remote set-url origin "$DEVOPS_REPO"
+      git -C "$checkout" fetch --quiet --force --tags origin
+
+      if [[ $DEVOPS_REF =~ ^[0-9a-f]{40}$ ]]; then
+        want=$DEVOPS_REF
+        git -C "$checkout" cat-file -e "$want^{commit}" 2>/dev/null \
+          || git -C "$checkout" fetch --quiet origin "$want"
+      elif want=$(git -C "$checkout" rev-parse -q --verify "refs/tags/$DEVOPS_REF^{commit}"); then
+        echo "decdn-bootstrap: tag $DEVOPS_REF is commit $want"
+      else
+        die "DEVOPS_REF=$DEVOPS_REF is neither a full 40-character commit SHA nor a tag of $DEVOPS_REPO"
+      fi
+      git -C "$checkout" -c advice.detachedHead=false checkout --quiet --force --detach "$want"
+      [[ $(git -C "$checkout" rev-parse HEAD) == "$want" ]] || die "checkout is not at $want"
+      echo "decdn-bootstrap: running $DEVOPS_REPO at $want"
+      exec "$checkout/cloud-init/bootstrap.sh"
+
+runcmd:
+  - [/usr/local/sbin/decdn-bootstrap]
+
+final_message: >-
+  deCDN bootstrap finished after $UPTIME s. `cat /var/lib/decdn-bootstrap/state` shows
+  where it stopped; "awaiting-secret" means SSH in, write /etc/decdn/decdn.env and run
+  `sudo decdn-bootstrap` (cloud-init/README.md).

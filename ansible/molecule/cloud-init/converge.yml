@@ -1,0 +1,223 @@
+---
+# First boot. The seed is cloud-init/user-data.yaml as committed, with each MUST-EDIT
+# filled in the way an operator would and the three outside dependencies redirected
+# (repo, release mirror, signing key). Anything else in the file is exercised as
+# written. If the file's placeholders change, the "no CHANGE_ME left" check below fails
+# rather than letting this test drift into booting something else.
+#
+# It then runs cloud-init's own boot stages against that seed, and asserts the host
+# stopped where the README says it does: hardened (here: skipped, see molecule.yml),
+# nothing of the node installed, state "awaiting-secret", and cloud-init reporting done
+# without errors.
+- name: Converge — first boot of the user-data
+  hosts: all
+  become: true
+  vars:
+    userdata_src: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/../cloud-init/user-data.yaml"
+    seed: /var/lib/cloud/seed/nocloud
+    # Stood up by prepare.yml.
+    mirror_base: http://127.0.0.1:8080/releases
+    mirror_key: /srv/mirror/KEYS.asc
+  tasks:
+    - name: Read the commit the source repo is at (recorded by prepare.yml)
+      ansible.builtin.slurp:
+        src: /srv/devops-src.sha
+      register: src_sha_file
+
+    - name: Decode it
+      ansible.builtin.set_fact:
+        src_sha: "{{ src_sha_file.content | b64decode | trim }}"
+
+    - name: Create the NoCloud seed directory
+      ansible.builtin.file:
+        path: "{{ seed }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Seed the committed user-data
+      ansible.builtin.copy:
+        src: "{{ userdata_src }}"
+        dest: "{{ seed }}/user-data"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Fill in the MUST-EDIT values and point at the local repo and mirror
+      ansible.builtin.replace:
+        path: "{{ seed }}/user-data"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - regexp: '^(\s*)DEVOPS_REPO=https://github\.com/decdn/devops\.git$'
+          replace: '\1DEVOPS_REPO=file:///srv/devops-src'
+        - regexp: '^(\s*)DEVOPS_REF=CHANGE_ME$'
+          replace: '\1DEVOPS_REF={{ src_sha }}'
+        - regexp: '^(\s*)- name: CHANGE_ME\b.*$'
+          replace: '\1- name: molecule'
+        - regexp: '^(\s*)- "CHANGE_ME"(.*)$'
+          replace: '\1- "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMolecule0000000000000000000000000000000000 molecule"'
+        - regexp: '^(\s*)decdn_node_version: "CHANGE_ME".*$'
+          replace: '\1decdn_node_version: "0.0.0-molecule-stub"'
+        - regexp: '^(\s*)# decdn_node_release_base: .*$'
+          replace: '\1decdn_node_release_base: "{{ mirror_base }}"\n\1decdn_release_keyring: {{ mirror_key }}'
+        - regexp: '^(\s*)decdn_region: "CHANGE_ME".*$'
+          replace: '\1decdn_region: "DE"'
+      loop_control:
+        label: "{{ item.regexp }}"
+
+    # Values only (`KEY=CHANGE_ME`, `key: CHANGE_ME`, `- "CHANGE_ME"`), not the header
+    # comment or stage 1's own `!= CHANGE_ME` guard.
+    - name: Check that no placeholder value is left (the file and this test still agree)
+      ansible.builtin.command:
+        cmd: >-
+          grep -nE '(=|: |- )"?CHANGE_ME' {{ seed }}/user-data
+      register: leftover
+      changed_when: false
+      failed_when: leftover.rc != 1
+
+    - name: Create the bootstrap's config directory
+      ansible.builtin.file:
+        path: /etc/decdn-bootstrap
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # Outside the user-data on purpose: the lint rejects a user-data that mentions it.
+    - name: Skip baseline in the container (bootstrap.sh's test-only switch)
+      ansible.builtin.copy:
+        dest: /etc/decdn-bootstrap/TEST-ONLY-skip-baseline
+        content: ""
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Write the NoCloud meta-data
+      ansible.builtin.copy:
+        dest: "{{ seed }}/meta-data"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          instance-id: molecule-cloud-init
+          local-hostname: {{ inventory_hostname }}
+
+    # Container-only settings, none of which touch what the user-data does: find the
+    # seed without probing clouds, leave the container's network and hostname alone, and
+    # skip the locale module (the image ships no locales, so update-locale fails; a
+    # cloud image has them).
+    - name: Configure cloud-init for a container
+      ansible.builtin.copy:
+        dest: /etc/cloud/cloud.cfg.d/99-molecule.cfg
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          datasource_list: [NoCloud, None]
+          network: {config: disabled}
+          preserve_hostname: true
+          locale: false
+
+    - name: Boot
+      block:
+        - name: Start from a clean cloud-init state
+          ansible.builtin.command:
+            cmd: cloud-init clean --logs
+          changed_when: true
+
+        # The four stages a real boot runs, in order. The last one runs runcmd, which is
+        # stage 1 of the bootstrap.
+        - name: Run cloud-init's boot stages
+          ansible.builtin.command:
+            cmd: "cloud-init {{ item }}"
+          loop:
+            - init --local
+            - init
+            - modules --mode=config
+            - modules --mode=final
+          changed_when: true
+
+        - name: Read cloud-init's result
+          ansible.builtin.slurp:
+            src: /run/cloud-init/result.json
+          register: ci_result
+
+        # Not `cloud-init status`: cloud-init was installed after this container booted,
+        # so the systemd generator never enabled it and the status reads
+        # "disabled-by-generator" even though every stage above ran. The stages' own
+        # records are the ground truth.
+        - name: Read cloud-init's per-stage status
+          ansible.builtin.slurp:
+            src: /run/cloud-init/status.json
+          register: ci_status
+
+        - name: Assert cloud-init finished without errors
+          vars:
+            result: "{{ (ci_result.content | b64decode | from_json).v1 }}"
+            stages: "{{ (ci_status.content | b64decode | from_json).v1 }}"
+          ansible.builtin.assert:
+            that:
+              - result.errors | length == 0
+              - result.datasource is search('NoCloud')
+              - stages['modules-final'].finished is not none
+              - stages['modules-final'].errors | length == 0
+            fail_msg: "cloud-init did not finish cleanly: {{ result }} {{ stages['modules-final'] }}"
+      rescue:
+        - name: Read the bootstrap's output
+          ansible.builtin.command:
+            cmd: tail -n 80 /var/log/cloud-init-output.log
+          register: ci_output
+          changed_when: false
+          failed_when: false
+
+        - name: Fail with the bootstrap's output
+          ansible.builtin.fail:
+            msg: "{{ ci_output.stdout_lines | default([]) }}"
+
+    # --- Stopped at the secret gate -------------------------------------------------
+    - name: Read the bootstrap state
+      ansible.builtin.slurp:
+        src: /var/lib/decdn-bootstrap/state
+      register: bootstrap_state
+
+    # Stage 1 leaves the checkout on a detached HEAD, so .git/HEAD holds the SHA itself.
+    - name: Read the checkout's commit
+      ansible.builtin.slurp:
+        src: /opt/decdn-devops/.git/HEAD
+      register: checkout_head
+
+    - name: Stat what must NOT exist before the secret
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: premature
+      loop:
+        - /usr/local/bin/decdn-node
+        - /etc/systemd/system/decdn-node.service
+        - /var/lib/decdn/keystore.json
+
+    - name: Run the login hint
+      ansible.builtin.command:
+        cmd: sh /etc/profile.d/decdn-bootstrap.sh
+      register: login_hint
+      changed_when: false
+
+    - name: Validate the user-data cloud-init actually consumed
+      ansible.builtin.command:
+        cmd: cloud-init schema --system
+      changed_when: false
+
+    - name: Assert the host is waiting for its secret, and nothing more
+      ansible.builtin.assert:
+        that:
+          - bootstrap_state.content | b64decode | trim == 'awaiting-secret'
+          - checkout_head.content | b64decode | trim == src_sha
+          - premature.results | selectattr('stat.exists') | list | length == 0
+          - login_hint.stdout is search('waiting for its RPC secret')
+        fail_msg: >-
+          Expected state awaiting-secret at {{ src_sha }} with no node installed
+          and a login hint. Got state {{ bootstrap_state.content | b64decode | trim }},
+          checkout {{ checkout_head.content | b64decode | trim }}, present:
+          {{ premature.results | selectattr('stat.exists') | map(attribute='item') | list }},
+          hint {{ login_hint.stdout | to_json }}.
