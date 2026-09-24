@@ -10,8 +10,10 @@
 # distribution in the scenario's own output, and `default` stays a fast single-host
 # loop for development. `make molecule` finds it by glob.
 #
-# Same boundary as `default`: the decdn_node role only. `baseline` is not
-# container-testable (see default/molecule.yml) and is verified on real hosts.
+# Same boundary as `default`: decdn_node end to end, plus grafana_alloy's disabled
+# path and baseline's admin-account tasks, which default's converge includes.
+# grafana_alloy's install path (grafana-cloud*) and baseline's hardening are not
+# covered here: the former runs on Debian 12 only, the latter on real hosts.
 #
 # Images: digest-pinned multi-arch indexes (amd64 + arm64), :latest as of
 # 2026-09-24 (these images publish only :latest). Re-resolve with

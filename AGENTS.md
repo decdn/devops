@@ -123,11 +123,13 @@ addresses) the repo carries, and they carry their upstream commit.
   everything, so only the real pinned binary proves the rendered config loads. See
   `ansible/roles/grafana_alloy/README.md`.
 
-- **`compose/`** — the same node under Docker Compose on one host: the upstream image by
-  digest, the role's host layout (`/etc/decdn` read-only, `/var/lib/decdn`), host
+- **`compose/`** — the same node under Docker Compose on one host: the upstream image,
+  always by digest (`compose.yaml` builds `DECDN_IMAGE_REPO@DECDN_IMAGE_DIGEST`), the
+  role's host layout (`/etc/decdn` read-only, `/var/lib/decdn`), host
   networking (so loopback metrics/admin stay loopback and Docker publishes no ports),
   read-only rootfs, no capabilities, 300 s SIGTERM grace. `make lint-compose` asserts
-  those invariants; `make security` scans it.
+  those invariants (and `make test-scripts` that it rejects broken variants);
+  `make security` scans it.
 
 - **`charts/decdn-node/`** — the same node on Kubernetes: a one-replica StatefulSet (one
   release = one identity) on the upstream daemon-only image (`ghcr.io/decdn/decdn-node`;
@@ -159,6 +161,7 @@ make molecule         # every ansible/molecule/*/ scenario in parallel (Docker; 
 make lint-helm        # chart: lint + render tests + kubeconform + schema keys
 make lint-alloy       # grafana_alloy config against the real pinned Alloy binary
 make lint-compose     # compose/ invariants
+make test-scripts     # Makefile guards, release gate, lint-compose negatives
 make security         # KICS over ansible/, the rendered chart and compose/
 
 # Ansible — run from ansible/
@@ -185,7 +188,7 @@ together with the chart at the same version, and only while the `PUBLISH_ENABLED
 repository variable is `true` (RELEASING.md). Log changes under `[Unreleased]` in
 `ansible/galaxy/CHANGELOG.md` and `charts/decdn-node/CHANGELOG.md`.
 
-**CI.** `ci.yml` is the blocking gate: `pre-commit` and `actionlint` on every PR, the
+**CI.** `ci.yml` is the blocking gate: `pre-commit`, `scripts` and `actionlint` on every PR, the
 Ansible, chart and compose jobs path-filtered, KICS on any of them; `molecule.yml` runs the
 molecule suite on `ansible/**`. `ansible-lint` is **not** a per-commit hook (it needs
 collections vendored): run `make lint-ansible`.

@@ -12,7 +12,7 @@ deCDN ADRs.
 | Host hardening (firewall, SSH, patching) | yes, `baseline` | no, yours | no, the cluster's |
 | Fleets | yes, one inventory | one host per compose project | one release per node |
 | Secrets | host file or git-ignored inventory | host file | operator-created Secrets |
-| Install source | signed release tarball, or local build | image by digest | image by digest |
+| Install source | signed release tarball, or local build | image by digest (enforced) | image by digest (recommended) or tag |
 | Chain config | `decdn_network` profile | `decdn config init --chain` | explicit values |
 | Monitoring | opt-in Grafana Cloud agent | bring your own | ServiceMonitor, PrometheusRule, dashboards |
 | Backup / decommission | `make backup` / `make decommission` | manual commands | PVC snapshot |
@@ -25,7 +25,7 @@ path. It is the only one that hardens the host as well as installing the node.
 
 | | Supported | How it is tested |
 |---|---|---|
-| OS | Debian 12 (bookworm), Debian 13 (trixie), Ubuntu 24.04 (noble), Ubuntu 26.04 (resolute) | molecule converges the node roles on all four in systemd containers; `baseline` on real hosts |
+| OS | Debian 12 (bookworm), Debian 13 (trixie), Ubuntu 24.04 (noble), Ubuntu 26.04 (resolute) | molecule converges `decdn_node` on all four in systemd containers; `grafana_alloy`'s install path on Debian 12 only (its disabled path on all four); `baseline` on real hosts |
 | Architecture | x86_64, aarch64 | upstream builds both; the Ansible role derives the target from the host |
 | Ansible (control machine) | ansible-core ≥ 2.15 | CI runs the current release |
 | Kubernetes | ≥ 1.25 | rendered and validated with kubeconform against 1.30 |

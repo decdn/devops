@@ -42,7 +42,8 @@ specific to this path:
 - Control machine: **Ansible ≥ 2.15**, `ansible-lint`, `yamllint`.
 - Target: **Debian 12 (bookworm) / 13 (trixie)** or **Ubuntu 24.04 (noble) / 26.04
   (resolute)** host(s), x86_64 or aarch64, reachable over SSH with a sudo-capable user.
-  `make molecule` converges the node roles on all four; `baseline` is verified on real
+  `make molecule` converges `decdn_node` on all four (`grafana_alloy`'s install path on
+  Debian 12 only); `baseline` is verified on real
   hosts (see `roles/baseline/README.md` § Platforms).
   - **Ubuntu sudo-rs note:** 25.10+ (and 26.04) ship `sudo-rs` as the default `sudo`,
     which doesn't honor the custom `-p` become prompt Ansible relies on — so
@@ -190,9 +191,10 @@ connects as your `$USER` with no flag. You do not want that bootstrap play — o
 — reaching nodes already serving paid traffic. Same when re-running a single node after a config change, a failed play, or a
 binary bump.
 
-`make check`/`make deploy` refuse to run if `LIMIT` or `ANSIBLE_ARGS` reaches them from an
-exported shell variable, or if `LIMIT` expands empty — both are ways a run looks scoped but
-is silently fleet-wide.
+`make check`, `deploy`, `backup` and `decommission` refuse to run if `LIMIT`,
+`ANSIBLE_ARGS` or `INVENTORY` reaches them from an exported shell variable, or if `LIMIT`
+or `INVENTORY` expands empty: all ways a run looks scoped but silently targets something
+else. `make decommission` additionally requires `LIMIT` on the command line.
 
 `ANSIBLE_ARGS` passes anything else straight through. Quote the whole value at your prompt,
 or make will read the extra words as its own goals and flags (a bare `-vv` is make's `-v`);
@@ -201,7 +203,7 @@ literal `$` as `$$`:
 
 ```bash
 make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='--tags decdn_node -vv'
-make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='--start-at-task="Install the decdn binaries"'
+make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='--start-at-task="Install decdn-node + decdn CLI"'
 ```
 
 > **Watch the PLAY RECAP.** A *well-formed* argument that selects nothing is not an error:
@@ -228,7 +230,7 @@ primitives underneath it. All take `--dry-run`. See
 
 ### Grafana Cloud observability (opt-in)
 
-The play's third role, `grafana_alloy`, installs a loopback-only
+A third role, `grafana_alloy`, installs a loopback-only
 [Grafana Alloy](https://grafana.com/docs/alloy/) agent that ships the node's metrics, the
 machine's own metrics, journald, the agent's health and the daemon's OTLP traces to your
 Grafana Cloud org. One mirrored inventory flag drives both roles:
@@ -248,7 +250,7 @@ To import upstream's decdn dashboards and alert rules into that stack, see
 
 ```bash
 make backup LIMIT=<host>                                           # encrypted identity backup
-make backup LIMIT=<host> ANSIBLE_ARGS='-e decdn_backup_scope=full'  # full state (stops the node briefly)
+make backup LIMIT=<host> ANSIBLE_ARGS='-e decdn_backup_scope=full'  # full state (stops the node briefly; stays on the host)
 make decommission LIMIT=<host>                                     # typed confirmation; keeps the identity
 ```
 

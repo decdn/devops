@@ -350,7 +350,7 @@
       ContentBlacklist, because an absent or zero address is a fail-open compliance
       trap — serving a blacklisted hash past its window is slashable. Source
       chain-id + contract addresses from the deCDN contract deployment manifest
-      (decdn/contracts/deployments/<chainId>.json) — never guess — or set
+      (contracts/deployments/<chainId>.json in decdn/decdn) — never guess — or set
       decdn_network (e.g. "arbitrum-sepolia") to take them from the role's mirror of
       that manifest.
   vars:

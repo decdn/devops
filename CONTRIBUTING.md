@@ -33,6 +33,7 @@ targets, so a local pass means a CI pass. Deploy targets live in
 | `make lint-helm` | chart: `helm lint --strict`, positive/negative render tests, kubeconform (digest-pinned image), the shared schema-key check (needs `helm`, `yq`, `python3` ≥ 3.11, Docker). Set `DECDN_CLI=<path to decdn>` to also run the real `decdn config validate` (CI can't). |
 | `make lint-alloy` | renders `roles/grafana_alloy`'s templates and validates them with the **real** digest-pinned Alloy binary. The molecule stub exits 0 for everything, so this is the only gate that proves the config loads. `ALLOY_BIN=<path>` skips the download. |
 | `make lint-compose` | renders `compose/compose.yaml` with its example env and asserts its security invariants |
+| `make test-scripts` | `tests/scripts-test.sh`: the `ansible/Makefile` scoping guards (dry runs), the release gate, and `lint-compose`'s negative cases. `UPSTREAM=<decdn checkout>` adds the sync generators' exit codes. |
 | `make security` | KICS IaC scan of `ansible/`, the rendered chart and `compose/` (digest-pinned engine, fail on HIGH) |
 | `make galaxy-check` | build the `decdn.node` collection and run galaxy-importer's checks |
 
@@ -49,13 +50,17 @@ Three things here are generated from `decdn/decdn`; regenerate, never hand-edit:
 | `charts/decdn-node/files/monitoring/` (dashboards, alert rules) | `scripts/sync-monitoring.sh <decdn-checkout>` |
 | `ansible/molecule/schema/files/schema-keys.txt` (node.toml keys) | `ansible/molecule/schema/files/gen-schema-keys.py <decdn-checkout> > …` |
 
-The scripts read `origin/main` through git, so the checkout's own branch doesn't
-matter. The weekly `upstream-drift` workflow fails when any of them is stale.
+The two `scripts/sync-*` generators read `origin/main` through git (override with
+`--ref`), so the checkout's own branch doesn't matter for them; `gen-schema-keys.py`
+reads the checkout's working tree, so check out the ref you mean first. The generators
+exit 1 for "stale" and 2 for "could not run"; the weekly `upstream-drift` workflow
+reports the two differently.
 
 ## CI overview
 
 - **`ci.yml`**, path-filtered so heavy jobs skip unrelated PRs:
-  - always: `pre-commit` (every hook, every file) and `actionlint`;
+  - always: `pre-commit` (every hook, every file), `scripts` (`make test-scripts`) and
+    `actionlint`;
   - on `ansible/**`: `ansible-lint` (plus a syntax-check of every playbook),
     `galaxy-build` and `alloy-config` (`make lint-alloy`);
   - on `charts/**` (or the shared schema files, the root `Makefile`, `ci.yml`): `helm`
@@ -97,8 +102,8 @@ matter. The weekly `upstream-drift` workflow fails when any of them is stale.
 - **Bump manually** (Dependabot can't parse them): the `KICS_IMAGE` and
   `KUBECONFORM_IMAGE` digests in the `Makefile`; the molecule image digests in
   `ansible/molecule/*/molecule.yml` (all together, `docker buildx imagetools inspect`);
-  the `setup-helm` `version:` inputs in `ci.yml` (`helm` and `kics` jobs) and
-  `release.yml`; the collection versions in `ansible/requirements.yml`; and the local
+  the four `setup-helm` `version:` inputs (`ci.yml`'s `helm` and `kics` jobs, both
+  jobs in `release.yml`); the collection versions in `ansible/requirements.yml`; and the local
   yamllint hook's `additional_dependencies` pin.
 - **Bump the `cache-epoch:` counter in `ansible/requirements.yml` to make CI
   re-resolve the collections.** Those are `>=` ranges, so a warm cache pins the

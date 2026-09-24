@@ -44,12 +44,22 @@ make backup LIMIT=<host> ANSIBLE_ARGS='-e decdn_backup_scope=full' # stops the n
 | Scope | Archives | Node downtime |
 |-------|----------|---------------|
 | `identity` (default) | `node.secret`, `keystore.json`, `keystore.password` | none |
-| `full` | the whole data dir except the cache, plus the password file | the copy (the redb stores are only consistent at rest); restarted afterwards |
+| `full` | the whole data dir except the cache, plus the keystore (wherever it lives) and the password file | the copy (the redb stores are only consistent at rest); restarted afterwards if it was up |
 
 Add `-e decdn_backup_include_env=true` to include `decdn.env` (your RPC URL, which
 may embed an API key). The archive is written to `/var/backups/decdn/` on the host
-(`root` `0600`) and the encrypted file is fetched to `ansible/backups/<host>/`, which
-is git-ignored. `make backup` runs one host at a time.
+(`root` `0600`). `make backup` runs one host at a time.
+
+- **Identity** archives (kilobytes) are fetched to `ansible/backups/<host>/`, which is
+  git-ignored.
+- **Full** archives are **not** fetched by default: Ansible's `fetch` would read the
+  whole file into memory on both ends. The run prints a streaming copy command instead
+  (`ssh <host> sudo cat <file> > <file>`). Force a fetch with
+  `-e decdn_backup_fetch=true` if you know the archive is small.
+
+If the archive step fails (a bad recipient, a full disk), the node is restarted, no
+partial file is left behind and the run fails. `decdn_backup_leave_stopped` only
+applies to a backup that succeeded.
 
 **Test the restore path, not just the backup:**
 
@@ -77,9 +87,10 @@ identity on the network and on-chain. **Stop the old host first.**
    ```
 
    Then make sure it cannot come back on a reboot. Either run
-   `make decommission LIMIT=old-host` (it only stops and removes the service; ignore
-   the on-chain exit steps it prints, since the identity is moving, not leaving) or
-   run `sudo systemctl disable --now decdn-node` on it.
+   `make decommission LIMIT=old-host` (it removes the node's service and this repo's
+   Alloy agent and keeps the data; ignore the on-chain exit steps it prints, since the
+   identity is moving, not leaving) or run `sudo systemctl disable --now decdn-node`
+   on it.
 
 2. **Prepare the new host** with a normal deploy. Do *not* set
    `decdn_node_generate_keystore: true` for it. The deploy creates the `decdn` user
@@ -90,11 +101,13 @@ identity on the network and on-chain. **Stop the old host first.**
    make deploy LIMIT=new-host ANSIBLE_ARGS='-u root'   # first converge of a fresh box
    ```
 
-3. **Restore**, decrypting on your workstation and streaming straight into the new
-   host, so the plaintext never touches a disk off the target:
+3. **Restore**, streaming the archive from the old host through your workstation's
+   `age` straight into the new host, so the plaintext never touches a disk off the
+   target (the full archive stays on the old host; step 1 printed its path):
 
    ```bash
-   age -d -i ~/.config/decdn/backup-age.key ansible/backups/old-host/<file>.tar.age \
+   ssh old-host sudo cat /var/backups/decdn/<file>.tar.age \
+     | age -d -i ~/.config/decdn/backup-age.key \
      | ssh new-host 'sudo tar -xzf - -C / --no-same-owner \
          && sudo chown -R decdn:decdn /var/lib/decdn /etc/decdn/keystore.password'
    ```
@@ -106,16 +119,11 @@ identity on the network and on-chain. **Stop the old host first.**
 
 5. **Update what is on-chain**, if it changed. The node is registered with its
    multiaddr and region. A new public IP needs `decdn node update-multiaddrs`; a new
-   country needs `decdn node update-region`. Both sign with the operator key and read
-   the RPC URL from `decdn.env`, so run them through systemd with the unit's own
-   environment file. Preview first:
+   country needs `decdn node update-region`. With `decdn_chain` from
+   [Running on-chain commands](#running-on-chain-commands), preview first:
 
    ```bash
-   sudo systemd-run --pty --wait --collect -p User=decdn \
-     -p EnvironmentFile=/etc/decdn/decdn.env \
-     /usr/local/bin/decdn node update-multiaddrs --config /etc/decdn/node.toml \
-     --keystore-password-file /etc/decdn/keystore.password \
-     --multiaddr /ip4/<new-public-ip>/udp/4433/quic-v1 --dry-run
+   decdn_chain node update-multiaddrs --multiaddr /ip4/<new-public-ip>/udp/4433/quic-v1 --dry-run
    ```
 
    Then the same command without `--dry-run`. The address set you pass replaces the
@@ -132,17 +140,19 @@ It stops `decdn-node` with `systemctl` (SIGTERM, which is the daemon's graceful 
 path), disables it and removes the unit, and tears down the Grafana Alloy agent this
 repo installed, if any. `-e decdn_decommission_purge_cache=true` also deletes the
 cache. It refuses to run on more than one host unless you raise
-`decdn_decommission_max_hosts`.
+`decdn_decommission_max_hosts`, and an unanswered confirmation prompt fails after
+`decdn_decommission_prompt_seconds` (300). Both entry points refuse a
+`decdn_cache_dir` that equals or encloses the identity, so a purge can never take the
+keys with it.
 
 It **keeps** the identity, `/etc/decdn` and the binaries, because the keystore is
 what withdraws the bond. It does **not** touch the chain. The exit is two operator
-steps with the `decdn` CLI, both with `--dry-run` first (invocation as in step 5
-above; see
-[`roles/decdn_node/README.md` § On-chain onboarding](../ansible/roles/decdn_node/README.md#on-chain-onboarding)):
+steps with the `decdn` CLI, both with `--dry-run` first (use `decdn_chain` from
+[Running on-chain commands](#running-on-chain-commands)):
 
-1. `decdn node deregister` leaves the active node set. The bond is **not** returned:
-   it stays deposited and slashable.
-2. `decdn node unbond --all` starts the unbonding window. Run it again after the
+1. `decdn_chain node deregister` leaves the active node set. The bond is **not**
+   returned: it stays deposited and slashable.
+2. `decdn_chain node unbond --all` starts the unbonding window. Run it again after the
    window to withdraw.
 
 Delete the keystore only after the withdrawal has landed. The public `udp/4433`
@@ -150,6 +160,34 @@ firewall rule stays until baseline is re-run without it.
 
 Do not use `decdn node drain` to take a systemd-managed node down: the unit is
 `Restart=always`, so systemd starts the drained daemon again five seconds later.
+
+## Running on-chain commands
+
+`decdn setup`, `node bond`, `node register`, `node update-multiaddrs`,
+`node update-region`, `node deregister` and `node unbond` sign with the operator key
+and need the RPC endpoint. **They do not read `DECDN_RPC_URL`** from the environment,
+unlike the daemon: they take `--rpc-url`, or `blockchain.rpc_url` from `node.toml`.
+The Ansible role leaves `rpc_url` out of `node.toml` on purpose (it may embed an API
+key), and on Compose `config init` wrote the public endpoint there. So pass it
+explicitly. This helper runs the CLI as `decdn` with the unit's own environment file
+and hands the URL over as `--rpc-url`:
+
+```bash
+decdn_chain() {
+  sudo systemd-run --pty --wait --collect -p User=decdn \
+    -p EnvironmentFile=/etc/decdn/decdn.env \
+    /bin/sh -c 'exec /usr/local/bin/decdn "$@" --config /etc/decdn/node.toml \
+      --rpc-url "$DECDN_RPC_URL" --keystore-password-file /etc/decdn/keystore.password' \
+    decdn "$@"
+}
+
+decdn_chain setup --mbps 100 --region DE \
+  --multiaddr /ip4/<public-ip>/udp/4433/quic-v1 --dry-run
+```
+
+The URL is in the `decdn` process's arguments while the command runs, so other local
+users could read it with `ps`. On a shared host, write a `0600` copy of `node.toml`
+with `rpc_url` set under `[blockchain]` and pass that as `--config` instead.
 
 ## Compose and Kubernetes
 

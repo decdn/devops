@@ -26,7 +26,7 @@ lint:
 #     (history expansion) or 'decdn-node-*' (globbing) before make ever starts.
 #   - ANSIBLE_ARGS is substituted unquoted on purpose: the recipe's shell splits it
 #     back into separate flags (so inner quoting works —
-#     ANSIBLE_ARGS='--start-at-task="Install the decdn binaries"' survives). Unquoted
+#     ANSIBLE_ARGS='--start-at-task="Install decdn-node + decdn CLI"' survives). Unquoted
 #     at your prompt, make takes the extra words as goals and flags of its own — a
 #     bare -vv is make's own -v. A literal $ must be written $$.
 LIMIT ?=
@@ -42,13 +42,15 @@ limit_arg = $(if $(LIMIT),--limit '$(LIMIT)')
 INVENTORY ?= inventory/hosts.yml
 # A missing or unparseable inventory fails the run. Ansible's default only warns,
 # skips the `hosts: decdn_nodes` play and exits 0, so a mistyped INVENTORY= would
-# report a successful deploy that did nothing. This applies to check/deploy only:
+# report a successful deploy that did nothing. This applies to the playbook targets
+# (check/deploy/backup/decommission) only:
 # ansible.cfg can't set it globally, because ansible-lint's own syntax checks run
 # with no inventory present.
 strict_inventory = ANSIBLE_INVENTORY_UNPARSED_FAILED=True
 
 # Fail loud on the two ways a run can look scoped but silently be fleet-wide. Scoped to
-# check/deploy via MAKECMDGOALS so an unrelated `make lint` is never blocked. NOTE: this
+# the playbook targets (check/deploy/backup/decommission) via MAKECMDGOALS so an
+# unrelated `make lint` is never blocked. NOTE: this
 # does not catch an argument that is well-formed but selects nothing — `--tags` with a
 # typo (decdn-node vs decdn_node) runs zero tasks and still exits 0. See ansible/README.md.
 ifneq ($(filter check deploy backup decommission,$(MAKECMDGOALS)),)

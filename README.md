@@ -36,7 +36,8 @@ behind `decdn_network`), it is a generated mirror with its upstream commit recor
   manifest: `decdn_network: arbitrum-sepolia` on Ansible, `decdn config init --chain`
   for Compose and Helm. Nothing is hand-copied.
 - **Signed installs.** Ansible verifies release tarballs against the GPG-signed
-  `SHA256SUMS`; Compose and Helm pin the image by digest.
+  `SHA256SUMS`; Compose only takes the image by digest; Helm takes a digest
+  (recommended) or a tag.
 - **Monitoring.** Upstream's Grafana dashboards and alert rules, with the labels they
   expect: opt-in Grafana Cloud shipping via `grafana_alloy` on Ansible, a
   `ServiceMonitor` + `PrometheusRule` + dashboard ConfigMaps on Helm

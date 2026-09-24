@@ -20,10 +20,13 @@ creates the GitHub Release, but **only** when the repository variable
 1. **Versions.** Set the same `X.Y.Z` in `ansible/galaxy/galaxy.yml` (`version:`) and
    `charts/decdn-node/Chart.yaml` (`version:`). Bump the chart's `appVersion` if it now
    targets a newer decdn release.
-2. **Changelogs.** In `ansible/galaxy/CHANGELOG.md` and `charts/decdn-node/CHANGELOG.md`,
-   move the `[Unreleased]` entries under a dated `## [X.Y.Z] — YYYY-MM-DD` heading. The
-   gate rejects a missing section and one still marked "unreleased". These two sections
-   become the GitHub Release notes.
+2. **Changelogs.** Both `ansible/galaxy/CHANGELOG.md` and `charts/decdn-node/CHANGELOG.md`
+   collect changes under `## [Unreleased]`. At release time, move those entries under a
+   dated `## [X.Y.Z] — YYYY-MM-DD` heading and leave an empty `[Unreleased]` above it.
+   **First release only:** both files already hold a `## [0.1.0] — unreleased` section
+   describing the initial state; fold `[Unreleased]` into it and replace "unreleased"
+   with the date. The gate rejects a missing section and one still marked
+   "unreleased". These two sections become the GitHub Release notes.
 3. **Check locally:** `scripts/check-release-version.sh vX.Y.Z`, then
    `make -C ansible galaxy-check` and `make lint-helm`.
 4. **Merge** that as a PR, then tag the merge commit on `main` and push the tag:
