@@ -192,8 +192,14 @@ fix is upstream: give `CommonChainArgs.rpc_url` (`crates/common/src/cli/common.r
 `env = "DECDN_RPC_URL"`, as the daemon has. Then `EnvironmentFile=` alone would be
 enough and the helper could drop `--rpc-url`.
 
-Register an `/ip4/` multiaddr only. The daemon binds QUIC on `0.0.0.0:4433` (IPv4
-only), so an `/ip6/` address on-chain points at a port nothing listens on.
+Register the node's public `/ip4/` multiaddr, and on a dual-stack host its `/ip6/` one
+too (repeat `--multiaddr`). Since decdn/decdn#2144 (`869141e9`) the daemon binds QUIC
+on both `0.0.0.0:4433` and `[::]:4433`; on a host without IPv6 it starts IPv4-only and
+logs a `warn`. Check `ss -ulpn` shows `[::]:4433` before registering an `/ip6/` address.
+An older build binds IPv6 on a random port, so an `/ip6/` address on-chain would point
+at a port nothing listens on: register `/ip4/` only there. To add the `/ip6/` address
+after an upgrade, run `decdn_chain node update-multiaddrs` with **both** addresses; it
+replaces the whole on-chain set.
 
 To fund the wallet you need its address, and `keystore.json` has no plaintext address
 field. `whoami` decrypts it. It takes no `--rpc-url`, so run it directly rather than

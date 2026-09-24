@@ -454,7 +454,10 @@ decdn_chain node register --region US \
                                    # --region is REQUIRED (no default).
 ```
 
-The multiaddr must be `/ip4/`. The daemon binds QUIC on `0.0.0.0:4433`, IPv4 only.
+On a dual-stack host, add `--multiaddr /ip6/<public-ipv6>/udp/4433/quic-v1` as well.
+Builds since decdn/decdn#2144 (`869141e9`) bind QUIC on both `0.0.0.0:4433` and
+`[::]:4433`; check `ss -ulpn` shows `[::]:4433` first. Older builds are IPv4-only on
+that port, so register `/ip4/` only there.
 To get the address to fund, run `whoami` as `decdn` (also in that section of
 `docs/lifecycle.md`). `keystore.json` has no plaintext address field.
 
