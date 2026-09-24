@@ -38,22 +38,36 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
+      # Each check exits 0 (current), 1 (stale) or anything else (could not run), and
+      # the two failure kinds are reported differently: a broken generator is not an
+      # upstream change. Full output goes to the job summary; annotations stay one line.
       - name: Compare the mirrors with upstream main
         run: |
           rc=0
           check() {
-            local name="$1"; shift
-            if out="$("$@" 2>&1)"; then
-              echo "- ✅ **$name**: current" >> "$GITHUB_STEP_SUMMARY"
-            else
-              rc=1
-              echo "::error title=$name drifted::$out"
-              { echo "- ❌ **$name**: stale"; echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-            fi
+            local name="$1" out status; shift
+            out="$("$@" 2>&1)" && status=0 || status=$?
+            case "$status" in
+              0) echo "- ✅ **$name**: current" >> "$GITHUB_STEP_SUMMARY" ;;
+              1) rc=1
+                 echo "::error title=$name is stale::re-run its generator (see the job summary)"
+                 { echo "- ❌ **$name**: stale"; echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
+              *) rc=1
+                 echo "::error title=$name check could not run::exit $status (see the job summary)"
+                 { echo "- ⚠️ **$name**: check failed to run (exit $status)"; echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY" ;;
+            esac
+          }
+          # The schema inventory has no --check of its own: generate, then diff, so a
+          # crashing generator (exit 2) is not mistaken for "every key removed" (exit 1).
+          # shellcheck disable=SC2329  # invoked indirectly, through check()
+          schema_check() {
+            local fresh
+            fresh="$(mktemp)"
+            python3 ansible/molecule/schema/files/gen-schema-keys.py upstream > "$fresh" || return 2
+            diff -u ansible/molecule/schema/files/schema-keys.txt "$fresh"
           }
           echo "### Upstream drift (decdn/decdn@$(git -C upstream rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
           check "network profiles" python3 scripts/sync-network-profiles.py upstream --check
           check "monitoring assets" scripts/sync-monitoring.sh upstream --check
-          check "config schema keys" bash -c \
-            'python3 ansible/molecule/schema/files/gen-schema-keys.py upstream | diff -u ansible/molecule/schema/files/schema-keys.txt -'
+          check "config schema keys" schema_check
           exit "$rc"

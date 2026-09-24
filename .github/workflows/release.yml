@@ -41,7 +41,8 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-      # Helm version is pinned here as in ci.yml's helm and kics jobs; bump all three.
+      # Helm is pinned four times: ci.yml's helm and kics jobs, and both jobs here.
+      # Bump all four together.
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.0
@@ -102,8 +103,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Helm and cosign keep separate credential stores (Helm's registry config
+          # vs Docker's config.json), so log both in: cosign pushes the signature.
           echo "$GH_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          out="$(helm push dist/decdn-node-"${TAG#v}".tgz "$CHART_REGISTRY" 2>&1)"
+          echo "$GH_TOKEN" | cosign login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          # Capture and print on both paths: under `bash -e` a bare out="$(…)" would
+          # exit on failure before the error text was shown.
+          if ! out="$(helm push dist/decdn-node-"${TAG#v}".tgz "$CHART_REGISTRY" 2>&1)"; then
+            echo "$out"
+            echo "::error::helm push failed"
+            exit 1
+          fi
           echo "$out"
           digest="$(sed -nE 's/^Digest: (sha256:[0-9a-f]{64})$/\1/p' <<<"$out")"
           [ -n "$digest" ] || { echo "::error::no digest in helm push output"; exit 1; }

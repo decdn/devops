@@ -13,9 +13,21 @@
 # --check copies into a scratch dir instead and exits 1 when any vendored file's
 # bytes, or SOURCE's file list and hashes, differ from <ref> (the commit line in
 # SOURCE is ignored, so an unrelated upstream commit is not drift).
+#
+# Exit status: 0 current/written, 1 stale (--check), 2 could not run, so the drift
+# job can tell drift from breakage.
 set -euo pipefail
 
 usage() { echo "usage: $0 <decdn-checkout> [ref] [--check]" >&2; exit 2; }
+die() { echo "sync-monitoring: $*" >&2; exit 2; }
+# Any other failure (a git show under set -e, a full disk) is "could not run" too.
+scratch=""
+on_exit() {
+  local rc=$?
+  [[ -z "$scratch" ]] || rm -rf "$scratch"
+  ((rc == 0 || rc == 1 || rc == 2)) || { echo "sync-monitoring: failed (exit $rc)" >&2; exit 2; }
+}
+trap on_exit EXIT
 
 upstream="" ref="origin/main" check=false
 for arg in "$@"; do
@@ -30,15 +42,19 @@ done
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dest="$repo/charts/decdn-node/files/monitoring"
 
-commit="$(git -C "$upstream" rev-parse --verify "$ref^{commit}")"
-mapfile -t files < <(git -C "$upstream" ls-tree --name-only "$ref" monitoring/ \
-  | grep -E '^monitoring/[^/]+\.(json|ya?ml)$' | sort)
-((${#files[@]} > 0)) || { echo "no monitoring files at $ref" >&2; exit 1; }
+commit="$(git -C "$upstream" rev-parse --verify "$ref^{commit}")" || die "no commit '$ref' in $upstream"
+listing="$(git -C "$upstream" ls-tree --name-only "$ref" monitoring/)" || die "cannot list monitoring/ at $ref"
+mapfile -t files < <(grep -E '^monitoring/[^/]+\.(json|ya?ml)$' <<<"$listing" | sort)
+# The chart needs both kinds: an empty dashboard set would render nothing and an
+# absent rule file would fail every render, so a changed upstream layout stops here
+# instead of silently vendoring half of it.
+printf '%s\n' "${files[@]}" | grep -q '\.json$' || die "no dashboards (monitoring/*.json) at $ref"
+printf '%s\n' "${files[@]}" | grep -qx 'monitoring/prometheus-alerts.yml' || die "no monitoring/prometheus-alerts.yml at $ref"
 
 out="$dest"
 if $check; then
   out="$(mktemp -d)"
-  trap 'rm -rf "$out"' EXIT
+  scratch="$out"
 fi
 mkdir -p "$out"
 

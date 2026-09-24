@@ -14,9 +14,10 @@ name: decdn
 
 services:
   decdn-node:
-    # Pin by digest: the release's signed image-digest.txt names it. Upstream only
-    # tags an image after a maintainer signs the release, so a tag alone proves less.
-    image: ${DECDN_IMAGE:?set DECDN_IMAGE in .env to ghcr.io/decdn/decdn-node@sha256:<digest>}
+    # Always by digest, structurally: the reference is built here as repo@digest, so
+    # no .env can swap in a mutable tag. The release's signed image-digest.txt names
+    # the digest; upstream only tags an image after a maintainer signs the release.
+    image: ${DECDN_IMAGE_REPO:-ghcr.io/decdn/decdn-node}@${DECDN_IMAGE_DIGEST:?set DECDN_IMAGE_DIGEST in .env to sha256:<digest>}
     network_mode: host
     # A dedicated host account (see README.md), not the image's uid 1000, which on
     # most hosts is the first human login.

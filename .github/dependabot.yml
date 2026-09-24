@@ -6,8 +6,9 @@
 #   pre-commit      bumps the `rev:` of each repo in .pre-commit-config.yaml
 #
 # Considered and not applicable here, so not listed:
-#   docker-compose  compose/compose.yaml takes its image from ${DECDN_IMAGE}, which
-#                   the operator pins to a signed release digest; nothing to bump
+#   docker-compose  compose/compose.yaml builds its image from ${DECDN_IMAGE_REPO} and
+#                   ${DECDN_IMAGE_DIGEST}, which the operator pins to a signed
+#                   release digest; nothing to bump
 #   helm            the chart has no dependencies, and its image is operator-set
 #   pip             the repo has no pip manifest (CI installs are unpinned)
 # Ansible Galaxy (ansible/requirements.yml) is not a Dependabot ecosystem.
@@ -15,7 +16,7 @@
 # NOT covered, bump manually (CONTRIBUTING.md § Supply-chain / pinning rules):
 #   - the KICS and kubeconform image digests in the Makefile
 #   - the molecule image digests in ansible/molecule/*/molecule.yml
-#   - both setup-helm `version:` inputs in ci.yml, and release.yml's
+#   - the four setup-helm `version:` inputs (two in ci.yml, two in release.yml)
 #   - the Galaxy collections in ansible/requirements.yml
 #   - the local yamllint hook's `additional_dependencies` pin
 version: 2

@@ -186,7 +186,8 @@ jobs:
     timeout-minutes: 20         # pulls the kubeconform image; ~1m in practice
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Helm version is pinned here AND in the kics job below; bump both.
+      # Helm version is pinned here, in the kics job below and twice in release.yml;
+      # bump all four.
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.0
@@ -340,6 +341,17 @@ jobs:
           key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
       - name: Run every hook on every file
         run: pre-commit run --all-files --show-diff-on-failure
+
+  # The repo's own guard rails: ansible/Makefile's scoping guards (dry runs), the
+  # release gate, and lint-compose's negative cases (tests/scripts-test.sh). Always
+  # runs: seconds, and it covers files every path filter above would miss.
+  scripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Script and guard tests
+        run: make test-scripts
 
   # Lint the workflow files themselves.
   actionlint:

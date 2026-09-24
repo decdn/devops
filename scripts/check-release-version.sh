@@ -10,8 +10,13 @@
 # are written to <file> as the GitHub Release body.
 set -euo pipefail
 
-tag="${1:-}"; notes=""
-[[ "${2:-}" == "--notes" ]] && notes="${3:?--notes needs a file}"
+usage() { echo "usage: $0 vX.Y.Z [--notes <file>]" >&2; exit 2; }
+tag="" notes=""
+case $# in
+  1) tag="$1" ;;
+  3) [[ "$2" == "--notes" && -n "$3" ]] || usage; tag="$1" notes="$3" ;;
+  *) usage ;;
+esac
 [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]] || { echo "tag '$tag' is not vX.Y.Z" >&2; exit 1; }
 version="${BASH_REMATCH[1]}"
 
