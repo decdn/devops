@@ -4,7 +4,7 @@
 # lint-compose and lint-cloud-init invariants (negative cases), and — with
 # UPSTREAM=<decdn checkout> — the upstream-mirror generators' exit codes.
 # `make test-scripts` runs it; CI's `scripts` job does too. Needs make, docker
-# (compose v2), jq; the cloud-init cases also need cloud-init, shellcheck and yq.
+# (compose v2), jq, flock; the cloud-init cases also need cloud-init, shellcheck and yq.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,6 +34,22 @@ mk decommission LIMIT=h | grep -q -- "playbooks/decommission.yml --limit 'h'" \
 pass "decommission LIMIT=h scopes playbooks/decommission.yml"
 mk backup | grep -q -- "playbooks/backup.yml" || fail "backup does not run playbooks/backup.yml"
 pass "backup runs playbooks/backup.yml fleet-wide by default"
+
+# --- molecule suite lock: a second run must refuse, not share the containers ----------
+# Hold the lock, then start the suite for real (-o deps: no galaxy install). flock
+# -n refuses at once, so no scenario runs; make reports the recipe failure as 2.
+lock="$work/molecule.lock"
+# The sleep itself holds the lock fd, so killing it releases the lock (a
+# `flock <file> sleep` holder would leave an orphaned sleep holding it).
+( exec 9>"$lock"; flock 9; exec sleep 60 ) & holder=$!
+until ! flock -n "$lock" true; do sleep 0.1; done
+for target in molecule molecule-serial; do
+  expect 2 "$target refuses to start while another suite holds the lock" \
+    make -s -C "$repo/ansible" -o deps "$target" MOLECULE_LOCK="$lock"
+  grep -q "another molecule suite holds $lock" "$work/out" \
+    || { cat "$work/out" >&2; fail "$target lock refusal does not say why"; }
+done
+kill "$holder"; wait "$holder" 2>/dev/null || true
 
 # --- release gate ----------------------------------------------------------------------
 gate="$repo/scripts/check-release-version.sh"

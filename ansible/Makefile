@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN Ansible project.
 # Always run from the ansible/ directory.
-.PHONY: deps lint check deploy backup decommission molecule molecule-serial build galaxy-check
+.PHONY: deps lint check deploy backup decommission molecule molecule-serial molecule-fanout build galaxy-check
 SHELL := /bin/bash
 
 # Install the required Galaxy collections (>= constraints in requirements.yml)
@@ -141,6 +141,25 @@ decommission:
 #     that one stops launching queued scenarios, so a single unlucky exit code would
 #     otherwise cut the suite short. So: 123 when a scenario failed, 125 if one was
 #     killed by a signal, and every scenario always gets to run.
+#
+# One suite at a time per host. Overlapping runs are not isolated from each other:
+# container names are fixed per scenario on the one Docker daemon (so this covers
+# other checkouts and worktrees too), each scenario starts by destroying its
+# container, and lifecycle/cloud-init stage files in molecule's ephemeral dir,
+# which is keyed on scenario, not run. So `molecule` and `molecule-serial` take a
+# host-wide lock and a second run refuses to start (exit 75) instead of
+# corrupting the first. `flock -o` holds the lock in flock itself, not in anything
+# molecule leaves running. molecule-fanout is the unlocked fan-out; call the
+# locked targets, not it.
+MOLECULE_LOCK ?= $(or $(XDG_RUNTIME_DIR),/tmp)/decdn-devops-molecule.lock
+define molecule_locked
+@command -v flock >/dev/null || { \
+  echo "make $@ needs util-linux's flock on PATH"; exit 1; }
+@flock -n -o -E 75 '$(MOLECULE_LOCK)' $(1) || { rc=$$?; \
+  test $$rc -ne 75 || echo "another molecule suite holds $(MOLECULE_LOCK) — wait for it to finish (overlapping runs share containers)"; \
+  exit $$rc; }
+endef
+
 SCENARIOS := $(notdir $(patsubst %/,%,$(dir $(wildcard molecule/*/molecule.yml))))
 SCENARIO_DIRS := $(notdir $(patsubst %/,%,$(wildcard molecule/*/)))
 JOBS ?= $(words $(SCENARIOS))
@@ -154,6 +173,9 @@ molecule: deps
 	@test "$$((10#$(JOBS)))" -gt 0 || { \
 	  echo "JOBS must be a positive integer (got '$(JOBS)'): any all-zero value — 0, 00, 000 —"; \
 	  echo "reaches xargs as -P 0, which means UNLIMITED concurrency, not none"; exit 1; }
+	$(call molecule_locked,$(MAKE) --no-print-directory molecule-fanout JOBS='$(JOBS)')
+
+molecule-fanout:
 	@printf '%s\n' $(SCENARIOS) | xargs -P $(JOBS) -I{} \
 		bash -c 'set -euo pipefail; molecule test -s {} --no-command-borders 2>&1 | sed -u "s/^/[{}] /" \
 		  || { echo "[{}] SCENARIO FAILED"; exit 1; }'
@@ -162,7 +184,7 @@ molecule: deps
 # failing scenario (--continue-on-failure defaults off), so it reports less than the
 # parallel target — but readably, which is the point.
 molecule-serial: deps
-	molecule test --all
+	$(call molecule_locked,molecule test --all)
 
 # --- Galaxy collection (decdn.node) ------------------------------------------
 # Stage baseline + decdn_node + grafana_alloy into a clean collection tree and build the
