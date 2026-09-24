@@ -187,7 +187,23 @@ decdn_chain setup --mbps 100 --region DE \
 
 The URL is in the `decdn` process's arguments while the command runs, so other local
 users could read it with `ps`. On a shared host, write a `0600` copy of `node.toml`
-with `rpc_url` set under `[blockchain]` and pass that as `--config` instead.
+with `rpc_url` set under `[blockchain]` and pass that as `--config` instead. The clean
+fix is upstream: give `CommonChainArgs.rpc_url` (`crates/common/src/cli/common.rs`)
+`env = "DECDN_RPC_URL"`, as the daemon has. Then `EnvironmentFile=` alone would be
+enough and the helper could drop `--rpc-url`.
+
+Register an `/ip4/` multiaddr only. The daemon binds QUIC on `0.0.0.0:4433` (IPv4
+only), so an `/ip6/` address on-chain points at a port nothing listens on.
+
+To fund the wallet you need its address, and `keystore.json` has no plaintext address
+field. `whoami` decrypts it. It takes no `--rpc-url`, so run it directly rather than
+through `decdn_chain`:
+
+```bash
+sudo systemd-run --pty --wait --collect -p User=decdn \
+  /usr/local/bin/decdn --config /etc/decdn/node.toml whoami \
+  --keystore-password-file /etc/decdn/keystore.password
+```
 
 ## Compose and Kubernetes
 

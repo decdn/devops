@@ -48,9 +48,11 @@ On Ubuntu 25.10 and later, `sudo` is sudo-rs; see the `ansible_become_exe` note 
   at a latency cost. A node that serves paid traffic should be directly reachable, and
   the multiaddr it registers on-chain must be its public address
   (`/ip4/<public-ip>/udp/4433/quic-v1`).
-- **IPv6:** supported. On Ansible, `baseline_preserve_ipv6_autoconf` (default `true`)
-  keeps SLAAC addresses alive under DevSec hardening; set it `false` on static-IPv6
-  hosts. Multi-homed hosts may need `baseline_rp_filter_loose: true`.
+- **IPv6:** the host can keep it, but the node's QUIC listener is IPv4-only (it binds
+  `0.0.0.0:4433`), so the node needs a public IPv4 address and registers an `/ip4/`
+  multiaddr. On Ansible, `baseline_preserve_ipv6_autoconf` (default `true`) keeps
+  SLAAC addresses alive under DevSec hardening; set it `false` on static-IPv6 hosts.
+  Multi-homed hosts may need `baseline_rp_filter_loose: true`.
 - **Loopback only, never exposed:** metrics `127.0.0.1:9090`, admin RPC
   `127.0.0.1:9191`. Reach them over SSH, or ship metrics with the monitoring options.
 - **Clock:** keep NTP running (`baseline` installs chrony). `decdn setup`'s pre-flight
