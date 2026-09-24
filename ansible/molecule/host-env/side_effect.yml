@@ -1,7 +1,8 @@
 ---
 # Edit the host-provisioned env file OUT OF BAND, exactly as an operator rotating
 # an RPC key would, and record the daemon's current MainPID. molecule.yml runs a
-# SECOND converge after this, and verify.yml then asserts the PID changed.
+# SECOND converge after this, and verify.yml then asserts the PID changed without
+# systemd having auto-restarted the unit.
 #
 # This is the only test of the feature's headline behaviour. Every other assertion
 # about /etc/decdn/.decdn.env.sha256 checks a precondition (it exists, it is 0600
@@ -14,31 +15,38 @@
   vars:
     decdn_etc: /etc/decdn
   tasks:
-    # pgrep, not `systemctl show --property=MainPID`: ansible-lint's
-    # command-instead-of-module rule rejects any `systemctl` invocation, and there
-    # is no module that returns a unit's PID. This queries the process table
-    # instead, which is a different job from managing the service.
-    - name: Record the daemon's PID before the edit
-      ansible.builtin.command:
-        cmd: pgrep -f '/usr/local/bin/decdn-node run'
-      register: decdn_pid_before
-      changed_when: false
-      failed_when: false
+    # A read-only `systemctl show`: the module fills `status` before it acts, and
+    # check_mode stops it acting. `state` is only there because the module rejects
+    # a bare `name` — it never starts anything here. (A `systemctl` command would
+    # trip ansible-lint's command-instead-of-module.)
+    - name: Read the daemon's unit state before the edit
+      ansible.builtin.systemd_service:
+        name: decdn-node
+        state: started
+      check_mode: true
+      register: decdn_unit_before
 
-    - name: Assert the daemon was actually running before the edit
+    # NRestarts counts only restarts systemd made under Restart=always, never the
+    # role's handler. It must start at 0 so verify.yml can require it to still be 0:
+    # that is what tells a handler restart apart from a crash that systemd revived.
+    - name: Assert the daemon was running cleanly before the edit
       ansible.builtin.assert:
         that:
-          - decdn_pid_before.stdout_lines | length == 1
-          - decdn_pid_before.stdout | trim | int > 0
+          - decdn_unit_before.status.ActiveState == 'active'
+          - decdn_unit_before.status.MainPID | int > 0
+          - decdn_unit_before.status.NRestarts | int == 0
         fail_msg: >-
-          Expected exactly one running decdn-node before the out-of-band edit
-          (got {{ decdn_pid_before.stdout_lines | default([]) }}), so a PID change
-          after it would prove nothing.
+          Expected decdn-node active, with a MainPID and no automatic restarts,
+          before the out-of-band edit (got ActiveState={{ decdn_unit_before.status.ActiveState }},
+          MainPID={{ decdn_unit_before.status.MainPID }},
+          NRestarts={{ decdn_unit_before.status.NRestarts }}). A daemon that is
+          already crash-looping makes a PID change after the edit prove nothing —
+          check: journalctl -u decdn-node -e
 
     - name: Save the pre-edit MainPID for verify.yml
       ansible.builtin.copy:
         dest: "{{ decdn_etc }}/molecule-pid-before"
-        content: "{{ decdn_pid_before.stdout | trim }}\n"
+        content: "{{ decdn_unit_before.status.MainPID }}\n"
         mode: "0644"
 
     # Append/replace in place rather than rewriting the file: this must look like

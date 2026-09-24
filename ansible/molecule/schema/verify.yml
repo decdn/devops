@@ -141,3 +141,24 @@
           fi
           echo "breadth OK: $keys keys, $(echo "$tables" | grep -c '') tables"
       changed_when: false
+
+    - name: Collect listening TCP sockets
+      ansible.builtin.command:
+        cmd: ss -ltn
+      register: listeners
+      changed_when: false
+
+    # The role's /metrics readiness probe only WARNS on timeout, so without this a
+    # daemon that never binds metrics would still leave this scenario green.
+    # Same check as ../default/verify.yml: bound on loopback, and on no wildcard.
+    # It checks the daemon the LAST converge play (resolve-only) left running.
+    - name: Assert metrics are up and bound to loopback only
+      ansible.builtin.assert:
+        that:
+          - "'127.0.0.1:9090' in listeners.stdout"
+          - "'0.0.0.0:9090' not in listeners.stdout"
+          - "'[::]:9090' not in listeners.stdout"
+          - "'*:9090' not in listeners.stdout"
+        fail_msg: >-
+          metrics are not up on 127.0.0.1:9090 only (check: journalctl -u decdn-node -e):
+          {{ listeners.stdout }}
