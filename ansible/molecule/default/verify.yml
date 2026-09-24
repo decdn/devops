@@ -333,6 +333,13 @@
         cmd: |
           set -euo pipefail
           pid=$(systemctl show -p MainPID --value decdn-node)
+          # MainPID is 0 when the unit is not running; say so rather than fail
+          # on a confusing read of /proc/0.
+          if [ -z "$pid" ] || [ "$pid" = 0 ]; then
+            echo "decdn-node has no main process (MainPID='$pid');" \
+              "check: journalctl -u decdn-node -e" >&2
+            exit 1
+          fi
           tr '\0' '\n' < "/proc/$pid/cmdline"
           echo ---
           # WATCHDOG_* only: the environment also carries DECDN_RPC_URL.
