@@ -1,0 +1,100 @@
+---
+# After the secret: the node came from the (mirrored, signed) release, generated its own
+# wallet and is running. The toolchain is exactly what cloud-init/ pins.
+- name: Verify
+  hosts: all
+  become: true
+  vars:
+    ci_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/../cloud-init"
+    venv: /opt/decdn-bootstrap/venv
+    lock: "{{ (lookup('ansible.builtin.file', ci_dir ~ '/collections.lock.yml') | from_yaml).collections }}"
+    # requirements.in's two ansible-core pins, keyed by which side of 3.12 they serve.
+    core_pins: >-
+      {{ lookup('ansible.builtin.file', ci_dir ~ '/requirements.in')
+         | regex_findall('(?m)^ansible-core==(\S+) ; python_version (<|>=) "3\.12"') }}
+  tasks:
+    - name: Read the bootstrap state
+      ansible.builtin.slurp:
+        src: /var/lib/decdn-bootstrap/state
+      register: bootstrap_state
+
+    - name: Read the installed-version stamp (release mode only writes it)
+      ansible.builtin.slurp:
+        src: /usr/local/lib/decdn/installed-version
+      register: stamp
+
+    - name: Stat the host-generated wallet
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: wallet
+      loop:
+        - /var/lib/decdn/keystore.json
+        - /var/lib/decdn/node.secret
+        - /etc/decdn/keystore.password
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Run the login hint
+      ansible.builtin.command:
+        cmd: sh /etc/profile.d/decdn-bootstrap.sh
+      register: login_hint
+      changed_when: false
+
+    - name: Assert the node is installed from the release, keyed and running
+      ansible.builtin.assert:
+        that:
+          - bootstrap_state.content | b64decode | trim == 'complete'
+          - stamp.content | b64decode | trim == '0.0.0-molecule-stub'
+          - wallet.results | rejectattr('stat.exists') | list | length == 0
+          - wallet.results | map(attribute='stat.mode') | unique == ['0600']
+          - ansible_facts.services['decdn-node.service'].state == 'running'
+          - login_hint.stdout == ''
+        fail_msg: >-
+          state={{ bootstrap_state.content | b64decode | trim }}
+          stamp={{ stamp.content | b64decode | trim }}
+          wallet={{ wallet.results | map(attribute='stat') | list }}
+          service={{ ansible_facts.services['decdn-node.service'] | default('absent') }}
+          hint={{ login_hint.stdout | to_json }}
+
+    # --- The pinned toolchain ---------------------------------------------------------
+    - name: Read the venv's Python and ansible-core versions
+      ansible.builtin.command:
+        cmd: >-
+          {{ venv }}/bin/python -c
+          "import sys, ansible.release as r; print('%d.%d' % sys.version_info[:2], r.__version__)"
+      register: toolchain
+      changed_when: false
+
+    - name: List the installed collections
+      ansible.builtin.command:
+        cmd: >-
+          {{ venv }}/bin/ansible-galaxy collection list --format json
+          -p /opt/decdn-devops/ansible/collections
+      register: galaxy_list
+      changed_when: false
+
+    - name: Assert the toolchain is exactly the pinned one
+      vars:
+        py: "{{ toolchain.stdout.split()[0] }}"
+        core: "{{ toolchain.stdout.split()[1] }}"
+        want_core: >-
+          {{ (core_pins | selectattr(1, 'equalto', '<') | first)[0]
+             if py is version('3.12', '<') else
+             (core_pins | selectattr(1, 'equalto', '>=') | first)[0] }}
+        # -p adds to the default search paths, so pick out the checkout's own tree.
+        tree: >-
+          {{ (galaxy_list.stdout | from_json)['/opt/decdn-devops/ansible/collections/ansible_collections']
+             | default({}) | dict2items }}
+        installed: >-
+          {{ tree | map(attribute='key') | zip(tree | map(attribute='value.version'))
+             | map('join', '==') | sort }}
+        wanted: "{{ lock | map(attribute='name') | zip(lock | map(attribute='version')) | map('join', '==') | sort }}"
+      ansible.builtin.assert:
+        that:
+          - core_pins | length == 2
+          - core == want_core
+          - installed == wanted
+        fail_msg: >-
+          Python {{ py }} got ansible-core {{ core }} (pinned: {{ want_core }});
+          collections {{ installed }} vs collections.lock.yml {{ wanted }}.

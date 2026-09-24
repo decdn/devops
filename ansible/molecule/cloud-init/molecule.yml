@@ -1,0 +1,72 @@
+---
+# Boots the REAL cloud-init/user-data.yaml in a systemd container and follows the
+# operator walkthrough in cloud-init/README.md end to end:
+#   prepare     installs cloud-init. It stands up a local release mirror: the shared stub
+#               daemon packaged as release tarballs, with a SHA256SUMS signed by a
+#               throwaway GPG key, served on loopback. It also commits the working tree
+#               into a git repo in the container, for stage 1 to clone.
+#   converge    seeds NoCloud with the user-data (placeholders filled, the repo, mirror
+#               and keyring pointed at the local ones) and runs cloud-init's boot stages.
+#               It then asserts that the host stopped cleanly at the secret gate.
+#   side_effect writes 0600 /etc/decdn/decdn.env over "SSH", as the operator would, and
+#               re-runs `decdn-bootstrap`.
+#   verify      checks a release-mode install, a host-generated wallet, a running
+#               daemon, and the pinned collection set.
+#
+# Release mode runs here and nowhere else in the suite: the role's download, GPG
+# signature check, SHA256SUMS check, extract and version stamp, against a mirror,
+# because upstream has not cut a release yet.
+#
+# Coverage boundary: `baseline` is skipped through the user-data's own
+# DECDN_BOOTSTRAP_ANSIBLE_ARGS (--skip-tags baseline). Its host hardening (nftables,
+# DevSec sysctl/sshd, fail2ban) means nothing in a throwaway container, the same as in
+# every other scenario (see ../default/molecule.yml). So this scenario proves the
+# bootstrap plumbing and the node path, not the hardening. `cloud-init/README.md` says
+# the same.
+#
+# Oldest and newest supported distributions only. They bracket the controller Pythons
+# that cloud-init/requirements.txt pins two ansible-core versions for (3.11 gets 2.19,
+# 3.14 gets 2.21). The image digests are the same pins as ../default and ../os-matrix;
+# bump them together.
+#
+# The stages need network access: apt (the user-data's packages), PyPI (the pinned
+# ansible-core) and Galaxy (the pinned collections).
+driver:
+  name: docker
+platforms:
+  - name: decdn-cloud-init-deb12
+    image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+  - name: decdn-cloud-init-u2604
+    image: geerlingguy/docker-ubuntu2604-ansible@sha256:a81f2af83a18b609eabdc926d56bc4813d3d7558d60dc891db6056f868fe6054
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # See ../default/molecule.yml for why pipelining is on.
+    ANSIBLE_PIPELINING: "true"
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    # Leading destroy: see ../default/molecule.yml. No idempotence step: converge boots
+    # cloud-init once, which is what a first boot does.
+    - destroy
+    - create
+    - prepare
+    - converge
+    - side_effect
+    - verify
+    - destroy

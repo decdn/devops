@@ -8,7 +8,7 @@ Pick this path for a single machine you already run Docker on. For a fleet, or a
 you want hardened from scratch (firewall, SSH, auto-patching), use the
 [Ansible project](../ansible/README.md); on Kubernetes, the
 [Helm chart](../charts/decdn-node/README.md). [`docs/requirements.md`](../docs/requirements.md)
-compares the three.
+compares the paths.
 
 > **Upstream has not published a release yet**, so there is no signed image to pin.
 > `compose.yaml` only takes an image by digest, and a locally built image has no

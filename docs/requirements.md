@@ -1,25 +1,27 @@
 # Requirements and choosing a deploy path
 
-What a deCDN node needs from its host and network, and which of this repo's three
+What a deCDN node needs from its host and network, and which of this repo's four
 deploy paths fits. Protocol facts (bond sizing, fees) are not here: they come from the
 deCDN ADRs.
 
 ## Choosing a path
 
-| | Ansible | Docker Compose | Helm |
-|---|---|---|---|
-| Target | VMs, bare metal | one host running Docker | Kubernetes |
-| Host hardening (firewall, SSH, patching) | yes, `baseline` | no, yours | no, the cluster's |
-| Fleets | yes, one inventory | one host per compose project | one release per node |
-| Secrets | host file or git-ignored inventory | host file | operator-created Secrets |
-| Install source | signed release tarball, or local build | image by digest (enforced) | image by digest (recommended) or tag |
-| Chain config | `decdn_network` profile | `decdn config init --chain` | explicit values |
-| Monitoring | opt-in Grafana Cloud agent | bring your own | ServiceMonitor, PrometheusRule, dashboards |
-| Backup / decommission | `make backup` / `make decommission` | manual commands | PVC snapshot |
-| Guide | [ansible/README.md](../ansible/README.md) | [compose/README.md](../compose/README.md) | [charts/decdn-node/README.md](../charts/decdn-node/README.md) |
+| | Ansible | cloud-init | Docker Compose | Helm |
+|---|---|---|---|---|
+| Target | VMs, bare metal | one cloud VM, no control machine | one host running Docker | Kubernetes |
+| Host hardening (firewall, SSH, patching) | yes, `baseline` | yes, `baseline` | no, yours | no, the cluster's |
+| Fleets | yes, one inventory | one user-data per VM | one host per compose project | one release per node |
+| Secrets | host file or git-ignored inventory | host file, written over SSH | host file | operator-created Secrets |
+| Install source | signed release tarball, or local build | signed release tarball | image by digest (enforced) | image by digest (recommended) or tag |
+| Chain config | `decdn_network` profile | `decdn_network` profile | `decdn config init --chain` | explicit values |
+| Monitoring | opt-in Grafana Cloud agent | opt-in Grafana Cloud agent (token in a host file) | bring your own | ServiceMonitor, PrometheusRule, dashboards |
+| Backup / decommission | `make backup` / `make decommission` | the Ansible targets, from a workstation inventory | manual commands | PVC snapshot |
+| Guide | [ansible/README.md](../ansible/README.md) | [cloud-init/README.md](../cloud-init/README.md) | [compose/README.md](../compose/README.md) | [charts/decdn-node/README.md](../charts/decdn-node/README.md) |
 
 If you are unsure: a VPS or dedicated server you control end to end is the Ansible
-path. It is the only one that hardens the host as well as installing the node.
+path, or cloud-init for a single VM when you would rather not run Ansible from a
+workstation. They are the only two that harden the host as well as installing the node,
+and they run the same roles.
 
 ## Platforms
 
@@ -28,6 +30,7 @@ path. It is the only one that hardens the host as well as installing the node.
 | OS | Debian 12 (bookworm), Debian 13 (trixie), Ubuntu 24.04 (noble), Ubuntu 26.04 (resolute) | molecule converges `decdn_node` on all four in systemd containers; `grafana_alloy`'s install path on Debian 12 only (its disabled path on all four); `baseline` on real hosts |
 | Architecture | x86_64, aarch64 | upstream builds both; the Ansible role derives the target from the host |
 | Ansible (control machine) | ansible-core ≥ 2.15 | CI runs the current release |
+| cloud-init | the provider image's own; the bootstrap installs its pinned ansible-core on the host | the user-data is booted with the distro's cloud-init in Debian 12 and Ubuntu 26.04 containers, to a running node |
 | Kubernetes | ≥ 1.25 | rendered and validated with kubeconform against 1.30 |
 | Docker Compose | v2 with `env_file.required` support (2.24+) | rendered in CI |
 

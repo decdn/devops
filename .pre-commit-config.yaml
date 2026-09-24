@@ -58,17 +58,18 @@ repos:
     hooks:
       - id: markdownlint-cli2
 
-  # ── YAML lint for the Ansible tree (reuses ansible/.yamllint) ──────────────
-  # Scoped to ansible/ so it stays in lockstep with `make -C ansible lint`.
+  # ── YAML lint for the Ansible tree and cloud-init/ (reuses ansible/.yamllint) ─
+  # Scoped so it stays in lockstep with `make -C ansible lint`. cloud-init/ is the
+  # Ansible project's user-data and collection lock, so it takes the same rules.
   # *.yml.example templates don't match (they end in .example) and are skipped.
   - repo: local
     hooks:
       - id: yamllint-ansible
-        name: yamllint (ansible/)
+        name: yamllint (ansible/, cloud-init/)
         entry: yamllint -c ansible/.yamllint
         language: python
         additional_dependencies: ["yamllint==1.35.1"]
-        files: ^ansible/.*\.(ya?ml)$
+        files: ^(ansible|cloud-init)/.*\.(ya?ml)$
         exclude: ^ansible/(collections|\.ansible)/
 
       # Opt-in: full ansible-lint locally (needs `make -C ansible deps` first).

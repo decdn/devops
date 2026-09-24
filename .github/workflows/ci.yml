@@ -18,8 +18,8 @@ concurrency:
 # malicious code — cf. the March 2026 KICS action compromise). The trailing
 # comment records the human-readable version; .github/dependabot.yml bumps them.
 jobs:
-  # Detect whether ansible/, the Helm chart or compose/ changed so heavy jobs skip
-  # unrelated PRs.
+  # Detect whether ansible/, the Helm chart, compose/ or cloud-init/ changed so heavy
+  # jobs skip unrelated PRs.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5          # ~5s in practice
@@ -30,6 +30,7 @@ jobs:
       ansible: ${{ steps.filter.outputs.ansible }}
       helm: ${{ steps.filter.outputs.helm }}
       compose: ${{ steps.filter.outputs.compose }}
+      cloud-init: ${{ steps.filter.outputs.cloud-init }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
@@ -50,6 +51,13 @@ jobs:
             # lint-compose and security-compose live in the root Makefile.
             compose:
               - 'compose/**'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
+            # lint-cloud-init lives in the root Makefile and reads
+            # ansible/requirements.yml (the collection lock must cover it).
+            cloud-init:
+              - 'cloud-init/**'
+              - 'ansible/requirements.yml'
               - 'Makefile'
               - '.github/workflows/ci.yml'
 
@@ -200,6 +208,24 @@ jobs:
         # DECDN_CLI=... before bumping the decdn version.
         run: make lint-helm
 
+  # cloud-init path: `cloud-init schema` plus the invariants cloud-init/README.md
+  # promises (no secrets, release install, host-generated wallet, localhost in
+  # decdn_nodes, a keyed admin account, shellcheck-clean stage 1, a collection lock
+  # covering ansible/requirements.yml). The boot itself is the molecule `cloud-init`
+  # scenario (molecule.yml). Runs only when cloud-init/ or the root Makefile changed.
+  cloud-init:
+    needs: changes
+    if: needs.changes.outputs.cloud-init == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10         # an apt install at most; seconds otherwise
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # yq and shellcheck ship on ubuntu-latest; cloud-init may not.
+      - name: Install cloud-init
+        run: command -v cloud-init || { sudo apt-get update -qq && sudo apt-get install -y -qq cloud-init; }
+      - name: cloud-init invariants
+        run: make lint-cloud-init
+
   # Docker Compose path: render compose/compose.yaml with its example env files and
   # assert the invariants its README promises (host network, no published ports,
   # digest-pinned image, read-only rootfs, no capabilities, graceful stop). Runs
@@ -343,13 +369,17 @@ jobs:
         run: pre-commit run --all-files --show-diff-on-failure
 
   # The repo's own guard rails: ansible/Makefile's scoping guards (dry runs), the
-  # release gate, and lint-compose's negative cases (tests/scripts-test.sh). Always
-  # runs: seconds, and it covers files every path filter above would miss.
+  # release gate, and the lint-compose and lint-cloud-init negative cases
+  # (tests/scripts-test.sh). Always runs: seconds, and it covers files every path
+  # filter above would miss.
   scripts:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10         # an apt install at most; seconds otherwise
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Without cloud-init on PATH the harness SKIPS the lint-cloud-init cases.
+      - name: Install cloud-init
+        run: command -v cloud-init || { sudo apt-get update -qq && sudo apt-get install -y -qq cloud-init; }
       - name: Script and guard tests
         run: make test-scripts
 

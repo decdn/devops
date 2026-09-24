@@ -1,0 +1,35 @@
+---
+# The operator's part, as cloud-init/README.md tells it: SSH in, write the RPC endpoint to
+# a 0600 file on the host, and re-run the bootstrap. The value is a placeholder; the stub
+# daemon never dials it.
+- name: Side effect — provision the secret and re-run the bootstrap
+  hosts: all
+  become: true
+  tasks:
+    - name: Create /etc/decdn
+      ansible.builtin.file:
+        path: /etc/decdn
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Write the RPC endpoint on the host
+      ansible.builtin.copy:
+        dest: /etc/decdn/decdn.env
+        content: "DECDN_RPC_URL=https://rpc.example.invalid/\n"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Re-run the bootstrap
+      ansible.builtin.command:
+        cmd: /usr/local/sbin/decdn-bootstrap
+      register: rerun
+      changed_when: true
+      failed_when: false
+
+    - name: Fail with the bootstrap's output
+      ansible.builtin.fail:
+        msg: "{{ rerun.stdout_lines[-60:] + rerun.stderr_lines }}"
+      when: rerun.rc != 0

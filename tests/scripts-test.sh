@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Tests for the repo's own guard rails that no molecule scenario or chart render
 # exercises: the ansible/ Makefile's scoping guards, the release gate, the
-# lint-compose invariants (negative cases), and — with UPSTREAM=<decdn checkout> —
-# the upstream-mirror generators' exit codes. `make test-scripts` runs it; CI's
-# `scripts` job does too. Needs make, docker (compose v2), jq.
+# lint-compose and lint-cloud-init invariants (negative cases), and — with
+# UPSTREAM=<decdn checkout> — the upstream-mirror generators' exit codes.
+# `make test-scripts` runs it; CI's `scripts` job does too. Needs make, docker
+# (compose v2), jq; the cloud-init cases also need cloud-init, shellcheck and yq.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -75,6 +76,39 @@ variant "short stop grace"      's/^(\s*)stop_grace_period: 300s$/\1stop_grace_p
 variant "capabilities kept"     's/^(\s*)cap_drop: \[ALL\]$/\1cap_drop: [NET_RAW]/'
 variant "published port"        's/^(\s*)network_mode: host$/\1ports: ["127.0.0.1:9090:9090"]/'
 variant "tag instead of digest" 's#^(\s*)image: .*#\1image: ghcr.io/decdn/decdn-node:latest#'
+
+# --- lint-cloud-init negatives: each broken variant must be rejected -------------------
+if command -v cloud-init >/dev/null; then
+  userdata="$repo/cloud-init/user-data.yaml"
+  expect 0 "lint-cloud-init accepts cloud-init/user-data.yaml" make -s -C "$repo" lint-cloud-init
+  sed '1s/^#cloud-config$/# cloud-config/' "$userdata" > "$work/ci-header.yaml"
+  if make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-header.yaml" >"$work/out" 2>&1 \
+    || ! grep -q 'is not a valid cloud-config' "$work/out"; then
+    cat "$work/out" >&2; fail "lint-cloud-init did not reject a missing #cloud-config header as invalid"
+  fi
+  pass "lint-cloud-init rejects: no #cloud-config header (schema)"
+  ci_variant() { # <name> <sed expression>
+    sed -E "$2" "$userdata" > "$work/ci-$1.yaml"
+    cmp -s "$userdata" "$work/ci-$1.yaml" && fail "variant $1 did not change user-data.yaml"
+    if make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-$1.yaml" >"$work/out" 2>&1; then
+      fail "lint-cloud-init accepted: $1"
+    fi
+    grep -q 'violates an invariant' "$work/out" || { cat "$work/out" >&2; fail "lint-cloud-init failed for another reason: $1"; }
+    pass "lint-cloud-init rejects: $1"
+  }
+  ci_variant "RPC URL in bootstrap.env" 's#^(\s*)DECDN_BOOTSTRAP_ANSIBLE_ARGS=$#\1DECDN_RPC_URL=https://rpc.example/key#'
+  ci_variant "RPC URL in the inventory" 's#^(\s*)decdn_network: arbitrum-sepolia$#\1decdn_rpc_url: "https://rpc.example/"#'
+  ci_variant "credentials in a URL"     's#^(\s*)DEVOPS_REPO=https://#\1DEVOPS_REPO=https://user:pw@#'
+  ci_variant "manual install method"    's/^(\s*)decdn_node_install_method: release$/\1decdn_node_install_method: manual/'
+  ci_variant "no host-generated wallet" 's/^(\s*)decdn_node_generate_keystore: true(.*)$/\1decdn_node_generate_keystore: false\2/'
+  ci_variant "localhost outside decdn_nodes" 's/^(\s*)decdn_nodes:$/\1decdn_hosts:/'
+  ci_variant "admin account without keys" '/^\s*keys:$/,+1d'
+  ci_variant "stage 1 not run"          's#^  - \[/usr/local/sbin/decdn-bootstrap\]$#  - [/bin/true]#'
+  # shellcheck disable=SC2016 # a literal $DEVOPS_REPO: the variant unquotes it in stage 1
+  ci_variant "shellcheck-dirty stage 1" 's#git clone --quiet --no-checkout "\$DEVOPS_REPO"#git clone --quiet --no-checkout $DEVOPS_REPO#'
+else
+  skipped+=("lint-cloud-init negatives (needs cloud-init on PATH; CI installs it)")
+fi
 
 # --- upstream-mirror generators (optional: needs a decdn/decdn checkout) --------------
 if [[ -n "${UPSTREAM:-}" ]]; then

@@ -6,10 +6,11 @@ DevOps repo.
 ## What this repo is
 
 The official DevOps project for deploying a **deCDN node**: infrastructure, deployment,
-and operational tooling, for node operators anywhere. There are three deploy paths:
+and operational tooling, for node operators anywhere. There are four deploy paths:
 **Ansible** (`ansible/`, VMs/bare metal, the primary path, also the `decdn.node` Galaxy
-collection), **Docker Compose** (`compose/`, a single Docker host) and a **Helm chart**
-(`charts/decdn-node/`, Kubernetes).
+collection), **cloud-init** (`cloud-init/`, one VM that runs the Ansible playbook on
+itself, no control machine), **Docker Compose** (`compose/`, a single Docker host) and a
+**Helm chart** (`charts/decdn-node/`, Kubernetes).
 
 This repo is **infrastructure only**. It is *not* a source of truth for protocol or
 economic claims — those trace to the deCDN ADRs. If something here states a protocol fact
@@ -56,6 +57,7 @@ ansible/                # the deployment project (DevSec-hardened, lean roles)
   playbooks/            # site.yml (decdn node), backup.yml, decommission.yml
   roles/                # baseline, decdn_node, grafana_alloy
   inventory/ galaxy/ molecule/    # see ansible/README.md
+cloud-init/             # user-data.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
 compose/                # Docker Compose deploy path for a single host (see its README.md)
 charts/
   decdn-node/           # Helm chart for the node on Kubernetes (see its README.md)
@@ -123,6 +125,26 @@ addresses) the repo carries, and they carry their upstream commit.
   everything, so only the real pinned binary proves the rendered config loads. See
   `ansible/roles/grafana_alloy/README.md`.
 
+- **`cloud-init/`** — the Ansible path with no control machine. `user-data.yaml` carries
+  only public material (the lint refuses secret-looking keys, credentials in URLs and
+  unknown `bootstrap.env` keys) and a stage-1 `decdn-bootstrap`. That script clones this
+  repo at a pinned ref (a full SHA is verified after checkout) and execs
+  `cloud-init/bootstrap.sh`, which:
+  - installs ansible-core from the hash-locked `requirements.txt` into a venv (two pins
+    split by Python marker: 2.19 for Debian 12's 3.11, 2.21 for 3.12 and later);
+  - installs the exact collections from `collections.lock.yml`;
+  - runs `site.yml` against localhost. The inventory must put localhost in
+    `decdn_nodes`, or the play matches nothing and the udp/4433 hole never loads.
+
+  With no `/etc/decdn/decdn.env`, it runs `--tags baseline` only and records
+  `awaiting-secret`. The operator writes the file over SSH and re-runs `decdn-bootstrap`
+  for the full playbook (`release` install, host-generated wallet). The roles are used
+  unchanged, so a role change reaches this path without edits here. When
+  `ansible/requirements.yml` changes, re-sync the lock: `make lint-cloud-init` checks
+  it covers the requirements. The molecule `cloud-init` scenario boots the real
+  user-data through cloud-init (skipping `baseline`) against a locally signed release
+  mirror, and is the suite's only release-mode coverage.
+
 - **`compose/`** — the same node under Docker Compose on one host: the upstream image,
   always by digest (`compose.yaml` builds `DECDN_IMAGE_REPO@DECDN_IMAGE_DIGEST`), the
   role's host layout (`/etc/decdn` read-only, `/var/lib/decdn`), host
@@ -161,7 +183,8 @@ make molecule         # every ansible/molecule/*/ scenario in parallel (Docker; 
 make lint-helm        # chart: lint + render tests + kubeconform + schema keys
 make lint-alloy       # grafana_alloy config against the real pinned Alloy binary
 make lint-compose     # compose/ invariants
-make test-scripts     # Makefile guards, release gate, lint-compose negatives
+make lint-cloud-init  # cloud-init/user-data.yaml: schema + invariants (no secrets, release mode, lock)
+make test-scripts     # Makefile guards, release gate, lint-compose/lint-cloud-init negatives
 make security         # KICS over ansible/, the rendered chart and compose/
 
 # Ansible — run from ansible/
@@ -189,6 +212,7 @@ repository variable is `true` (RELEASING.md). Log changes under `[Unreleased]` i
 `ansible/galaxy/CHANGELOG.md` and `charts/decdn-node/CHANGELOG.md`.
 
 **CI.** `ci.yml` is the blocking gate: `pre-commit`, `scripts` and `actionlint` on every PR, the
-Ansible, chart and compose jobs path-filtered, KICS on any of them; `molecule.yml` runs the
-molecule suite on `ansible/**`. `ansible-lint` is **not** a per-commit hook (it needs
+Ansible, chart, compose and cloud-init jobs path-filtered, KICS on the first three (KICS has
+no cloud-init platform); `molecule.yml` runs the molecule suite on `ansible/**` and
+`cloud-init/**`. `ansible-lint` is **not** a per-commit hook (it needs
 collections vendored): run `make lint-ansible`.

@@ -1,0 +1,33 @@
+---
+# Exact Galaxy collection versions for the cloud-init bootstrap (cloud-init/bootstrap.sh).
+#
+# ansible/requirements.yml lists `>=` ranges, and a control machine vendors whatever they
+# resolve to (`make deps`). A node that bootstraps itself has no such control machine, so
+# it installs these exact versions instead. The list covers the closure: the two
+# collections the roles use directly, and every collection they depend on transitively.
+# Pinning only the top two would leave the transitive ones to resolve to latest.
+#
+# To bump, run `make deps` and copy the resolved versions from
+# ansible/collections/ansible_collections/*/*/MANIFEST.json. Leave out anything that
+# neither of the top two needs (community.docker is only vendored for molecule).
+# `make lint-cloud-init` checks that every collection in ansible/requirements.yml is
+# pinned here within its range. The cloud-init molecule scenario checks that a node
+# ends up with exactly this set.
+collections:
+  # Direct: ansible/requirements.yml
+  - name: devsec.hardening
+    version: "10.6.0"
+  - name: ansible.posix
+    version: "2.2.2"
+  # Transitive, via devsec.hardening
+  - name: community.crypto
+    version: "3.3.0"
+  - name: community.general
+    version: "13.3.0"
+  - name: community.mysql
+    version: "5.0.2"
+  # Transitive, via community.general and community.mysql
+  - name: community.library_inventory_filtering_v1
+    version: "1.1.5"
+  - name: ansible.mysql
+    version: "5.2.0"

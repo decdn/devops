@@ -33,7 +33,8 @@ targets, so a local pass means a CI pass. Deploy targets live in
 | `make lint-helm` | chart: `helm lint --strict`, positive/negative render tests, kubeconform (digest-pinned image), the shared schema-key check (needs `helm`, `yq`, `python3` ≥ 3.11, Docker). Set `DECDN_CLI=<path to decdn>` to also run the real `decdn config validate` (CI can't). |
 | `make lint-alloy` | renders `roles/grafana_alloy`'s templates and validates them with the **real** digest-pinned Alloy binary. The molecule stub exits 0 for everything, so this is the only gate that proves the config loads. `ALLOY_BIN=<path>` skips the download. |
 | `make lint-compose` | renders `compose/compose.yaml` with its example env and asserts its security invariants |
-| `make test-scripts` | `tests/scripts-test.sh`: the `ansible/Makefile` scoping guards (dry runs), the release gate, and `lint-compose`'s negative cases. `UPSTREAM=<decdn checkout>` adds the sync generators' exit codes. |
+| `make lint-cloud-init` | `cloud-init schema` on `cloud-init/user-data.yaml`, then `cloud-init/tests/lint.py`: no secrets, `release` install with a host-generated wallet, localhost in `decdn_nodes`, a keyed admin account, a shellcheck-clean stage 1, and a collection lock that covers `ansible/requirements.yml` (needs `cloud-init`, `shellcheck`, `yq`). `CLOUD_INIT_FILE=<path>` checks your own filled-in copy. |
+| `make test-scripts` | `tests/scripts-test.sh`: the `ansible/Makefile` scoping guards (dry runs), the release gate, and the negative cases of `lint-compose` and `lint-cloud-init` (the latter skipped without `cloud-init` on PATH). `UPSTREAM=<decdn checkout>` adds the sync generators' exit codes. |
 | `make security` | KICS IaC scan of `ansible/`, the rendered chart and `compose/` (digest-pinned engine, fail on HIGH) |
 | `make galaxy-check` | build the `decdn.node` collection and run galaxy-importer's checks |
 
@@ -66,8 +67,13 @@ reports the two differently.
   - on `charts/**` (or the shared schema files, the root `Makefile`, `ci.yml`): `helm`
     (`make lint-helm`);
   - on `compose/**` (or the root `Makefile`, `ci.yml`): `compose` (`make lint-compose`);
-  - on any of those: `kics` (`make security`).
-- **`molecule.yml`**: `make molecule JOBS=3` on `ansible/**` changes.
+  - on `cloud-init/**` (or `ansible/requirements.yml`, the root `Makefile`, `ci.yml`):
+    `cloud-init` (`make lint-cloud-init`);
+  - on the Ansible, chart or compose paths: `kics` (`make security`). KICS has no
+    cloud-init platform.
+- **`molecule.yml`**: `make molecule JOBS=3` on `ansible/**` or `cloud-init/**` changes.
+  The `cloud-init` scenario boots the real user-data, so it needs network access to apt,
+  PyPI and Galaxy.
 - **`release.yml`**: on `vX.Y.Z` tags; see [RELEASING.md](RELEASING.md).
 - **`upstream-drift.yml`**: weekly, non-blocking; see "Upstream mirrors" above.
 - **Every job is bounded** by `timeout-minutes`. The values are bounds sized off
@@ -103,8 +109,11 @@ reports the two differently.
   `KUBECONFORM_IMAGE` digests in the `Makefile`; the molecule image digests in
   `ansible/molecule/*/molecule.yml` (all together, `docker buildx imagetools inspect`);
   the four `setup-helm` `version:` inputs (`ci.yml`'s `helm` and `kics` jobs, both
-  jobs in `release.yml`); the collection versions in `ansible/requirements.yml`; and the local
-  yamllint hook's `additional_dependencies` pin.
+  jobs in `release.yml`); the collection versions in `ansible/requirements.yml`, and
+  their exact pins in `cloud-init/collections.lock.yml` (the full transitive set, from
+  a `make deps` resolve); ansible-core in `cloud-init/requirements.in`, followed by a
+  recompile of the hash-locked `requirements.txt` (command in `cloud-init/README.md`);
+  and the local yamllint hook's `additional_dependencies` pin.
 - **Bump the `cache-epoch:` counter in `ansible/requirements.yml` to make CI
   re-resolve the collections.** Those are `>=` ranges, so a warm cache pins the
   resolved set — transitive collections like `community.crypto` included — until the

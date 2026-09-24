@@ -5,13 +5,15 @@ name: Molecule
 # Heavy (privileged systemd Docker container) — scoped to ansible/ changes and
 # blocking. Mark it a required status check in branch protection once proven.
 # This file is in `paths` alongside ansible/ so a change to the job itself (its cache
-# wiring, JOBS, the timeout) is exercised by the PR that makes it.
+# wiring, JOBS, the timeout) is exercised by the PR that makes it. cloud-init/ is in
+# `paths` because the `cloud-init` scenario boots cloud-init/user-data.yaml and runs
+# cloud-init/bootstrap.sh.
 on:
   pull_request:
-    paths: ['ansible/**', '.github/workflows/molecule.yml']
+    paths: ['ansible/**', 'cloud-init/**', '.github/workflows/molecule.yml']
   push:
     branches: [main]
-    paths: ['ansible/**', '.github/workflows/molecule.yml']
+    paths: ['ansible/**', 'cloud-init/**', '.github/workflows/molecule.yml']
 
 permissions:
   contents: read

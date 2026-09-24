@@ -1,0 +1,157 @@
+---
+# Everything the user-data needs from the outside world, stood up inside the container:
+#   * cloud-init itself (a cloud image ships it; these images do not);
+#   * the repo, committed from the WORKING TREE, so the scenario tests the change under
+#     review rather than whatever is pushed. Stage 1 clones it from file:// and checks
+#     out that commit exactly as it would a pinned SHA on GitHub;
+#   * a release mirror: the shared stub daemon packaged the way upstream names its
+#     release tarballs, with a SHA256SUMS signed by a throwaway key and served on
+#     loopback. The role verifies it against that key (decdn_release_keyring) rather
+#     than the vendored upstream KEYS, which is the only difference from a real
+#     release.
+- name: Prepare — pack the working tree on the controller
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/.."
+    scratch: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+  tasks:
+    # Tracked and untracked-but-not-ignored files, so a new file under review is
+    # included, and a tracked file deleted in the working tree is skipped instead of
+    # failing tar.
+    - name: Pack the working tree on the controller
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          git ls-files -z -co --exclude-standard \
+            | while IFS= read -r -d '' f; do if [ -e "$f" ]; then printf '%s\0' "$f"; fi; done \
+            | tar --null -T - -czf {{ (scratch ~ '/devops-src.tgz') | quote }}
+        chdir: "{{ repo_root }}"
+        executable: /bin/bash
+      changed_when: true
+
+- name: Prepare
+  hosts: all
+  become: true
+  vars:
+    scratch: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/default/files/decdn-node-stub"
+    stub_version: "0.0.0-molecule-stub"
+    mirror: /srv/mirror
+    release_dir: "{{ mirror }}/www/releases/v{{ stub_version }}"
+    targets: {x86_64: x86_64-unknown-linux-gnu, aarch64: aarch64-unknown-linux-gnu}
+    target: "{{ targets[ansible_facts.architecture] }}"
+  tasks:
+    - name: Install cloud-init, git and gnupg
+      ansible.builtin.apt:
+        name: [cloud-init, git, gnupg, tar]
+        state: present
+        update_cache: true
+
+    # --- The repo, as a git remote (packed by the play above) ----------------------
+    - name: Create the source repo directory
+      ansible.builtin.file:
+        path: /srv/devops-src
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Unpack the working tree into the container
+      ansible.builtin.unarchive:
+        src: "{{ scratch }}/devops-src.tgz"
+        dest: /srv/devops-src
+
+    - name: Commit it, so stage 1 has a SHA to pin and verify
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          git init -q
+          git add -A
+          git -c user.name=molecule -c user.email=molecule@molecule.invalid commit -qm "molecule snapshot"
+          git rev-parse HEAD > /srv/devops-src.sha
+        chdir: /srv/devops-src
+        executable: /bin/bash
+        creates: /srv/devops-src/.git
+
+    # --- The release mirror -----------------------------------------------------------
+    # Each level explicitly: the file module gives parents it creates the leaf's mode,
+    # and the server (a DynamicUser) must traverse down to the release directory.
+    - name: Create the mirror's served tree
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - "{{ mirror }}"
+        - "{{ mirror }}/www"
+        - "{{ mirror }}/www/releases"
+        - "{{ release_dir }}"
+
+    - name: Create the mirror's private directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      loop:
+        - "{{ mirror }}/gnupg"
+        - "{{ mirror }}/stage"
+
+    # One flat binary per archive, named as upstream's release does (install.yml).
+    - name: Stage the stub as both release binaries
+      ansible.builtin.copy:
+        src: "{{ stub_bin }}"
+        dest: "{{ mirror }}/stage/{{ item }}"
+        owner: root
+        group: root
+        mode: "0755"
+      loop: [decdn-node, decdn]
+
+    - name: Build, checksum and sign the release
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          export GNUPGHOME={{ (mirror ~ '/gnupg') | quote }}
+          for bin in decdn-node decdn; do
+            tar -C {{ (mirror ~ '/stage') | quote }} -czf "$bin-{{ stub_version }}-{{ target }}.tar.gz" "$bin"
+          done
+          sha256sum -- *.tar.gz > SHA256SUMS
+          gpg --batch --pinentry-mode loopback --passphrase '' \
+            --quick-gen-key 'molecule mirror <mirror@molecule.invalid>' ed25519 sign 1d
+          gpg --batch --armor --export > {{ (mirror ~ '/KEYS.asc') | quote }}
+          gpg --batch --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
+          chmod 0644 -- *
+        chdir: "{{ release_dir }}"
+        executable: /bin/bash
+        creates: "{{ release_dir }}/SHA256SUMS.asc"
+
+    - name: Install the mirror's HTTP server unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/molecule-mirror.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Loopback release mirror for the cloud-init molecule scenario
+          [Service]
+          ExecStart=/usr/bin/python3 -m http.server 8080 --bind 127.0.0.1 --directory {{ mirror }}/www
+          DynamicUser=yes
+
+    - name: Start the mirror
+      ansible.builtin.systemd_service:
+        name: molecule-mirror
+        state: started
+        daemon_reload: true
+
+    - name: Wait for the mirror to serve the signed manifest
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8080/releases/v{{ stub_version }}/SHA256SUMS.asc"
+      register: mirror_up
+      until: mirror_up.status == 200
+      retries: 10
+      delay: 1

@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN DevOps monorepo.
 # Run from the repo root. Ansible-specific work is delegated to ansible/Makefile.
-.PHONY: help hooks lint lint-ansible lint-helm lint-alloy lint-compose test-scripts security security-ansible security-helm security-compose molecule molecule-serial galaxy-build galaxy-check
+.PHONY: help hooks lint lint-ansible lint-helm lint-alloy lint-compose lint-cloud-init test-scripts security security-ansible security-helm security-compose molecule molecule-serial galaxy-build galaxy-check
 SHELL := /bin/bash
 
 # KICS runs straight from the engine image, pinned by digest. This target IS the
@@ -90,6 +90,19 @@ lint-compose:        ## render compose/ with its examples and check its security
 	jq -e '$(COMPOSE_INVARIANTS)' <<<"$$rendered" >/dev/null \
 		|| { echo "$(COMPOSE_FILE) violates an invariant (see the lint-compose comment in Makefile)" >&2; exit 1; }
 	@echo "compose invariants hold"
+
+# The cloud-init user-data (cloud-init/README.md): `cloud-init schema` for its shape, then
+# cloud-init/tests/lint.py for what a schema cannot see. That covers no secrets, release
+# install with a host-generated wallet, localhost in decdn_nodes, a keyed admin account,
+# a shellcheck-clean stage 1, and a collection lock that covers ansible/requirements.yml.
+# CLOUD_INIT_FILE is overridable so tests/scripts-test.sh can feed it broken variants.
+CLOUD_INIT_FILE ?= cloud-init/user-data.yaml
+lint-cloud-init:     ## schema-check cloud-init/user-data.yaml and its invariants (needs cloud-init, shellcheck, yq)
+	@cloud-init schema -c '$(CLOUD_INIT_FILE)' >/dev/null 2>&1 \
+		|| { cloud-init schema -c '$(CLOUD_INIT_FILE)' 2>&1 | grep -v WARNING >&2; \
+		     echo "lint-cloud-init: $(CLOUD_INIT_FILE) is not a valid cloud-config (see above)" >&2; exit 2; }
+	@cloud-init/tests/lint.py '$(CLOUD_INIT_FILE)'
+	@echo "cloud-init invariants hold"
 
 # The guard rails nothing else exercises: ansible/Makefile's scoping guards, the
 # release gate, lint-compose's negative cases, and (with UPSTREAM=<decdn checkout>)
