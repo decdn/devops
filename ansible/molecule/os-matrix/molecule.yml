@@ -49,7 +49,8 @@ platforms:
 provisioner:
   name: ansible
   env:
-    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    # molecule/default/roles holds converge.yml's test-only shadow_reload_systemd.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles:${MOLECULE_PROJECT_DIRECTORY}/molecule/default/roles"
     ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
     # See default/molecule.yml for why pipelining is on.
     ANSIBLE_PIPELINING: "true"

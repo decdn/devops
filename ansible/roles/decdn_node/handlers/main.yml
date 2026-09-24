@@ -3,10 +3,15 @@
   ansible.builtin.systemd:
     daemon_reload: true
 
+# Reloads systemd itself rather than relying on "Reload systemd" running first.
+# A same-named handler loaded later shadows this role's — baseline include_role's
+# devsec.hardening.os_hardening defines one — and runs after this restart, which
+# then starts decdn-node from systemd's cached copy of the unit it just rewrote.
 - name: Restart decdn-node
   ansible.builtin.systemd:
     name: decdn-node
     state: restarted
+    daemon_reload: true
 
 # Applies the five hot-reloadable config sections without dropping connections.
 # Nothing in this role notifies it — the node.toml handler restarts, because a

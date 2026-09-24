@@ -10,6 +10,9 @@ can be exercised end-to-end without a published release or a live chain:
                      the role's `/metrics` readiness probe succeeds, and block
                      forever under systemd (Type=simple). CLI args (`--config`,
                      `--keystore-password-file`) are accepted and ignored.
+                     Under a unit with WatchdogSec it heartbeats WATCHDOG=1 to
+                     NOTIFY_SOCKET every WATCHDOG_USEC/2, as the real daemon
+                     does, so systemd does not kill it at the deadline.
                      If the marker file NO_METRICS_MARKER exists, it instead
                      blocks forever WITHOUT binding metrics — standing in for a
                      healthy node whose metrics listener binds late (behind the
@@ -36,8 +39,10 @@ It intentionally implements no protocol behaviour — the scenario verifies host
 prep, config/unit rendering, hardening, and loopback binding, not node logic.
 """
 import os
+import socket
 import tomllib
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -156,6 +161,29 @@ def config_validate(args):
     return 0
 
 
+def _start_watchdog_heartbeat():
+    """Send WATCHDOG=1 every WATCHDOG_USEC/2, if systemd armed a watchdog.
+
+    systemd sets WATCHDOG_USEC (and NOTIFY_SOCKET) only when the unit that started
+    this process carries WatchdogSec, so a unit without one gets no thread.
+    """
+    usec = os.environ.get("WATCHDOG_USEC")
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not usec or not addr:
+        return
+    if addr.startswith("@"):  # abstract namespace
+        addr = "\0" + addr[1:]
+    interval = int(usec) / 2 / 1_000_000
+
+    def beat():
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            while True:
+                sock.sendto(b"WATCHDOG=1", addr)
+                time.sleep(interval)
+
+    threading.Thread(target=beat, daemon=True).start()
+
+
 def main():
     args = sys.argv[1:]
     if "--version" in args:
@@ -166,6 +194,7 @@ def main():
     if args[:2] == ["config", "validate"]:
         return config_validate(args[2:])
     if args and args[0] == "run":
+        _start_watchdog_heartbeat()
         # Late-bind simulation: stay alive (Type=simple => unit stays `running`)
         # but never bind metrics, so the role's advisory probe times out.
         if os.path.isfile(NO_METRICS_MARKER):

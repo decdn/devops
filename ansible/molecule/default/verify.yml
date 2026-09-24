@@ -322,6 +322,48 @@
       vars:
         unit: "{{ decdn_unit.content | b64decode }}"
 
+    # The unit on disk is not what runs: systemd restarts a loaded unit from its
+    # cached copy until a daemon-reload. prepare.yml left a stale unit (sleep, no
+    # WatchdogSec) loaded and converge.yml shadows the roles' "Reload systemd" the
+    # way devsec.hardening does, so this passes only if the restart itself reloads.
+    # WATCHDOG_USEC is set by systemd in the started process's environment, so it
+    # proves the watchdog was armed for THIS process, not merely configured.
+    - name: Read the running decdn-node's command line and environment
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          pid=$(systemctl show -p MainPID --value decdn-node)
+          # MainPID is 0 when the unit is not running; say so rather than fail
+          # on a confusing read of /proc/0.
+          if [ -z "$pid" ] || [ "$pid" = 0 ]; then
+            echo "decdn-node has no main process (MainPID='$pid');" \
+              "check: journalctl -u decdn-node -e" >&2
+            exit 1
+          fi
+          tr '\0' '\n' < "/proc/$pid/cmdline"
+          echo ---
+          # WATCHDOG_* only: the environment also carries DECDN_RPC_URL.
+          tr '\0' '\n' < "/proc/$pid/environ" | grep '^WATCHDOG_' || true
+        executable: /bin/bash
+      register: decdn_running
+      changed_when: false
+
+    - name: Assert decdn-node runs from the role's unit with the watchdog armed
+      ansible.builtin.assert:
+        that:
+          - "'/usr/local/bin/decdn-node' in running_cmd"
+          - "'WATCHDOG_USEC=60000000' in running_env"
+          - "'WatchdogSec=60' in unit and 'NotifyAccess=main' in unit"
+          - "'AF_NETLINK AF_UNIX' in unit"
+        fail_msg: >-
+          decdn-node is running from a stale unit or without its watchdog: a
+          restart handler ran before any daemon-reload. Command line:
+          {{ running_cmd }}; environment: {{ running_env }}
+      vars:
+        running_cmd: "{{ decdn_running.stdout.split('---')[0] }}"
+        running_env: "{{ decdn_running.stdout.split('---')[1] | default('') }}"
+        unit: "{{ decdn_unit.content | b64decode }}"
+
     - name: Collect listening TCP sockets
       ansible.builtin.command:
         cmd: ss -ltn

@@ -33,6 +33,10 @@
       # Makes the stub compare the environment received by `config validate`
       # against the exact literal above (not merely assert that no command ran).
       DECDN_MOLECULE_ASSERT_RPC_LITERAL: "1"
+    # Arms the unit's watchdog (the stub heartbeats), so verify.yml can prove the
+    # running process was started from the unit this converge wrote: prepare.yml
+    # leaves a stale unit loaded that has no WatchdogSec.
+    decdn_node_watchdog_sec: 60
     decdn_chain_id: 421614
     decdn_region: "US"
     decdn_payment_pool_address: "0x1111111111111111111111111111111111111111"
@@ -124,6 +128,13 @@
       ansible.builtin.include_role:
         name: baseline
         tasks_from: sudo_users
+    # Reproduces site.yml's handler order: baseline include_role's
+    # devsec.hardening.os_hardening, whose same-named "Reload systemd" handler is
+    # loaded last, shadows the roles' own and runs after "Restart decdn-node".
+    # verify.yml asserts the node still runs on the unit this converge wrote.
+    - name: Load a same-named "Reload systemd" handler, as devsec.hardening does
+      ansible.builtin.include_role:
+        name: shadow_reload_systemd  # molecule/default/roles, on ANSIBLE_ROLES_PATH
   roles:
     - role: grafana_alloy
       tags: [observability, decdn_node, node]
