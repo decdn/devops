@@ -47,6 +47,18 @@ TimeoutStopSec={{ decdn_node_stop_timeout_sec }}
 Restart=always
 RestartSec=5
 
+{% if decdn_node_watchdog_sec | int > 0 %}
+# Runtime-liveness watchdog. The node sends WATCHDOG=1 from a task on its tokio
+# runtime every WatchdogSec/2, so the heartbeat stops when every runtime worker
+# is held by work that never yields. The unit then stays `active` while the node
+# serves nothing, logs nothing and answers no /metrics scrape. systemd kills it
+# with SIGABRT at the deadline and Restart=always brings it back. The heartbeat
+# arrives over NOTIFY_SOCKET, so the unit allows the main PID to notify and
+# allows AF_UNIX below.
+WatchdogSec={{ decdn_node_watchdog_sec }}
+NotifyAccess=main
+{% endif %}
+
 # --- Hardening -------------------------------------------------------------
 # StateDirectory owns {{ decdn_home }} (the only writable path under
 # ProtectSystem=strict): node.secret, keystore.json, cache, redb state.
@@ -61,8 +73,10 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 ProtectClock=true
-# AF_INET/AF_INET6 for QUIC; AF_NETLINK for interface/address discovery (STUN).
-RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK
+# AF_INET/AF_INET6 for QUIC; AF_NETLINK for interface/address discovery (STUN);
+# AF_UNIX for the watchdog heartbeat on NOTIFY_SOCKET.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK{% if decdn_node_watchdog_sec | int > 0 %} AF_UNIX{% endif %}
+
 RestrictNamespaces=true
 RestrictSUIDSGID=true
 LockPersonality=true

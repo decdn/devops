@@ -406,6 +406,14 @@ decdn_cli_bin: /usr/local/bin/decdn
 # templates/decdn-node.service.j2.
 decdn_node_stop_timeout_sec: 300
 
+# systemd WatchdogSec for the node unit (seconds). The node heartbeats from its
+# tokio runtime every half period, so a runtime whose workers never yield is
+# killed and restarted instead of staying `active` while it serves nothing. It
+# needs a decdn-node build that sends the heartbeat: an older binary sends none
+# and is killed every period, so set 0 to omit the watchdog for such a binary.
+# See templates/decdn-node.service.j2.
+decdn_node_watchdog_sec: 60
+
 # --- Lifecycle: backup + decommission (tasks_from: backup / decommission) -------
 # Only read by those entry points (playbooks/backup.yml, playbooks/decommission.yml);
 # a normal deploy ignores them. See docs/lifecycle.md.
