@@ -1,8 +1,8 @@
 ---
 # Edit the host-provisioned env file OUT OF BAND, exactly as an operator rotating
 # an RPC key would, and record the daemon's current MainPID. molecule.yml runs a
-# SECOND converge after this, and verify.yml then asserts the PID changed without
-# systemd having auto-restarted the unit.
+# SECOND converge after this, and verify.yml then asserts the PID changed and that
+# systemd did not auto-restart the unit after the role's restart.
 #
 # This is the only test of the feature's headline behaviour. Every other assertion
 # about /etc/decdn/.decdn.env.sha256 checks a precondition (it exists, it is 0600
@@ -15,26 +15,26 @@
   vars:
     decdn_etc: /etc/decdn
   tasks:
-    # A read-only `systemctl show`: the module fills `status` before it acts, and
-    # check_mode stops it acting. `state` is only there because the module rejects
-    # a bare `name` — it never starts anything here. (A `systemctl` command would
-    # trip ansible-lint's command-instead-of-module.)
+    # With only `name`, systemd_service is a read-only `systemctl show`: it fills
+    # `status` and changes nothing. (A `systemctl show` command would trip
+    # ansible-lint's command-instead-of-module.)
     - name: Read the daemon's unit state before the edit
       ansible.builtin.systemd_service:
         name: decdn-node
-        state: started
-      check_mode: true
       register: decdn_unit_before
 
-    # NRestarts counts only restarts systemd made under Restart=always, never the
-    # role's handler. It must start at 0 so verify.yml can require it to still be 0:
-    # that is what tells a handler restart apart from a crash that systemd revived.
+    # NRestarts counts systemd's automatic (Restart=) restarts since the unit was
+    # last started or restarted by hand; a manual restart resets it to 0. Nonzero
+    # here means the daemon is already crash-looping, which would make the PID
+    # comparison in verify.yml meaningless, so stop now with a clear message.
+    # Compared as strings: systemctl prints a number, and `| int` would turn
+    # anything else into a passing 0.
     - name: Assert the daemon was running cleanly before the edit
       ansible.builtin.assert:
         that:
           - decdn_unit_before.status.ActiveState == 'active'
           - decdn_unit_before.status.MainPID | int > 0
-          - decdn_unit_before.status.NRestarts | int == 0
+          - decdn_unit_before.status.NRestarts == '0'
         fail_msg: >-
           Expected decdn-node active, with a MainPID and no automatic restarts,
           before the out-of-band edit (got ActiveState={{ decdn_unit_before.status.ActiveState }},

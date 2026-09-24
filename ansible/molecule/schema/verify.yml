@@ -142,23 +142,40 @@
           echo "breadth OK: $keys keys, $(echo "$tables" | grep -c '') tables"
       changed_when: false
 
+    # With only `name`, systemd_service is a read-only `systemctl show` (a
+    # `systemctl show` command would trip ansible-lint's command-instead-of-module).
+    - name: Read the daemon's unit state
+      ansible.builtin.systemd_service:
+        name: decdn-node
+      register: decdn_unit
+
+    # -p names the owning process, so the listener can be tied to the unit's
+    # current MainPID rather than to whatever holds the port.
     - name: Collect listening TCP sockets
       ansible.builtin.command:
-        cmd: ss -ltn
+        cmd: ss -ltnp
       register: listeners
       changed_when: false
 
     # The role's /metrics readiness probe only WARNS on timeout, so without this a
-    # daemon that never binds metrics would still leave this scenario green.
-    # Same check as ../default/verify.yml: bound on loopback, and on no wildcard.
-    # It checks the daemon the LAST converge play (resolve-only) left running.
-    - name: Assert metrics are up and bound to loopback only
+    # daemon that never binds metrics would still leave this scenario green. This
+    # is a liveness check on the daemon the LAST converge play (resolve-only) left
+    # running under the rendered unit. The stub hardcodes 127.0.0.1:9090 and
+    # ignores node.toml, so it says nothing about the maximal config, and the
+    # wildcard lines cannot catch a bad rendered metrics_bind here
+    # (../default/verify.yml checks that value).
+    - name: Assert metrics are served by the current decdn-node, on loopback only
       ansible.builtin.assert:
         that:
-          - "'127.0.0.1:9090' in listeners.stdout"
+          - decdn_unit.status.MainPID | int > 0
+          - metrics_line | length == 1
+          - ('pid=' ~ decdn_unit.status.MainPID ~ ',') in metrics_line[0]
           - "'0.0.0.0:9090' not in listeners.stdout"
           - "'[::]:9090' not in listeners.stdout"
           - "'*:9090' not in listeners.stdout"
         fail_msg: >-
-          metrics are not up on 127.0.0.1:9090 only (check: journalctl -u decdn-node -e):
+          metrics are not served on 127.0.0.1:9090 (only) by decdn-node's MainPID
+          {{ decdn_unit.status.MainPID }} (check: journalctl -u decdn-node -e):
           {{ listeners.stdout }}
+      vars:
+        metrics_line: "{{ listeners.stdout_lines | select('search', '127\\.0\\.0\\.1:9090 ') | list }}"
