@@ -138,30 +138,47 @@
     # still serving with the old endpoint behind a green deploy. Comparing MainPID
     # is what makes this behavioural — the checksum assertions above all remain
     # true even if the restart signal is deleted outright.
+    #
+    # A changed PID alone is only the EFFECT. The unit is Restart=always, so a
+    # daemon that crashed (or was OOM-killed under parallel molecule load) between
+    # side_effect and the re-converge also comes back with a new PID. NRestarts
+    # pins the CAUSE: it counts only systemd's automatic restarts, so a new PID
+    # with NRestarts still 0 can only have come from the role's handler.
     - name: Read the pre-edit MainPID recorded by side_effect
       ansible.builtin.slurp:
         src: "{{ decdn_etc }}/molecule-pid-before"
       register: decdn_pid_before
 
-    # pgrep rather than `systemctl show` — see the note in side_effect.yml.
-    - name: Read the daemon's PID after the re-converge
-      ansible.builtin.command:
-        cmd: pgrep -f '/usr/local/bin/decdn-node run'
-      register: decdn_pid_after
-      changed_when: false
-      failed_when: false
+    # Read-only `systemctl show` via check_mode — see the note in side_effect.yml.
+    - name: Read the daemon's unit state after the re-converge
+      ansible.builtin.systemd_service:
+        name: decdn-node
+        state: started
+      check_mode: true
+      register: decdn_unit_after
 
     - name: Assert the out-of-band edit restarted decdn-node
       ansible.builtin.assert:
         that:
-          - decdn_pid_after.stdout_lines | length == 1
-          - decdn_pid_after.stdout | trim | int > 0
-          - (decdn_pid_after.stdout | trim) != (decdn_pid_before.content | b64decode | trim)
+          - decdn_unit_after.status.MainPID | int > 0
+          - (decdn_unit_after.status.MainPID | string) != (decdn_pid_before.content | b64decode | trim)
         fail_msg: >-
-          decdn-node still runs as PID {{ decdn_pid_after.stdout | trim }} after
+          decdn-node still runs as PID {{ decdn_unit_after.status.MainPID }} after
           {{ decdn_etc }}/decdn.env was edited out of band and the role re-converged
           — the daemon is on the PRE-rotation secret behind a green deploy. The
           env-file checksum record did not drive the restart handler.
+
+    - name: Assert the restart came from the role, not from systemd
+      ansible.builtin.assert:
+        that:
+          - decdn_unit_after.status.NRestarts | int == 0
+        fail_msg: >-
+          systemd auto-restarted decdn-node {{ decdn_unit_after.status.NRestarts }}
+          time(s) (Restart=always) — the daemon died on its own at some point
+          between side_effect and verify, so the PID change above cannot prove the
+          role's handler restarted it. Find out why it died
+          (journalctl -u decdn-node -e; an OOM kill under `make molecule` load shows
+          in dmesg) rather than relaxing this check.
 
     # Without EnvironmentFile the daemon never receives the host-provisioned
     # secret at all, and every other assertion in this scenario would still pass.
@@ -190,3 +207,23 @@
             'decdn-node.service' in ansible_facts.services
             and ansible_facts.services['decdn-node.service'].state == 'running'
         fail_msg: "decdn-node is not running — check: journalctl -u decdn-node -e"
+
+    - name: Collect listening TCP sockets
+      ansible.builtin.command:
+        cmd: ss -ltn
+      register: listeners
+      changed_when: false
+
+    # The role's /metrics readiness probe only WARNS on timeout, so without this a
+    # daemon that never binds metrics would still leave this scenario green.
+    # Same check as ../default/verify.yml: bound on loopback, and on no wildcard.
+    - name: Assert metrics are up and bound to loopback only
+      ansible.builtin.assert:
+        that:
+          - "'127.0.0.1:9090' in listeners.stdout"
+          - "'0.0.0.0:9090' not in listeners.stdout"
+          - "'[::]:9090' not in listeners.stdout"
+          - "'*:9090' not in listeners.stdout"
+        fail_msg: >-
+          metrics are not up on 127.0.0.1:9090 only (check: journalctl -u decdn-node -e):
+          {{ listeners.stdout }}
