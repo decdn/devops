@@ -29,7 +29,7 @@ targets, so a local pass means a CI pass. Deploy targets live in
 |--------|--------------|
 | `make lint` | every pre-commit hook on every file (CI job `pre-commit`) |
 | `make lint-ansible` | install Galaxy collections + `ansible-lint` (production profile, which includes the Ansible security rules) |
-| `make molecule` | every `ansible/molecule/*/` scenario in parallel, in privileged systemd containers (needs Docker; cap with `JOBS=<n>`). `make molecule-serial` runs them one at a time for readable failures. |
+| `make molecule` | every `ansible/molecule/*/` scenario in parallel, in privileged systemd containers (needs Docker and util-linux `flock`; cap with `JOBS=<n>`). `make molecule-serial` runs them one at a time for readable failures. Both take a host-wide lock, so a second suite refuses to start (overlapping runs share container names). |
 | `make lint-helm` | chart: `helm lint --strict`, positive/negative render tests, kubeconform (digest-pinned image), the shared schema-key check (needs `helm`, `yq`, `python3` ≥ 3.11, Docker). Set `DECDN_CLI=<path to decdn>` to also run the real `decdn config validate` (CI can't). |
 | `make lint-alloy` | renders `roles/grafana_alloy`'s templates and validates them with the **real** digest-pinned Alloy binary. The molecule stub exits 0 for everything, so this is the only gate that proves the config loads. `ALLOY_BIN=<path>` skips the download. |
 | `make lint-compose` | renders `compose/compose.yaml` with its example env and asserts its security invariants |
