@@ -36,18 +36,22 @@ mk backup | grep -q -- "playbooks/backup.yml" || fail "backup does not run playb
 pass "backup runs playbooks/backup.yml fleet-wide by default"
 
 # --- molecule suite lock: a second run must refuse, not share the containers ----------
-# Hold the lock, then start the suite for real (-o deps: no galaxy install). flock
-# -n refuses at once, so no scenario runs; make reports the recipe failure as 2.
+# Hold the lock, then start the suite for real. flock -n refuses at once, so no
+# scenario runs and — since deps sits behind the lock — no galaxy install either;
+# make reports the recipe failure as 2. A directory lock, like the default.
 lock="$work/molecule.lock"
+mkdir "$lock"
 # The sleep itself holds the lock fd, so killing it releases the lock (a
-# `flock <file> sleep` holder would leave an orphaned sleep holding it).
-( exec 9>"$lock"; flock 9; exec sleep 60 ) & holder=$!
+# `flock <path> sleep` holder would leave an orphaned sleep holding it).
+( exec 9<"$lock"; flock 9; exec sleep 60 ) & holder=$!
 until ! flock -n "$lock" true; do sleep 0.1; done
 for target in molecule molecule-serial; do
   expect 2 "$target refuses to start while another suite holds the lock" \
-    make -s -C "$repo/ansible" -o deps "$target" MOLECULE_LOCK="$lock"
+    make -C "$repo/ansible" "$target" MOLECULE_LOCK="$lock"
   grep -q "another molecule suite holds $lock" "$work/out" \
     || { cat "$work/out" >&2; fail "$target lock refusal does not say why"; }
+  ! grep -q "ansible-galaxy" "$work/out" \
+    || { cat "$work/out" >&2; fail "$target ran deps outside the lock"; }
 done
 kill "$holder"; wait "$holder" 2>/dev/null || true
 

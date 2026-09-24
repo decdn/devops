@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN Ansible project.
 # Always run from the ansible/ directory.
-.PHONY: deps lint check deploy backup decommission molecule molecule-serial molecule-fanout build galaxy-check
+.PHONY: deps lint check deploy backup decommission molecule molecule-serial molecule-fanout molecule-all build galaxy-check
 SHELL := /bin/bash
 
 # Install the required Galaxy collections (>= constraints in requirements.yml)
@@ -148,13 +148,23 @@ decommission:
 # container, and lifecycle/cloud-init stage files in molecule's ephemeral dir,
 # which is keyed on scenario, not run. So `molecule` and `molecule-serial` take a
 # host-wide lock and a second run refuses to start (exit 75) instead of
-# corrupting the first. `flock -o` holds the lock in flock itself, not in anything
-# molecule leaves running. molecule-fanout is the unlocked fan-out; call the
-# locked targets, not it.
-MOLECULE_LOCK ?= $(or $(XDG_RUNTIME_DIR),/tmp)/decdn-devops-molecule.lock
+# corrupting the first. `deps` runs under the lock too: it rewrites collections/,
+# which a running suite reads. `flock -o` holds the lock in flock itself, not in
+# anything molecule leaves running. molecule-fanout and molecule-all are the
+# unlocked bodies; call the locked targets, not them.
+#
+# The lock is a DIRECTORY in /tmp, shared by every user of the host (users of one
+# Docker daemon collide just the same). Not $XDG_RUNTIME_DIR, which is per user,
+# and not a regular file: with fs.protected_regular (Ubuntu/Debian default) another
+# user cannot open(O_CREAT) a file someone else created in sticky /tmp, so the
+# second user would fail even when no suite is running. Directories are exempt,
+# and flock(1) falls back to a read-only open on one, so 0755 is enough.
+MOLECULE_LOCK ?= /tmp/decdn-devops-molecule.lock
 define molecule_locked
 @command -v flock >/dev/null || { \
   echo "make $@ needs util-linux's flock on PATH"; exit 1; }
+@test -e '$(MOLECULE_LOCK)' || mkdir -m 0755 '$(MOLECULE_LOCK)' 2>/dev/null || test -e '$(MOLECULE_LOCK)' || { \
+  echo "cannot create the molecule lock directory $(MOLECULE_LOCK)"; exit 1; }
 @flock -n -o -E 75 '$(MOLECULE_LOCK)' $(1) || { rc=$$?; \
   test $$rc -ne 75 || echo "another molecule suite holds $(MOLECULE_LOCK) — wait for it to finish (overlapping runs share containers)"; \
   exit $$rc; }
@@ -164,7 +174,7 @@ SCENARIOS := $(notdir $(patsubst %/,%,$(dir $(wildcard molecule/*/molecule.yml))
 SCENARIO_DIRS := $(notdir $(patsubst %/,%,$(wildcard molecule/*/)))
 JOBS ?= $(words $(SCENARIOS))
 
-molecule: deps
+molecule:
 	@test -n "$(strip $(SCENARIOS))" && test "$(strip $(SCENARIOS))" = "$(strip $(SCENARIO_DIRS))" || { \
 	  echo "scenario discovery failed: molecule.yml in [$(SCENARIOS)] but scenario dirs are [$(SCENARIO_DIRS)]"; \
 	  echo "refusing to run a silently-truncated suite (this target must run from ansible/)"; exit 1; }
@@ -175,7 +185,7 @@ molecule: deps
 	  echo "reaches xargs as -P 0, which means UNLIMITED concurrency, not none"; exit 1; }
 	$(call molecule_locked,$(MAKE) --no-print-directory molecule-fanout JOBS='$(JOBS)')
 
-molecule-fanout:
+molecule-fanout: deps
 	@printf '%s\n' $(SCENARIOS) | xargs -P $(JOBS) -I{} \
 		bash -c 'set -euo pipefail; molecule test -s {} --no-command-borders 2>&1 | sed -u "s/^/[{}] /" \
 		  || { echo "[{}] SCENARIO FAILED"; exit 1; }'
@@ -183,8 +193,11 @@ molecule-fanout:
 # The same suite, one scenario at a time (molecule's own --all). It stops at the FIRST
 # failing scenario (--continue-on-failure defaults off), so it reports less than the
 # parallel target — but readably, which is the point.
-molecule-serial: deps
-	$(call molecule_locked,molecule test --all)
+molecule-serial:
+	$(call molecule_locked,$(MAKE) --no-print-directory molecule-all)
+
+molecule-all: deps
+	molecule test --all
 
 # --- Galaxy collection (decdn.node) ------------------------------------------
 # Stage baseline + decdn_node + grafana_alloy into a clean collection tree and build the
