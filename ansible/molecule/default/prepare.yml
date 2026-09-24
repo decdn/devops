@@ -42,3 +42,22 @@
         dest: "{{ decdn_home }}/node.secret"
         content: "molecule-placeholder-node-secret\n"
         mode: "0644"
+
+    # A stale decdn-node unit, loaded and running, so converge CHANGES the unit
+    # rather than creating it. systemd loads a new unit from disk on first use, but
+    # restarts a loaded one from its cached copy until a daemon-reload, which is
+    # the case the restart handler has to get right. verify.yml asserts the
+    # running process came from the role's unit, not this one.
+    - name: Stage a stale decdn-node unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/decdn-node.service
+        content: |
+          [Service]
+          ExecStart=/bin/sleep infinity
+        mode: "0644"
+
+    - name: Load and start the stale unit
+      ansible.builtin.systemd:
+        name: decdn-node
+        state: started
+        daemon_reload: true

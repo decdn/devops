@@ -1,0 +1,10 @@
+---
+# Stands in for devsec.hardening.os_hardening's handler of the same name. baseline
+# loads that role with include_role, which appends its handlers to the play at run
+# time, so on a real site.yml run it is the LAST "Reload systemd" loaded: it wins the
+# name lookup for every role's `notify: Reload systemd`, and runs after the static
+# roles' handlers — after "Restart decdn-node". converge.yml loads this role the same
+# way to reproduce that ordering in the container.
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true

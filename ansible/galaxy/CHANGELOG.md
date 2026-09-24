@@ -78,6 +78,14 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A changed `decdn-node` or `alloy` unit now takes effect on the converge that
+  writes it. The restart handlers relied on a separate `Reload systemd`
+  handler running first, but `devsec.hardening.os_hardening` (loaded by
+  `baseline` through `include_role`) defines a handler of the same name. Being
+  loaded last, it shadows the roles' own and runs after the restarts, so
+  systemd restarted the service from its cached unit: a new `WatchdogSec` was
+  on disk while the running node had no watchdog until the next restart. The
+  restart handlers now `daemon_reload` themselves.
 - The OTLP gateway is authenticated with its own instance ID. The role reused
   the Prometheus one, so a Grafana Cloud org whose stack ID differs 401s every
   trace while metrics and logs keep flowing. New `grafana_alloy_otlp_username` /

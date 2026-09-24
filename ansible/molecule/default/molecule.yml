@@ -34,7 +34,8 @@ platforms:
 provisioner:
   name: ansible
   env:
-    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    # molecule/default/roles holds converge.yml's test-only shadow_reload_systemd.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles:${MOLECULE_PROJECT_DIRECTORY}/molecule/default/roles"
     ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
     # The docker connection plugin supports pipelining, which drops a `docker exec`
     # round trip per remote task — 105s -> 82s measured on this scenario. Safe here:
