@@ -226,11 +226,15 @@ if name == "ci-values.yaml":
         rules = [r for g in pr["spec"]["groups"] for r in g["rules"]]
         check(len(rules) == len(vendored) > 0, f"PrometheusRule has {len(rules)} rules, vendored file {len(vendored)}")
         check(all(r["labels"].get("team") == "node-ops" for r in rules), "ruleLabels not merged into every rule")
-        check([r["labels"].get("severity") for r in rules] == [r.get("labels", {}).get("severity") for r in vendored],
-              "a rule's own labels were overwritten")
+        # ci-values sets ruleLabels.severity: a rule's own severity must win, and
+        # only a rule without one may take the extra.
+        check([r["labels"].get("severity") for r in rules]
+              == [r.get("labels", {}).get("severity", "overridden") for r in vendored],
+              "ruleLabels overrode a rule's own labels")
     # One sidecar-labelled ConfigMap per vendored dashboard, each valid JSON with a uid.
     import pathlib
     want = sorted(p.name for p in pathlib.Path(sys.argv[5]).glob("*.json"))
+    check(want, "no vendored dashboards in files/monitoring/")
     cms = [d for d in docs if d["kind"] == "ConfigMap"
            and d["metadata"]["labels"].get("app.kubernetes.io/component") == "dashboard"]
     check(sorted(k for d in cms for k in d["data"]) == want, "dashboard ConfigMaps vs vendored files")
@@ -324,6 +328,24 @@ expect_fail "ServiceMonitor, policy blocks" template 'metrics.networkPolicy.from
 expect_fail "non-string rule label"        schema   '/metrics/prometheusRule/ruleLabels'         --set-json 'metrics.prometheusRule.ruleLabels={"team":1}'
 expect_fail "invalid dashboard label key"  schema   '/metrics/grafanaDashboards/label'           --set 'metrics.grafanaDashboards.label=not a label'
 expect_fail "unknown monitoring knob"      schema   "additional propert(y|ies) 'rules'"          --set metrics.prometheusRule.rules=x
+
+# Long release names: every rendered object keeps a unique name. The dashboard
+# ConfigMaps used to truncate to 63 characters and collide.
+long="$(printf 'n%.0s' $(seq 1 63))"
+helm template t "$chart" -f "$chart/ci/ci-values.yaml" --set fullnameOverride="$long" \
+  | yq -N '.kind + "/" + .metadata.name' | grep -v '^null' | sort | uniq -d > "$work/dupes"
+[ ! -s "$work/dupes" ] || { cat "$work/dupes" >&2; fail "duplicate object names with a 63-character fullname"; }
+pass "unique object names with a 63-character fullname"
+
+# Dashboards enabled with none vendored must fail the render, not render nothing.
+nodash="$work/nodash"
+cp -r "$chart" "$nodash"
+rm -f "$nodash"/files/monitoring/*.json
+if out="$(helm template t "$nodash" -f "$chart/ci/ci-values.yaml" 2>&1)"; then
+  fail "render should fail: dashboards enabled, none vendored"
+fi
+grep -q 'holds no \*.json dashboards' <<<"$out" || { echo "$out" >&2; fail "wrong failure for missing dashboards"; }
+pass "rejects: dashboards enabled, none vendored"
 
 # --- optional: the real binary --------------------------------------------------
 if [ -n "${DECDN_CLI:-}" ]; then

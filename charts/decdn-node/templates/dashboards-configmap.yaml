@@ -8,13 +8,19 @@ release per Grafana.
 */}}
 {{- if .Values.metrics.grafanaDashboards.enabled }}
 {{- $cfg := .Values.metrics.grafanaDashboards }}
-{{- range $path, $_ := .Files.Glob "files/monitoring/*.json" }}
+{{- $dashboards := .Files.Glob "files/monitoring/*.json" }}
+{{- if not $dashboards }}
+{{- fail "metrics.grafanaDashboards.enabled, but files/monitoring/ holds no *.json dashboards; re-run scripts/sync-monitoring.sh" }}
+{{- end }}
+{{- range $path, $_ := $dashboards }}
 {{- $file := base $path }}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ printf "%s-%s" (include "decdn-node.fullname" $) (trimSuffix ".json" $file) | trunc 63 | trimSuffix "-" }}
+  {{- /* No trunc 63: ConfigMap names may be 253 characters, and truncating the
+       suffix made dashboards collide once the fullname passed ~52 characters. */}}
+  name: {{ printf "%s-%s" (include "decdn-node.fullname" $) (trimSuffix ".json" $file) }}
   {{- with $cfg.namespace }}
   namespace: {{ . }}
   {{- end }}
