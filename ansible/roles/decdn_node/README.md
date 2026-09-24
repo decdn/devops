@@ -455,9 +455,14 @@ decdn_chain node register --region US \
 ```
 
 The multiaddr must be `/ip4/`. The daemon binds QUIC on `0.0.0.0:4433`, IPv4 only.
-To get the address to fund, run `decdn --config /etc/decdn/node.toml whoami
---keystore-password-file /etc/decdn/keystore.password` as `decdn` (it's in the same
-section of `docs/lifecycle.md`). `keystore.json` has no plaintext address field.
+To get the address to fund, run `whoami` as `decdn` (also in that section of
+`docs/lifecycle.md`). `keystore.json` has no plaintext address field.
+
+```bash
+sudo systemd-run --pty --wait --collect -p User=decdn \
+  /usr/local/bin/decdn --config /etc/decdn/node.toml whoami \
+  --keystore-password-file /etc/decdn/keystore.password
+```
 
 Exiting is the reverse, in order: `decdn node deregister` (leaves the active set
 and clears the declared tier — the bond stays deposited and **fully slashable**),
