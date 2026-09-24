@@ -54,7 +54,7 @@ repos:
 
   # ── Markdown (relaxed ruleset; see .markdownlint-cli2.yaml) ────────────────
   - repo: https://github.com/DavidAnson/markdownlint-cli2
-    rev: v0.22.1
+    rev: v0.23.3
     hooks:
       - id: markdownlint-cli2
 
