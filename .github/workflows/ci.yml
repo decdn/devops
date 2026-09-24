@@ -212,7 +212,8 @@ jobs:
   # promises (no secrets, release install, host-generated wallet, localhost in
   # decdn_nodes, a keyed admin account, shellcheck-clean stage 1, a collection lock
   # covering ansible/requirements.yml). The boot itself is the molecule `cloud-init`
-  # scenario (molecule.yml). Runs only when cloud-init/ or the root Makefile changed.
+  # scenario (molecule.yml). Runs only when cloud-init/, ansible/requirements.yml, the
+  # root Makefile or ci.yml changed.
   cloud-init:
     needs: changes
     if: needs.changes.outputs.cloud-init == 'true'

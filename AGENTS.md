@@ -143,7 +143,7 @@ addresses) the repo carries, and they carry their upstream commit.
   `ansible/requirements.yml` changes, re-sync the lock: `make lint-cloud-init` checks
   it covers the requirements. The molecule `cloud-init` scenario boots the real
   user-data through cloud-init (skipping `baseline`) against a locally signed release
-  mirror, and is the suite's only release-mode coverage.
+  mirror, and is the suite's only coverage of the release download and verify path.
 
 - **`compose/`** — the same node under Docker Compose on one host: the upstream image,
   always by digest (`compose.yaml` builds `DECDN_IMAGE_REPO@DECDN_IMAGE_DIGEST`), the

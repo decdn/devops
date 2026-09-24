@@ -78,6 +78,8 @@ variant "published port"        's/^(\s*)network_mode: host$/\1ports: ["127.0.0.
 variant "tag instead of digest" 's#^(\s*)image: .*#\1image: ghcr.io/decdn/decdn-node:latest#'
 
 # --- lint-cloud-init negatives: each broken variant must be rejected -------------------
+# Skipped without cloud-init on PATH, except in CI (which installs it), so a broken
+# install step cannot quietly drop these cases.
 if command -v cloud-init >/dev/null; then
   userdata="$repo/cloud-init/user-data.yaml"
   expect 0 "lint-cloud-init accepts cloud-init/user-data.yaml" make -s -C "$repo" lint-cloud-init
@@ -87,25 +89,54 @@ if command -v cloud-init >/dev/null; then
     cat "$work/out" >&2; fail "lint-cloud-init did not reject a missing #cloud-config header as invalid"
   fi
   pass "lint-cloud-init rejects: no #cloud-config header (schema)"
-  ci_variant() { # <name> <sed expression>
-    sed -E "$2" "$userdata" > "$work/ci-$1.yaml"
+  # <name> <expected message fragment> <sed expression>: the fragment pins WHICH
+  # invariant fired, since one edit can trip several.
+  ci_variant() {
+    sed -E "$3" "$userdata" > "$work/ci-$1.yaml"
     cmp -s "$userdata" "$work/ci-$1.yaml" && fail "variant $1 did not change user-data.yaml"
     if make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-$1.yaml" >"$work/out" 2>&1; then
       fail "lint-cloud-init accepted: $1"
     fi
     grep -q 'violates an invariant' "$work/out" || { cat "$work/out" >&2; fail "lint-cloud-init failed for another reason: $1"; }
+    grep -qF -- "$2" "$work/out" || { cat "$work/out" >&2; fail "lint-cloud-init rejected $1, but not with: $2"; }
     pass "lint-cloud-init rejects: $1"
   }
-  ci_variant "RPC URL in bootstrap.env" 's#^(\s*)DECDN_BOOTSTRAP_ANSIBLE_ARGS=$#\1DECDN_RPC_URL=https://rpc.example/key#'
-  ci_variant "RPC URL in the inventory" 's#^(\s*)decdn_network: arbitrum-sepolia$#\1decdn_rpc_url: "https://rpc.example/"#'
-  ci_variant "credentials in a URL"     's#^(\s*)DEVOPS_REPO=https://#\1DEVOPS_REPO=https://user:pw@#'
-  ci_variant "manual install method"    's/^(\s*)decdn_node_install_method: release$/\1decdn_node_install_method: manual/'
-  ci_variant "no host-generated wallet" 's/^(\s*)decdn_node_generate_keystore: true(.*)$/\1decdn_node_generate_keystore: false\2/'
-  ci_variant "localhost outside decdn_nodes" 's/^(\s*)decdn_nodes:$/\1decdn_hosts:/'
-  ci_variant "admin account without keys" '/^\s*keys:$/,+1d'
-  ci_variant "stage 1 not run"          's#^  - \[/usr/local/sbin/decdn-bootstrap\]$#  - [/bin/true]#'
+  ref='^(\s*)DEVOPS_REF=CHANGE_ME$'
+  net='^(\s*)decdn_network: arbitrum-sepolia$'
+  loc='^(\s*)ansible_connection: local$'
+  stage1='^(\s*)- path: /usr/local/sbin/decdn-bootstrap$'
+  # Secrets
+  ci_variant "RPC URL in bootstrap.env"    'bootstrap.env: unexpected key DECDN_RPC_URL' "s#$ref#&\\n\\1DECDN_RPC_URL=https://rpc.example/key#"
+  ci_variant "unknown bootstrap.env key"   'bootstrap.env: unexpected key FOO'           "s#$ref#&\\n\\1FOO=bar#"
+  ci_variant "RPC URL in the inventory"    'decdn_nodes.vars.decdn_rpc_url looks secret-bearing' "s#$net#&\\n\\1decdn_rpc_url: https://rpc.example/#"
+  ci_variant "decdn_extra_env"             'decdn_nodes.vars.decdn_extra_env looks secret-bearing' "s#$net#&\\n\\1decdn_extra_env: {AWS_REGION: eu-west-1}#"
+  ci_variant "credentials in a URL"        'a URL with embedded credentials' 's#^(\s*)DEVOPS_REPO=https://#\1DEVOPS_REPO=https://user:pw@#'
+  ci_variant "another write_files path"    'write_files writes /etc/decdn/decdn.env' "s#$stage1#\\1- path: /etc/decdn/decdn.env\\n\\1  content: FOO=bar\\n&#"
+  ci_variant "b64-encoded content"         'encoding b64 hides its content' "s#$stage1#&\\n\\1  encoding: b64#"
+  ci_variant "secret assigned in runcmd"   'assigns a secret-looking variable' 's#^  - \[/usr/local/sbin/decdn-bootstrap\]$#&\n  - "GC_API_TOKEN=x /bin/true"#'
+  # Hardening and the signed install
+  ci_variant "the test-only baseline skip" 'mentions TEST-ONLY-skip-baseline' 's#^  - \[/usr/local/sbin/decdn-bootstrap\]$#  - [touch, /etc/decdn-bootstrap/TEST-ONLY-skip-baseline]\n&#'
+  ci_variant "manual install method"       'decdn_node_install_method must be release' 's/^(\s*)decdn_node_install_method: release$/\1decdn_node_install_method: manual/'
+  ci_variant "no host-generated wallet"    'decdn_node_generate_keystore must be true' 's/^(\s*)decdn_node_generate_keystore: true(.*)$/\1decdn_node_generate_keystore: false\2/'
+  ci_variant "signature off as a host var" 'set decdn_verify_release_signature only in decdn_nodes.vars' "s#$loc#&\\n\\1decdn_verify_release_signature: false#"
+  ci_variant "install method as a host var" 'set decdn_node_install_method only in decdn_nodes.vars' "s#$loc#&\\n\\1decdn_node_install_method: manual#"
+  ci_variant "another signing key"         'decdn_release_keyring may not be overridden' "s#$net#&\\n\\1decdn_release_keyring: /tmp/KEYS.asc#"
+  ci_variant "another env file path"       'decdn_env_file may not be overridden' "s#$net#&\\n\\1decdn_env_file: /etc/decdn/other.env#"
+  ci_variant "another inventory group"     'only the decdn_nodes group belongs here' 's#^(\s*)decdn_nodes:$#\1all: {vars: {decdn_verify_release_signature: false}}\n&#'
+  # Shape
+  ci_variant "localhost outside decdn_nodes" 'localhost must be in decdn_nodes' 's/^(\s*)decdn_nodes:$/\1decdn_hosts:/'
+  ci_variant "admin account without keys"  'baseline_sudo_users needs at least one named account' '/^\s*keys:$/,+1d'
+  ci_variant "stage 1 not run"             'runcmd must be exactly' 's#^  - \[/usr/local/sbin/decdn-bootstrap\]$#  - [/bin/true]#'
+  ci_variant "stage 1 failure masked"      'runcmd must be exactly' 's#^  - \[/usr/local/sbin/decdn-bootstrap\]$#  - "/usr/local/sbin/decdn-bootstrap || true"#'
   # shellcheck disable=SC2016 # a literal $DEVOPS_REPO: the variant unquotes it in stage 1
-  ci_variant "shellcheck-dirty stage 1" 's#git clone --quiet --no-checkout "\$DEVOPS_REPO"#git clone --quiet --no-checkout $DEVOPS_REPO#'
+  ci_variant "shellcheck-dirty stage 1"    'decdn-bootstrap fails shellcheck' 's#git clone --quiet --no-checkout "\$DEVOPS_REPO"#git clone --quiet --no-checkout $DEVOPS_REPO#'
+  # Non-secret knobs whose names look secret must still pass.
+  sed -E "s#$net#&\\n\\1baseline_sudo_passwordless: false\\n\\1decdn_keystore_file: /var/lib/decdn/keystore.json#" \
+    "$userdata" > "$work/ci-knobs.yaml"
+  expect 0 "lint-cloud-init accepts non-secret knobs with secret-looking names" \
+    make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-knobs.yaml"
+elif [[ -n ${CI:-} ]]; then
+  fail "cloud-init is not on PATH in CI; the lint-cloud-init negatives would be skipped"
 else
   skipped+=("lint-cloud-init negatives (needs cloud-init on PATH; CI installs it)")
 fi

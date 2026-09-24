@@ -1,11 +1,66 @@
 ---
-# The operator's part, as cloud-init/README.md tells it: SSH in, write the RPC endpoint to
-# a 0600 file on the host, and re-run the bootstrap. The value is a placeholder; the stub
-# daemon never dials it.
-- name: Side effect — provision the secret and re-run the bootstrap
+# The operator's part, as cloud-init/README.md tells it, plus the mistakes stage 1 must
+# refuse:
+#   1. Each broken bootstrap.env must make `decdn-bootstrap` exit non-zero with its reason,
+#      record "failed", and make the login hint say so. The branch-name case matters
+#      most: a branch is unpinned code run as root.
+#   2. Then the real thing: move DEVOPS_REF to a tag on a newer commit (the upgrade
+#      path), write the RPC endpoint to a 0600 file on the host, and re-run. The value
+#      is a placeholder; the stub daemon never dials it.
+- name: Side effect — refusals, then the secret and a re-run at a tag
   hosts: all
   become: true
+  vars:
+    env_file: /etc/decdn-bootstrap/bootstrap.env
+    refusals:
+      - name: a branch name
+        content: "DEVOPS_REPO=file:///srv/devops-src\nDEVOPS_REF=molecule\n"
+        mode: "0600"
+        expect: neither a full 40-character commit SHA nor a tag
+      - name: the placeholder ref
+        content: "DEVOPS_REPO=file:///srv/devops-src\nDEVOPS_REF=CHANGE_ME\n"
+        mode: "0600"
+        expect: set DEVOPS_REF
+      - name: an unknown key
+        content: "DEVOPS_REPO=file:///srv/devops-src\nDEVOPS_REF=CHANGE_ME\nFOO=bar\n"
+        mode: "0600"
+        expect: unknown key FOO
+      - name: a group-readable bootstrap.env
+        content: "DEVOPS_REPO=file:///srv/devops-src\nDEVOPS_REF=v0.0.0-molecule\n"
+        mode: "0640"
+        expect: must be owned by root, mode 0600
   tasks:
+    - name: Read the working bootstrap.env
+      ansible.builtin.slurp:
+        src: "{{ env_file }}"
+      register: good_env
+
+    - name: Read the SHA converge pinned (recorded by prepare.yml)
+      ansible.builtin.slurp:
+        src: /srv/devops-src.sha
+      register: pinned_sha_file
+
+    - name: Decode it
+      ansible.builtin.set_fact:
+        pinned_sha: "{{ pinned_sha_file.content | b64decode | trim }}"
+
+    - name: Refuse each broken bootstrap.env
+      ansible.builtin.include_tasks: includes/refuse.yml
+      loop: "{{ refusals }}"
+      loop_control:
+        loop_var: refusal
+        label: "{{ refusal.name }}"
+
+    - name: Pin the tag on the newer commit (the upgrade path)
+      ansible.builtin.copy:
+        dest: "{{ env_file }}"
+        content: >-
+          {{ good_env.content | b64decode
+             | regex_replace('(?m)^DEVOPS_REF=.*$', 'DEVOPS_REF=v0.0.0-molecule') }}
+        owner: root
+        group: root
+        mode: "0600"
+
     - name: Create /etc/decdn
       ansible.builtin.file:
         path: /etc/decdn

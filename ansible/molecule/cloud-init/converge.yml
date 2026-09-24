@@ -54,8 +54,6 @@
           replace: '\1DEVOPS_REPO=file:///srv/devops-src'
         - regexp: '^(\s*)DEVOPS_REF=CHANGE_ME$'
           replace: '\1DEVOPS_REF={{ src_sha }}'
-        - regexp: '^(\s*)DECDN_BOOTSTRAP_ANSIBLE_ARGS=$'
-          replace: '\1DECDN_BOOTSTRAP_ANSIBLE_ARGS=--skip-tags baseline'
         - regexp: '^(\s*)- name: CHANGE_ME\b.*$'
           replace: '\1- name: molecule'
         - regexp: '^(\s*)- "CHANGE_ME"(.*)$'
@@ -78,6 +76,23 @@
       register: leftover
       changed_when: false
       failed_when: leftover.rc != 1
+
+    - name: Create the bootstrap's config directory
+      ansible.builtin.file:
+        path: /etc/decdn-bootstrap
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # Outside the user-data on purpose: the lint rejects a user-data that mentions it.
+    - name: Skip baseline in the container (bootstrap.sh's test-only switch)
+      ansible.builtin.copy:
+        dest: /etc/decdn-bootstrap/TEST-ONLY-skip-baseline
+        content: ""
+        owner: root
+        group: root
+        mode: "0600"
 
     - name: Write the NoCloud meta-data
       ansible.builtin.copy:

@@ -62,14 +62,20 @@
         src: "{{ scratch }}/devops-src.tgz"
         dest: /srv/devops-src
 
-    - name: Commit it, so stage 1 has a SHA to pin and verify
+    # Two commits: converge pins the first by SHA; side_effect then moves the host to a
+    # tag on the second, the "upgrade the deployment code" path. The branch is named
+    # so side_effect can check that stage 1 refuses a branch name.
+    - name: Commit it, so stage 1 has a SHA to pin and a tag to move to
       ansible.builtin.shell:
         cmd: |
           set -euo pipefail
-          git init -q
+          git init -q -b molecule
           git add -A
           git -c user.name=molecule -c user.email=molecule@molecule.invalid commit -qm "molecule snapshot"
           git rev-parse HEAD > /srv/devops-src.sha
+          git -c user.name=molecule -c user.email=molecule@molecule.invalid commit -q --allow-empty -m "molecule bump"
+          git tag v0.0.0-molecule
+          git rev-parse HEAD > /srv/devops-src.tag-sha
         chdir: /srv/devops-src
         executable: /bin/bash
         creates: /srv/devops-src/.git

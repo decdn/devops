@@ -8,21 +8,24 @@
 #   converge    seeds NoCloud with the user-data (placeholders filled, the repo, mirror
 #               and keyring pointed at the local ones) and runs cloud-init's boot stages.
 #               It then asserts that the host stopped cleanly at the secret gate.
-#   side_effect writes 0600 /etc/decdn/decdn.env over "SSH", as the operator would, and
-#               re-runs `decdn-bootstrap`.
-#   verify      checks a release-mode install, a host-generated wallet, a running
-#               daemon, and the pinned collection set.
+#   side_effect checks that stage 1 refuses a branch name, the placeholder ref, an
+#               unknown bootstrap.env key and a group-readable bootstrap.env, each
+#               recording "failed" for the login hint. It then moves DEVOPS_REF to a tag
+#               on a newer commit, writes 0600 /etc/decdn/decdn.env over "SSH", as the
+#               operator would, and re-runs `decdn-bootstrap`.
+#   verify      checks the checkout is at the tag, a release-mode install, a
+#               host-generated wallet, a running daemon, and the pinned collection set.
 #
 # Release mode runs here and nowhere else in the suite: the role's download, GPG
 # signature check, SHA256SUMS check, extract and version stamp, against a mirror,
 # because upstream has not cut a release yet.
 #
-# Coverage boundary: `baseline` is skipped through the user-data's own
-# DECDN_BOOTSTRAP_ANSIBLE_ARGS (--skip-tags baseline). Its host hardening (nftables,
-# DevSec sysctl/sshd, fail2ban) means nothing in a throwaway container, the same as in
-# every other scenario (see ../default/molecule.yml). So this scenario proves the
-# bootstrap plumbing and the node path, not the hardening. `cloud-init/README.md` says
-# the same.
+# Coverage boundary: `baseline` is skipped through bootstrap.sh's test-only switch
+# (/etc/decdn-bootstrap/TEST-ONLY-skip-baseline, written by converge outside the
+# user-data). Its host hardening (nftables, DevSec sysctl/sshd, fail2ban) means nothing
+# in a throwaway container, the same as in every other scenario (see
+# ../default/molecule.yml). So this scenario proves the bootstrap plumbing and the node
+# path, not the hardening. `cloud-init/README.md` says the same.
 #
 # Oldest and newest supported distributions only. They bracket the controller Pythons
 # that cloud-init/requirements.txt pins two ansible-core versions for (3.11 gets 2.19,

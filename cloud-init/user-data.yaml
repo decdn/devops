@@ -32,7 +32,6 @@ write_files:
     content: |
       DEVOPS_REPO=https://github.com/decdn/devops.git
       DEVOPS_REF=CHANGE_ME
-      DECDN_BOOTSTRAP_ANSIBLE_ARGS=
 
   # The Ansible inventory for this host. Everything the playbook needs that is not a
   # secret lives here. More knobs: ansible/roles/*/defaults/main.yml.
@@ -71,6 +70,31 @@ write_files:
           decdn_network: arbitrum-sepolia
           decdn_region: "CHANGE_ME"            # MUST-EDIT: ISO 3166-1 alpha-2 of the VM's location, e.g. "DE"
 
+  # What an interactive login prints while the bootstrap is unfinished. It is written
+  # here, not by the bootstrap, so that it is in place even if stage 1 fails.
+  - path: /etc/profile.d/decdn-bootstrap.sh
+    owner: root:root
+    permissions: "0644"
+    content: |
+      # deCDN bootstrap status at login (cloud-init/README.md in decdn/devops).
+      log=/var/log/cloud-init-output.log
+      rerun="sudo decdn-bootstrap"
+      case "$(cat /var/lib/decdn-bootstrap/state 2>/dev/null)" in
+        complete) ;;
+        awaiting-secret)
+          echo "deCDN: hardened, waiting for its RPC secret. Write 0600 /etc/decdn/decdn.env, then run: $rerun" ;;
+        running)
+          if pgrep -f 'sbin/decdn-bootstrap|cloud-init/bootstrap[.]sh' >/dev/null 2>&1; then
+            echo "deCDN: the bootstrap is running (log: $log)"
+          else
+            echo "deCDN: the bootstrap was interrupted. Re-run it: $rerun"
+          fi ;;
+        failed)
+          echo "deCDN: the last bootstrap run FAILED (log: $log). Re-run it: $rerun" ;;
+        *)
+          echo "deCDN: the bootstrap has not run yet (cloud-init status --wait; log: $log)" ;;
+      esac
+
   # Stage 1: fetch and verify the pinned checkout, then hand over to its
   # cloud-init/bootstrap.sh. Re-run it by hand after writing /etc/decdn/decdn.env, or
   # after changing DEVOPS_REF: `sudo decdn-bootstrap`.
@@ -83,26 +107,43 @@ write_files:
       set -euo pipefail
       conf=/etc/decdn-bootstrap/bootstrap.env
       checkout=/opt/decdn-devops
+      state_dir=/var/lib/decdn-bootstrap
       die() { echo "decdn-bootstrap: $*" >&2; exit 1; }
+      # World-readable: the login hint reads it as the admin account.
+      set_state() {
+        install -d -m 0755 "$state_dir"
+        printf '%s\n' "$1" >"$state_dir/state.tmp"
+        chmod 0644 "$state_dir/state.tmp"
+        mv -f "$state_dir/state.tmp" "$state_dir/state"
+      }
 
       [[ $EUID -eq 0 ]] || die "run as root (sudo decdn-bootstrap)"
+      # One run at a time. The lock is held until stage 2 exits (exec keeps fd 9).
+      exec 9>/run/decdn-bootstrap.lock
+      flock -n 9 || die "another decdn-bootstrap run is in progress"
+      # Any non-zero exit before the hand-over, a signal included, records "failed".
+      # exec replaces this process, so stage 2's own traps take over from there.
+      trap 'rc=$?; ((rc == 0)) || set_state failed' EXIT
+      trap 'exit 129' HUP
+      trap 'exit 130' INT
+      trap 'exit 143' TERM
+      set_state running
+
       [[ $(stat -c '%u %a' "$conf") == "0 600" ]] || die "$conf must be owned by root, mode 0600"
       # KEY=value lines, read literally: never sourced, so a value is data, not shell.
-      DEVOPS_REPO='' DEVOPS_REF='' DECDN_BOOTSTRAP_ANSIBLE_ARGS=''
+      DEVOPS_REPO='' DEVOPS_REF=''
       while IFS= read -r line || [[ -n $line ]]; do
         [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
         [[ $line =~ ^([A-Z_]+)=(.*)$ ]] || die "$conf: not a KEY=value line: $line"
         case ${BASH_REMATCH[1]} in
           DEVOPS_REPO) DEVOPS_REPO=${BASH_REMATCH[2]} ;;
           DEVOPS_REF) DEVOPS_REF=${BASH_REMATCH[2]} ;;
-          DECDN_BOOTSTRAP_ANSIBLE_ARGS) DECDN_BOOTSTRAP_ANSIBLE_ARGS=${BASH_REMATCH[2]} ;;
           *) die "$conf: unknown key ${BASH_REMATCH[1]}" ;;
         esac
       done <"$conf"
       [[ -n $DEVOPS_REPO ]] || die "DEVOPS_REPO is empty in $conf"
       [[ -n $DEVOPS_REF && $DEVOPS_REF != CHANGE_ME ]] \
         || die "set DEVOPS_REF in $conf to a commit SHA or release tag of $DEVOPS_REPO"
-      export DECDN_BOOTSTRAP_ANSIBLE_ARGS
       export HOME="${HOME:-/root}"
 
       if [[ ! -d $checkout/.git ]]; then

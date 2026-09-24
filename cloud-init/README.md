@@ -17,38 +17,44 @@ repeated deploys from your workstation, use the [Ansible project](../ansible/REA
 directly. [`docs/requirements.md`](../docs/requirements.md) compares the paths.
 
 > **Upstream has not published a release yet.** The node installs only from a
-> GPG-verified release tarball (`release` mode). The `manual` mode copies binaries
-> from a control machine, which this path does not have. Until a release exists, serve
+> GPG-verified release tarball (`release` mode). The `manual` mode would install
+> binaries that nothing verified, so the lint refuses it. Until a release exists, serve
 > `v<version>/{decdn-node,decdn}-<version>-<target>.tar.gz`, `SHA256SUMS` and
 > `SHA256SUMS.asc` from a mirror, and set `decdn_node_release_base` in the user-data
 > to point at it. The signature is still checked against deCDN's release key.
 
 ## What happens at boot
 
-1. cloud-init installs `git`, `python3-venv`, `ca-certificates` and `sudo`, then writes
-   three files:
+1. cloud-init writes four files early in boot:
    - `/etc/decdn-bootstrap/bootstrap.env`: which revision of this repo to run.
    - `/etc/decdn-bootstrap/inventory.yml`: your non-secret settings.
    - `/usr/local/sbin/decdn-bootstrap`: stage 1 of the bootstrap.
-2. **Stage 1** (`decdn-bootstrap`) clones this repo into `/opt/decdn-devops` at
-   `DEVOPS_REF`. If the ref is a full commit SHA, it checks that the checkout really is
-   at that commit. It then runs the checkout's [`bootstrap.sh`](bootstrap.sh).
+   - `/etc/profile.d/decdn-bootstrap.sh`: the login hint (below).
+
+   In its final stage it installs `git`, `python3-venv`, `ca-certificates` and `sudo`,
+   then runs stage 1.
+2. **Stage 1** (`decdn-bootstrap`) takes a lock, so only one run happens at a time, and
+   records `running`. It clones this repo into `/opt/decdn-devops` at `DEVOPS_REF`. If
+   the ref is a full commit SHA, it checks that the checkout really is at that commit.
+   It then runs the checkout's [`bootstrap.sh`](bootstrap.sh).
 3. **Stage 2** (`bootstrap.sh`) installs the pinned toolchain:
    - ansible-core into `/opt/decdn-bootstrap/venv`, from
      [`requirements.txt`](requirements.txt) with pip's hash checking on;
    - the Galaxy collections at the exact versions in
      [`collections.lock.yml`](collections.lock.yml).
 
-   It then syntax-checks the playbook and checks that the inventory puts localhost in
-   `decdn_nodes`.
+   It then syntax-checks the playbook. It also checks that the inventory puts localhost
+   in `decdn_nodes`, and that `--tags baseline` still selects the baseline role.
 4. With no `/etc/decdn/decdn.env` yet, stage 2 runs only the `baseline` role and
    records `awaiting-secret`. With the file present, it runs the whole playbook and
    records `complete`.
 
 The state is in `/var/lib/decdn-bootstrap/state`: `running`, `awaiting-secret`,
-`complete` or `failed`. A login hint (`/etc/profile.d/decdn-bootstrap.sh`) prints the
-next step while the bootstrap is unfinished. The full log is in
-`/var/log/cloud-init-output.log`.
+`complete` or `failed`. Any failed run records `failed`, including one that stage 1
+refused or a signal interrupted. The login hint (`/etc/profile.d/decdn-bootstrap.sh`)
+prints the next step whenever the state is not `complete`. It also says when a
+`running` bootstrap is no longer alive, for example after a reboot mid-run. The full
+log is in `/var/log/cloud-init-output.log`.
 
 ## Set up
 
@@ -67,15 +73,18 @@ next step while the bootstrap is unfinished. The full log is in
    - `decdn_node_release_base`, for a mirror (see the note above);
    - `decdn_network`, `arbitrum-sepolia` today.
 
-   Any other role knob can go in the same `vars:` block
-   (`ansible/roles/*/defaults/main.yml`). Check the file before you paste it:
+   Any other non-secret role knob can go in the same `vars:` block
+   (`ansible/roles/*/defaults/main.yml`). The knobs that decide the install's trust
+   (install method, wallet generation, signature verification) stay there too. The lint
+   refuses them as host vars, and refuses `decdn_release_keyring` and `decdn_env_file`
+   outright. Check the file before you paste it:
 
    ```bash
    make lint-cloud-init CLOUD_INIT_FILE=path/to/your-user-data.yaml
    ```
 
-   It fails on your edited copy only if an invariant breaks, for example a secret
-   added or `release` mode changed.
+   It fails on your edited copy only if an invariant breaks. Examples: a secret added,
+   another file written, or `release` mode changed.
 
 2. **Create the VM** with the file as its user data. Examples:
    - **Hetzner Cloud:** "Cloud config" field, or `hcloud server create --user-data-from-file`.
@@ -94,6 +103,10 @@ next step while the bootstrap is unfinished. The full log is in
    ssh <admin>@<ip> cloud-init status --wait    # status: done
    ssh <admin>@<ip> cat /var/lib/decdn-bootstrap/state   # awaiting-secret
    ```
+
+   Your admin account exists only once `baseline` has run, near the end of the first
+   boot. Until then, and after a failure before that point, log in the way your
+   provider set up (often `root` with the injected key).
 
    `status: error` means the bootstrap failed. The reason is at the end of
    `/var/log/cloud-init-output.log`. Fix it (usually a value in
@@ -133,18 +146,22 @@ next step while the bootstrap is unfinished. The full log is in
      --multiaddr /ip4/<public-ip>/udp/4433/quic-v1 --dry-run
    ```
 
-   The wallet's address is in `/var/lib/decdn/keystore.json`. Fund it before you run
-   the command without `--dry-run`.
+   `decdn whoami` prints the wallet's address. The address is encrypted inside the
+   keystore, so the command needs the keystore password, which is in the root-only
+   `/etc/decdn/keystore.password`. Fund the wallet before you run the command without
+   `--dry-run`.
 
 ## Operate
 
 - **Re-run or change settings:** edit `/etc/decdn-bootstrap/inventory.yml`, then run
-  `sudo decdn-bootstrap`. Every run converges the whole host again, as `make deploy`
-  does.
+  `sudo decdn-bootstrap`. Once `/etc/decdn/decdn.env` exists, every run converges the
+  whole host again, as `make deploy` does. Before that, runs apply `baseline` only.
 - **Upgrade the deployment code:** set `DEVOPS_REF` in
   `/etc/decdn-bootstrap/bootstrap.env` to the new SHA or tag, then run
   `sudo decdn-bootstrap`. It fetches, verifies and re-installs the toolchain pinned at
-  that revision. Nothing pulls on a timer: the host only runs code you pinned.
+  that revision. Nothing pulls on a timer: the host only runs code you pinned. A tag is
+  resolved again on every run, so if someone re-points it, the next run follows. Pin a
+  SHA if that matters to you.
 - **Upgrade the node:** change `decdn_node_version` in the inventory and re-run.
 - **Back up, migrate or decommission:** the host is an ordinary Ansible node. Add it to
   an inventory on your workstation with the same variables and use `make backup`,
@@ -159,16 +176,23 @@ next step while the bootstrap is unfinished. The full log is in
   only public material: an SSH public key, a version, a region, a repo URL. The RPC URL
   is written over SSH, and the wallet is generated on the host.
   `make lint-cloud-init` fails on:
-  - any secret-looking key (RPC URL, password, token, private key, keystore);
+  - any file written besides the bootstrap's own four, and any encoded file content;
+  - any secret-looking key (RPC URL, password, token, private key, keystore,
+    `decdn_extra_env`);
+  - a `NAME=value` assignment of a secret-looking variable anywhere, including
+    commands;
   - a URL with embedded credentials;
-  - an unknown `bootstrap.env` key.
+  - an unknown `bootstrap.env` key;
+  - any mention of the test-only switch that skips hardening.
 - **Everything is pinned.**
-  - This repo: by commit SHA (checked after checkout) or tag.
+  - This repo: by commit SHA (checked after checkout), or by tag, which is weaker
+    because a tag can be moved.
   - ansible-core: by version and hash.
   - The collections: by exact version.
   - The node: by release version, installed only if `SHA256SUMS` carries a valid
-    signature from deCDN's release key (`decdn_verify_release_signature` cannot be
-    turned off in this file).
+    signature from deCDN's release key. The lint refuses a user-data that turns
+    `decdn_verify_release_signature` off, swaps `decdn_release_keyring`, or sets either
+    one as a host var.
 
   Nothing is piped from `curl` into a shell.
 - **No lockout.** Baseline refuses to harden SSH unless `baseline_sudo_users` names a
@@ -177,15 +201,19 @@ next step while the bootstrap is unfinished. The full log is in
   the node's QUIC udp/4433 open. Metrics and the admin RPC stay on loopback.
 - The files in `/etc/decdn-bootstrap/` are `root` `0600`. `decdn-bootstrap` refuses a
   `bootstrap.env` that is not `root`-owned `0600`. It reads the file as literal
-  `KEY=value` lines and never sources it, and it rejects unknown keys.
+  `KEY=value` lines and never sources it, and it rejects unknown keys. That leaves no
+  way to pass Ansible arguments (extra-vars or skipped tags) from user-data.
+- `runcmd` must be exactly stage 1, so a failure always reaches `cloud-init status`.
 
 What CI proves:
 
 - `make lint-cloud-init` (CI job `cloud-init`) checks the schema and the invariants
   above, and `make test-scripts` checks that it rejects broken variants.
 - The molecule `cloud-init` scenario boots this file with cloud-init in Debian 12 and
-  Ubuntu 26.04 containers. It covers the secret gate, then `decdn.env`, then a running
-  node installed from a locally signed mirror.
+  Ubuntu 26.04 containers. It covers the secret gate first. It then checks that stage 1
+  refuses a branch name, the placeholder ref, an unknown key and a loose file mode,
+  each recording `failed`. Finally, after an upgrade to a tag and `decdn.env`, it
+  covers a running node installed from a locally signed mirror.
 - The scenario skips `baseline`, because host hardening means nothing in a container.
   It is exercised on real hosts, as for the Ansible path.
 
@@ -200,7 +228,8 @@ What CI proves:
 
   Keep a pin whose controller Python range covers 3.11 (Debian 12) and one covering
   3.12 to 3.14 (Ubuntu 24.04, Debian 13, Ubuntu 26.04).
-- **Collections:** run `make deps` in `ansible/`, then copy the resolved versions into
-  [`collections.lock.yml`](collections.lock.yml). `make lint-cloud-init` checks the
+- **Collections:** resolve from scratch (`rm -rf ansible/collections && make -C ansible
+  deps`), because an existing tree keeps what it has. Then copy the resolved versions
+  into [`collections.lock.yml`](collections.lock.yml). `make lint-cloud-init` checks the
   lock against `ansible/requirements.yml`. The molecule scenario checks that a node
   ends up with exactly the locked set.

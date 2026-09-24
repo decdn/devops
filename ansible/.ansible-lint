@@ -17,3 +17,8 @@ skip_list:
 exclude_paths:
   - build/
   - galaxy/
+
+# Task files a molecule scenario includes (ansible-lint would otherwise read them as
+# playbooks, and a `tasks/` directory would make the scenario look like a role).
+kinds:
+  - tasks: "**/molecule/*/includes/*.yml"

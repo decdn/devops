@@ -92,12 +92,15 @@ lint-compose:        ## render compose/ with its examples and check its security
 	@echo "compose invariants hold"
 
 # The cloud-init user-data (cloud-init/README.md): `cloud-init schema` for its shape, then
-# cloud-init/tests/lint.py for what a schema cannot see. That covers no secrets, release
-# install with a host-generated wallet, localhost in decdn_nodes, a keyed admin account,
-# a shellcheck-clean stage 1, and a collection lock that covers ansible/requirements.yml.
-# CLOUD_INIT_FILE is overridable so tests/scripts-test.sh can feed it broken variants.
+# cloud-init/tests/lint.py for what a schema cannot see. That covers no secrets, no
+# hardening skip, a signed release install with a host-generated wallet, localhost in
+# decdn_nodes, a keyed admin account, runcmd exactly stage 1, shellcheck-clean scripts,
+# and a collection lock that covers ansible/requirements.yml.
+# CLOUD_INIT_FILE is overridable so operators can check their filled-in copy and
+# tests/scripts-test.sh can feed it broken variants.
 CLOUD_INIT_FILE ?= cloud-init/user-data.yaml
 lint-cloud-init:     ## schema-check cloud-init/user-data.yaml and its invariants (needs cloud-init, shellcheck, yq)
+	@command -v cloud-init >/dev/null || { echo "lint-cloud-init: needs cloud-init on PATH" >&2; exit 2; }
 	@cloud-init schema -c '$(CLOUD_INIT_FILE)' >/dev/null 2>&1 \
 		|| { cloud-init schema -c '$(CLOUD_INIT_FILE)' 2>&1 | grep -v WARNING >&2; \
 		     echo "lint-cloud-init: $(CLOUD_INIT_FILE) is not a valid cloud-config (see above)" >&2; exit 2; }
@@ -105,9 +108,9 @@ lint-cloud-init:     ## schema-check cloud-init/user-data.yaml and its invariant
 	@echo "cloud-init invariants hold"
 
 # The guard rails nothing else exercises: ansible/Makefile's scoping guards, the
-# release gate, lint-compose's negative cases, and (with UPSTREAM=<decdn checkout>)
-# the upstream-mirror generators' exit codes. CI job `scripts`.
-test-scripts:        ## test the Makefile guards, release gate and lint-compose negatives (needs docker, jq)
+# release gate, the lint-compose and lint-cloud-init negative cases, and (with
+# UPSTREAM=<decdn checkout>) the upstream-mirror generators' exit codes. CI job `scripts`.
+test-scripts:        ## test the Makefile guards, release gate, lint-compose and lint-cloud-init negatives (needs docker, jq, cloud-init, yq)
 	tests/scripts-test.sh
 
 lint-helm:           ## helm lint + render tests + kubeconform + shared schema-key check (needs helm, yq, python3>=3.11, docker)

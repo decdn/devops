@@ -1,6 +1,7 @@
 ---
-# After the secret: the node came from the (mirrored, signed) release, generated its own
-# wallet and is running. The toolchain is exactly what cloud-init/ pins.
+# After the secret: the host moved to the pinned tag, the node came from the (mirrored,
+# signed) release, generated its own wallet and is running. The toolchain is exactly
+# what cloud-init/ pins.
 - name: Verify
   hosts: all
   become: true
@@ -17,6 +18,17 @@
       ansible.builtin.slurp:
         src: /var/lib/decdn-bootstrap/state
       register: bootstrap_state
+
+    # side_effect moved DEVOPS_REF from converge's SHA to a tag on a newer commit.
+    - name: Read the tagged commit (recorded by prepare.yml)
+      ansible.builtin.slurp:
+        src: /srv/devops-src.tag-sha
+      register: tag_sha
+
+    - name: Read the checkout's commit
+      ansible.builtin.slurp:
+        src: /opt/decdn-devops/.git/HEAD
+      register: checkout_head
 
     - name: Read the installed-version stamp (release mode only writes it)
       ansible.builtin.slurp:
@@ -45,6 +57,7 @@
       ansible.builtin.assert:
         that:
           - bootstrap_state.content | b64decode | trim == 'complete'
+          - checkout_head.content | b64decode | trim == tag_sha.content | b64decode | trim
           - stamp.content | b64decode | trim == '0.0.0-molecule-stub'
           - wallet.results | rejectattr('stat.exists') | list | length == 0
           - wallet.results | map(attribute='stat.mode') | unique == ['0600']
@@ -52,6 +65,7 @@
           - login_hint.stdout == ''
         fail_msg: >-
           state={{ bootstrap_state.content | b64decode | trim }}
+          head={{ checkout_head.content | b64decode | trim }} (tag {{ tag_sha.content | b64decode | trim }})
           stamp={{ stamp.content | b64decode | trim }}
           wallet={{ wallet.results | map(attribute='stat') | list }}
           service={{ ansible_facts.services['decdn-node.service'] | default('absent') }}

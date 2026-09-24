@@ -5,7 +5,7 @@
 #
 # Two pins, because no single ansible-core release supports every supported host's
 # controller Python. The range is Debian 12's 3.11 through Ubuntu 26.04's 3.14. 2.19 is
-# the last release that supports 3.11, and 2.20 and later support 3.12 to 3.14. Both
+# the last release that supports 3.11, and 2.20 and 2.21 support 3.12 to 3.14. Both
 # stay at or above the roles' min_ansible_version (2.15).
 ansible-core==2.19.13 ; python_version < "3.12"
 ansible-core==2.21.4 ; python_version >= "3.12"

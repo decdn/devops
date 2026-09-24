@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Stage 2 of the cloud-init bootstrap (see README.md). Stage 1 is the small
-# /usr/local/sbin/decdn-bootstrap that user-data.yaml writes. It clones this repo at the
-# pinned ref, verifies the checkout, then execs this script from it.
+# /usr/local/sbin/decdn-bootstrap that user-data.yaml writes. It takes a lock, records
+# "running", clones this repo at the pinned ref, verifies the checkout, then execs this
+# script from it.
 #
 # This script turns the host into a node by running ansible/playbooks/site.yml against
 # localhost:
@@ -17,23 +18,28 @@
 #      - decdn.env present: run the whole playbook (install, keystore, service), then
 #        record "complete".
 #
-# Re-running it is how the operator continues after writing decdn.env, and how a host
-# picks up a new pinned ref: `sudo decdn-bootstrap`.
-set -Eeuo pipefail
+# `sudo decdn-bootstrap` (stage 1, then this) is how the operator continues after
+# writing decdn.env, and how a host picks up a new pinned ref.
+set -euo pipefail
 
 readonly CONF_DIR=/etc/decdn-bootstrap
 readonly INVENTORY=$CONF_DIR/inventory.yml
 readonly VENV=/opt/decdn-bootstrap/venv
 readonly STATE_DIR=/var/lib/decdn-bootstrap
 readonly STATE_FILE=$STATE_DIR/state
-readonly LOGIN_HINT=/etc/profile.d/decdn-bootstrap.sh
 # The decdn_node role's default decdn_env_file (roles/decdn_node/defaults/main.yml).
 readonly ENV_FILE=/etc/decdn/decdn.env
+# Test hook for the molecule `cloud-init` scenario only: baseline's hardening means
+# nothing in a container. bootstrap.env carries no Ansible arguments, so there is no
+# route for extra-vars; this marker is the only way to skip baseline, and
+# `make lint-cloud-init` rejects a user-data that mentions it.
+readonly SKIP_BASELINE_MARKER=$CONF_DIR/TEST-ONLY-skip-baseline
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly repo
 
-# World-readable on purpose: the login hint below runs as the admin account.
+# World-readable on purpose: the login hint (/etc/profile.d/decdn-bootstrap.sh, written
+# by the user-data) reads it as the admin account. Stage 1 has a copy of this function.
 set_state() {
   install -d -m 0755 "$STATE_DIR"
   printf '%s\n' "$1" >"$STATE_FILE.tmp"
@@ -41,41 +47,29 @@ set_state() {
   mv -f "$STATE_FILE.tmp" "$STATE_FILE"
 }
 
-die() {
-  echo "decdn-bootstrap: $*" >&2
-  [[ $EUID -ne 0 ]] || set_state failed
-  exit 1
-}
-
-trap 'set_state failed; echo "decdn-bootstrap: FAILED (see the output above; re-run: sudo decdn-bootstrap)" >&2' ERR
+die() { echo "decdn-bootstrap: $*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "run as root (sudo decdn-bootstrap)"
+# Any non-zero exit records "failed": a failed command under set -e, a die, or a signal
+# (an SSH session dropping mid-run). An ERR trap alone would miss the last two.
+trap 'rc=$?; if ((rc != 0)); then set_state failed
+  echo "decdn-bootstrap: FAILED (see the output above; re-run: sudo decdn-bootstrap)" >&2; fi' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 [[ -f $INVENTORY ]] || die "$INVENTORY is missing (it is written by the cloud-init user-data)"
 if grep -n 'CHANGE_ME' "$INVENTORY" >&2; then
   die "$INVENTORY still has CHANGE_ME placeholders (the lines above); edit them, then re-run"
 fi
 
-# Extra ansible-playbook arguments from bootstrap.env, for example
-# `--skip-tags baseline` in the containerised CI test. Split on whitespace.
-read -ra extra_args <<<"${DECDN_BOOTSTRAP_ANSIBLE_ARGS:-}"
+extra_args=()
+if [[ -e $SKIP_BASELINE_MARKER ]]; then
+  echo "decdn-bootstrap: WARNING: $SKIP_BASELINE_MARKER exists; skipping host hardening (test use only)" >&2
+  extra_args=(--skip-tags baseline)
+fi
 
 set_state running
-
-# A login hint for the admin account, written before anything can fail so that a failed
-# first boot shows it too. It prints nothing once the node is complete. It lives in
-# /etc/profile.d rather than a MOTD, because DevSec ssh_hardening disables the PAM motd.
-cat >"$LOGIN_HINT" <<EOF
-# Written by decdn-bootstrap ($repo/cloud-init/bootstrap.sh).
-case "\$(cat $STATE_FILE 2>/dev/null)" in
-  running)
-    echo "deCDN: the bootstrap is running (cloud-init status --wait; log: /var/log/cloud-init-output.log)" ;;
-  awaiting-secret)
-    echo "deCDN: hardened, waiting for its RPC secret. Write 0600 $ENV_FILE, then run: sudo decdn-bootstrap" ;;
-  failed)
-    echo "deCDN: the last bootstrap run FAILED. Re-run it: sudo decdn-bootstrap" ;;
-esac
-EOF
-chmod 0644 "$LOGIN_HINT"
 
 # --- 1. Pinned toolchain ------------------------------------------------------
 # A venv whose interpreter no longer runs (the distro's python3 changed under it after a
@@ -103,6 +97,12 @@ ansible-playbook -i "$INVENTORY" playbooks/site.yml --syntax-check
 members=$(ansible -i "$INVENTORY" decdn_nodes --list-hosts)
 grep -qE '^\s+localhost$' <<<"$members" \
   || die "$INVENTORY does not put localhost in the decdn_nodes group (site.yml would match nothing)"
+# Phase 1 below relies on site.yml tagging the baseline role `baseline`. If that tag
+# were renamed, --tags baseline would select nothing and exit 0, and the host would be
+# reported hardened without being so.
+tasks=$(ansible-playbook -i "$INVENTORY" playbooks/site.yml --tags baseline --list-tasks)
+grep -qE '^\s+baseline : ' <<<"$tasks" \
+  || die "--tags baseline selects no baseline task in playbooks/site.yml (was the role's tag renamed?)"
 
 # --- 3. Converge ----------------------------------------------------------------
 if [[ -e $ENV_FILE ]]; then
