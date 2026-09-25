@@ -82,6 +82,9 @@ rpc_watchdog_interval_sec = {{ decdn_rpc_watchdog_interval_sec | int }}
 {% if decdn_event_poll_interval_ms not in ["", none] %}
 event_poll_interval_ms = {{ decdn_event_poll_interval_ms | int }}
 {% endif %}
+{% if decdn_get_logs_max_block_span not in ["", none] %}
+get_logs_max_block_span = {{ decdn_get_logs_max_block_span | int }}
+{% endif %}
 {% if decdn_fee_shares_poll_interval_sec not in ["", none] %}
 fee_shares_poll_interval_sec = {{ decdn_fee_shares_poll_interval_sec | int }}
 {% endif %}

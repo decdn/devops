@@ -8,6 +8,15 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- `decdn_get_logs_max_block_span` (default `""`, daemon default 10000, `>= 1`): the
+  ceiling on one chain-watcher `eth_getLogs` block span, rendered as
+  `blockchain.get_logs_max_block_span` (decdn/decdn @ 3ebf5f17). The poller halves
+  its window on a provider range rejection and grows it back toward this ceiling;
+  if rejections keep coming, set it to the lowest span reached while they do, not
+  the provider's quoted limit. A binary built without that commit rejects the key
+  and the role's `decdn config validate` gate fails the deploy, so leave it unset
+  there.
+
 - `decdn_network` (default `""`): set it to `arbitrum-sepolia` and `decdn_chain_id`
   plus every contract address default to upstream's deployment manifest, mirrored
   into `roles/decdn_node/vars/main/networks.yml` by `scripts/sync-network-profiles.py`.
@@ -68,6 +77,9 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   is nothing left for either knob to tune.
 
 ### Changed
+
+- The role now tracks the config schema of decdn/decdn @ 3ebf5f17 (was
+  d3bc7da7).
 
 - `grafana_alloy` fails loud on an architecture Alloy has no package for, instead of
   a 404 at download time.

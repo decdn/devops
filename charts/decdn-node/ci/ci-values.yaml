@@ -66,6 +66,7 @@ config:
     rpc_watchdog_interval_sec: 15
     event_poll_interval_ms: 5000
     fee_shares_poll_interval_sec: 1800
+    get_logs_max_block_span: 2000
     redeem_threshold_micro_usdc: 2000000
     redeem_max_vouchers_per_tx: 250
     redeem_interval_secs: 120

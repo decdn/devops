@@ -135,7 +135,7 @@ def main():
         "# a leaf-name inventory cannot tell the two apart. See gen-schema-keys.py for\n"
         "# the struct -> path mapping and molecule/schema/README.md for why this exists.\n"
         "#\n"
-        f"# Synced from decdn/decdn @ d3bc7da7 (crate version 0.0.0): {len(paths)} paths."
+        f"# Synced from decdn/decdn @ 3ebf5f17 (crate version 0.0.0): {len(paths)} paths."
     )
     for path in sorted(paths):
         print(path)

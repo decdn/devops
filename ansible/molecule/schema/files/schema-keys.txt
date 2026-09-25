@@ -9,7 +9,7 @@
 # a leaf-name inventory cannot tell the two apart. See gen-schema-keys.py for
 # the struct -> path mapping and molecule/schema/README.md for why this exists.
 #
-# Synced from decdn/decdn @ d3bc7da7 (crate version 0.0.0): 155 paths.
+# Synced from decdn/decdn @ 3ebf5f17 (crate version 0.0.0): 156 paths.
 blockchain.buyer_max_approve
 blockchain.buyer_working_deposit_micro_usdc
 blockchain.capacity_bond_address
@@ -20,6 +20,7 @@ blockchain.content_blacklist_poll_interval_sec
 blockchain.eth_keystore
 blockchain.event_poll_interval_ms
 blockchain.fee_shares_poll_interval_sec
+blockchain.get_logs_max_block_span
 blockchain.origin_assignment_address
 blockchain.origin_directory_cache_capacity
 blockchain.origin_directory_negative_ttl_sec

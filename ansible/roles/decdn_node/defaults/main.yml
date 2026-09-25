@@ -154,6 +154,10 @@ decdn_pool_floor_signer_live_windows: ""  # daemon dflt 8; lower-clamped to 1 wi
 # --- Blockchain watcher tuning ("" => daemon default) -------------------------
 decdn_rpc_watchdog_interval_sec: ""    # daemon dflt 30; 0 disables, else >= 10 — RPC watchdog
 decdn_event_poll_interval_ms: ""       # daemon dflt 7000; >= 250 — multiplexed getLogs poll
+# Ceiling on one eth_getLogs block span. The poller halves it on a provider range
+# rejection and grows back toward it. If rejections keep coming, set it to the
+# lowest span reached while they do, not the provider's quoted limit.
+decdn_get_logs_max_block_span: ""      # daemon dflt 10_000; >= 1 — getLogs span ceiling
 decdn_content_blacklist_poll_interval_sec: ""    # daemon dflt 600; >= 1 — blacklist re-scope cadence
 # Seconds the node may go without a successful chain read before it stops serving
 # (ADR 011 §Serving while chain-stale). Always evaluated (no on/off flag) and only

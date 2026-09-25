@@ -51,6 +51,7 @@
     decdn_rpc_watchdog_interval_sec: 15
     decdn_event_poll_interval_ms: 5000
     decdn_fee_shares_poll_interval_sec: 1800
+    decdn_get_logs_max_block_span: 2000
     decdn_redeem_threshold_micro_usdc: 2000000
     decdn_redeem_max_vouchers_per_tx: 250
     decdn_redeem_interval_secs: 120
