@@ -1,4 +1,0 @@
-# Travels with `cp -r inventory/fleet.example <private-overlay>`, so the private
-# repo never tracks a per-node secret either (decdn_rpc_url may embed an API key).
-host_vars/*/secret.*
-!host_vars/*/secret.*.example

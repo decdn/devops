@@ -8,7 +8,7 @@ collections/
 # template config.
 inventory/host_vars/*/secret.*
 !inventory/host_vars/*/secret.*.example
-# Same rule for inventory templates nested one level down (inventory/fleet.example/).
+# Same rule one level down, for any inventory kept under inventory/<dir>/.
 inventory/*/host_vars/*/secret.*
 !inventory/*/host_vars/*/secret.*.example
 

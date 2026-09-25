@@ -2,7 +2,7 @@
 # Copy to inventory/hosts.yml and fill in your hosts. inventory/hosts.yml is
 # git-ignored: this repo is public, so real host IPs never belong in it. To track a
 # real fleet, keep its inventory in a private overlay and pass INVENTORY=<path>
-# (template: inventory/fleet.example/, see README.md "Private fleet inventory").
+# (see README.md "Private fleet inventory").
 #
 # No ansible_user by default: Ansible connects as your local $USER, which is the admin
 # account the baseline role creates (the auto-detected runner). A fresh box doesn't have
@@ -39,3 +39,14 @@ decdn_nodes:
       ansible_host: REPLACE_WITH_NODE_VPS_IP_OR_DNS
       # ansible_user: alice   # post-bootstrap, only if the admin account's name ≠ your $USER — see note above
       # ansible_become_exe: /usr/bin/sudo.ws   # Ubuntu sudo-rs workaround — see note above
+    # More nodes: one entry each, with its own host_vars/<name>/main.yml
+    # (decdn_region is REQUIRED per host).
+    # decdn-node-2:
+    #   ansible_host: REPLACE_WITH_NODE_VPS_IP_OR_DNS
+  # Child groups, for hosts that differ in a way that is easier to express per group
+  # than per host (disk size, an origin, an egress cap on pay-per-TB bandwidth). Give
+  # each one a group_vars/<group>.yml; Ansible merges it over decdn_nodes'.
+  # children:
+  #   big_disk:
+  #     hosts:
+  #       decdn-node-2:

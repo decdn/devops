@@ -7,6 +7,27 @@
 # The node's public QUIC firewall hole (udp/4433) is NOT set here. It lives in
 # playbooks/group_vars/decdn_nodes.yml so it applies to every inventory, including a
 # private fleet overlay passed with INVENTORY=.
+#
+# Settings every node shares (decdn_network, decdn_node_install_method, …) can move
+# here from host_vars/<node>/main.yml once you run more than one node. host_vars
+# still win for a node that differs.
+
+# --- Binaries (fleet-wide) ------------------------------------------------------
+# Until upstream tags a release, install locally built binaries. Rather than the two
+# per-host *_manual_bin_src paths in host_vars, point every node at one decdn
+# checkout's target/release dir (cross-compile for aarch64 hosts; the role derives
+# each host's target from its architecture and checks the ELF before shipping):
+#   cargo build --release -p decdn-node -p decdn-cli
+# A host that sets BOTH explicit paths ignores this dir.
+# decdn_release_target_dir: ""      # control-machine path to decdn's target/release
+
+# --- Cache sizing -----------------------------------------------------------------
+# Size to each host's disk and to the largest object you expect to serve; see
+# docs/requirements.md for the disk formula. A node rejects any blob larger than
+# decdn_max_blob_size_mb with BlobTooLarge, and decdn_cache_size_mb must be at
+# least that. Override per host in host_vars when disks differ.
+# decdn_max_blob_size_mb: 1024      # role default
+# decdn_cache_size_mb: 10240        # role default (10 GiB)
 
 # --- Grafana Cloud observability (opt-in) --------------------------------------
 # One mirrored flag drives BOTH roles (grafana_alloy install/config AND the
