@@ -729,7 +729,7 @@
         decdn_pool_min_remaining_deposit_micro_usdc, decdn_pool_floor_signer_live_windows,
         decdn_chain_staleness_grace_sec, decdn_rpc_watchdog_interval_sec,
         decdn_event_poll_interval_ms, decdn_content_blacklist_poll_interval_sec,
-        decdn_fee_shares_poll_interval_sec,
+        decdn_fee_shares_poll_interval_sec, decdn_get_logs_max_block_span,
         decdn_origin_directory_positive_ttl_sec, decdn_origin_directory_negative_ttl_sec,
         decdn_origin_directory_cache_capacity,
         decdn_max_blob_size_mb, decdn_disk_headroom_mb, decdn_max_rate_per_mb, decdn_max_probe_holds,
@@ -868,12 +868,12 @@
       decdn_chain_staleness_grace_sec (>= 1); and each of
       decdn_redeem_threshold_micro_usdc, decdn_redeem_max_vouchers_per_tx,
       decdn_redeem_interval_secs, decdn_buyer_working_deposit_micro_usdc,
-      decdn_fee_shares_poll_interval_sec,
+      decdn_fee_shares_poll_interval_sec, decdn_get_logs_max_block_span,
       decdn_voucher_commit_interval_ms must be >= 1 when set ("{{ item }}" is not).
   loop: >-
     {{ [decdn_redeem_threshold_micro_usdc, decdn_redeem_max_vouchers_per_tx,
         decdn_redeem_interval_secs, decdn_buyer_working_deposit_micro_usdc,
-        decdn_fee_shares_poll_interval_sec,
+        decdn_fee_shares_poll_interval_sec, decdn_get_logs_max_block_span,
         decdn_voucher_commit_interval_ms] }}
 
 # Bounded ranges. Each is a closed interval the daemon range-checks at load, so an

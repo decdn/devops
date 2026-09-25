@@ -12,7 +12,7 @@ machine. This is the repo's deployment (`playbooks/site.yml`).
 > download. Build the two binaries from a checkout until that changes.
 
 **Schema tracking.** This role renders `node.toml` against the config schema of
-`decdn/decdn` main @ `d3bc7da7` (crate version 0.0.0 — unreleased). Upstream marks every config
+`decdn/decdn` main @ `3ebf5f17` (crate version 0.0.0 — unreleased). Upstream marks every config
 section `#[serde(deny_unknown_fields)]` and defines **no** serde aliases, so a key
 this role emits that your binary does not know is a startup crash-loop, not a
 warning. The role runs `decdn config validate` against the installed binary after
@@ -261,7 +261,12 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
   `decdn_event_poll_interval_ms` (`>= 250`), `decdn_content_blacklist_poll_interval_sec`
   (`>= 1`), `decdn_chain_staleness_grace_sec` (seconds the node may go without a
   successful chain read before it stops serving — ADR 011; `> 0`, daemon default
-  `1800`), `decdn_fee_shares_poll_interval_sec`,
+  `1800`), `decdn_fee_shares_poll_interval_sec`, `decdn_get_logs_max_block_span`
+  (`>= 1`, daemon default `10000`: the ceiling on one `eth_getLogs` block span. The
+  poller halves its window on a range rejection and grows it back, so leave this
+  unset unless `decdn_chain_get_logs_range_rejections_total` keeps rising; then set
+  it to the lowest `decdn_chain_get_logs_span` reached while it does, not to the
+  limit your provider quotes),
   and the `decdn_origin_directory_*` cache knobs.
 - **Network** — `decdn_relay_urls` (list; the singular `relay_url` config key no
   longer exists). Operator-run address discovery (#818) via

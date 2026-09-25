@@ -421,6 +421,21 @@
             decdn_rejected: "{{ decdn_rejected + ['range'] }}"
           when: ansible_failed_task.name is match('^Validate optional')
 
+    # --- Case: range-min1 (0 for a knob the daemon requires strictly positive) ----
+    # 0 passes the non-negative shape assert, so only the ranges task can reject it.
+    - name: "Case range-min1 — get_logs_max_block_span of 0"
+      block:
+        - name: Run decdn_node with a zero getLogs span ceiling
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_get_logs_max_block_span: 0
+      rescue:
+        - name: Record range-min1 rejection (only if the ranges assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['range-min1'] }}"
+          when: ansible_failed_task.name is match('^Validate optional knob ranges the daemon rejects')
+
     # --- Case: shape (non-numeric string for an integer knob) ---------------------
     - name: "Case shape — non-numeric integer knob"
       block:
@@ -1623,8 +1638,8 @@
         _decdn_expected:
           ["cross-field", "binary-format", "binary-check-mode", "arch-mismatch", "arch-unset", "network-unknown",
            "network-unknown-noaddr", "network-chain", "backup-secret-key", "backup-bare-string",
-           "backup-empty", "path-cache-home", "path-backup-home", "path-decommission-cache", "range", "bounded-range",
-           "shape", "bool",
+           "backup-empty", "path-cache-home", "path-backup-home", "path-decommission-cache", "range",
+           "range-min1", "bounded-range", "shape", "bool",
            "enum", "dict", "float", "list", "string", "string-newline", "otlp-https",
            "otlp-noport", "otlp-path", "otlp-userinfo", "otlp-colon", "otlp-port",
            "otlp-newline", "env-control-rpc", "env-control-extra", "env-gate",
