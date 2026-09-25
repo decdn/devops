@@ -78,6 +78,12 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A `release` install no longer fails intermittently at "Remove the download
+  staging directory" with `rmtree failed: [Errno 2] No such file or directory:
+  'S.gpg-agent.extra'`. Signature verification auto-started a `gpg-agent`
+  whose sockets lived in the staging `GNUPGHOME`, and the agent removed them
+  itself while the cleanup was deleting the directory. `gpg` now runs with
+  `--no-autostart`, since importing and verifying need no agent.
 - A changed `decdn-node` or `alloy` unit now takes effect on the converge that
   writes it. The restart handlers relied on a separate `Reload systemd`
   handler running first, but `devsec.hardening.os_hardening` (loaded by

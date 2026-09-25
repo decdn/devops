@@ -151,6 +151,11 @@
         # revoked because a maintainer was compromised, or it quietly aged out —
         # the vendored key expires 2029-08-08) would both install the tarball.
         # VALIDSIG is emitted only for a good signature from a still-valid key.
+        # --no-autostart: importing public keys and verifying need no gpg-agent,
+        # and one auto-started here puts its sockets in this GNUPGHOME (root has
+        # no /run/user/0) and outlives the task. When the cleanup below deletes
+        # S.gpg-agent, the agent notices and unlinks its other sockets mid-rmtree,
+        # failing the run with ENOENT on S.gpg-agent.extra.
         - name: Verify the SHA256SUMS signature against the release keyring
           ansible.builtin.shell:
             chdir: "{{ decdn_stage.path }}"
@@ -161,8 +166,8 @@
               export GNUPGHOME="{{ decdn_stage.path }}/gnupg"
               mkdir -p "$GNUPGHOME"
               chmod 700 "$GNUPGHOME"
-              gpg --batch --quiet --import keyring/KEYS.asc
-              gpg --batch --status-fd 3 --verify SHA256SUMS.asc SHA256SUMS \
+              gpg --batch --quiet --no-autostart --import keyring/KEYS.asc
+              gpg --batch --no-autostart --status-fd 3 --verify SHA256SUMS.asc SHA256SUMS \
                 3>gpg-status.txt
               if grep -qE '^\[GNUPG:\] (EXPKEYSIG|REVKEYSIG|EXPSIG)' gpg-status.txt; then
                 echo "SHA256SUMS carries a good signature from an EXPIRED or REVOKED" >&2
