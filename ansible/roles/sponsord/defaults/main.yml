@@ -80,7 +80,7 @@ sponsord_pool_watch_interval_secs: ""      # [3600] how often the keeper checks 
 # no secret). systemd reads the API token, treasury keystore and password as root
 # and hands them to the DynamicUser service as credentials (LoadCredential=); the
 # unit copies the keystore 0600 into its private runtime directory, because
-# upstream rejects the 0440 credential file systemd 254+ writes. secret.env reaches
+# upstream rejects the 0440 credential file newer systemd (255) writes. secret.env reaches
 # the daemon as an EnvironmentFile.
 sponsord_etc: /etc/sponsord
 sponsord_env_file: /etc/sponsord/sponsord.env          # non-secret settings (0644, role-owned)

@@ -32,7 +32,7 @@ LoadCredential=treasury-password:{{ sponsord_treasury_password_file }}
 LoadCredential=treasury-keystore.json:{{ sponsord_treasury_keystore_file }}
 Environment=SPONSORD_API_TOKEN_FILE=%d/api-token
 Environment=SPONSORD_TREASURY_PASSWORD_FILE=%d/treasury-password
-# The keystore cannot be read from %d directly: systemd 254+ writes credentials
+# The keystore cannot be read from %d directly: newer systemd (255) writes credentials
 # 0440, and upstream refuses a keystore with any group/other bit. So it is copied
 # at 0600 into this unit's private 0700 runtime directory (tmpfs, removed when the
 # unit stops). The file is the ENCRYPTED keystore; the password stays in %d.

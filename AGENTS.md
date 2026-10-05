@@ -136,7 +136,7 @@ addresses) the repo carries, and they carry their upstream commit.
   - **Unit:** `DynamicUser`; the API token (generated on the host, never replaced),
     treasury keystore and password (operator-provisioned) are `LoadCredential=`
     credentials, never env. The keystore is re-copied at 0600 into the unit's
-    `RuntimeDirectory` by `ExecStartPre`, because systemd 254+ writes credentials 0440
+    `RuntimeDirectory` by `ExecStartPre`, because newer systemd (255) writes credentials 0440
     and upstream rejects a group-readable keystore. Debian 12's systemd 252 hides
     this (0400); the `molecule/sponsord` Ubuntu 24.04 platform catches it, because
     the stub enforces upstream's keystore mode check.

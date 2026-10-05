@@ -39,11 +39,13 @@ expects the daemon on the same host and reads the API token from
   it no persistent uid, no state directory and a read-only filesystem. systemd hands
   it the three secret files as `LoadCredential=` credentials, so they never sit in
   its environment.
-  - The keystore needs one extra step. systemd 254+ writes credentials at 0440, and
-    sponsord refuses a keystore with any group bit, so `ExecStartPre` copies that
+  - The keystore needs one extra step. Newer systemd writes credentials 0440
+    (seen on Ubuntu 24.04's systemd 255; Debian 12's 252 still writes 0400), and
+    sponsord refuses a keystore with any group bit. So `ExecStartPre` copies that
     one credential at 0600 into the unit's private, tmpfs `RuntimeDirectory`.
   - Upstream's reference unit reads it straight from the credentials directory, and
-    fails on Ubuntu 24.04 / Debian 13.
+    fails on Ubuntu 24.04
+    ([decdn/sponsord#36](https://github.com/decdn/sponsord/issues/36)).
 - **Gates the deploy on `/healthz`.** sponsord binds only after it has decrypted the
   keystore and confirmed on-chain that the treasury owns `sponsord_pool_id`. If
   `/healthz` does not answer 200 within the readiness window, the deploy fails.

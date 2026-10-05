@@ -13,7 +13,7 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   the default until upstream tags a release) or a `sponsord-v<version>` release
   verified against its GPG-signed `SHA256SUMS`. The unit uses `DynamicUser`, and the
   API token, treasury keystore and password reach it as `LoadCredential=`
-  credentials. systemd 254+ writes credentials `0440` and sponsord refuses a
+  credentials. Newer systemd (255 on Ubuntu 24.04) writes credentials `0440` and sponsord refuses a
   group-readable keystore, so the keystore is re-copied `0600` into the unit's
   `RuntimeDirectory` at start. The API token is generated on the host and never
   replaced. The RPC
