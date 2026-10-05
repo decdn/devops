@@ -1,0 +1,17 @@
+---
+# Fixture for check.sh: one host per group shape. Nothing here is ever contacted;
+# check.sh only asks Ansible to resolve each host's variables.
+all:
+  vars:
+    ansible_connection: local
+  children:
+    decdn_nodes:
+      hosts:
+        node: {}
+        node-port:
+          decdn_bind_port: 5555
+        co-located: {}
+    sponsord_hosts:
+      hosts:
+        sponsord: {}
+        co-located: {}

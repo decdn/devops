@@ -9,9 +9,8 @@
 # Precedence: playbook group_vars beat inventory group_vars, so to change this
 # for a node, override it in that node's host_vars.
 
-# Open the node's public QUIC listener in the baseline firewall. Metrics (9090)
-# and admin RPC (9191) stay loopback and get NO hole.
-baseline_extra_inbound:
-  - proto: udp
-    port: "{{ decdn_bind_port }}"
-    comment: "decdn QUIC"
+# The public holes in the baseline firewall: the node's QUIC listener, plus those of
+# any other service the host also runs (all.yml builds the list from the host's
+# groups). sponsord_hosts.yml sets the same value, so a host in both groups renders
+# one firewall in both plays.
+baseline_extra_inbound: "{{ _baseline_service_inbound }}"

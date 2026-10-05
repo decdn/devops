@@ -1,0 +1,8 @@
+---
+# Playbook-adjacent group_vars for sponsord_hosts (see decdn_nodes.yml beside this
+# for why playbook-adjacent, and for the precedence).
+#
+# The same list as decdn_nodes.yml, built in all.yml from the host's groups. It
+# must be identical in both files: a host in both groups runs baseline once per
+# play, and two different lists would flip its firewall on every run.
+baseline_extra_inbound: "{{ _baseline_service_inbound }}"

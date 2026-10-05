@@ -381,6 +381,9 @@ jobs:
       # Without cloud-init on PATH the harness SKIPS the lint-cloud-init cases.
       - name: Install cloud-init
         run: command -v cloud-init || { sudo apt-get update -qq && sudo apt-get install -y -qq cloud-init; }
+      # Without ansible-core on PATH the harness FAILS the firewall-holes case in CI.
+      - name: Install ansible-core
+        run: command -v ansible || pipx install ansible-core
       - name: Script and guard tests
         run: make test-scripts
 

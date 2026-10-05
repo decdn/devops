@@ -231,10 +231,14 @@ make build / galaxy-check          # the decdn.node collection
 
 **Inventory is private; the firewall hole is not.** This repo is public, so
 `ansible/inventory/hosts.yml` is git-ignored and a real fleet lives in a private overlay.
-Inventory-adjacent group_vars do not load for an overlay, so anything every node needs regardless of inventory (today the udp/4433
-`baseline_extra_inbound` hole) lives in `ansible/playbooks/group_vars/decdn_nodes.yml`, and
-the Alloy per-daemon toggles every host needs in `ansible/playbooks/group_vars/all.yml`.
-Don't move it back under `inventory/`.
+Inventory-adjacent group_vars do not load for an overlay, so anything every host needs
+regardless of inventory lives in `ansible/playbooks/group_vars/`. The public firewall holes
+(`baseline_extra_inbound`, today the node's udp/4433) are built from a host's groups in
+`all.yml` (`_baseline_service_inbound`). `decdn_nodes.yml` and `sponsord_hosts.yml` both set
+`baseline_extra_inbound` to that list, so a co-located host renders one firewall in every play.
+`ansible/tests/firewall-holes/` (run by `make test-scripts`) pins the result per host shape.
+The Alloy per-daemon toggles also live in `all.yml`. Don't move any of it back under
+`inventory/`.
 
 **Galaxy collection (`decdn.node`).** The four roles (`baseline` + `decdn_node` +
 `grafana_alloy` + `sponsord`) ship as a

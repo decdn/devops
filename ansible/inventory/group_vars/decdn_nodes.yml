@@ -5,8 +5,8 @@
 # you would rather the role authored that file) in a git-ignored secret.yml.
 
 # The node's public QUIC firewall hole (udp/4433) is NOT set here. It lives in
-# playbooks/group_vars/decdn_nodes.yml so it applies to every inventory, including a
-# private fleet overlay passed with INVENTORY=.
+# playbooks/group_vars/ (all.yml builds it) so it applies to every inventory,
+# including a private fleet overlay passed with INVENTORY=.
 #
 # Settings every node shares (decdn_network, decdn_node_install_method, …) can move
 # here from host_vars/<node>/main.yml once you run more than one node. host_vars

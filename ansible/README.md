@@ -107,10 +107,12 @@ the overlay carries its own: create them next to its `hosts.yml`, starting from 
 `host_vars/*/secret.*` in the private repo, so it never tracks a per-node secret. The public
 `inventory/group_vars/` and `inventory/host_vars/` are **not** loaded for it. Add child groups
 of your own when hosts differ by group (an origin, an egress cap on metered bandwidth), each
-with a `group_vars/<group>.yml`. Settings every node needs regardless of
-inventory, currently only the udp/4433 QUIC firewall hole, live in
-`playbooks/group_vars/decdn_nodes.yml`, so an overlay can't drop them. Override that per node
-in `host_vars` if you have to. Playbook group_vars beat inventory group_vars.
+with a `group_vars/<group>.yml`. Settings every host needs regardless of
+inventory, currently the public firewall holes (the node's udp/4433), live in
+`playbooks/group_vars/`, so an overlay can't drop them: `all.yml` builds the list from the
+host's groups and `decdn_nodes.yml` / `sponsord_hosts.yml` apply it. Override
+`baseline_extra_inbound` per host in `host_vars` if you have to. Playbook group_vars beat
+inventory group_vars.
 
 By default baseline **deploys you as yourself**: the runner (your control-machine `$USER` +
 its autodetected `~/.ssh` key, `id_ed25519` > `ecdsa` > `rsa`) is prepended as the head of

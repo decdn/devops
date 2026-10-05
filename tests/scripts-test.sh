@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Tests for the repo's own guard rails that no molecule scenario or chart render
 # exercises: the ansible/ Makefile's scoping guards, the release gate, the
-# lint-compose and lint-cloud-init invariants (negative cases), and — with
+# lint-compose and lint-cloud-init invariants (negative cases), the firewall holes
+# playbooks/group_vars/ derives per host, and — with
 # UPSTREAM=<decdn checkout> — the upstream-mirror generators' exit codes.
 # `make test-scripts` runs it; CI's `scripts` job does too. Needs make, docker
-# (compose v2), jq, flock; the cloud-init cases also need cloud-init, shellcheck and yq.
+# (compose v2), jq, flock; the cloud-init cases also need cloud-init, shellcheck and yq,
+# the firewall-holes case ansible-core.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -159,6 +161,16 @@ elif [[ -n ${CI:-} ]]; then
   fail "cloud-init is not on PATH in CI; the lint-cloud-init negatives would be skipped"
 else
   skipped+=("lint-cloud-init negatives (needs cloud-init on PATH; CI installs it)")
+fi
+
+# --- baseline firewall holes per host shape (playbooks/group_vars) ------------------
+if command -v ansible >/dev/null; then
+  expect 0 "firewall holes resolve per host shape, co-located included" \
+    "$repo/ansible/tests/firewall-holes/check.sh"
+elif [[ -n ${CI:-} ]]; then
+  fail "ansible is not on PATH in CI; the firewall-holes check would be skipped"
+else
+  skipped+=("firewall holes (needs ansible-core on PATH)")
 fi
 
 # --- upstream-mirror generators (optional: needs a decdn/decdn checkout) --------------

@@ -1,0 +1,6 @@
+{
+  "node": [{"proto": "udp", "port": 4433, "comment": "decdn QUIC"}],
+  "node-port": [{"proto": "udp", "port": 5555, "comment": "decdn QUIC"}],
+  "sponsord": [],
+  "co-located": [{"proto": "udp", "port": 4433, "comment": "decdn QUIC"}]
+}
