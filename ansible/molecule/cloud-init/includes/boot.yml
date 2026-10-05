@@ -1,0 +1,160 @@
+---
+# Shared by the cloud-init scenarios' converge.yml: seed NoCloud with a committed
+# user-data template, filled in the way an operator would (userdata_edits, which also
+# redirects the outside dependencies to the local repo and mirror), and run cloud-init's
+# boot stages against it. Anything else in the file is exercised as written. If the
+# template's placeholders change, the "no CHANGE_ME left" check fails rather than
+# letting the test drift into booting something else.
+#
+# Input, from the including play:
+#   userdata_src:   controller path of the template
+#   userdata_edits: [{regexp, replace}] applied to the seeded copy. `{{ src_sha }}`
+#                   (the commit prepare recorded) is available to them.
+# Output: the src_sha fact.
+- name: Read the commit the source repo is at (recorded by includes/repo.yml)
+  ansible.builtin.slurp:
+    src: /srv/devops-src.sha
+  register: src_sha_file
+
+- name: Decode it
+  ansible.builtin.set_fact:
+    src_sha: "{{ src_sha_file.content | b64decode | trim }}"
+
+- name: Create the NoCloud seed directory
+  ansible.builtin.file:
+    path: /var/lib/cloud/seed/nocloud
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Seed the committed user-data
+  ansible.builtin.copy:
+    src: "{{ userdata_src }}"
+    dest: /var/lib/cloud/seed/nocloud/user-data
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Fill in the MUST-EDIT values and point at the local repo and mirror
+  ansible.builtin.replace:
+    path: /var/lib/cloud/seed/nocloud/user-data
+    regexp: "{{ item.regexp }}"
+    replace: "{{ item.replace }}"
+  loop: "{{ userdata_edits }}"
+  loop_control:
+    label: "{{ item.regexp }}"
+
+# Values only (`KEY=CHANGE_ME`, `key: CHANGE_ME`, `- "CHANGE_ME"`), not the header
+# comment or stage 1's own `!= CHANGE_ME` guard.
+- name: Check that no placeholder value is left (the file and this test still agree)
+  ansible.builtin.command:
+    cmd: >-
+      grep -nE '(=|: |- )"?CHANGE_ME' /var/lib/cloud/seed/nocloud/user-data
+  register: leftover
+  changed_when: false
+  failed_when: leftover.rc != 1
+
+- name: Create the bootstrap's config directory
+  ansible.builtin.file:
+    path: /etc/decdn-bootstrap
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Outside the user-data on purpose: the lint rejects a user-data that mentions it.
+- name: Skip baseline in the container (bootstrap.sh's test-only switch)
+  ansible.builtin.copy:
+    dest: /etc/decdn-bootstrap/TEST-ONLY-skip-baseline
+    content: ""
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Write the NoCloud meta-data
+  ansible.builtin.copy:
+    dest: /var/lib/cloud/seed/nocloud/meta-data
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      instance-id: molecule-cloud-init
+      local-hostname: {{ inventory_hostname }}
+
+# Container-only settings, none of which touch what the user-data does: find the seed
+# without probing clouds, leave the container's network and hostname alone, and skip
+# the locale module (the image ships no locales, so update-locale fails; a cloud image
+# has them).
+- name: Configure cloud-init for a container
+  ansible.builtin.copy:
+    dest: /etc/cloud/cloud.cfg.d/99-molecule.cfg
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      datasource_list: [NoCloud, None]
+      network: {config: disabled}
+      preserve_hostname: true
+      locale: false
+
+- name: Boot
+  block:
+    - name: Start from a clean cloud-init state
+      ansible.builtin.command:
+        cmd: cloud-init clean --logs
+      changed_when: true
+
+    # The four stages a real boot runs, in order. The last one runs runcmd, which is
+    # stage 1 of the bootstrap.
+    - name: Run cloud-init's boot stages
+      ansible.builtin.command:
+        cmd: "cloud-init {{ item }}"
+      loop:
+        - init --local
+        - init
+        - modules --mode=config
+        - modules --mode=final
+      changed_when: true
+
+    - name: Read cloud-init's result
+      ansible.builtin.slurp:
+        src: /run/cloud-init/result.json
+      register: ci_result
+
+    # Not `cloud-init status`: cloud-init was installed after this container booted,
+    # so the systemd generator never enabled it and the status reads
+    # "disabled-by-generator" even though every stage above ran. The stages' own
+    # records are the ground truth.
+    - name: Read cloud-init's per-stage status
+      ansible.builtin.slurp:
+        src: /run/cloud-init/status.json
+      register: ci_status
+
+    - name: Assert cloud-init finished without errors
+      vars:
+        result: "{{ (ci_result.content | b64decode | from_json).v1 }}"
+        stages: "{{ (ci_status.content | b64decode | from_json).v1 }}"
+      ansible.builtin.assert:
+        that:
+          - result.errors | length == 0
+          - result.datasource is search('NoCloud')
+          - stages['modules-final'].finished is not none
+          - stages['modules-final'].errors | length == 0
+        fail_msg: "cloud-init did not finish cleanly: {{ result }} {{ stages['modules-final'] }}"
+  rescue:
+    - name: Read the bootstrap's output
+      ansible.builtin.command:
+        cmd: tail -n 80 /var/log/cloud-init-output.log
+      register: ci_output
+      changed_when: false
+      failed_when: false
+
+    - name: Fail with the bootstrap's output
+      ansible.builtin.fail:
+        msg: "{{ ci_output.stdout_lines | default([]) }}"
+
+- name: Validate the user-data cloud-init actually consumed
+  ansible.builtin.command:
+    cmd: cloud-init schema --system
+  changed_when: false

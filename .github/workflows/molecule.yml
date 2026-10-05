@@ -6,7 +6,7 @@ name: Molecule
 # blocking. Mark it a required status check in branch protection once proven.
 # This file is in `paths` alongside ansible/ so a change to the job itself (its cache
 # wiring, JOBS, the timeout) is exercised by the PR that makes it. cloud-init/ is in
-# `paths` because the `cloud-init` scenario boots cloud-init/user-data.yaml and runs
+# `paths` because the `cloud-init` scenarios boot cloud-init/user-data*.yaml and run
 # cloud-init/bootstrap.sh.
 on:
   pull_request:
@@ -28,7 +28,8 @@ jobs:
     # ~4m41s at JOBS=3 with 8 scenarios. os-matrix (3 containers) and lifecycle took the
     # suite to ~10m at JOBS=3 on a local 16-thread box; re-measure from CI's first run.
     # sponsord added a 12th scenario (2 containers, Debian 12 + Ubuntu 24.04), and
-    # sponsord-onramp a 13th (the same 2, plus an apt install of Caddy each).
+    # sponsord-onramp a 13th (the same 2, plus an apt install of Caddy each), and
+    # cloud-init-sponsord a 14th (1 container: a cloud-init boot, pip, Galaxy, Caddy).
     # A bound, not a target: without one a wedged privileged systemd container burns
     # the 360-minute default, and with cancel-in-progress above, some branch-protection
     # setups read the resulting cancelled check as "not failed" rather than as a failure.

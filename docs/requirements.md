@@ -30,7 +30,7 @@ and they run the same roles.
 | OS | Debian 12 (bookworm), Debian 13 (trixie), Ubuntu 24.04 (noble), Ubuntu 26.04 (resolute) | molecule converges `decdn_node` on all four in systemd containers; `grafana_alloy`'s install path on Debian 12 only (its disabled path on all four); `sponsord` and `sponsord_onramp` on Debian 12 and Ubuntu 24.04; `baseline` on real hosts |
 | Architecture | x86_64, aarch64 | upstream builds both; the Ansible role derives the target from the host |
 | Ansible (control machine) | ansible-core ≥ 2.15 | CI runs the current release |
-| cloud-init | the provider image's own; the bootstrap installs its pinned ansible-core on the host | the user-data is booted with the distro's cloud-init in Debian 12 and Ubuntu 26.04 containers, to a running node |
+| cloud-init | the provider image's own; the bootstrap installs its pinned ansible-core on the host | the node template is booted with the distro's cloud-init in Debian 12 and Ubuntu 26.04 containers, to a running node; the sponsor template in Ubuntu 26.04, to running `sponsord`, `sponsord-onramp` and Caddy |
 | Kubernetes | ≥ 1.25 | rendered and validated with kubeconform against 1.30 |
 | Docker Compose | v2 with `env_file.required` and `depends_on.restart` support (2.24+) | rendered in CI with every profile on |
 

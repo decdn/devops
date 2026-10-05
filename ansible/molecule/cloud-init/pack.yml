@@ -1,0 +1,24 @@
+---
+# Shared by the cloud-init scenarios' prepare.yml (imported as a playbook): pack the
+# WORKING TREE on the controller, so the scenario tests the change under review rather
+# than whatever is pushed. includes/repo.yml unpacks it in the container.
+- name: Prepare — pack the working tree on the controller
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/.."
+    scratch: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+  tasks:
+    # Tracked and untracked-but-not-ignored files, so a new file under review is
+    # included, and a tracked file deleted in the working tree is skipped instead of
+    # failing tar.
+    - name: Pack the working tree on the controller
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          git ls-files -z -co --exclude-standard \
+            | while IFS= read -r -d '' f; do if [ -e "$f" ]; then printf '%s\0' "$f"; fi; done \
+            | tar --null -T - -czf {{ (scratch ~ '/devops-src.tgz') | quote }}
+        chdir: "{{ repo_root }}"
+        executable: /bin/bash
+      changed_when: true

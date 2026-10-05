@@ -1,0 +1,31 @@
+---
+# Everything the sponsor user-data needs from the outside world, stood up inside the
+# container (see molecule.yml). The secrets are NOT staged here: side_effect writes
+# them after the first boot, as the operator would.
+- name: Pack the working tree
+  ansible.builtin.import_playbook: ../cloud-init/pack.yml
+
+- name: Prepare
+  hosts: all
+  become: true
+  vars:
+    stub_version: "0.0.0-molecule-stub"
+    stubs: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule"
+    mirror_releases:
+      - dir: "sponsord-v{{ stub_version }}"
+        bins: [{name: sponsord, src: "{{ stubs }}/sponsord/files/sponsord-stub"}]
+      - dir: "sponsord-onramp-v{{ stub_version }}"
+        bins: [{name: sponsord-onramp, src: "{{ stubs }}/sponsord-onramp/files/sponsord-onramp-stub"}]
+  tasks:
+    # CONTAINER-ONLY: without shared propagation on / every LoadCredential= directory
+    # comes up empty under docker (../sponsord/prepare.yml explains).
+    - name: Give / shared mount propagation, as systemd does on a real host  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: mount --make-rshared /
+      changed_when: true
+
+    - name: The repo, as a git remote
+      ansible.builtin.include_tasks: ../cloud-init/includes/repo.yml
+
+    - name: The release mirror
+      ansible.builtin.include_tasks: ../cloud-init/includes/mirror.yml
