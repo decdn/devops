@@ -1,0 +1,695 @@
+---
+# Provision sponsord-onramp: validate, gate on the host's secrets, install,
+# configure, start, gate on /healthz, then put Caddy in front. Every pure-input
+# assert runs before the first host mutation, and every gate (host files included)
+# before the binary is installed. The Turnstile widget and the release pins are
+# operator inputs — see roles/sponsord_onramp/README.md.
+
+# The onramp needs the sponsord daemon on the same host: it reads the daemon's API
+# token file and calls it on loopback. Nothing here names an inventory group; the
+# token gate below and the /healthz gate (the onramp binds only after reaching the
+# daemon) are what prove the daemon is there.
+
+# --- Install method + target ----------------------------------------------------
+- name: Require a valid install method
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_install_method in ["release", "manual"]
+    fail_msg: >-
+      sponsord_onramp_install_method must be "release" (pinned GitHub Release
+      tarball) or "manual" (copy a locally-built binary from the control machine).
+
+- name: Require a pinned release version
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_version | length > 0
+    fail_msg: >-
+      sponsord_onramp_install_method "release" requires sponsord_onramp_version (e.g.
+      "0.1.0") and a matching sponsord-onramp-v<version> GitHub Release. Until upstream
+      cuts one, build the binary from a decdn/sponsord checkout and use
+      sponsord_onramp_install_method "manual".
+  when: sponsord_onramp_install_method == "release"
+
+- name: Validate sponsord_onramp_verify_release_signature is a real boolean
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_verify_release_signature is boolean
+    fail_msg: >-
+      sponsord_onramp_verify_release_signature must be a boolean (true/false). Leave it
+      true unless you install from a mirror that strips SHA256SUMS.asc.
+  when: sponsord_onramp_install_method == "release"
+
+- name: Resolve the sponsord-onramp target triple
+  when: >-
+    sponsord_onramp_install_method == "release"
+    or (sponsord_onramp_release_target_dir | length > 0 and sponsord_onramp_manual_bin_src | length == 0)
+  block:
+    - name: Require a supported target triple
+      ansible.builtin.assert:
+        that:
+          - sponsord_onramp_target in _sponsord_onramp_arch_targets.values()
+        fail_msg: >-
+          sponsord_onramp_target resolved to "{{ sponsord_onramp_target }}", which is not
+          one of the Linux targets upstream releases
+          ({{ _sponsord_onramp_arch_targets.values() | join(', ') }}). It is derived from
+          the host's gathered architecture
+          ("{{ ansible_facts.get('architecture', 'not gathered') }}"): gather facts or set
+          sponsord_onramp_target explicitly.
+
+    - name: Require the target triple to match the host architecture
+      ansible.builtin.assert:
+        that:
+          - _sponsord_onramp_arch_targets[ansible_facts['architecture']] == sponsord_onramp_target
+        fail_msg: >-
+          sponsord_onramp_target is {{ sponsord_onramp_target }}, but this host is
+          {{ ansible_facts['architecture'] }} and needs
+          {{ _sponsord_onramp_arch_targets[ansible_facts['architecture']] }}. Drop the
+          explicit sponsord_onramp_target (it is derived from the host) or fix it.
+      when: ansible_facts.get('architecture', '') in _sponsord_onramp_arch_targets
+
+# The same resolution as roles/sponsord: an explicit sponsord_onramp_manual_bin_src
+# is copied verbatim (a test stub is legitimately not an ELF); a target dir is
+# searched and the result must be an ELF for the host.
+- name: Resolve and validate the manual binary source
+  when: sponsord_onramp_install_method == "manual"
+  block:
+    - name: Require a manual binary source
+      ansible.builtin.assert:
+        that:
+          - sponsord_onramp_manual_bin_src | length > 0 or sponsord_onramp_release_target_dir | length > 0
+        fail_msg: >-
+          sponsord_onramp_install_method "manual" needs sponsord_onramp_manual_bin_src (a
+          control-machine path to the sponsord-onramp binary) or
+          sponsord_onramp_release_target_dir (the control-machine target/release dir of
+          a decdn/sponsord checkout; it defaults to sponsord_release_target_dir).
+
+    - name: Decide whether target-dir resolution applies
+      ansible.builtin.set_fact:
+        _sponsord_onramp_use_dir: "{{ sponsord_onramp_manual_bin_src | length == 0 }}"
+        _sponsord_onramp_target_dir: "{{ sponsord_onramp_release_target_dir | regex_replace('/+$', '') }}"
+        _sponsord_onramp_bin_src: "{{ sponsord_onramp_manual_bin_src }}"
+
+    - name: Stat the binary in each candidate directory
+      ansible.builtin.stat:
+        path: "{{ item }}/sponsord-onramp"
+      register: _sponsord_onramp_bin_stat
+      loop:
+        - "{{ _sponsord_onramp_target_dir }}"
+        - "{{ (_sponsord_onramp_target_dir | dirname) ~ '/' ~ sponsord_onramp_target ~ '/release' }}"
+      loop_control:
+        label: "{{ item }}"
+      delegate_to: localhost
+      become: false
+      when: _sponsord_onramp_use_dir | bool
+
+    - name: Select the first candidate directory that holds the binary
+      ansible.builtin.set_fact:
+        _sponsord_onramp_resolved_dir: >-
+          {{ (_sponsord_onramp_bin_stat.results | selectattr('stat.exists') | map(attribute='item')
+              | first) | default('', true) }}
+      when: _sponsord_onramp_use_dir | bool
+
+    - name: Fail if no candidate directory held the binary
+      ansible.builtin.assert:
+        that:
+          - _sponsord_onramp_resolved_dir | length > 0
+        fail_msg: >-
+          No sponsord-onramp binary under sponsord_onramp_release_target_dir
+          ({{ sponsord_onramp_release_target_dir }}) or its cross output dir
+          ({{ (_sponsord_onramp_target_dir | dirname) ~ '/' ~ sponsord_onramp_target ~ '/release' }}).
+          Build it in a decdn/sponsord checkout — `cargo build --release -p
+          sponsord-onramp`, or cross-compiling for the host, `cross build --release -p
+          sponsord-onramp --target {{ sponsord_onramp_target }}`.
+      when: _sponsord_onramp_use_dir | bool
+
+    - name: Derive the effective binary source path
+      ansible.builtin.set_fact:
+        _sponsord_onramp_bin_src: "{{ _sponsord_onramp_resolved_dir ~ '/sponsord-onramp' }}"
+      when: _sponsord_onramp_use_dir | bool
+
+    - name: Identify the on-disk format of the resolved binary
+      ansible.builtin.command:
+        argv: [file, -b, --, "{{ _sponsord_onramp_bin_src }}"]
+      register: _sponsord_onramp_bin_file
+      changed_when: false
+      check_mode: false
+      delegate_to: localhost
+      become: false
+      when: _sponsord_onramp_use_dir | bool
+
+    - name: Require the binary to be an ELF for the host's architecture
+      ansible.builtin.assert:
+        that:
+          - "'ELF' in _sponsord_onramp_bin_file.stdout"
+          - _sponsord_onramp_arch_file_tokens[sponsord_onramp_target] in _sponsord_onramp_bin_file.stdout
+        fail_msg: >-
+          {{ _sponsord_onramp_bin_src }} is "{{ _sponsord_onramp_bin_file.stdout }}" — not
+          an ELF {{ _sponsord_onramp_arch_file_tokens[sponsord_onramp_target] }} binary for
+          {{ sponsord_onramp_target }}. Cross-compile for the host: `cross build --release
+          -p sponsord-onramp --target {{ sponsord_onramp_target }}`.
+      when: _sponsord_onramp_use_dir | bool
+
+# --- Chain ------------------------------------------------------------------------
+- name: Require a known sponsord_onramp_network
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_network == "" or sponsord_onramp_network in _sponsord_onramp_network_profiles
+    fail_msg: >-
+      sponsord_onramp_network "{{ sponsord_onramp_network }}" is not a known network.
+      Known: {{ _sponsord_onramp_network_profiles.keys() | join(', ') }}. Leave it ""
+      to set sponsord_onramp_capacity_bond_address yourself.
+
+# The onramp takes its chain from the daemon, so contract addresses from another
+# network's profile would point users' decdn at the wrong chain's contracts.
+- name: Require the onramp and the daemon to name the same network
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_network == sponsord_network
+    fail_msg: >-
+      sponsord_onramp_network is "{{ sponsord_onramp_network }}" but the daemon's
+      sponsord_network is "{{ sponsord_network }}". The onramp serves the daemon's
+      chain, so both must name the same network. Drop sponsord_onramp_network (it
+      follows sponsord_network) or fix one of them.
+  when:
+    - sponsord_onramp_network | length > 0
+    - sponsord_network | default('') | length > 0
+
+# Also when the daemon has no profile but an explicit chain id: the onramp's
+# profile must be that chain's.
+- name: Require the onramp's network to be the daemon's chain
+  ansible.builtin.assert:
+    that:
+      - _sponsord_onramp_profile.chain_id | string == sponsord_chain_id | string
+    fail_msg: >-
+      sponsord_onramp_network "{{ sponsord_onramp_network }}" is chain
+      {{ _sponsord_onramp_profile.chain_id }}, but the daemon's sponsord_chain_id is
+      {{ sponsord_chain_id }}. Its CapacityBond and SlashJudge would belong to another
+      chain. Set the onramp's contract addresses for chain {{ sponsord_chain_id }}
+      explicitly and clear sponsord_onramp_network.
+  when:
+    - sponsord_onramp_network | length > 0
+    - sponsord_chain_id | default('') | string | length > 0
+
+- name: Report a contract address overridden in inventory
+  ansible.builtin.debug:
+    msg: >-
+      sponsord_onramp_network "{{ sponsord_onramp_network }}" is in use, but inventory
+      overrides {{ item }}. The inventory value wins over the profile; make sure that
+      is deliberate (a stale hand-copied address is the usual cause).
+  loop: [capacity_bond_address, slash_judge_address]
+  when:
+    - sponsord_onramp_network | length > 0
+    - (lookup('ansible.builtin.vars', 'sponsord_onramp_' ~ item) | lower) != (_sponsord_onramp_profile[item] | lower)
+
+- name: Require the CapacityBond (and a well-formed SlashJudge) address
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_capacity_bond_address is match('^0x[0-9a-fA-F]{40}$')
+      - sponsord_onramp_capacity_bond_address != '0x' ~ '0' * 40
+      - >-
+        sponsord_onramp_slash_judge_address == ''
+        or (sponsord_onramp_slash_judge_address is match('^0x[0-9a-fA-F]{40}$')
+            and sponsord_onramp_slash_judge_address != '0x' ~ '0' * 40)
+    fail_msg: >-
+      sponsord_onramp_capacity_bond_address must be 0x + 40 hex, not zero, and
+      sponsord_onramp_slash_judge_address "" or the same shape. Set
+      sponsord_onramp_network (or the daemon's sponsord_network) to take both from the
+      role's mirror of upstream's deployment manifest — never hand-copy them.
+
+# --- Listener -----------------------------------------------------------------------
+# AGENTS.md hard rule 2: the onramp's own listener stays on loopback; the public
+# side is Caddy (or your proxy) terminating TLS in front of it.
+- name: Require the listener to stay on loopback
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_bind_address is match('^127(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$')
+      - sponsord_onramp_port | string is match('^[0-9]+$')
+      - sponsord_onramp_port | int >= 1
+      - sponsord_onramp_port | int <= 65535
+      - sponsord_onramp_daemon_url is match('^http://127(\.[0-9]{1,3}){3}:[0-9]+$')
+    fail_msg: >-
+      sponsord_onramp_bind_address must be an IPv4 loopback address (got
+      "{{ sponsord_onramp_bind_address }}"), sponsord_onramp_port a TCP port (got
+      "{{ sponsord_onramp_port }}") and sponsord_onramp_daemon_url the daemon's loopback
+      listener as http://127.x.y.z:port (got "{{ sponsord_onramp_daemon_url }}"). The
+      public side is the TLS proxy in front (AGENTS.md hard rule 2), never the onramp
+      itself.
+
+# --- Public address + TLS front ----------------------------------------------------
+- name: Validate the proxy settings
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_proxy in ['caddy', 'none']
+      - sponsord_onramp_caddy_tls in ['acme', 'internal']
+      - sponsord_onramp_caddy_overwrite_config is boolean
+    fail_msg: >-
+      sponsord_onramp_proxy must be "caddy" or "none", sponsord_onramp_caddy_tls "acme"
+      or "internal", and sponsord_onramp_caddy_overwrite_config a boolean.
+
+- name: Require a domain for Caddy
+  ansible.builtin.assert:
+    that:
+      # A DNS name: labels of letters, digits and inner hyphens, at least one dot.
+      - sponsord_onramp_domain is match('^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$')
+      - >-
+        sponsord_onramp_acme_email == ''
+        or sponsord_onramp_acme_email is match('^[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,63}$')
+    fail_msg: >-
+      sponsord_onramp_proxy "caddy" needs sponsord_onramp_domain, the DNS name users
+      reach (got "{{ sponsord_onramp_domain }}"), and sponsord_onramp_acme_email must be
+      "" or an email address. For acme its A/AAAA records must point at this host.
+  when: sponsord_onramp_proxy == 'caddy'
+
+# Mirrors upstream's base_url + script_safe_url: the value is baked into the POSIX
+# and PowerShell installers inside quoted strings. In the character class below,
+# \x27 is ' and \x5c\x5c a backslash: a '' or \\ there would not survive Jinja's
+# string-literal decoding.
+- name: Require an https public base URL the installers can hold
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_public_url is match('^https://[^/?#@]+(/[^?#]*)?$')
+      - sponsord_onramp_public_url is not search('[\s\x27"`$\x5c\x5c{}]')
+    fail_msg: >-
+      sponsord_onramp_public_url must be an https base URL with no credentials, query
+      or fragment, and none of whitespace ' " ` $ \ { } (got
+      "{{ sponsord_onramp_public_url }}"). With sponsord_onramp_proxy "none" it is
+      required: the address your proxy serves the onramp at.
+
+# Public by design: GET /v1/profile hands it to every user. A key in it is a leaked
+# key, so the role refuses anything that looks like a credential. The message never
+# echoes the value, in case it does hold one.
+- name: Require a public RPC URL with no credentials in it
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_rpc_url is match('^https?://[^/?#@]+(/[^?#]*)?$')
+      - sponsord_onramp_rpc_url is not search('[\s\x27"`$\x5c\x5c{}]')
+    fail_msg: >-
+      sponsord_onramp_rpc_url must be an http(s) URL with no userinfo, query or
+      fragment, and none of whitespace ' " ` $ \ { }. The onramp PUBLISHES it to every
+      user and bakes it into the installers, so it must be a public endpoint (e.g.
+      https://sepolia-rollup.arbitrum.io/rpc), never the keyed URL the daemon uses.
+      Check its path holds no API key either.
+
+# --- Gate + release pins --------------------------------------------------------------
+- name: Validate the Turnstile sitekey and gate settings
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_turnstile_sitekey is match('^[A-Za-z0-9_-]+$')
+      - sponsord_onramp_brand_name | string is match('^[^\x00-\x1f\x7f]*\Z')
+    fail_msg: >-
+      sponsord_onramp_turnstile_sitekey is required: letters, digits, '_' and '-' (got
+      "{{ sponsord_onramp_turnstile_sitekey }}"), from the Turnstile widget for
+      {{ sponsord_onramp_domain | default('your domain', true) }}. sponsord_onramp_brand_name
+      may hold no control characters.
+
+- name: Validate the release pins the installers use
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_decdn_release is match('^v' ~ _semver ~ '$')
+      - sponsord_onramp_cli_release is match('^decdn-sponsored-v' ~ _semver ~ '$')
+      - sponsord_onramp_decdn_sums_sha256 is match('^[0-9a-f]{64}$')
+      - sponsord_onramp_cli_sums_sha256 is match('^[0-9a-f]{64}$')
+      - sponsord_onramp_min_cli_version == '' or sponsord_onramp_min_cli_version is match('^' ~ _semver ~ '$')
+      - >-
+        sponsord_onramp_releases_base == ''
+        or (sponsord_onramp_releases_base is match('^https://[^/?#@]+(/[^?#]*)?$')
+            and sponsord_onramp_releases_base is not search('[\s\x27"`$\x5c\x5c{}]'))
+    fail_msg: >-
+      The installers need sponsord_onramp_decdn_release (vMAJOR.MINOR.PATCH),
+      sponsord_onramp_cli_release (decdn-sponsored-vMAJOR.MINOR.PATCH), and the SHA-256
+      of each release's SHA256SUMS in sponsord_onramp_decdn_sums_sha256 /
+      sponsord_onramp_cli_sums_sha256 (64 lowercase hex; decdn-sponsored's release notes
+      print both values). sponsord_onramp_min_cli_version must be "" or MAJOR.MINOR.PATCH,
+      sponsord_onramp_releases_base "" or an https base URL.
+  vars:
+    _semver: '(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?'
+
+- name: Validate the onramp's limits
+  ansible.builtin.assert:
+    that:
+      - item.value | string is match('^[0-9]+$')
+      - item.key is search('_rate_per_min$') or item.value | int > 0
+    fail_msg: >-
+      {{ item.key }} must be "" (the onramp's default) or a non-negative integer
+      ({{ 'zero turns the limit off' if item.key is search('_rate_per_min$') else 'greater than zero' }}),
+      got "{{ item.value }}".
+  loop: "{{ _sponsord_onramp_limits | dict2items | rejectattr('value', 'equalto', '') | list }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    _sponsord_onramp_limits:
+      sponsord_onramp_spending_cap_micro_usdc: "{{ sponsord_onramp_spending_cap_micro_usdc }}"
+      sponsord_onramp_ttl_secs: "{{ sponsord_onramp_ttl_secs }}"
+      sponsord_onramp_fund_rate_per_min: "{{ sponsord_onramp_fund_rate_per_min }}"
+      sponsord_onramp_poll_rate_per_min: "{{ sponsord_onramp_poll_rate_per_min }}"
+
+- name: Validate the client IP header name
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_client_ip_header == '' or sponsord_onramp_client_ip_header is match('^[A-Za-z0-9-]+$')
+    fail_msg: >-
+      sponsord_onramp_client_ip_header must be "" (the TCP peer) or an HTTP header name
+      such as X-Forwarded-For or CF-Connecting-IP (got
+      "{{ sponsord_onramp_client_ip_header }}").
+
+# --- Host secrets (the daemon's token, the Turnstile secret) ------------------------
+- name: Check the daemon API token and the Turnstile secret
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+    get_checksum: false
+  register: sponsord_onramp_secret_stat
+  loop:
+    - "{{ sponsord_onramp_api_token_file }}"
+    - "{{ sponsord_onramp_turnstile_secret_file }}"
+
+# The sponsord role, which runs first on this host, generated (or gated on) the
+# token; under --check its generation is only simulated, so a fresh host has none.
+- name: Require the daemon API token as a regular file
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_secret_stat.results[0].stat.isreg | default(false)
+    fail_msg: >-
+      {{ sponsord_onramp_api_token_file }} is
+      {{ 'missing' if not sponsord_onramp_secret_stat.results[0].stat.exists else 'not a regular file' }}.
+      The onramp runs beside the sponsord daemon and uses its token, which the sponsord
+      role creates: deploy sponsord on this host first (in this repo, list the host in
+      sponsord_hosts too; `make deploy-sponsord` runs both).
+  when: not (ansible_check_mode and not sponsord_onramp_secret_stat.results[0].stat.exists)
+
+- name: Require the Turnstile secret as a regular file
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_secret_stat.results[1].stat.isreg | default(false)
+    fail_msg: |-
+      {{ sponsord_onramp_turnstile_secret_file }} is {{ _what }}.
+      The role never handles the Turnstile secret: copy it from the Cloudflare
+      dashboard (the widget for {{ sponsord_onramp_domain | default('your domain', true) }})
+      onto this host, as root:
+        umask 077
+        printf '%s' '<secret>' | sudo tee {{ sponsord_onramp_turnstile_secret_file }} >/dev/null
+        sudo chmod 600 {{ sponsord_onramp_turnstile_secret_file }}
+  vars:
+    _what: >-
+      {{ 'missing' if not sponsord_onramp_secret_stat.results[1].stat.exists
+         else 'not a regular file (symlink/directory?)' }}
+
+# Ownership + mode only; the content is the operator's.
+- name: Lock down the Turnstile secret
+  ansible.builtin.file:
+    path: "{{ sponsord_onramp_turnstile_secret_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    follow: false
+
+# grep -q: the secret never reaches stdout. Upstream strips one trailing newline;
+# an empty value would only fail at the first person through the gate.
+- name: Confirm the Turnstile secret is not empty
+  ansible.builtin.command:
+    cmd: grep -q '[^[:space:]]' {{ sponsord_onramp_turnstile_secret_file | quote }}
+  register: sponsord_onramp_turnstile_grep
+  changed_when: false
+  check_mode: false
+  # 1 = no non-blank character (reported below); 2 = grep could not read the file.
+  failed_when: sponsord_onramp_turnstile_grep.rc not in [0, 1]
+
+- name: Report an empty Turnstile secret
+  ansible.builtin.fail:
+    msg: >-
+      {{ sponsord_onramp_turnstile_secret_file }} is empty. Write the widget's secret
+      key into it, as root: umask 077; printf '%s' '<secret>' | sudo tee
+      {{ sponsord_onramp_turnstile_secret_file }} >/dev/null
+  when: sponsord_onramp_turnstile_grep.rc == 1
+
+- name: Read whether Caddy is already installed
+  ansible.builtin.package_facts:
+  when: sponsord_onramp_proxy == 'caddy'
+
+# Before any mutation: a Caddyfile someone else wrote is never replaced silently.
+# It is judged by the file, not by whether the package is installed: a Caddy run
+# from a static binary leaves no dpkg trace, and apt keeps an existing conffile.
+- name: Check the Caddyfile
+  ansible.builtin.stat:
+    path: "{{ _sponsord_onramp_caddyfile }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: md5
+  register: sponsord_onramp_caddyfile_stat
+  when: sponsord_onramp_proxy == 'caddy'
+
+- name: Check the Caddyfile for this role's marker
+  ansible.builtin.command:
+    argv: [grep, -qF, "MANAGED BY the sponsord_onramp role", "{{ _sponsord_onramp_caddyfile }}"]
+  register: sponsord_onramp_caddyfile_marker
+  changed_when: false
+  check_mode: false
+  # 1 = no marker; 2 = unreadable, which must not pass for "no marker".
+  failed_when: sponsord_onramp_caddyfile_marker.rc not in [0, 1]
+  when:
+    - sponsord_onramp_proxy == 'caddy'
+    - sponsord_onramp_caddyfile_stat.stat.isreg | default(false)
+
+# The package's own default Caddyfile (a first run that installed Caddy and then
+# stopped before templating leaves exactly that) is safe to replace. dpkg records
+# its md5 among the package's conffiles; empty when the package is not installed.
+- name: Read the packaged Caddyfile's checksum
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      { dpkg-query -W -f='${Conffiles}\n' caddy 2>/dev/null || true; } \
+        | awk -v f={{ _sponsord_onramp_caddyfile | quote }} '$1 == f { print $2 }'
+  register: sponsord_onramp_caddyfile_pristine
+  changed_when: false
+  check_mode: false
+  when:
+    - sponsord_onramp_proxy == 'caddy'
+    - sponsord_onramp_caddyfile_marker.rc | default(0) == 1
+
+- name: Refuse to replace a Caddyfile this role did not write
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_caddyfile_stat.stat.isreg
+      - >-
+        sponsord_onramp_caddy_overwrite_config
+        or sponsord_onramp_caddyfile_marker.rc | default(0) == 0
+        or (sponsord_onramp_caddyfile_pristine.stdout | default('') | trim | length > 0
+            and sponsord_onramp_caddyfile_pristine.stdout | trim == sponsord_onramp_caddyfile_stat.stat.checksum)
+    fail_msg: >-
+      {{ _sponsord_onramp_caddyfile }} exists and is not the role's (no "MANAGED BY the
+      sponsord_onramp role" line, and not the caddy package's untouched default), or
+      is not a regular file. The role owns that whole file, so it would discard
+      whatever else this Caddy serves. Move the other sites elsewhere (or onto your
+      own proxy, with sponsord_onramp_proxy "none"), or set
+      sponsord_onramp_caddy_overwrite_config: true to let the role replace it.
+  when:
+    - sponsord_onramp_proxy == 'caddy'
+    - sponsord_onramp_caddyfile_stat.stat.exists
+
+# Switching to "none" closes the firewall holes but leaves the role's Caddy running
+# on 80/443 (your own proxy could not bind them). The role removes nothing.
+- name: Check for a Caddyfile this role wrote while proxy was "caddy"
+  ansible.builtin.command:
+    argv: [grep, -qF, "MANAGED BY the sponsord_onramp role", "{{ _sponsord_onramp_caddyfile }}"]
+  register: sponsord_onramp_stale_caddy
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  when: sponsord_onramp_proxy == 'none'
+
+- name: Warn that the role's Caddy is still installed
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: sponsord_onramp_proxy is "none", but {{ _sponsord_onramp_caddyfile }} is
+      this role's, so its Caddy may still be running and holding tcp/80 and tcp/443
+      (the firewall no longer opens them). Remove it: sudo systemctl disable --now
+      caddy && sudo apt-get remove caddy.
+  when:
+    - sponsord_onramp_proxy == 'none'
+    - sponsord_onramp_stale_caddy.rc | default(1) == 0
+
+# --- Install, configure, start ------------------------------------------------------
+- name: Install the sponsord-onramp binary
+  ansible.builtin.import_tasks: install.yml
+
+- name: Install the custom gate page
+  ansible.builtin.copy:
+    src: "{{ sponsord_onramp_gate_template_src }}"
+    dest: "{{ sponsord_onramp_gate_template_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart sponsord-onramp
+  when: sponsord_onramp_gate_template_src | length > 0
+
+- name: Remove a custom gate page that is no longer configured
+  ansible.builtin.file:
+    path: "{{ sponsord_onramp_gate_template_file }}"
+    state: absent
+  notify: Restart sponsord-onramp
+  when: sponsord_onramp_gate_template_src | length == 0
+
+- name: Template the non-secret sponsord-onramp.env
+  ansible.builtin.template:
+    src: sponsord-onramp.env.j2
+    dest: "{{ sponsord_onramp_env_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart sponsord-onramp
+
+- name: Install the sponsord-onramp systemd unit
+  ansible.builtin.template:
+    src: sponsord-onramp.service.j2
+    dest: /etc/systemd/system/sponsord-onramp.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart sponsord-onramp
+
+# --- Restart inputs -----------------------------------------------------------------
+# As roles/sponsord: hashes of everything the onramp starts from, recorded once it
+# is healthy, so a rotated daemon token or Turnstile secret (both edited on the
+# host, out of band) or a restart lost to a failed run is caught next converge.
+- name: Hash the restart inputs
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: sponsord_onramp_inputs_stat
+  loop:
+    - "{{ sponsord_onramp_api_token_file }}"
+    - "{{ sponsord_onramp_turnstile_secret_file }}"
+    - "{{ sponsord_onramp_env_file }}"
+    - "{{ sponsord_onramp_gate_template_file }}"
+    - /etc/systemd/system/sponsord-onramp.service
+    - "{{ sponsord_onramp_bin }}"
+
+- name: Read the restart-input checksums this role last recorded
+  ansible.builtin.slurp:
+    src: "{{ sponsord_onramp_inputs_checksum_file }}"
+  register: sponsord_onramp_inputs_recorded
+  failed_when: >-
+    sponsord_onramp_inputs_recorded.failed
+    and 'not found' not in (sponsord_onramp_inputs_recorded.msg | default(''))
+  changed_when: false
+
+- name: Read whether sponsord-onramp is already running
+  ansible.builtin.systemd_service:
+    name: sponsord-onramp
+  register: sponsord_onramp_is_active
+
+- name: Summarise the restart-input checksums
+  ansible.builtin.set_fact:
+    sponsord_onramp_inputs_sums: >-
+      {{ sponsord_onramp_inputs_stat.results | map(attribute='stat') | map('default', {}, true)
+         | map(attribute='checksum', default='') | join(' ') }}
+    sponsord_onramp_inputs_recorded_sums: >-
+      {{ sponsord_onramp_inputs_recorded.content | default('') | b64decode | trim }}
+
+- name: Note restart inputs that changed since the onramp last started healthy
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'The daemon token, the Turnstile secret, the env file, the gate page, the unit
+      or the binary differs from what sponsord-onramp was last confirmed healthy on'
+      if sponsord_onramp_inputs_recorded_sums | length > 0
+      else 'sponsord-onramp is running but was never confirmed healthy on its current inputs' }}
+      — restarting sponsord-onramp.
+  changed_when: true
+  notify: Restart sponsord-onramp
+  when: >-
+    (sponsord_onramp_inputs_recorded_sums | length > 0
+     and sponsord_onramp_inputs_sums != sponsord_onramp_inputs_recorded_sums)
+    or (sponsord_onramp_inputs_recorded_sums | length == 0
+        and sponsord_onramp_is_active.status.ActiveState | default('') == 'active')
+
+- name: Apply pending sponsord-onramp changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start sponsord-onramp
+  ansible.builtin.systemd:
+    name: sponsord-onramp
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# --- Readiness (fatal) ------------------------------------------------------------
+# The onramp binds only after it has read the daemon's /v1/info and checked its own
+# cap and TTL against the daemon's maximum, so this is the deploy's config gate.
+# Retry while nothing answers (-1); any other answer than 200 stops at once.
+# KICS flags plain HTTP here; the target is the loopback listener asserted above.
+- name: Wait for sponsord-onramp /healthz
+  ansible.builtin.uri:
+    url: "http://{{ sponsord_onramp_bind_address }}:{{ sponsord_onramp_port }}/healthz"
+    status_code: 200
+    return_content: true
+    timeout: 5
+  register: sponsord_onramp_health
+  retries: "{{ sponsord_onramp_readiness_retries }}"
+  delay: "{{ sponsord_onramp_readiness_delay }}"
+  until: sponsord_onramp_health.status | default(-1) != -1
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Report a sponsord-onramp that did not become healthy
+  ansible.builtin.fail:
+    msg: |-
+      sponsord-onramp did not answer 200 on
+      http://{{ sponsord_onramp_bind_address }}:{{ sponsord_onramp_port }}/healthz within
+      ~{{ (sponsord_onramp_readiness_retries | int) * (sponsord_onramp_readiness_delay | int) }}s
+      (last status {{ sponsord_onramp_health.status | default('none') }}). It binds only
+      after reaching the daemon at {{ sponsord_onramp_daemon_url }} with its API token
+      and validating its settings, so the usual causes are a daemon that is down, a
+      cap or TTL above the daemon's maximum, or a malformed release pin. Read the
+      reason on the host:
+        sudo journalctl -u sponsord-onramp -e
+  when:
+    - not ansible_check_mode
+    - >-
+      sponsord_onramp_health.status | default(-1) != 200
+      or sponsord_onramp_health.json.ok | default(false) is not true
+
+# As roles/sponsord: the 200 must come from THIS unit, not another holder of the port.
+- name: Read the sponsord-onramp unit state
+  ansible.builtin.systemd_service:
+    name: sponsord-onramp
+  register: sponsord_onramp_unit_state
+  when: not ansible_check_mode
+
+- name: Read the owner of the sponsord-onramp listener
+  ansible.builtin.command:
+    argv: [ss, -Hltnp, "sport = :{{ sponsord_onramp_port }}"]
+  register: sponsord_onramp_listener
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Require the listener to belong to the running sponsord-onramp unit
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_unit_state.status.ActiveState == 'active'
+      - sponsord_onramp_unit_state.status.SubState == 'running'
+      - ('pid=' ~ sponsord_onramp_unit_state.status.MainPID ~ ',') in sponsord_onramp_listener.stdout
+    fail_msg: >-
+      Something answered /healthz on {{ sponsord_onramp_bind_address }}:{{ sponsord_onramp_port }},
+      but it is not the sponsord-onramp unit (state
+      {{ sponsord_onramp_unit_state.status.ActiveState }}/{{ sponsord_onramp_unit_state.status.SubState }},
+      MainPID {{ sponsord_onramp_unit_state.status.MainPID }}; listeners:
+      {{ sponsord_onramp_listener.stdout | default('none', true) }}). Another service holds
+      the port: free it or set sponsord_onramp_port.
+  when: not ansible_check_mode
+
+- name: Record the restart-input checksums
+  ansible.builtin.copy:
+    dest: "{{ sponsord_onramp_inputs_checksum_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ sponsord_onramp_inputs_sums }}\n"
+  when: not ansible_check_mode
+
+# --- TLS front ----------------------------------------------------------------------
+- name: Put Caddy in front of the onramp
+  ansible.builtin.import_tasks: caddy.yml
+  when: sponsord_onramp_proxy == 'caddy'

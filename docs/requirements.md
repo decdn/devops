@@ -27,7 +27,7 @@ and they run the same roles.
 
 | | Supported | How it is tested |
 |---|---|---|
-| OS | Debian 12 (bookworm), Debian 13 (trixie), Ubuntu 24.04 (noble), Ubuntu 26.04 (resolute) | molecule converges `decdn_node` on all four in systemd containers; `grafana_alloy`'s install path on Debian 12 only (its disabled path on all four); `sponsord` on Debian 12 and Ubuntu 24.04; `baseline` on real hosts |
+| OS | Debian 12 (bookworm), Debian 13 (trixie), Ubuntu 24.04 (noble), Ubuntu 26.04 (resolute) | molecule converges `decdn_node` on all four in systemd containers; `grafana_alloy`'s install path on Debian 12 only (its disabled path on all four); `sponsord` and `sponsord_onramp` on Debian 12 and Ubuntu 24.04; `baseline` on real hosts |
 | Architecture | x86_64, aarch64 | upstream builds both; the Ansible role derives the target from the host |
 | Ansible (control machine) | ansible-core ≥ 2.15 | CI runs the current release |
 | cloud-init | the provider image's own; the bootstrap installs its pinned ansible-core on the host | the user-data is booted with the distro's cloud-init in Debian 12 and Ubuntu 26.04 containers, to a running node |
@@ -42,6 +42,12 @@ On Ubuntu 25.10 and later, `sudo` is sudo-rs; see the `ansible_become_exe` note 
 - **Inbound: udp/4433 (QUIC)** from anywhere. This is the node's only public port. Open
   it in the host firewall (the Ansible `baseline` does this) **and** in your cloud
   provider's security group or firewall, which the host cannot see.
+- **A sponsord-onramp host (Ansible only) also needs inbound tcp/80 and tcp/443** for
+  Caddy, from anywhere: 443 serves the onramp, 80 answers the ACME challenge and
+  redirects to https. `baseline` opens both for hosts in `sponsord_onramp_hosts` while
+  `sponsord_onramp_proxy` is `caddy` (the default; `none` opens neither); open them in
+  the provider's firewall too, and point the domain's A/AAAA records at the host.
+  Caddy comes from the distribution: on Ubuntu, enable the **universe** component.
 - **Outbound:** HTTPS to your RPC provider and to any cache origin; QUIC/UDP to peers;
   HTTPS to the iroh relays (upstream's defaults unless you set your own).
 - **NAT:** a node without direct inbound reachability still works through iroh relays,

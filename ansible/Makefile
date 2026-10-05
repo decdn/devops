@@ -121,8 +121,10 @@ decommission:
 # /metrics probe timeout), grafana-cloud and grafana-cloud-token (opt-in Grafana
 # Cloud observability, host-provisioned vs inventory token), os-matrix (default's
 # plays on Debian 13, Ubuntu 24.04 and 26.04), lifecycle (network profile,
-# backup + decommission) and sponsord (the sponsord role on a host with no node,
-# through playbooks/sponsord.yml, on Debian 12 and Ubuntu 24.04). The glob below is the authority; this list is a guide.
+# backup + decommission), sponsord (the sponsord role on a host with no node,
+# through playbooks/sponsord.yml, on Debian 12 and Ubuntu 24.04) and sponsord-onramp
+# (the onramp beside its daemon, behind the real distro Caddy). The glob below is the
+# authority; this list is a guide.
 #
 # The scenarios run concurrently: distinct container names, no published host ports,
 # per-scenario ephemeral dirs, and what they share on the control machine (the
@@ -209,8 +211,8 @@ molecule-all: deps
 	molecule test --all
 
 # --- Galaxy collection (decdn.node) ------------------------------------------
-# Stage baseline + decdn_node + grafana_alloy + sponsord into a clean collection tree and
-# build the artifact under build/. Only the four roles ship; see galaxy/README.md. Publishing
+# Stage baseline + decdn_node + grafana_alloy + sponsord + sponsord_onramp into a clean collection tree and
+# build the artifact under build/. Only the five roles ship; see galaxy/README.md. Publishing
 # runs from a vX.Y.Z tag in .github/workflows/release.yml (see RELEASING.md).
 build:
 	./galaxy/build.sh

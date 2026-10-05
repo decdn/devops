@@ -1,0 +1,19 @@
+---
+# Each handler reloads systemd itself rather than relying on a separate "Reload
+# systemd" handler running first (see roles/sponsord/handlers/main.yml).
+- name: Restart sponsord-onramp
+  ansible.builtin.systemd:
+    name: sponsord-onramp
+    state: restarted
+    daemon_reload: true
+
+# Not a reload: the role's Caddyfile turns the admin API off, which `caddy reload`
+# (the packaged unit's ExecReload) needs.
+# Under --check on a host without Caddy its install is only simulated, so there
+# is no unit to restart (tasks/caddy.yml guards its start the same way).
+- name: Restart caddy
+  ansible.builtin.systemd:
+    name: caddy
+    state: restarted
+    daemon_reload: true
+  when: not ansible_check_mode or 'caddy' in ansible_facts.packages

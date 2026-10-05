@@ -1,0 +1,257 @@
+---
+# Install the sponsord-onramp binary. Two methods, selected by sponsord_onramp_install_method:
+#   "release": download the pinned sponsord-onramp-v<version> GitHub Release tarball,
+#     verify it against the GPG-signed SHA256SUMS manifest, then extract.
+#     Idempotent and upgrade-aware via a version stamp.
+#   "manual" (default today): copy a locally-built binary from the control machine.
+# The verification steps mirror roles/decdn_node/tasks/install.yml, which carries
+# the full rationale for each (status-parsed gpg, exact manifest entry, private
+# staging dir kept on failure).
+
+- name: Install from the pinned GitHub Release tarball
+  when: sponsord_onramp_install_method == "release"
+  block:
+    - name: Name the release archive
+      ansible.builtin.set_fact:
+        # The archive holds ONE flat binary at its root (upstream release.yml).
+        sponsord_onramp_release_archive: >-
+          sponsord-onramp-{{ sponsord_onramp_version }}-{{ sponsord_onramp_target }}.tar.gz
+        sponsord_onramp_release_url: "{{ sponsord_onramp_release_base }}/sponsord-onramp-v{{ sponsord_onramp_version }}"
+
+    - name: Read the installed-version stamp
+      ansible.builtin.slurp:
+        src: /usr/local/lib/sponsord-onramp/installed-version
+      register: sponsord_onramp_stamp
+      failed_when: false
+      changed_when: false
+
+    - name: Decide whether (re)install is needed
+      ansible.builtin.set_fact:
+        sponsord_onramp_need_install: >-
+          {{ (sponsord_onramp_stamp.content is not defined)
+             or ((sponsord_onramp_stamp.content | b64decode | trim) != sponsord_onramp_version) }}
+
+    - name: Report that the release download is not simulated in check mode
+      ansible.builtin.debug:
+        msg: >-
+          check mode: skipping the download + signature verification of sponsord-onramp
+          {{ sponsord_onramp_version }}. The config and unit below still diff normally.
+      when:
+        - sponsord_onramp_need_install
+        - ansible_check_mode
+
+    - name: Install sponsord-onramp {{ sponsord_onramp_version }}
+      when:
+        - sponsord_onramp_need_install
+        - not ansible_check_mode
+      block:
+        - name: Create a private download staging directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: sponsord-onramp-install-
+          register: sponsord_onramp_stage
+          changed_when: false
+
+        - name: Restrict the staging directory to root
+          ansible.builtin.file:
+            path: "{{ sponsord_onramp_stage.path }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: WARN that release signature verification is DISABLED
+          ansible.builtin.debug:
+            msg: |-
+              sponsord_onramp_verify_release_signature is false. SHA256SUMS is fetched
+              UNAUTHENTICATED from {{ sponsord_onramp_release_url }}, so the checksum check
+              proves only that the download was not corrupted — NOT that the binary
+              came from deCDN. This binary holds the daemon API token.
+          when: not sponsord_onramp_verify_release_signature
+
+        - name: Ensure gnupg is available for signature verification
+          ansible.builtin.package:
+            name: gnupg
+            state: present
+          when: sponsord_onramp_verify_release_signature
+
+        - name: Download the release tarball
+          ansible.builtin.get_url:
+            url: "{{ sponsord_onramp_release_url }}/{{ sponsord_onramp_release_archive }}"
+            dest: "{{ sponsord_onramp_stage.path }}/{{ sponsord_onramp_release_archive }}"
+            owner: root
+            group: root
+            mode: "0600"
+
+        - name: Download the SHA256SUMS manifest and signature
+          ansible.builtin.get_url:
+            url: "{{ sponsord_onramp_release_url }}/{{ item }}"
+            dest: "{{ sponsord_onramp_stage.path }}/{{ item }}"
+            owner: root
+            group: root
+            mode: "0600"
+          loop: "{{ ['SHA256SUMS', 'SHA256SUMS.asc'] if sponsord_onramp_verify_release_signature else ['SHA256SUMS'] }}"
+
+        - name: Create the keyring staging directory
+          ansible.builtin.file:
+            path: "{{ sponsord_onramp_stage.path }}/keyring"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+          when: sponsord_onramp_verify_release_signature
+
+        - name: Stage the release signing keyring
+          ansible.builtin.copy:
+            src: "{{ sponsord_onramp_release_keyring }}"
+            dest: "{{ sponsord_onramp_stage.path }}/keyring/KEYS.asc"
+            owner: root
+            group: root
+            mode: "0600"
+          when: sponsord_onramp_verify_release_signature
+
+        # Isolated GNUPGHOME; VALIDSIG required, an expired/revoked key refused,
+        # --no-autostart so no gpg-agent outlives the task (see decdn_node).
+        - name: Verify the SHA256SUMS signature against the release keyring
+          ansible.builtin.shell:
+            chdir: "{{ sponsord_onramp_stage.path }}"
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              export GNUPGHOME="{{ sponsord_onramp_stage.path }}/gnupg"
+              mkdir -p "$GNUPGHOME"
+              chmod 700 "$GNUPGHOME"
+              gpg --batch --quiet --no-autostart --import keyring/KEYS.asc
+              gpg --batch --no-autostart --status-fd 3 --verify SHA256SUMS.asc SHA256SUMS \
+                3>gpg-status.txt
+              if grep -qE '^\[GNUPG:\] (EXPKEYSIG|REVKEYSIG|EXPSIG)' gpg-status.txt; then
+                echo "SHA256SUMS carries a good signature from an EXPIRED or REVOKED" >&2
+                echo "release key. Refusing to install. Re-sync" >&2
+                echo "roles/sponsord/files/sponsord-release-KEYS.asc from upstream KEYS," >&2
+                echo "or verify this release out of band." >&2
+                exit 1
+              fi
+              grep -q '^\[GNUPG:\] VALIDSIG ' gpg-status.txt
+          register: sponsord_onramp_sig_check
+          changed_when: false
+          failed_when: sponsord_onramp_sig_check.rc != 0
+          when: sponsord_onramp_verify_release_signature
+
+        - name: Verify the tarball against SHA256SUMS
+          ansible.builtin.shell:
+            chdir: "{{ sponsord_onramp_stage.path }}"
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              f={{ sponsord_onramp_release_archive | quote }}
+              entry=$(awk -v f="$f" 'substr($0, index($0, " ") + 2) == f' SHA256SUMS)
+              n=$(printf '%s\n' "$entry" | grep -c . || true)
+              if [ "$n" -ne 1 ]; then
+                echo "SHA256SUMS has $n entries for $f (expected exactly 1)." >&2
+                exit 1
+              fi
+              printf '%s\n' "$entry" | sha256sum --check --strict -
+          register: sponsord_onramp_sum_check
+          changed_when: false
+          failed_when: sponsord_onramp_sum_check.rc != 0
+
+        - name: Extract the binary into /usr/local/bin
+          ansible.builtin.unarchive:
+            src: "{{ sponsord_onramp_stage.path }}/{{ sponsord_onramp_release_archive }}"
+            dest: "{{ sponsord_onramp_bin | dirname }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+          notify: Restart sponsord-onramp
+
+      always:
+        - name: Report the retained staging directory after a failure
+          ansible.builtin.debug:
+            msg: >-
+              Verification failed; leaving {{ sponsord_onramp_stage.path }} in place for
+              inspection (gpg-status.txt, SHA256SUMS, SHA256SUMS.asc, the archive).
+              Remove it by hand once done.
+          when:
+            - sponsord_onramp_stage.path is defined
+            - sponsord_onramp_sig_check.failed | default(false) or sponsord_onramp_sum_check.failed | default(false)
+
+        - name: Remove the download staging directory
+          ansible.builtin.file:
+            path: "{{ sponsord_onramp_stage.path }}"
+            state: absent
+          when:
+            - sponsord_onramp_stage.path is defined
+            - not (sponsord_onramp_sig_check.failed | default(false)
+                   or sponsord_onramp_sum_check.failed | default(false))
+
+- name: Install a locally-built binary from the control machine
+  when: sponsord_onramp_install_method == "manual"
+  block:
+    - name: Copy the sponsord-onramp binary from the control machine
+      ansible.builtin.copy:
+        src: "{{ _sponsord_onramp_bin_src }}"
+        dest: "{{ sponsord_onramp_bin }}"
+        owner: root
+        group: root
+        mode: "0755"
+      notify: Restart sponsord-onramp
+
+    # A leftover stamp would make a later release deploy of the SAME version skip
+    # the download, keeping this manual binary.
+    - name: Clear the release version stamp in manual mode
+      ansible.builtin.file:
+        path: /usr/local/lib/sponsord-onramp/installed-version
+        state: absent
+
+# Runs every converge, so a binary that drifted from the pin is caught. With
+# sponsord_onramp_version empty (the usual manual case) it degrades to a liveness check.
+# An exact match on clap's `sponsord-onramp <version>` line, so a 0.1.0 pin does not
+# accept 10.1.0 or 0.1.0-rc.1.
+- name: Run the installed sponsord-onramp --version (version backstop)
+  ansible.builtin.command: "{{ sponsord_onramp_bin }} --version"
+  register: sponsord_onramp_installed_version
+  changed_when: false
+  failed_when: false
+  # The binary only exists once the copy/extract above really ran.
+  when: not ansible_check_mode
+
+- name: Require the installed sponsord-onramp to run and match the pinned version
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_installed_version.rc == 0
+      - >-
+        sponsord_onramp_version | length == 0
+        or (sponsord_onramp_installed_version.stdout | trim) == 'sponsord-onramp ' ~ sponsord_onramp_version
+    fail_msg: >-
+      {{ sponsord_onramp_bin }} --version exited {{ sponsord_onramp_installed_version.rc }} with
+      "{{ sponsord_onramp_installed_version.stdout | trim }}"{{
+      (', expected "sponsord-onramp ' ~ sponsord_onramp_version ~ '"')
+        if sponsord_onramp_version | length > 0 else '' }}.
+      The binary on the host is broken or is not the pinned release. In release mode,
+      remove /usr/local/lib/sponsord-onramp/installed-version to force a fresh download.
+  when: not ansible_check_mode
+
+# Written only once the version check passed, so a tarball that installed a wrong
+# or broken binary is fetched again next run instead of being trusted via the stamp.
+- name: Record the installed release version
+  when:
+    - sponsord_onramp_install_method == "release"
+    - sponsord_onramp_need_install | default(false)
+    - not ansible_check_mode
+  block:
+    - name: Ensure the stamp directory exists
+      ansible.builtin.file:
+        path: /usr/local/lib/sponsord-onramp
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Record the installed version
+      ansible.builtin.copy:
+        dest: /usr/local/lib/sponsord-onramp/installed-version
+        content: "{{ sponsord_onramp_version }}\n"
+        owner: root
+        group: root
+        mode: "0644"

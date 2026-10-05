@@ -1,0 +1,14 @@
+---
+# Fixture for tests/scripts-test.sh's playbook-guard cases. Nothing here is ever
+# contacted: the cases run only the guard play, which gathers no facts.
+all:
+  vars:
+    ansible_connection: local
+  children:
+    sponsord_hosts:
+      hosts:
+        both: {}
+    sponsord_onramp_hosts:
+      hosts:
+        both: {}
+        onramp-only: {}

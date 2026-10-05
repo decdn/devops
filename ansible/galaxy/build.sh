@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Stage and build the public `decdn.node` Galaxy collection.
 #
-# Only the roles/baseline, roles/decdn_node, roles/grafana_alloy and roles/sponsord sources ship. All deploy machinery
+# Only the roles/baseline, roles/decdn_node, roles/grafana_alloy, roles/sponsord and
+# roles/sponsord_onramp sources ship. All deploy machinery
 # (inventory, Makefile, ansible.cfg) is excluded BY CONSTRUCTION — it is simply
 # never copied into the staging tree. This keeps the artifact clean and leaves the
 # internal project untouched (no galaxy.yml at the project root, so ansible-lint
@@ -16,7 +17,7 @@ repo_root="$(cd "$ansible_dir/.." && pwd)"             # repo root
 
 build_dir="$ansible_dir/build"
 stage="$build_dir/ansible_collections/decdn/node"
-roles=(baseline decdn_node grafana_alloy sponsord)
+roles=(baseline decdn_node grafana_alloy sponsord sponsord_onramp)
 
 echo "staging decdn.node -> $stage"
 rm -rf "$stage"

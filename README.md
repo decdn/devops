@@ -82,7 +82,9 @@ This is the canonical statement; the per-path READMEs add only what is specific 
   you choose.
 - **Localhost-only by default.** Backends bind `127.0.0.1`. A service that must accept
   public traffic declares its port explicitly, and the node declares exactly one:
-  udp/4433. On Kubernetes, metrics bind `0.0.0.0` in the pod only behind a ClusterIP
+  udp/4433. The sponsor's public onramp (Ansible only) stays on loopback too, behind
+  Caddy on tcp/80 + tcp/443 (the default; with `sponsord_onramp_proxy: none` you bring
+  the proxy and open its ports). On Kubernetes, metrics bind `0.0.0.0` in the pod only behind a ClusterIP
   Service and a NetworkPolicy.
 - **Default-deny inbound** (Ansible's `baseline`, nftables). SSH is the only
   universally open port; extra public ports are declared via `baseline_extra_inbound`.
@@ -97,7 +99,7 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 
 | Path | What it is |
 |------|------------|
-| [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `sponsord.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
+| [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `sponsord.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
 | [`cloud-init/`](cloud-init/README.md) | The cloud-init deploy path: `user-data.yaml`, the on-host `bootstrap.sh`, and the pinned ansible-core and collections it installs. |
 | [`compose/`](compose/README.md) | The Docker Compose deploy path. |
 | [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart, with vendored dashboards and alert rules in `files/monitoring/`. |

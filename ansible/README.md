@@ -8,7 +8,7 @@ hardened host baseline. The roles also ship as the `decdn.node` Galaxy collectio
 | **`site.yml`** | Harden the host and deploy the public **deCDN node** (`decdn-node`). | `make check` / `make deploy` |
 | `backup.yml` | Encrypted backup of a node's identity or full state. | `make backup` |
 | `decommission.yml` | Stop a node and remove its service (keeps the identity; no on-chain steps). | `make decommission` |
-| `sponsord.yml` | Harden the host and deploy **sponsord**, the onboarding sponsor, on hosts in `sponsord_hosts`, with or without a node. Also run by `site.yml`. | `make check-sponsord` / `make deploy-sponsord` |
+| `sponsord.yml` | Harden the host and deploy **sponsord**, the onboarding sponsor, on hosts in `sponsord_hosts`, with or without a node; then its public **sponsord-onramp** (behind Caddy) on hosts in `sponsord_onramp_hosts`. Also run by `site.yml`. | `make check-sponsord` / `make deploy-sponsord` |
 
 ```
 baseline        host hardening: DevSec os/ssh, nftables default-deny inbound,
@@ -17,7 +17,9 @@ baseline        host hardening: DevSec os/ssh, nftables default-deny inbound,
    ├─ decdn_node      public QUIC udp/4433; metrics + admin loopback; signed-tarball or
    │                  local-build install; hardened systemd unit; backup/decommission
    └─ sponsord        treasury signer + PaymentPool keeper; loopback API; DynamicUser
-                      unit with systemd credentials; standalone or beside a node
+      │               unit with systemd credentials; standalone or beside a node
+      └─ sponsord_onramp  the public gate + installers on sponsord's host; loopback
+                          listener behind Caddy (ACME TLS, tcp/80 + tcp/443)
 ```
 
 ## Security model
@@ -26,8 +28,9 @@ The repo-wide model is in the [root README](../README.md#security-model). What i
 specific to this path:
 
 - **nftables is the firewall.** SSH plus the node's **udp/4433** (via
-  `baseline_extra_inbound`) are the only holes; metrics 9090 and the admin RPC 9191 stay
-  loopback. Baseline turns off `os_hardening`'s ufw config template
+  `baseline_extra_inbound`) are the only holes, plus **tcp/80 + tcp/443** for Caddy on a
+  `sponsord_onramp_hosts` host; metrics 9090, the admin RPC 9191, sponsord 8090 and the
+  onramp 8080 stay loopback. Baseline turns off `os_hardening`'s ufw config template
   (`ufw_manage_defaults: false`) so a misleading DROP-policy `/etc/default/ufw` is never
   written. Do not install or enable ufw: it would replace the nftables ruleset and drop
   QUIC and SSH.
@@ -107,10 +110,13 @@ the overlay carries its own: create them next to its `hosts.yml`, starting from 
 `host_vars/*/secret.*` in the private repo, so it never tracks a per-node secret. The public
 `inventory/group_vars/` and `inventory/host_vars/` are **not** loaded for it. Add child groups
 of your own when hosts differ by group (an origin, an egress cap on metered bandwidth), each
-with a `group_vars/<group>.yml`. Settings every node needs regardless of
-inventory, currently only the udp/4433 QUIC firewall hole, live in
-`playbooks/group_vars/decdn_nodes.yml`, so an overlay can't drop them. Override that per node
-in `host_vars` if you have to. Playbook group_vars beat inventory group_vars.
+with a `group_vars/<group>.yml`. Settings every host needs regardless of
+inventory, currently the public firewall holes (the node's udp/4433, and tcp/80 +
+tcp/443 for Caddy on `sponsord_onramp_hosts`), live in
+`playbooks/group_vars/`, so an overlay can't drop them: `all.yml` builds the list from the
+host's groups and `decdn_nodes.yml` / `sponsord_hosts.yml` apply it. Override
+`baseline_extra_inbound` per host in `host_vars` if you have to. Playbook group_vars beat
+inventory group_vars.
 
 By default baseline **deploys you as yourself**: the runner (your control-machine `$USER` +
 its autodetected `~/.ssh` key, `id_ed25519` > `ecdsa` > `rsa`) is prepended as the head of
@@ -264,8 +270,19 @@ a dedicated host or a node host listed in both groups. Then run
   `sponsord_hosts` and the node on hosts in `decdn_nodes`
   (`playbooks/group_vars/all.yml`).
 
-Setup and variables: [`roles/sponsord/README.md`](roles/sponsord/README.md). The public
-`sponsord-onramp` is not deployed by this repo yet.
+Setup and variables: [`roles/sponsord/README.md`](roles/sponsord/README.md).
+
+Its public side, `sponsord-onramp` (the Turnstile gate, the installers, the CLI API),
+is the fifth role, `sponsord_onramp`. List the sponsord host in `sponsord_onramp_hosts`
+as well; `make deploy-sponsord` runs it after the daemon.
+
+- **You provision** the Turnstile secret on the host. The onramp reads the daemon's own
+  API token.
+- **Caddy** (the default) terminates TLS for `sponsord_onramp_domain` and opens tcp/80
+  and tcp/443. Set `sponsord_onramp_proxy: none` to bring your own proxy.
+- **The RPC URL it gets is public**: it is handed to every user, so it must hold no key.
+
+Setup and variables: [`roles/sponsord_onramp/README.md`](roles/sponsord_onramp/README.md).
 
 ### Backup and decommission
 
@@ -298,15 +315,18 @@ make lint-alloy     # render grafana_alloy's templates, then `alloy validate` th
 for every role, must be rejected by their own asserts), `generate-keystore` (opt-in
 host-side wallet), `host-env` (host-provisioned `/etc/decdn/decdn.env`),
 `slow-readiness` (advisory `/metrics` probe timeout), `grafana-cloud` (the opt-in
-observability wiring — see [Grafana Cloud observability](#grafana-cloud-observability-opt-in))
+observability wiring — see [Grafana Cloud observability](#grafana-cloud-observability-opt-in)),
 `grafana-cloud-token` (the same wiring with the API token carried through
 git-ignored inventory instead: role-authored env file + provenance record),
 `os-matrix` (default's plays on Debian 13, Ubuntu 24.04 and Ubuntu 26.04; `default`
 itself is Debian 12), `lifecycle` (a `decdn_network` profile with an override, both
-backup scopes decrypted and checked, a rejected and a real decommission) and
+backup scopes decrypted and checked, a rejected and a real decommission),
 `sponsord` (`playbooks/sponsord.yml` on a host with no node: generated token, credential
 rotation restart, the fatal `/healthz` gate, Alloy scraping sponsord and not the node;
-`grafana-cloud` covers sponsord co-located with a node).
+`grafana-cloud` covers sponsord co-located with a node) and `sponsord-onramp` (the
+onramp beside its daemon, behind the real distro Caddy with `tls internal`: the https
+chain, the client address Caddy passes on, ACME and `none` modes, a Turnstile rotation
+restart, the fatal gates, a refused foreign Caddyfile).
 They are independent, so they run concurrently, and each line of output is prefixed with its scenario name
 because the runs interleave. `make molecule-serial` is the escape hatch when that
 interleaving gets in the way of reading a failure.
@@ -360,12 +380,12 @@ the RPC URL when it is not provisioned on the host instead). Highlights:
 
 ## Packaging as a Galaxy collection (`decdn.node`)
 
-The four roles (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`) are also packaged as the
+The five roles (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`) are also packaged as the
 distributable **`decdn.node`** collection, for operators who bring their own playbooks.
 
 The collection overlay lives in [`galaxy/`](galaxy/) (`galaxy.yml`, the collection
 `README.md`/`CHANGELOG.md`, `meta/runtime.yml`, `build.sh`). It is deliberately **not**
-a `galaxy.yml` at the project root: `galaxy/build.sh` stages only the four roles into a
+a `galaxy.yml` at the project root: `galaxy/build.sh` stages only the five roles into a
 clean `ansible_collections/decdn/node/` tree and builds the artifact, so this project
 stays a plain Ansible project (the `make deploy`/`lint` flow is unchanged).
 

@@ -60,3 +60,12 @@ decdn_nodes:
 #   hosts:
 #     sponsord-1:
 #       ansible_host: REPLACE_WITH_SPONSORD_VPS_IP_OR_DNS
+#
+# OPTIONAL: sponsord-onramp, sponsord's public side (Turnstile gate, installers, the
+# decdn-sponsored CLI API), behind Caddy on tcp/80 + tcp/443. List a sponsord host
+# again here; it must be in sponsord_hosts too. Its knobs are in
+# group_vars/sponsord_onramp_hosts.yml; the Turnstile secret is provisioned on the
+# host (roles/sponsord_onramp/README.md).
+# sponsord_onramp_hosts:
+#   hosts:
+#     sponsord-1:

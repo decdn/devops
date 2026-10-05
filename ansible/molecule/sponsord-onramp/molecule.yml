@@ -1,0 +1,111 @@
+---
+# sponsord-onramp beside its daemon: a host in sponsord_hosts AND
+# sponsord_onramp_hosts, converged through the real playbooks/sponsord.yml (both
+# plays) against the stub daemon (../sponsord/files/sponsord-stub), a stub onramp
+# (files/sponsord-onramp-stub) and the REAL distro Caddy, with Caddy's internal CA
+# in place of ACME (no public DNS in a container).
+#
+#   converge     the daemon (as ../sponsord, minus its RPC literal check), then the
+#                onramp: the host-provisioned Turnstile secret locked to 0600, the
+#                daemon's token as a credential, loopback listener, /healthz gate,
+#                Caddy terminating TLS for the domain with the role's Caddyfile;
+#                Alloy labelling the onramp's journal stream.
+#   idempotence  an unchanged host must not restart anything.
+#   side_effect  rotate the Turnstile secret out of band -> the next converge must
+#                restart the onramp (and only it); make the onramp refuse to start
+#                -> the /healthz gate must FAIL the converge; strip the role's
+#                marker from the Caddyfile -> the role must refuse to replace it
+#                until sponsord_onramp_caddy_overwrite_config is set.
+#   verify       files, modes, unit hardening, credentials, listeners, the whole
+#                https chain through Caddy, the client address Caddy passes on.
+#
+# `baseline` is skipped (real-host-only — see ../default/molecule.yml), so the
+# tcp/80 + tcp/443 holes are covered by tests/firewall-holes instead. Release
+# mode is covered for the sponsord role (../sponsord), whose install tasks this
+# role mirrors. The broken-input matrix lives in ../validation.
+driver:
+  name: docker
+platforms:
+  - name: onramp-molecule
+    # Same digest-pinned images as ../sponsord (repo convention).
+    image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    groups:
+      - sponsord_hosts
+      - sponsord_onramp_hosts
+  # systemd 255 writes LoadCredential= files 0440 and Caddy comes from universe.
+  - name: onramp-molecule-u2404
+    image: geerlingguy/docker-ubuntu2404-ansible@sha256:3394e335df58c961c00b78ae601ef30cdd7463b112f21b0c5f78674a70526302
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    groups:
+      - sponsord_hosts
+      - sponsord_onramp_hosts
+provisioner:
+  name: ansible
+  options:
+    skip-tags: baseline
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # Same pipelining note as ../default/molecule.yml.
+    ANSIBLE_PIPELINING: "true"
+  inventory:
+    group_vars:
+      sponsord_hosts:
+        sponsord_install_method: manual
+        sponsord_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/sponsord/files/sponsord-stub"
+        sponsord_version: "0.0.0-molecule-stub"
+        sponsord_network: arbitrum-sepolia
+        sponsord_pool_id: "0x00000000000000000000000000000000000000000000000000000000000000aa"
+        sponsord_rpc_url: "https://rpc.example.invalid/v2/molecule"
+        sponsord_readiness_retries: 10
+        sponsord_readiness_delay: 1
+        decdn_grafana_cloud_enabled: true
+        grafana_alloy_install_method: manual
+        grafana_alloy_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/grafana-cloud/files/alloy-stub"
+        grafana_alloy_region: US
+        grafana_alloy_loki_url: https://logs-prod-xx.molecule.invalid/loki/api/v1/push
+      sponsord_onramp_hosts:
+        sponsord_onramp_install_method: manual
+        sponsord_onramp_manual_bin_src: "${MOLECULE_SCENARIO_DIRECTORY}/files/sponsord-onramp-stub"
+        sponsord_onramp_version: "0.0.0-molecule-stub"
+        # sponsord_onramp_network follows sponsord_network (arbitrum-sepolia).
+        sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc
+        sponsord_onramp_domain: onramp.molecule.test
+        sponsord_onramp_caddy_tls: internal
+        # Renders (and so validates) the Caddyfile's global email option.
+        sponsord_onramp_acme_email: ops@molecule.test
+        sponsord_onramp_turnstile_sitekey: 1x00000000000000000000AA
+        # Must equal EXPECTED_BRAND in files/sponsord-onramp-stub: quotes and a
+        # dollar sign prove the env file's quoting ($$ is molecule's escape).
+        sponsord_onramp_brand_name: 'deCDN "molecule" $$HOME'
+        sponsord_onramp_decdn_release: v0.1.0
+        sponsord_onramp_decdn_sums_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+        sponsord_onramp_cli_release: decdn-sponsored-v0.1.0
+        sponsord_onramp_cli_sums_sha256: "2222222222222222222222222222222222222222222222222222222222222222"
+        sponsord_onramp_fund_rate_per_min: 0
+        sponsord_onramp_readiness_retries: 10
+        sponsord_onramp_readiness_delay: 1
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    # Leading destroy: see ../default/molecule.yml.
+    - destroy
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - side_effect
+    - verify
+    - destroy

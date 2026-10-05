@@ -1,0 +1,35 @@
+---
+# Shared config for sponsord-onramp hosts (the second play of playbooks/sponsord.yml,
+# also run by site.yml). Each host must be in sponsord_hosts too. Uncomment and fill
+# in; per-host values can move to host_vars/<host>/main.yml.
+# Full variable list: roles/sponsord_onramp/defaults/main.yml and its README.md.
+#
+# Before the first deploy, on the host as root (the role never handles it):
+#   /etc/sponsord/turnstile-secret   the Turnstile widget's secret key, 0600
+# The daemon's API token (/etc/sponsord/api-token) is the sponsord role's.
+
+# --- Binary ------------------------------------------------------------------------
+# Follows sponsord_release_target_dir (`cargo build --release` in a decdn/sponsord
+# checkout builds both binaries). Once a release exists:
+# sponsord_onramp_install_method: release
+# sponsord_onramp_version: "0.1.0"
+
+# --- Public address ----------------------------------------------------------------
+# Caddy terminates TLS for this name (ACME). Its A/AAAA records must point at the
+# host; the playbooks open tcp/80 + tcp/443. To bring your own proxy instead, set
+# sponsord_onramp_proxy: none (HERE, not in a play: the firewall holes read it) and
+# sponsord_onramp_public_url.
+# sponsord_onramp_domain: downloads.example.org
+# sponsord_onramp_acme_email: ops@example.org
+
+# --- What users get (REQUIRED) -----------------------------------------------------
+# PUBLIC: served to every user. A keyless endpoint, never sponsord_rpc_url.
+# sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc
+# sponsord_onramp_turnstile_sitekey: "0x…"
+# The releases the installers install: tags and the SHA-256 of each SHA256SUMS
+# (decdn-sponsored's release notes print both of its values).
+# sponsord_onramp_decdn_release: v0.1.0
+# sponsord_onramp_decdn_sums_sha256: "…"
+# sponsord_onramp_cli_release: decdn-sponsored-v0.1.0
+# sponsord_onramp_cli_sums_sha256: "…"
+# CapacityBond and SlashJudge come from sponsord_network (group_vars/sponsord_hosts.yml).

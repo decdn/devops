@@ -1,0 +1,28 @@
+# MANAGED BY the sponsord_onramp role — do not edit by hand.
+#
+# The public side of sponsord-onramp: TLS for {{ sponsord_onramp_domain }}, then a
+# reverse proxy to the onramp on loopback. Caddy redirects http to https and,
+# with no trusted_proxies, replaces any client-sent X-Forwarded-For with the real
+# client address, which the onramp rate limits by.
+{
+	# No admin API: nothing on this host can reconfigure the running proxy over
+	# the admin endpoint (:2019).
+	# Config changes restart Caddy instead of reloading it.
+	admin off
+	# HTTP/1.1 and HTTP/2 only: HTTP/3 would need udp/443, which the firewall
+	# does not open.
+	servers {
+		protocols h1 h2
+	}
+{% if sponsord_onramp_acme_email | length > 0 %}
+	email {{ sponsord_onramp_acme_email }}
+{% endif %}
+}
+
+{{ sponsord_onramp_domain }} {
+{% if sponsord_onramp_caddy_tls == 'internal' %}
+	# Caddy's local CA: for staging and tests only, browsers do not trust it.
+	tls internal
+{% endif %}
+	reverse_proxy {{ sponsord_onramp_bind_address }}:{{ sponsord_onramp_port }}
+}

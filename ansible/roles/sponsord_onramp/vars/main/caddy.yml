@@ -1,0 +1,4 @@
+---
+# The Caddyfile the distribution's caddy.service loads (its ExecStart names this
+# path), so it is a fact of the package, not a knob.
+_sponsord_onramp_caddyfile: /etc/caddy/Caddyfile
