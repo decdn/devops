@@ -231,6 +231,12 @@ deliberately lean and every lever is a variable:
   (`grafana_alloy_logs_drop_priority_regex` / `_drop_unit_regex`, `""` disables
   either), and `grafana_alloy_logs_max_age` bounds the catch-up burst after an
   outage — without it a restart can replay days of journal in one go.
+- Every journald line, from every unit, has URL credentials redacted before it
+  leaves the host: userinfo, path, query and fragment become `<redacted>`, so
+  `https://u:p@rpc.example.io/v2/KEY?x=y` ships as
+  `https://<redacted>@rpc.example.io/<redacted>`. Scheme and host are kept, so the
+  provider is still identifiable. An RPC URL usually carries its provider API key,
+  and a daemon error can quote it. The redaction has no knob.
 - decdn-node's `level` label comes from its JSON `level` field, not the journald
   priority (journald reports every stdout line as `info`), and the priority drop
   regex is applied to that JSON level for this unit. Values follow journald's

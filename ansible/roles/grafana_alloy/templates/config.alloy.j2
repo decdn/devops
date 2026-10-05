@@ -6,7 +6,7 @@
 //
 // Pipeline: scrape the node's /metrics and push it to Grafana Cloud Prometheus;
 // scrape the MACHINE (Alloy's in-process node_exporter) and Alloy itself; ship
-// journald to Grafana Cloud Loki; receive OTLP traces (plus any logs/metrics
+// journald, with URL credentials redacted, to Grafana Cloud Loki; receive OTLP traces (plus any logs/metrics
 // pushed over localhost) on gRPC 4317 / HTTP 4318 bound to loopback only; stamp
 // resource identity on everything, probabilistically sample traces, batch, then
 // export via OTLP/HTTP.
@@ -352,7 +352,41 @@ loki.source.journal "host" {
   max_age        = {{ grafana_alloy_logs_max_age | to_json }}
   format_as_json = false
   relabel_rules  = loki.relabel.journal_rules.rules
-  forward_to     = [loki.process.daemon_level.receiver]
+  forward_to     = [loki.process.redact_urls.receiver]
+}
+
+{# Credentials embedded in URLs never leave the host. An RPC URL usually carries
+   its provider API key in the path or query, and a daemon error can quote it
+   (sponsord's "error sending request for url (...)"; decdn-node strips URLs at
+   the source, decdn_common::redact). This runs on EVERY unit's line, first, and
+   has no knob: it is the secret model, not a cost guardrail.
+
+   Keyed on "://", not a scheme list, so any scheme in any case is caught (the
+   same rule as upstream's redact_bare_urls). The scheme and host survive, so
+   the provider is still identifiable; userinfo, then everything from the first
+   / ? or # after the host, becomes <redacted>. A URL with nothing after its
+   host, and a line with no URL, pass through unchanged. The redacted tail runs
+   to whitespace, '"' or '\': it over-consumes punctuation such as a closing ')'
+   on purpose (')' is legal in a path, and leaking a key is worse than losing a
+   bracket), but stops at the JSON string delimiters so decdn-node's line stays
+   valid JSON for the level stage below. stage.replace rewrites every match on
+   the line. Only URL-shaped text is caught: a Debug-printed url::Url struct
+   would still leak, which is why the daemons redact at the source as well.
+   validate.sh runs these stages in the real Alloy against sample lines. #}
+loki.process "redact_urls" {
+  forward_to = [loki.process.daemon_level.receiver]
+
+  // userinfo: greedy, so it runs to the LAST @ of the authority.
+  stage.replace {
+    expression = `://([^/?#\s"\\]+)@`
+    replace    = "<redacted>"
+  }
+
+  // path, query and fragment.
+  stage.replace {
+    expression = `://[^/?#\s"\\]+([/?#][^\s"\\]*)`
+    replace    = "/<redacted>"
+  }
 }
 
 {# The daemon's own severity. decdn-node logs JSON to stdout, and journald gives

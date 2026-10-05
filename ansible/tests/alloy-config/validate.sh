@@ -151,8 +151,16 @@ assert_has defaults.alloy 'systemd {' "the per-unit systemd collector"
 # guardrail anchored with its alternation grouped. Each unit-name needle is one
 # of the three sites a decdn-node.service rename must touch.
 assert_has defaults.alloy 'loki.process "daemon_level"' "the daemon JSON-level stage"
-assert_has defaults.alloy 'forward_to     = [loki.process.daemon_level.receiver]' "the journal source feeding the daemon-level stage"
+assert_has defaults.alloy 'forward_to = [loki.process.daemon_level.receiver]' "the URL redactor feeding the daemon-level stage"
 assert_has defaults.alloy 'forward_to = [loki.relabel.journal_identity.receiver]' "the daemon-level stage feeding the identity relabeller"
+# Every configuration that ships the journal redacts it first (#84): the
+# redactor exists and the journal source feeds it, not the stage after it.
+for config in "${configs[@]}"; do
+  name="$(basename "$config")"
+  grep -qF 'loki.source.journal "host"' "$config" || continue
+  assert_has "$name" 'loki.process "redact_urls"' "the journald URL redactor"
+  assert_has "$name" 'forward_to     = [loki.process.redact_urls.receiver]' "the journal source feeding the URL redactor"
+done
 # shellcheck disable=SC2016  # literal backticks: Alloy's raw-string syntax
 assert_has defaults.alloy 'selector = `{unit="decdn-node.service"}`' "the daemon unit scoping of the level stage"
 assert_has defaults.alloy 'target_label  = "__priority_guardrail"' "the daemon's exemption from the journald priority drop"
@@ -254,9 +262,9 @@ assert_has colocated.alloy 'prometheus.scrape "sponsord"' "the sponsord scrape o
 assert_has colocated.alloy '"__address__" = "127.0.0.1:8090"' "the default sponsord listener"
 echo "ok: per-daemon scrape toggles"
 
-# --- Gate 1c: the daemon's level comes from its JSON body ----------------------
-# Loading proves syntax, not behaviour. Run the RENDERED journal_rules and
-# loki.process "daemon_level" blocks in the real Alloy, fed sample lines through
+# --- Gate 1c: URLs are redacted, and the daemon's level comes from its line ----
+# Loading proves syntax, not behaviour. Run the RENDERED journal_rules,
+# redact_urls and daemon_level blocks in the real Alloy, fed sample lines through
 # loki.source.api, and read what loki.echo prints. loki.source.api strips
 # __-prefixed labels on push, so the lifted rules read journal_* instead of
 # __journal_* (the only edit), and a final labeldrop removes those raw labels
@@ -285,11 +293,14 @@ samples_json() { # nanosecond timestamp
     ["$1","2026-10-05T07:59:10.000005Z ERROR sponsord: s-error"],
     ["$1","Error: s-raw read PaymentPool.usdc()"],
     ["$1","Caused by: s-cause connection refused"],
-    ["$1","s-plain an unlevelled line"]]},
+    ["$1","s-plain an unlevelled line"],
+    ["$1","Error: s-rpcurl read PaymentPool.usdc(): error sending request for url (https://arb-sepolia.example-provider.io/v2/SECRET-KEY?x=SECRET-Q)"]]},
   {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"info"},"values":[
     ["$1","{\"level\":\"ERROR\",\"fields\":{\"message\":\"m-other-info\"}}"]]},
   {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"error"},"values":[
-    ["$1","m-other-error"]]},
+    ["$1","m-other-error"],
+    ["$1","o-twourls wss://SECRET-USER@a.example/SECRET-A and HTTP://b.example?SECRET-B=1 end"],
+    ["$1","o-nopath https://c.example:443 done"]]},
   {"stream":{"journal__systemd_unit":"decdn-node.service","journal_priority_keyword":"info"},"values":[
     ["$1","{\"level\":\"TRACE\",\"fields\":{\"message\":\"m-trace\"}}"],
     ["$1","{\"level\":\" DEBUG\",\"fields\":{\"message\":\"m-debug\"}}"],
@@ -299,7 +310,8 @@ samples_json() { # nanosecond timestamp
     ["$1","{\"level\":\"ERROR\",\"fields\":{\"message\":\"m-error\"}}"],
     ["$1","{\"fields\":{\"message\":\"m-nolevel\"}}"],
     ["$1","{\"level\":5,\"fields\":{\"message\":\"m-weird\"}}"],
-    ["$1","m-text is not json"]]}
+    ["$1","m-text is not json"],
+    ["$1","{\"level\":\"WARN\",\"fields\":{\"message\":\"m-rpcurl via https://u:SECRET-PASS@rpc.example.io:8545/v3/SECRET-KEY#SECRET-FRAG failed\"}}"]]}
 ]}
 JSON
 }
@@ -323,7 +335,7 @@ loki.source.api "in" {
     listen_port    = $api_port
   }
   relabel_rules = loki.relabel.journal_rules.rules
-  forward_to    = [loki.process.daemon_level.receiver]
+  forward_to    = [loki.process.redact_urls.receiver]
 }
 
 loki.echo "out" { }
@@ -332,11 +344,14 @@ ALLOY
     awk '/^loki\.relabel "journal_rules" \{/ { on = 1 }
          on && /^\}/ { print "\n  rule {\n    regex  = \"journal_.*\"\n    action = \"labeldrop\"\n  }"; print; exit }
          on { print }' "$src" | sed 's/"__journal_/"journal_/g'
+    awk '/^loki\.process "redact_urls" \{/ { on = 1 } on { print } on && /^\}/ { exit }' "$src"
     awk '/^loki\.process "daemon_level" \{/ { on = 1 } on { print } on && /^\}/ { exit }' "$src" \
       | sed 's|forward_to = \[loki\.relabel\.journal_identity\.receiver\]|forward_to = [loki.echo.out.receiver]|'
   } >"$config"
-  if ! grep -qF 'action = "labeldrop"' "$config" || ! grep -qF 'forward_to = [loki.echo.out.receiver]' "$config"; then
-    fail "could not lift journal_rules and daemon_level out of $1"
+  if ! grep -qF 'action = "labeldrop"' "$config" \
+    || ! grep -qF 'loki.process "redact_urls"' "$config" \
+    || ! grep -qF 'forward_to = [loki.echo.out.receiver]' "$config"; then
+    fail "could not lift journal_rules, redact_urls and daemon_level out of $1"
   fi
 
   "$alloy" run "$config" --storage.path="$data" \
@@ -382,10 +397,21 @@ kept() { # marker, level, unit
 dropped() { # marker
   ! grep -qF "$1" "$harness_log" || harness_fail "$1 should have been dropped"
 }
+# URL redaction (#84). Every credential in the samples is spelled SECRET-*, so
+# no_secrets is the blanket check; redacted pins the exact shape that survives.
+redacted() { # marker, the redacted text its line must carry
+  grep -F "$1" "$harness_log" | grep -qF "$2" || harness_fail "$1 should carry \"$2\""
+}
+unchanged() { # the whole line, which must come out byte-for-byte
+  grep -qF "entry=\"$1\" " "$harness_log" || harness_fail "\"$1\" should pass through unchanged"
+}
+no_secrets() {
+  ! grep -qF 'SECRET' "$harness_log" || harness_fail "a URL credential (SECRET-*) left the pipeline"
+}
 
 # Defaults (guardrail "debug|trace"), sponsord not enabled: its plain-text lines
 # are not re-levelled and stand at journald's info.
-run_level_harness defaults.alloy 17
+run_level_harness defaults.alloy 21
 kept s-trace info sponsord.service
 kept s-error info sponsord.service
 kept m-warn-uc warning decdn-node.service
@@ -402,11 +428,28 @@ dropped m-debug                          # padded + lower-cased before the drop
 dropped m-other-debug                    # the journald-priority drop, other units
 echo "ok: daemon log level follows the JSON body (defaults)"
 
+# URL redaction, on every unit, ahead of the level stages.
+no_secrets
+# scheme and host survive; path and query go, and so does reqwest's closing ')'
+redacted s-rpcurl 'error sending request for url (https://arb-sepolia.example-provider.io/<redacted>"'
+kept s-rpcurl info sponsord.service       # sponsord not enabled: journald's level
+# userinfo, path and fragment go; the JSON stays valid, so the level still parses
+redacted m-rpcurl 'via https://<redacted>@rpc.example.io:8545/<redacted> failed'
+kept m-rpcurl warning decdn-node.service
+# every URL on the line, any scheme in any case, a query with no path
+redacted o-twourls 'o-twourls wss://<redacted>@a.example/<redacted> and HTTP://b.example/<redacted> end'
+unchanged 'o-nopath https://c.example:443 done'   # nothing after the host: untouched
+unchanged 'm-text is not json'                    # no URL: untouched
+echo "ok: URL credentials are redacted before the level stages (defaults)"
+
 # Guardrail "info|debug|trace": the daemon's every line is journald-info, so it
 # must be judged by its JSON level — errors and warnings survive, and lines with
 # no JSON level are never dropped for a priority they did not choose.
-run_level_harness priorityinfo.alloy 7
+run_level_harness priorityinfo.alloy 10
+no_secrets
 dropped s-error                          # sponsord not enabled: not exempt either
+dropped s-rpcurl
+kept m-rpcurl warning decdn-node.service # redacted JSON is still judged by its level
 kept m-warn-uc warning decdn-node.service
 kept m-warn-lc warning decdn-node.service
 kept m-error error decdn-node.service
@@ -422,7 +465,9 @@ dropped m-other-debug
 echo "ok: daemon log level follows the JSON body (info in the guardrail)"
 
 # sponsord enabled: its level is parsed from the plain-text line.
-run_level_harness sponsordonly.alloy 15
+run_level_harness sponsordonly.alloy 19
+no_secrets
+kept s-rpcurl error sponsord.service     # the "Error: " match still sees the redacted line
 kept s-info info sponsord.service
 kept s-warn warning sponsord.service
 kept s-error error sponsord.service
@@ -436,7 +481,10 @@ echo "ok: sponsord log level follows its text line (defaults)"
 
 # Co-located, guardrail "info|debug|trace": both daemons exempt from the
 # journald-priority drop and judged by the level they logged.
-run_level_harness colocated.alloy 12
+run_level_harness colocated.alloy 16
+no_secrets
+kept s-rpcurl error sponsord.service
+kept m-rpcurl warning decdn-node.service
 kept s-warn warning sponsord.service
 kept s-error error sponsord.service
 kept s-raw error sponsord.service

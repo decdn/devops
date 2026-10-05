@@ -109,7 +109,9 @@ addresses) the repo carries, and they carry their upstream commit.
   (Alloy's in-process `node_exporter`, curated collector set, `systemd` collector scoped
   to the units that matter), **journald** → Grafana Cloud Loki, Alloy's own health, and
   the daemon's OTLP spans. Host metrics and logs carry `job="integrations/node_exporter"`
-  so Grafana Cloud's prebuilt Linux Server dashboards work unmodified. The API token is the
+  so Grafana Cloud's prebuilt Linux Server dashboards work unmodified. Every journald line
+  passes `loki.process "redact_urls"` first (URL userinfo/path/query → `<redacted>`, no
+  knob), so an RPC URL a daemon error quotes never ships its API key. The API token is the
   only credential, and it has two homes: operator-provisioned on the host
   (`0600 /etc/grafana-alloy.env`) or carried by `grafana_alloy_api_token` from a git-ignored
   `host_vars/<node>/secret.yml`, in which case the role authors that file itself as a
