@@ -228,12 +228,13 @@ addresses) the repo carries, and they carry their upstream commit.
   - **Gates:** `make lint-compose` renders with `--profile '*'` under `env -i`,
     once with the example `.env` against `compose/tests/invariants.jq` (allowed
     keys and exact mounts per service, so `privileged`, `pid: host` or an extra
-    mount fail), once without the env files (`--no-env-resolution`) against
+    mount fail), once with every service env file empty (`/dev/null`) against
     `compose/tests/inline-env.jq` (an allow-list of inline env keys, so no RPC URL
     lands in the tracked file) and once with an empty `.env` against
-    `compose/tests/fail-closed.jq`. All print `<service>: <invariant>` per violation; `make test-scripts` pins
-    which one fires for each broken variant (`LINT_COMPOSE_FILE`, not Compose's own
-    `COMPOSE_FILE`). `make security` scans it.
+    `compose/tests/fail-closed.jq`. All print `<service>: <invariant>` per
+    violation; `make test-scripts` pins which one fires for each broken variant
+    (`LINT_COMPOSE_FILE`, not Compose's own `COMPOSE_FILE`). `make security`
+    scans it.
 
 - **`charts/decdn-node/`** — the same node on Kubernetes: a one-replica StatefulSet (one
   release = one identity) on the upstream daemon-only image (`ghcr.io/decdn/decdn-node`;
