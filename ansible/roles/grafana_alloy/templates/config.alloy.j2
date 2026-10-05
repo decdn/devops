@@ -301,15 +301,19 @@ loki.relabel "journal_rules" {
     source_labels = ["__journal__boot_id"]
     target_label  = "boot_id"
   }
+{# The units that log tracing-subscriber's plain text (the sponsord daemon and its
+   onramp), parsed for a level by loki.process "daemon_level" below. #}
+{% set ga_text_units = (['sponsord'] if grafana_alloy_sponsord_enabled | bool else [])
+     + (['sponsord-onramp'] if grafana_alloy_sponsord_onramp_enabled | bool else []) %}
 {% if grafana_alloy_logs_drop_priority_regex | length > 0 %}
 
   // Cost guardrail: the regex is anchored to the WHOLE value by Prometheus
   // relabel semantics, so "debug" drops debug and nothing else.
   //
-  // decdn-node{% if grafana_alloy_sponsord_enabled | bool %} and sponsord are{% else %} is{% endif %} exempt: journald reports every line it writes as info, so
+  // decdn-node{% if ga_text_units %} and {{ ga_text_units | join(' and ') }} are{% else %} is{% endif %} exempt: journald reports every line it writes as info, so
   // judging it by priority would be judging it by a level it never set (a
   // regex containing "info" would drop its errors). loki.process
-  // "daemon_level" below applies the same regex to its real{% if not grafana_alloy_sponsord_enabled | bool %}, JSON{% endif %} level. The
+  // "daemon_level" below applies the same regex to its real{% if not ga_text_units %}, JSON{% endif %} level. The
   // exemption blanks a scratch copy of the keyword for that one unit; like
   // every __-prefixed label it never leaves this ruleset.
   rule {
@@ -319,7 +323,7 @@ loki.relabel "journal_rules" {
 
   rule {
     source_labels = ["__journal__systemd_unit"]
-    regex         = {{ ('(?:decdn-node|sponsord)\\.service' if grafana_alloy_sponsord_enabled | bool else 'decdn-node\\.service') | tojson }}
+    regex         = {{ ('(?:' ~ (['decdn-node'] + ga_text_units) | join('|') ~ ')\\.service') | tojson }}
     target_label  = "__priority_guardrail"
     replacement   = ""
   }
@@ -457,13 +461,14 @@ loki.process "daemon_level" {
     }
 
 {{ ga_daemon_level_stages() }}  }
-{% if grafana_alloy_sponsord_enabled | bool %}
+{% if ga_text_units %}
+{% set ga_text_selector = '{unit=~"(' ~ ga_text_units | join('|') ~ ')\\\\.service"}' %}
 
-  // sponsord logs tracing-subscriber's plain-text format with colour off
-  // (NO_COLOR=1 in its unit): "<timestamp>  WARN <target>: <message>". The
+  // {{ ga_text_units | join(' and ') }} log{% if ga_text_units | length == 1 %}s{% endif %} tracing-subscriber's plain-text format with colour off
+  // (NO_COLOR=1 in the units): "<timestamp>  WARN <target>: <message>". The
   // level is the second whitespace-separated field.
   stage.match {
-    selector = `{unit="sponsord.service"}`
+    selector = `{{ ga_text_selector }}`
 
     stage.regex {
       expression = `^\S+\s+(?P<decdn_level>TRACE|DEBUG|INFO|WARN|ERROR)\s`
@@ -471,12 +476,12 @@ loki.process "daemon_level" {
 
 {{ ga_daemon_level_stages() }}  }
 
-  // What sponsord writes raw when it exits on an error carries no level field:
+  // What these write raw when they exit on an error carries no level field:
   // anyhow's "Error: ..." and "Caused by:" lines, and a panic message. They are
   // the lines that say WHY it stopped, so they are errors. Any other unlevelled
   // line keeps its journald level.
   stage.match {
-    selector = `{unit="sponsord.service"} |~ "^(Error: |Caused by:|thread '.+' panicked)"`
+    selector = `{{ ga_text_selector }} |~ "^(Error: |Caused by:|thread '.+' panicked)"`
 
     stage.template {
       source   = "decdn_level"
@@ -540,6 +545,17 @@ loki.relabel "journal_identity" {
     regex         = "sponsord\\.service"
     target_label  = "service_name"
     replacement   = {{ grafana_alloy_sponsord_service_name | tojson }}
+  }
+{% endif %}
+{% if grafana_alloy_sponsord_onramp_enabled | bool and grafana_alloy_sponsord_onramp_service_name | length > 0 %}
+{# The onramp's stream (the unit roles/sponsord_onramp installs). It has no
+   /metrics, so this and the daemon_level parsing above are all it gets. #}
+
+  rule {
+    source_labels = ["unit"]
+    regex         = "sponsord-onramp\\.service"
+    target_label  = "service_name"
+    replacement   = {{ grafana_alloy_sponsord_onramp_service_name | tojson }}
   }
 {% endif %}
 }

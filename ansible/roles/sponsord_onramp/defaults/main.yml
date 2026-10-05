@@ -1,0 +1,137 @@
+---
+# sponsord_onramp role defaults. sponsord-onramp is the public side of the deCDN
+# onboarding sponsor: the gate page people pass (Cloudflare Turnstile), the
+# decdn.sh / decdn.ps1 installers, and the API the decdn-sponsored CLI polls. It
+# holds no wallet. It calls the sponsord daemon on the same host with the daemon's
+# API token, so a host in sponsord_onramp_hosts must also be in sponsord_hosts.
+#
+# The onramp listens on loopback. Caddy, installed by this role unless you turn it
+# off, terminates TLS for sponsord_onramp_domain and is the only public listener
+# (AGENTS.md hard rule 2). Upstream: github.com/decdn/sponsord, docs/operator.md.
+
+# --- Install method -----------------------------------------------------------
+# "release": download the pinned sponsord-onramp-v<version> GitHub Release tarball
+# and verify it against the GPG-signed SHA256SUMS. "manual": copy a locally-built
+# binary from the control machine. Upstream has cut NO sponsord-onramp-v* tag yet,
+# so "manual" is the default.
+sponsord_onramp_install_method: manual    # "release" | "manual"
+sponsord_onramp_manual_bin_src: ""        # manual: control-machine path to the binary
+# Alternative to sponsord_onramp_manual_bin_src: the control-machine `target/release`
+# dir of a decdn/sponsord checkout (falls back to target/<triple>/release). The role
+# checks the binary is an ELF for the host's architecture before shipping it.
+sponsord_onramp_release_target_dir: "{{ sponsord_release_target_dir | default('') }}"
+
+# --- Release to install (REQUIRED in "release" mode) ---------------------------
+sponsord_onramp_version: ""               # e.g. "0.1.0" -> tag sponsord-onramp-v0.1.0
+# Derived from the host's gathered architecture (vars/main/arch.yml).
+sponsord_onramp_target: "{{ _sponsord_onramp_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
+sponsord_onramp_release_base: "https://github.com/decdn/sponsord/releases/download"
+sponsord_onramp_verify_release_signature: true
+# Upstream signs every decdn/sponsord release with the keys in its one KEYS file,
+# vendored once, in the sponsord role. Both roles ship side by side (this repo and
+# the decdn.node collection), so the path holds in either.
+sponsord_onramp_release_keyring: "{{ role_path }}/../sponsord/files/sponsord-release-KEYS.asc"
+
+# --- Chain ----------------------------------------------------------------------
+# The onramp takes the chain id and the PaymentPool from the daemon (/v1/info). It
+# hands users' decdn the CapacityBond (node discovery) and, if set, the SlashJudge
+# contract. With a network profile both come from upstream's deployment manifest,
+# mirrored into vars/main/networks.yml by scripts/sync-network-profiles.py; an
+# explicit inventory value still wins. Defaults to the daemon's sponsord_network.
+sponsord_onramp_network: "{{ sponsord_network | default('') }}"
+# Internal: set sponsord_onramp_network, not this.
+_sponsord_onramp_profile: "{{ _sponsord_onramp_network_profiles.get(sponsord_onramp_network, {}) }}"
+sponsord_onramp_capacity_bond_address: "{{ _sponsord_onramp_profile.get('capacity_bond_address', '') }}"
+# "" omits it.
+sponsord_onramp_slash_judge_address: "{{ _sponsord_onramp_profile.get('slash_judge_address', '') }}"
+
+# REQUIRED. The JSON-RPC endpoint users' decdn reads the chain through. NOT a
+# secret, and it must not hold one: the onramp publishes it to every user
+# (GET /v1/profile) and bakes it into the installers. Use a public endpoint, never
+# the keyed URL the daemon uses (sponsord_rpc_url).
+sponsord_onramp_rpc_url: ""
+
+# --- Listener -------------------------------------------------------------------
+# IPv4 loopback only (asserted): Caddy, or your own proxy, is the public side.
+sponsord_onramp_bind_address: 127.0.0.1
+sponsord_onramp_port: 8080
+# The daemon, on this host. Follows the sponsord role's listener when inventory
+# sets it; the fallbacks match roles/sponsord/defaults/main.yml.
+sponsord_onramp_daemon_url: >-
+  http://{{ sponsord_bind_address | default('127.0.0.1') }}:{{ sponsord_port | default(8090) }}
+
+# --- Public address + TLS front -------------------------------------------------
+# "caddy": install Caddy from the distro and let it terminate TLS for
+# sponsord_onramp_domain (ACME by default), opening tcp/80 and tcp/443.
+# "none": bring your own proxy (nginx, a Cloudflare Tunnel, ...); no package, no
+# firewall hole, and sponsord_onramp_public_url is required.
+# playbooks/group_vars/all.yml reads this to open the ports, so set it in
+# inventory, not in a play's vars.
+sponsord_onramp_proxy: caddy              # "caddy" | "none"
+sponsord_onramp_domain: ""                # caddy: REQUIRED, e.g. downloads.example.org
+# The base URL users reach, baked into the installers and the gate links. https
+# only. Derived from the domain in caddy mode.
+sponsord_onramp_public_url: >-
+  {{ ('https://' ~ sponsord_onramp_domain) if sponsord_onramp_proxy == 'caddy' else '' }}
+# "acme": a publicly trusted certificate (Let's Encrypt / ZeroSSL). The domain's
+# A/AAAA records must point at this host and tcp/80 + tcp/443 must reach it.
+# "internal": Caddy's own local CA, for staging and tests; browsers will not trust it.
+sponsord_onramp_caddy_tls: acme           # "acme" | "internal"
+sponsord_onramp_acme_email: ""            # optional ACME account contact
+# The role owns /etc/caddy/Caddyfile. On a host where Caddy was installed before
+# this role and that file lacks the role's marker, the role refuses to replace it
+# unless this is true.
+sponsord_onramp_caddy_overwrite_config: false
+sponsord_onramp_caddyfile: /etc/caddy/Caddyfile
+# The header Caddy (or your proxy) puts the client address in; the onramp rate
+# limits and gates by it. Caddy without trusted_proxies replaces any incoming
+# X-Forwarded-For, so the right-most address is the real client. With your own
+# proxy, set it only if that proxy is the ONLY way in (CF-Connecting-IP behind
+# Cloudflare); otherwise clients pick their own address. "" = the TCP peer.
+sponsord_onramp_client_ip_header: "{{ 'X-Forwarded-For' if sponsord_onramp_proxy == 'caddy' else '' }}"
+
+# --- Gate -----------------------------------------------------------------------
+# Cloudflare Turnstile: create a widget for sponsord_onramp_domain in the
+# Cloudflare dashboard. The sitekey is public; the secret is provisioned on the
+# host (0600 root) and reaches the onramp as a systemd credential.
+sponsord_onramp_turnstile_sitekey: ""     # REQUIRED
+sponsord_onramp_brand_name: ""            # [deCDN] name on the gate page
+# A control-machine HTML file served as the gate page instead of the built-in one
+# (placeholders: upstream docs/operator.md). "" = the built-in page.
+sponsord_onramp_gate_template_src: ""
+
+# --- Releases the installers install (REQUIRED) -------------------------------
+# A tag and the SHA-256 of that release's SHA256SUMS file. Both values for
+# decdn-sponsored are printed in its release notes (upstream RELEASING.md).
+sponsord_onramp_decdn_release: ""         # decdn/decdn tag, e.g. v0.1.0
+sponsord_onramp_decdn_sums_sha256: ""     # 64 lowercase hex
+sponsord_onramp_cli_release: ""           # e.g. decdn-sponsored-v0.1.0
+sponsord_onramp_cli_sums_sha256: ""       # 64 lowercase hex
+# Oldest decdn-sponsored accepted; older CLIs are told to re-run the installer.
+sponsord_onramp_min_cli_version: ""
+sponsord_onramp_releases_base: ""         # [https://github.com/decdn]
+
+# --- Limits ("" = the onramp's own default, shown in brackets) -----------------
+sponsord_onramp_spending_cap_micro_usdc: ""   # [the daemon's maximum] cap per capability
+sponsord_onramp_ttl_secs: ""                  # [the daemon's maximum] TTL per capability
+sponsord_onramp_fund_rate_per_min: ""         # [10] POST /v1/fund per address; 0 = off
+sponsord_onramp_poll_rate_per_min: ""         # [120] GET /v1/capability per address; 0 = off
+
+# --- Files on the host ----------------------------------------------------------
+# Under the daemon's directory: the onramp reads the daemon's own API token.
+sponsord_onramp_etc: "{{ sponsord_etc | default('/etc/sponsord') }}"
+sponsord_onramp_api_token_file: "{{ sponsord_api_token_file | default('/etc/sponsord/api-token') }}"
+sponsord_onramp_turnstile_secret_file: /etc/sponsord/turnstile-secret   # operator-provisioned (0600)
+sponsord_onramp_env_file: /etc/sponsord/sponsord-onramp.env              # non-secret (0644, role-owned)
+sponsord_onramp_gate_template_file: /etc/sponsord/onramp-gate.html       # when _src is set (0644)
+# sha256 record of every restart input (token, Turnstile secret, env file, gate
+# page, unit, binary) as of the last converge that saw the onramp healthy.
+sponsord_onramp_inputs_checksum_file: /etc/sponsord/.onramp-inputs.sha256
+
+sponsord_onramp_bin: /usr/local/bin/sponsord-onramp
+
+# --- Readiness --------------------------------------------------------------------
+# The onramp binds only after reading the daemon's /v1/info, so /healthz answering
+# 200 is the config gate. A timeout FAILS the deploy. Window ~60s.
+sponsord_onramp_readiness_retries: 30
+sponsord_onramp_readiness_delay: 2

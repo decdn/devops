@@ -34,7 +34,9 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
    and admin RPC). A service that must accept public traffic declares exactly one hole (the
    node's QUIC udp/4433) via `baseline_extra_inbound`; if a service ever needs an HTTP-facing
    public path, front it with an explicit reverse proxy that terminates auth + TLS. Never
-   bind a *backend* to `0.0.0.0` or expose its raw port.
+   bind a *backend* to `0.0.0.0` or expose its raw port. The one HTTP-facing service today,
+   `sponsord-onramp`, binds loopback behind the `sponsord_onramp` role's Caddy (tcp/80 +
+   tcp/443), and its own gate (Turnstile) is the auth.
    **Kubernetes exception (chart only):** the node's metrics bind `0.0.0.0` inside the pod
    so kubelet probes and Prometheus can reach them. That is allowed only behind a
    ClusterIP-only Service and the chart's NetworkPolicy (metrics ingress limited to
@@ -54,8 +56,8 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
 
 ```
 ansible/                # the deployment project (DevSec-hardened, lean roles)
-  playbooks/            # site.yml (decdn node + sponsord), sponsord.yml, backup.yml, decommission.yml
-  roles/                # baseline, decdn_node, grafana_alloy, sponsord
+  playbooks/            # site.yml (decdn node + sponsord), sponsord.yml (+ onramp), backup.yml, decommission.yml
+  roles/                # baseline, decdn_node, grafana_alloy, sponsord, sponsord_onramp
   inventory/ galaxy/ molecule/    # see ansible/README.md
 cloud-init/             # user-data.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
 compose/                # Docker Compose deploy path for a single host (see its README.md)
@@ -69,8 +71,9 @@ scripts/                # upstream-mirror generators + the release gate
 ```
 
 **Generated mirrors of upstream — regenerate, never hand-edit:**
-`ansible/roles/decdn_node/vars/main/networks.yml` and its subset
-`ansible/roles/sponsord/vars/main/networks.yml` (both `scripts/sync-network-profiles.py`),
+`ansible/roles/decdn_node/vars/main/networks.yml` and its subsets
+`ansible/roles/sponsord/vars/main/networks.yml` and
+`ansible/roles/sponsord_onramp/vars/main/networks.yml` (all `scripts/sync-network-profiles.py`),
 `charts/decdn-node/files/monitoring/` (`scripts/sync-monitoring.sh`) and
 `ansible/molecule/schema/files/schema-keys.txt` (`gen-schema-keys.py`). The weekly
 `upstream-drift` workflow flags staleness. These are the only protocol facts (contract
@@ -157,7 +160,26 @@ addresses) the repo carries, and they carry their upstream commit.
   - **Molecule:** under docker, `/` must be `--make-rshared` (see
     `molecule/sponsord/prepare.yml`) or every credential directory is empty.
   - **Not in cloud-init:** its lint only allows `decdn_nodes`.
-  - The public `sponsord-onramp` is not deployed yet.
+
+- **`ansible/roles/sponsord_onramp`** — `sponsord-onramp`, sponsord's public side (the
+  Turnstile gate, the installers, the `decdn-sponsored` CLI API), as a second play of
+  `playbooks/sponsord.yml` on `sponsord_onramp_hosts` (asserted to be in `sponsord_hosts`
+  too: it reads the daemon's `/etc/sponsord/api-token` and calls it on loopback).
+  - **Install / unit / gate:** the sponsord role's patterns, copied: manual or
+    GPG-verified `sponsord-onramp-v*` release (the KEYS are the sponsord role's file,
+    via `role_path`), `DynamicUser` with the token and the operator-provisioned
+    Turnstile secret as `LoadCredential=`, `PartOf=sponsord.service`, a restart-inputs
+    record, and a fatal `/healthz` gate on a loopback listener.
+  - **Public inputs:** `sponsord_onramp_rpc_url` is served to every user, so preflight
+    refuses userinfo, a query and the characters upstream's installers cannot quote.
+    CapacityBond/SlashJudge come from the generated `vars/main/networks.yml`.
+  - **Caddy (default) or none:** the distro package, a role-owned `/etc/caddy/Caddyfile`
+    (marker-gated: a foreign one needs `sponsord_onramp_caddy_overwrite_config`),
+    `admin off`, so the handler restarts. tcp/80 + tcp/443 come from
+    `playbooks/group_vars/all.yml`, which reads `sponsord_onramp_proxy` from inventory.
+  - **Molecule:** `molecule/sponsord-onramp` runs the real Caddy with `tls internal`
+    and checks the https chain and that a forged `X-Forwarded-For` cannot pick the
+    client address.
 
 - **`cloud-init/`** — the Ansible path with no control machine. `user-data.yaml` carries
   only public material (the lint refuses secret-looking keys, credentials in URLs and
@@ -240,8 +262,8 @@ regardless of inventory lives in `ansible/playbooks/group_vars/`. The public fir
 The Alloy per-daemon toggles also live in `all.yml`. Don't move any of it back under
 `inventory/`.
 
-**Galaxy collection (`decdn.node`).** The four roles (`baseline` + `decdn_node` +
-`grafana_alloy` + `sponsord`) ship as a
+**Galaxy collection (`decdn.node`).** The five roles (`baseline` + `decdn_node` +
+`grafana_alloy` + `sponsord` + `sponsord_onramp`) ship as a
 distributable collection. The overlay lives in `ansible/galaxy/` and is staged into a clean
 collection tree by `galaxy/build.sh` — there is **no** `galaxy.yml` at the `ansible/` root
 (that would make ansible-lint treat the deploy project as a collection). Build/validate with

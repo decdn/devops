@@ -269,10 +269,17 @@ assert_has sponsordonly.alloy 'forward_to      = [prometheus.relabel.sponsord_id
 assert_has sponsordonly.alloy 'replacement  = "sponsord"' "the sponsord metric service_name"
 assert_has sponsordonly.alloy 'regex         = "sponsord\\.service"' "the sponsord log-stream unit match"
 assert_has sponsordonly.alloy 'replacement   = "sponsord"' "the sponsord log-stream service_name"
-assert_has sponsordonly.alloy '(decdn-node|sponsord|alloy|ssh|sshd)' "sponsord in the systemd collector's unit list"
+assert_has sponsordonly.alloy '(decdn-node|sponsord|sponsord-onramp|caddy|alloy|ssh|sshd)' "sponsord, the onramp and Caddy in the systemd collector's unit list"
 assert_has colocated.alloy 'prometheus.scrape "decdn_node"' "the node scrape on a co-located host"
 assert_has colocated.alloy 'prometheus.scrape "sponsord"' "the sponsord scrape on a co-located host"
 assert_has colocated.alloy '"__address__" = "127.0.0.1:8090"' "the default sponsord listener"
+assert_lacks defaults.alloy 'sponsord-onramp\\.service' "an onramp log rule while it is disabled"
+assert_lacks colocated.alloy 'sponsord-onramp\\.service' "an onramp log rule while it is disabled"
+assert_lacks colocatedonramp.alloy 'prometheus.scrape "sponsord_onramp"' "an onramp scrape (it has no /metrics)"
+assert_has colocatedonramp.alloy 'regex         = "sponsord-onramp\\.service"' "the onramp log-stream unit match"
+assert_has colocatedonramp.alloy 'replacement   = "sponsord-onramp"' "the onramp log-stream service_name"
+assert_has colocatedonramp.alloy '"(?:decdn-node|sponsord|sponsord-onramp)\\.service"' "the onramp in the priority exemption"
+assert_has colocatedonramp.alloy '{unit=~"(sponsord|sponsord-onramp)\\.service"}' "the onramp in the plain-text level selector"
 echo "ok: per-daemon scrape toggles"
 
 # --- Gate 1c: URLs are redacted, and the daemon's level comes from its line ----
@@ -308,6 +315,12 @@ samples_json() { # nanosecond timestamp
     ["$1","Caused by: s-cause connection refused"],
     ["$1","s-plain an unlevelled line"],
     ["$1","Error: s-rpcurl read PaymentPool.usdc(): error sending request for url (https://arb-sepolia.example-provider.io/v2/SECRET-KEY?x=SECRET-Q)"]]},
+  {"stream":{"journal__systemd_unit":"sponsord-onramp.service","journal_priority_keyword":"info"},"values":[
+    ["$1","2026-10-05T07:59:11.000001Z DEBUG sponsord_onramp::http: r-debug"],
+    ["$1","2026-10-05T07:59:11.000002Z  INFO sponsord_onramp: r-info"],
+    ["$1","2026-10-05T07:59:11.000003Z  WARN sponsord_onramp::gate::turnstile: r-warn"],
+    ["$1","Error: r-raw the daemon at http://127.0.0.1:8090 is unreachable"],
+    ["$1","r-plain an unlevelled line"]]},
   {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"info"},"values":[
     ["$1","{\"level\":\"ERROR\",\"fields\":{\"message\":\"m-other-info\"}}"]]},
   {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"error"},"values":[
@@ -438,7 +451,7 @@ no_secrets() {
 
 # Defaults (guardrail "debug|trace"), sponsord not enabled: its plain-text lines
 # are not re-levelled and stand at journald's info.
-run_level_harness defaults.alloy 34
+run_level_harness defaults.alloy 39
 kept s-trace info sponsord.service
 kept s-error info sponsord.service
 kept m-warn-uc warning decdn-node.service
@@ -450,6 +463,8 @@ kept m-weird info decdn-node.service    # a non-string level is not a label valu
 kept m-text info decdn-node.service     # not JSON: journald's stands
 kept m-other-info info other.service    # another unit's JSON is never re-levelled
 kept m-other-error error other.service
+kept r-warn info sponsord-onramp.service  # onramp not enabled: journald's level
+kept r-debug info sponsord-onramp.service
 dropped m-trace                          # TRACE is not a journald keyword, so listed
 dropped m-debug                          # padded + lower-cased before the drop
 dropped m-other-debug                    # the journald-priority drop, other units
@@ -508,6 +523,7 @@ kept m-nolevel info decdn-node.service
 kept m-weird info decdn-node.service
 kept m-text info decdn-node.service
 kept m-other-error error other.service
+dropped r-warn                           # onramp not enabled: judged at journald's info
 dropped m-info
 dropped m-trace
 dropped m-debug
@@ -516,7 +532,7 @@ dropped m-other-debug
 echo "ok: daemon log level follows the JSON body (info in the guardrail)"
 
 # sponsord enabled: its level is parsed from the plain-text line.
-run_level_harness sponsordonly.alloy 32
+run_level_harness sponsordonly.alloy 37
 no_secrets
 kept s-rpcurl error sponsord.service     # the "Error: " match still sees the redacted line
 kept s-info info sponsord.service
@@ -528,6 +544,7 @@ kept s-plain info sponsord.service       # any other unlevelled line: journald's
 dropped s-trace
 dropped s-debug
 kept m-error error decdn-node.service    # the node's JSON stage is unaffected
+kept r-warn info sponsord-onramp.service  # the onramp is not enabled here
 echo "ok: sponsord log level follows its text line (defaults)"
 
 # Co-located, guardrail "info|debug|trace": both daemons exempt from the
@@ -546,7 +563,21 @@ dropped s-info
 dropped s-trace
 dropped m-info
 dropped m-other-info
+dropped r-warn                           # the onramp is not enabled: not exempt
+dropped r-raw
 echo "ok: both daemons judged by their own level (info in the guardrail)"
+
+# The onramp too: exempt, and levelled from its plain-text line like sponsord.
+run_level_harness colocatedonramp.alloy 32
+no_secrets
+kept r-warn warning sponsord-onramp.service
+kept r-raw error sponsord-onramp.service  # its exit error, with the daemon URL redacted
+kept r-plain info sponsord-onramp.service # exempt: no level of its own to judge by
+kept s-warn warning sponsord.service      # sponsord's stage is unaffected
+kept m-error error decdn-node.service
+dropped r-info
+dropped r-debug
+echo "ok: the onramp judged by its own level (info in the guardrail)"
 
 # --- Gate 2: every ExecStart flag exists -------------------------------------
 # `alloy run` ignores nothing: an unknown flag exits non-zero, i.e. a systemd

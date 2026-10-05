@@ -1,0 +1,66 @@
+# MANAGED BY the sponsord_onramp role — do not edit by hand.
+#
+# sponsord-onramp: the gate page, the installers and the CLI API, in front of the
+# sponsord daemon on this host. It listens on loopback only
+# ({{ sponsord_onramp_bind_address }}:{{ sponsord_onramp_port }}); {{ ('Caddy terminates TLS for ' ~ sponsord_onramp_domain) if sponsord_onramp_proxy == 'caddy' else "the operator's own proxy terminates TLS" }}.
+# It keeps only in-flight hand-offs in memory. The daemon's API token and the
+# Turnstile secret never sit in the environment: systemd reads the root-only files
+# and hands them to this unit as credentials.
+[Unit]
+Description=sponsord-onramp: the public onramp in front of sponsord
+Documentation=https://github.com/decdn/sponsord
+After=network-online.target sponsord.service
+Wants=network-online.target sponsord.service
+# The onramp reads the daemon's limits once, at start; restart it with the daemon.
+PartOf=sponsord.service
+# It exits at start while the daemon is unreachable; keep retrying until it is up.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart={{ sponsord_onramp_bin }}
+EnvironmentFile={{ sponsord_onramp_env_file }}
+# Plain-text logs into journald, without ANSI colour codes.
+Environment=NO_COLOR=1
+
+# Credentials land at $CREDENTIALS_DIRECTORY (%d), readable only by this unit.
+LoadCredential=api-token:{{ sponsord_onramp_api_token_file }}
+LoadCredential=turnstile-secret:{{ sponsord_onramp_turnstile_secret_file }}
+Environment=ONRAMP_DAEMON_TOKEN_FILE=%d/api-token
+Environment=ONRAMP_TURNSTILE_SECRET_FILE=%d/turnstile-secret
+
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5
+
+# --- Hardening -------------------------------------------------------------
+# Stateless: no StateDirectory, nothing on disk is writable.
+DynamicUser=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+CapabilityBoundingSet=
+# AF_INET/AF_INET6 for the listener, the daemon and Turnstile's siteverify;
+# AF_UNIX + AF_NETLINK for the libc resolver.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

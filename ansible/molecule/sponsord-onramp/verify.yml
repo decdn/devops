@@ -1,0 +1,169 @@
+---
+# What a converged onramp host must look like. Runs after side_effect.yml, which
+# leaves the host healthy on the role's own Caddyfile.
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stat the onramp's files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: _or_files
+      loop:
+        - /etc/sponsord/turnstile-secret
+        - /etc/sponsord/sponsord-onramp.env
+        - /etc/sponsord/.onramp-inputs.sha256
+        - /etc/caddy/Caddyfile
+
+    - name: Require the secret and records root-only, the config world-readable
+      ansible.builtin.assert:
+        that:
+          - _or_files.results[0].stat.isreg and _or_files.results[0].stat.mode == '0600'
+          - _or_files.results[0].stat.pw_name == 'root'
+          - _or_files.results[1].stat.isreg and _or_files.results[1].stat.mode == '0644'
+          - _or_files.results[2].stat.isreg and _or_files.results[2].stat.mode == '0600'
+          - _or_files.results[3].stat.isreg and _or_files.results[3].stat.mode == '0644'
+        fail_msg: "{{ _or_files.results | map(attribute='stat') | map(attribute='mode', default='absent') | list }}"
+
+    - name: Read the env file and the Caddyfile
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: _or_text
+      loop:
+        - /etc/sponsord/sponsord-onramp.env
+        - /etc/caddy/Caddyfile
+
+    - name: Require the env file to carry the settings and no secret
+      ansible.builtin.assert:
+        that:
+          - "'ONRAMP_BIND=127.0.0.1:8080' in _env"
+          - "'ONRAMP_DAEMON_URL=http://127.0.0.1:8090' in _env"
+          - "'ONRAMP_PUBLIC_URL=https://onramp.molecule.test' in _env"
+          - "'ONRAMP_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc' in _env"
+          # From the network profile mirror (the daemon's sponsord_network).
+          - "'ONRAMP_CAPACITY_BOND_ADDR=0x' in _env"
+          - "'ONRAMP_SLASH_JUDGE_ADDR=0x' in _env"
+          - "'ONRAMP_CLIENT_IP_HEADER=X-Forwarded-For' in _env"
+          - "'ONRAMP_FUND_RATE_PER_MIN=0' in _env"
+          - "'ONRAMP_TTL_SECS' not in _env"
+          - "'TOKEN' not in _env"
+          - "'TURNSTILE_SECRET' not in _env"
+          - "'1x0000000000000000000000000000000' not in _env"
+        fail_msg: "{{ _env }}"
+      vars:
+        _env: "{{ _or_text.results[0].content | b64decode }}"
+
+    - name: Require the role's Caddyfile, with its admin API off
+      ansible.builtin.assert:
+        that:
+          - "'MANAGED BY the sponsord_onramp role' in _caddy"
+          - "'admin off' in _caddy"
+          - "'onramp.molecule.test {' in _caddy"
+          - "'tls internal' in _caddy"
+          - "'reverse_proxy 127.0.0.1:8080' in _caddy"
+          - "'not the onramp' not in _caddy"
+        fail_msg: "{{ _caddy }}"
+      vars:
+        _caddy: "{{ _or_text.results[1].content | b64decode }}"
+
+    - name: Read the onramp unit
+      ansible.builtin.command:
+        argv: [systemctl, cat, sponsord-onramp]
+      register: _or_unit
+      changed_when: false
+
+    - name: Require credentials, hardening and the tie to the daemon
+      ansible.builtin.assert:
+        that:
+          # kics-scan ignore-line (a credential file PATH in the unit, not a secret)
+          - "'LoadCredential=api-token:/etc/sponsord/api-token' in _or_unit.stdout"
+          # kics-scan ignore-line (a credential file PATH in the unit, not a secret)
+          - "'LoadCredential=turnstile-secret:/etc/sponsord/turnstile-secret' in _or_unit.stdout"
+          - "'Environment=ONRAMP_DAEMON_TOKEN_FILE=%d/api-token' in _or_unit.stdout"
+          - "'Environment=ONRAMP_TURNSTILE_SECRET_FILE=%d/turnstile-secret' in _or_unit.stdout"
+          - "'DynamicUser=true' in _or_unit.stdout"
+          - "'ProtectSystem=strict' in _or_unit.stdout"
+          - "'CapabilityBoundingSet=\n' in _or_unit.stdout"
+          - "'PartOf=sponsord.service' in _or_unit.stdout"
+        fail_msg: "{{ _or_unit.stdout }}"
+
+    - name: Read the TCP listeners
+      ansible.builtin.command:
+        argv: [ss, -Hltn]
+      register: _or_ss
+      changed_when: false
+
+    - name: Require the onramp on loopback only, Caddy on 80 and 443
+      ansible.builtin.assert:
+        that:
+          - _or_ss.stdout is search('127\.0\.0\.1:8080\s')
+          - _or_ss.stdout is not search('(0\.0\.0\.0|\*|\[::\]):8080\s')
+          - _or_ss.stdout is search('(\*|0\.0\.0\.0|\[::\]):443\s')
+          - _or_ss.stdout is search('(\*|0\.0\.0\.0|\[::\]):80\s')
+          # The admin API is off: nothing on Caddy's default 2019.
+          - _or_ss.stdout is not search(':2019\s')
+        fail_msg: "{{ _or_ss.stdout }}"
+
+    - name: Reach the onramp through Caddy, as a user would
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --silent
+          - --show-error
+          - --fail
+          - --insecure
+          - --resolve
+          - onramp.molecule.test:443:127.0.0.1
+          - https://onramp.molecule.test/healthz
+      register: _or_https
+      changed_when: false
+
+    - name: Require the https chain to answer
+      ansible.builtin.assert:
+        that:
+          - (_or_https.stdout | from_json).ok is true
+        fail_msg: "{{ _or_https.stdout }}"
+
+    # The onramp rate-limits and gates by the right-most X-Forwarded-For address.
+    # A client that sends its own must not be able to choose it.
+    - name: Send a forged X-Forwarded-For through Caddy
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --silent
+          - --show-error
+          - --fail
+          - --insecure
+          - --header
+          - "X-Forwarded-For: 203.0.113.9"
+          - --resolve
+          - onramp.molecule.test:443:127.0.0.1
+          - https://onramp.molecule.test/molecule/client-ip
+      register: _or_xff
+      changed_when: false
+
+    - name: Require the right-most address to be the real client
+      ansible.builtin.assert:
+        that:
+          - (_or_xff.stdout.split(',') | last | trim) == '127.0.0.1'
+        fail_msg: >-
+          The onramp saw X-Forwarded-For "{{ _or_xff.stdout }}": its right-most address
+          must be the client Caddy saw (127.0.0.1), not the forged 203.0.113.9.
+
+    - name: Read the Alloy config
+      ansible.builtin.slurp:
+        src: /etc/alloy/config.alloy
+      register: _or_alloy
+
+    - name: Require Alloy to label the onramp's journal stream
+      ansible.builtin.assert:
+        that:
+          # The journal service_name rule, and the unit in the level selector.
+          - "'replacement   = \"sponsord-onramp\"' in _cfg"
+          - "'(sponsord|sponsord-onramp)' in _cfg"
+          - "'prometheus.scrape \"sponsord\"' in _cfg"
+          - "'prometheus.scrape \"decdn_node\"' not in _cfg"
+        fail_msg: Alloy's config lacks the onramp's journal labels (or scrapes a node).
+      vars:
+        _cfg: "{{ _or_alloy.content | b64decode }}"

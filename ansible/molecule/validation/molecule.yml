@@ -26,6 +26,11 @@ platforms:
     cgroupns_mode: host
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    # sponsord_onramp asserts its host also runs the daemon; the cases include the
+    # roles directly, so membership has no other effect here.
+    groups:
+      - sponsord_hosts
+      - sponsord_onramp_hosts
 provisioner:
   name: ansible
   env:

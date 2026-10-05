@@ -2,5 +2,15 @@
   "node": [{"proto": "udp", "port": 4433, "comment": "decdn QUIC"}],
   "node-port": [{"proto": "udp", "port": 5555, "comment": "decdn QUIC"}],
   "sponsord": [],
-  "co-located": [{"proto": "udp", "port": 4433, "comment": "decdn QUIC"}]
+  "co-located": [{"proto": "udp", "port": 4433, "comment": "decdn QUIC"}],
+  "onramp": [
+    {"proto": "tcp", "port": 80, "comment": "sponsord-onramp (Caddy, http)"},
+    {"proto": "tcp", "port": 443, "comment": "sponsord-onramp (Caddy, https)"}
+  ],
+  "onramp-own-proxy": [],
+  "co-located-onramp": [
+    {"proto": "udp", "port": 4433, "comment": "decdn QUIC"},
+    {"proto": "tcp", "port": 80, "comment": "sponsord-onramp (Caddy, http)"},
+    {"proto": "tcp", "port": 443, "comment": "sponsord-onramp (Caddy, https)"}
+  ]
 }

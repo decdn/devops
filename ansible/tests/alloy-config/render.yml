@@ -316,6 +316,26 @@
         grafana_alloy_sponsord_enabled: true
         grafana_alloy_logs_drop_priority_regex: 'info|debug|trace'
 
+    # The same host also running the onramp (sponsord_onramp_hosts): its journal
+    # stream gets a service_name and the plain-text level parsing, no scrape.
+    - name: Render the co-located node + sponsord + onramp configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/colocatedonramp.{{ item.ext }}"
+        mode: "0644"
+      loop: *ga_render_pair
+      loop_control:
+        label: "colocatedonramp.{{ item.ext }}"
+      vars:
+        _ga_instance_id: decdn-node-1
+        _ga_journal_groups: [systemd-journal, adm]
+        grafana_alloy_bin_effective: /usr/bin/alloy
+        grafana_alloy_deployment_environment: production
+        grafana_alloy_region: US
+        grafana_alloy_sponsord_enabled: true
+        grafana_alloy_sponsord_onramp_enabled: true
+        grafana_alloy_logs_drop_priority_regex: 'info|debug|trace'
+
     - name: Export the pinned release for the validation script
       ansible.builtin.copy:
         dest: "{{ _ga_render_dir }}/pin.env"

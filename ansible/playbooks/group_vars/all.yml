@@ -2,9 +2,10 @@
 # Playbook-adjacent group_vars for every host (see decdn_nodes.yml beside this for
 # why playbook-adjacent: they load for any INVENTORY=, an overlay included).
 #
-# Which daemons the opt-in Grafana Alloy agent scrapes, derived from the groups a
-# host is in, so a sponsord-only host does not scrape a decdn-node /metrics that
-# does not exist, and a co-located host gets both. Host-scoped on purpose: site.yml
+# Which daemons the opt-in Grafana Alloy agent scrapes (the onramp has no /metrics:
+# its toggle only labels its journal), derived from the groups a host is in, so a
+# sponsord-only host does not scrape a decdn-node /metrics that does not exist, and
+# a co-located host gets both. Host-scoped on purpose: site.yml
 # runs grafana_alloy once per play on a co-located host, and play vars would make
 # the two runs render different configs.
 #
@@ -15,6 +16,7 @@
 # host_vars, so override them there.
 grafana_alloy_node_enabled: "{{ 'decdn_nodes' in group_names }}"
 grafana_alloy_sponsord_enabled: "{{ 'sponsord_hosts' in group_names }}"
+grafana_alloy_sponsord_onramp_enabled: "{{ 'sponsord_onramp_hosts' in group_names }}"
 
 # The public holes in the baseline firewall, from the groups a host is in. Each
 # group that runs baseline (decdn_nodes.yml, sponsord_hosts.yml) sets
@@ -24,6 +26,14 @@ grafana_alloy_sponsord_enabled: "{{ 'sponsord_hosts' in group_names }}"
 #   decdn_nodes: the node's QUIC listener. decdn_bind_port is a decdn_node role
 #     default, which a play without that role (sponsord.yml) does not load; the
 #     fallback must match roles/decdn_node/defaults/main.yml.
+#   sponsord_onramp_hosts: Caddy, the onramp's TLS front (80 for the ACME challenge
+#     and the https redirect, 443), unless sponsord_onramp_proxy is "none" (your
+#     own proxy, which opens its own ports). Same fallback rule: "caddy" is
+#     roles/sponsord_onramp/defaults/main.yml's default.
 _baseline_service_inbound: >-
   {{ ([{'proto': 'udp', 'port': decdn_bind_port | default(4433), 'comment': 'decdn QUIC'}]
-      if 'decdn_nodes' in group_names else []) }}
+      if 'decdn_nodes' in group_names else [])
+     + ([{'proto': 'tcp', 'port': 80, 'comment': 'sponsord-onramp (Caddy, http)'},
+         {'proto': 'tcp', 'port': 443, 'comment': 'sponsord-onramp (Caddy, https)'}]
+        if 'sponsord_onramp_hosts' in group_names
+           and sponsord_onramp_proxy | default('caddy') == 'caddy' else []) }}

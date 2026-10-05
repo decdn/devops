@@ -1,14 +1,18 @@
 ---
-# sponsord: the deCDN onboarding sponsor (treasury signer + PaymentPool keeper).
-#   baseline -> grafana_alloy (opt-in, off by default) -> sponsord
-# Standalone entry point (`make deploy-sponsord`), also imported by site.yml. It
-# needs no decdn-node on the host and opens no firewall hole: its only listener is
-# loopback, for the onramp on the same host. A host in both decdn_nodes and
-# sponsord_hosts runs baseline and Alloy once per play; both converge to the same
-# state, because Alloy's per-daemon toggles are host-scoped
-# (playbooks/group_vars/all.yml), not play-scoped.
+# sponsord: the deCDN onboarding sponsor (treasury signer + PaymentPool keeper),
+# and its public onramp.
+#   sponsord_hosts:        baseline -> grafana_alloy (opt-in, off by default) -> sponsord
+#   sponsord_onramp_hosts: sponsord_onramp (+ Caddy in front, unless turned off)
+# Standalone entry point (`make deploy-sponsord`), also imported by site.yml. The
+# daemon needs no decdn-node on the host and listens on loopback only, for the
+# onramp on the same host. The onramp listens on loopback too; Caddy is its public
+# side (tcp/80 + tcp/443, opened by playbooks/group_vars/all.yml). A host in both
+# decdn_nodes and sponsord_hosts runs baseline and Alloy once per play; both
+# converge to the same state, because the firewall holes and Alloy's per-daemon
+# toggles are host-scoped (playbooks/group_vars/), not play-scoped.
 # Opening and funding the treasury's pool is an operator action — see
-# roles/sponsord/README.md.
+# roles/sponsord/README.md; the Turnstile widget and the release pins are too —
+# see roles/sponsord_onramp/README.md.
 - name: Provision sponsord
   hosts: sponsord_hosts
   become: true
@@ -19,3 +23,13 @@
       tags: [observability, sponsord]
     - role: sponsord
       tags: [sponsord]
+
+# After the daemon's play, whose /healthz gate is fatal, so the onramp starts
+# against a daemon that is up. Baseline and Alloy already ran for these hosts
+# above (the role asserts each one is also in sponsord_hosts).
+- name: Provision sponsord-onramp
+  hosts: sponsord_onramp_hosts
+  become: true
+  roles:
+    - role: sponsord_onramp
+      tags: [sponsord_onramp, sponsord]

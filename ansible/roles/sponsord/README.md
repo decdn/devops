@@ -11,8 +11,9 @@ It is independent of the node. It needs an RPC endpoint and the PaymentPool cont
 never a local `decdn-node`, so it can run on its own host or beside a node.
 
 The role covers the daemon only. Its public companion, `sponsord-onramp` (Turnstile
-gate, installers, behind a TLS reverse proxy), is not deployed here yet. The onramp
-expects the daemon on the same host and reads the API token from
+gate, installers, behind a TLS reverse proxy), is the
+[`sponsord_onramp`](../sponsord_onramp/README.md) role: list the host in
+`sponsord_onramp_hosts` too. It runs on the same host and reads the API token from
 `/etc/sponsord/api-token`.
 
 ## What it does
@@ -29,7 +30,7 @@ expects the daemon on the same host and reads the API token from
 
   | File | Who provides it |
   |------|-----------------|
-  | `api-token` | The role generates it on the host when absent and never replaces it, because the onramp holds a copy. |
+  | `api-token` | The role generates it on the host when absent and never replaces it, because the onramp (or your own gate) uses it. |
   | `treasury-keystore.json`, `treasury-password` | **You** do. The role never creates the treasury wallet. |
   | `secret.env` (`SPONSORD_RPC_URL`) | `sponsord_rpc_url` from inventory, or a file you write on the host. The two-way rules match `decdn_rpc_url`: an empty `sponsord_rpc_url` with a file the role wrote earlier fails the deploy, because that means `secret.yml` went missing. A host-written file may hold `SPONSORD_RPC_URL` **only**: as an `EnvironmentFile` it would override every other setting, so the role refuses any other key in it. |
 
@@ -112,8 +113,9 @@ yourself.
 
 ## Day 2
 
-- **Rotate the API token:** write the new token to `/etc/sponsord/api-token` and to
-  the onramp, then re-run the role, which restarts sponsord.
+- **Rotate the API token:** write the new token to `/etc/sponsord/api-token`, then
+  re-run the role, which restarts sponsord. The onramp reads the same file and
+  restarts with the daemon (`PartOf=`).
 - **Rotate the treasury:** replace the keystore and password files, then re-run.
   The new wallet must own `sponsord_pool_id`, or sponsord refuses to start and the
   deploy fails at `/healthz`.

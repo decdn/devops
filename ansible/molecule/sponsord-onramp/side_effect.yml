@@ -1,0 +1,148 @@
+---
+# Three behaviours a green converge + idempotence cannot prove:
+#   1. Rotating the Turnstile secret OUT OF BAND (the operator replaces the file)
+#      and re-running the role restarts the onramp onto it, and only the onramp:
+#      the daemon has nothing new to pick up.
+#   2. The /healthz readiness gate is FATAL: an onramp that never binds (the stub
+#      refuses to start while its marker exists) fails the converge at the role's
+#      report task.
+#   3. The role never silently replaces a Caddyfile it did not write: with its
+#      marker gone, the converge must stop at the refusal, then succeed once
+#      sponsord_onramp_caddy_overwrite_config confirms the takeover.
+# The host is left healthy on the role's Caddyfile for verify.yml.
+- name: Side effect — Turnstile rotation, the fatal readiness gate, a foreign Caddyfile
+  hosts: all
+  become: true
+  tasks:
+    - name: Read the unit states before the rotation
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+      register: _or_before
+      loop: [sponsord-onramp, sponsord]
+
+    - name: Assert the onramp was running cleanly before the rotation
+      ansible.builtin.assert:
+        that:
+          - _or_before.results[0].status.ActiveState == 'active'
+          - _or_before.results[0].status.MainPID | int > 0
+        fail_msg: >-
+          Expected sponsord-onramp active before the rotation (got
+          ActiveState={{ _or_before.results[0].status.ActiveState }}):
+          journalctl -u sponsord-onramp -e
+
+    - name: Rotate the Turnstile secret out of band
+      ansible.builtin.copy:
+        dest: /etc/sponsord/turnstile-secret
+        content: "1x0000000000000000000000000000000BB\n"
+        mode: "0600"
+
+    - name: Converge the onramp again after the rotation
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    - name: Read the unit states after the rotation converge
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+      register: _or_after
+      loop: [sponsord-onramp, sponsord]
+
+    - name: Require the rotation to have restarted the onramp, and only the onramp
+      ansible.builtin.assert:
+        that:
+          - _or_after.results[0].status.ActiveState == 'active'
+          - _or_after.results[0].status.MainPID != _or_before.results[0].status.MainPID
+          - _or_after.results[1].status.MainPID == _or_before.results[1].status.MainPID
+        fail_msg: >-
+          After the Turnstile secret was rotated, the onramp's PID went
+          {{ _or_before.results[0].status.MainPID }} -> {{ _or_after.results[0].status.MainPID }}
+          (must change) and the daemon's {{ _or_before.results[1].status.MainPID }} ->
+          {{ _or_after.results[1].status.MainPID }} (must not).
+
+    - name: Stop the onramp, then make it refuse to start
+      ansible.builtin.systemd_service:
+        name: sponsord-onramp
+        state: stopped
+
+    - name: Stage the stub's refuse-to-start marker
+      ansible.builtin.copy:
+        dest: /etc/sponsord/onramp-stub-unhealthy
+        content: ""
+        mode: "0644"
+
+    - name: Converge against an onramp that never becomes healthy
+      block:
+        - name: Run the role with a short readiness window
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_readiness_retries: 3
+            sponsord_onramp_readiness_delay: 1
+
+        - name: Fail — the readiness gate let an unhealthy onramp through
+          ansible.builtin.fail:
+            msg: The role finished although sponsord-onramp never answered /healthz.
+      rescue:
+        - name: Require the failure to come from the readiness gate itself
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Report a sponsord-onramp that did not become healthy'
+            fail_msg: >-
+              Expected the role to fail at its readiness report, but it failed at
+              "{{ ansible_failed_task.name }}".
+      always:
+        - name: Remove the refuse-to-start marker
+          ansible.builtin.file:
+            path: /etc/sponsord/onramp-stub-unhealthy
+            state: absent
+
+    - name: Converge once more to bring the onramp back
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    # A Caddyfile without the marker on a host where Caddy is already installed is
+    # exactly what an operator's own Caddy looks like to the role.
+    - name: Replace the Caddyfile with one this role did not write
+      ansible.builtin.copy:
+        dest: /etc/caddy/Caddyfile
+        mode: "0644"
+        content: |
+          # the operator's own site
+          other.molecule.test {
+            tls internal
+            respond "not the onramp"
+          }
+
+    - name: Converge against the foreign Caddyfile
+      block:
+        - name: Run the role without the overwrite confirmation
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+
+        - name: Fail — the role replaced a Caddyfile it did not write
+          ansible.builtin.fail:
+            msg: The role finished although /etc/caddy/Caddyfile carried no marker.
+      rescue:
+        - name: Require the failure to come from the Caddyfile refusal
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Refuse to replace a Caddyfile this role did not write'
+            fail_msg: >-
+              Expected the role to refuse the foreign Caddyfile, but it failed at
+              "{{ ansible_failed_task.name }}".
+
+    - name: Read the Caddyfile after the refusal
+      ansible.builtin.slurp:
+        src: /etc/caddy/Caddyfile
+      register: _or_foreign
+
+    - name: Require the foreign Caddyfile to be untouched
+      ansible.builtin.assert:
+        that:
+          - "'not the onramp' in (_or_foreign.content | b64decode)"
+        fail_msg: The refused run still changed /etc/caddy/Caddyfile.
+
+    - name: Converge with the takeover confirmed
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_caddy_overwrite_config: true
