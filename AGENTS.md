@@ -33,7 +33,8 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
 2. **Localhost-only by default.** Service daemons bind `127.0.0.1` (e.g. the node's metrics
    and admin RPC). A service that must accept public traffic declares its holes explicitly
    via `baseline_extra_inbound` (today: the node's QUIC udp/4433, and tcp/80 + tcp/443 for
-   the `sponsord_onramp` role's Caddy). An HTTP-facing service is fronted by an explicit
+   the `sponsord_onramp` role's Caddy; on Compose, the `caddy` profile's same two ports,
+   which the operator opens). An HTTP-facing service is fronted by an explicit
    reverse proxy that terminates TLS (and auth, where the service needs it), and the
    backend stays on loopback. Never bind a *backend* to `0.0.0.0` or expose its raw port.
    `sponsord-onramp` is public by design: its Turnstile gate guards the one action that
@@ -62,6 +63,9 @@ ansible/                # the deployment project (DevSec-hardened, lean roles)
   inventory/ galaxy/ molecule/    # see ansible/README.md
 cloud-init/             # user-data.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
 compose/                # Docker Compose deploy path for a single host (see its README.md)
+  compose.yaml          # profiles: node, sponsord, onramp (+ sponsord), caddy
+  Caddyfile             # mirrors roles/sponsord_onramp/templates/Caddyfile.j2
+  tests/*.jq            # lint-compose: invariants, inline-env, fail-closed
 charts/
   decdn-node/           # Helm chart for the node on Kubernetes (see its README.md)
     ci/                 # CI values files (mirror molecule/schema's three plays)
@@ -210,9 +214,8 @@ addresses) the repo carries, and they carry their upstream commit.
   `DECDN_IMAGE_REPO@DECDN_IMAGE_DIGEST`), the role's host layout (`/etc/decdn`
   read-only, `/var/lib/decdn`), host networking (so loopback metrics/admin stay
   loopback and Docker publishes no ports), read-only rootfs, no capabilities, 300 s
-  SIGTERM grace. Every service sits behind a
-  profile (`COMPOSE_PROFILES` in `.env`): `node`, `sponsord`, `onramp` (also starts
-  `sponsord`) and `caddy`.
+  SIGTERM grace. Every service sits behind a profile (`COMPOSE_PROFILES` in `.env`):
+  `node`, `sponsord`, `onramp` (also starts `sponsord`) and `caddy`.
   - **sponsord / onramp:** the roles' `/etc/sponsord/` layout, except that the
     credential files belong to a host `sponsord` account (bind mounts keep owner and
     mode, and upstream rejects a group-readable keystore). They are mounted
@@ -220,20 +223,34 @@ addresses) the repo carries, and they carry their upstream commit.
     `environment:`, which beats env files, because the release images default to
     `0.0.0.0`.
   - **Caddy:** the official image by digest, non-root, keeping only
-    `NET_BIND_SERVICE`; `compose/Caddyfile` mirrors the role's.
+    `NET_BIND_SERVICE`. `compose/Caddyfile` is a hand-kept copy of the role's
+    `Caddyfile.j2`: change one, change both.
   - **No `${VAR:?}`:** Compose interpolates disabled services too, so a required
     variable would break other profiles. An unset variable renders a value its
     service refuses instead (invalid image reference, unknown user, a domain with a
     non-numeric port).
-  - **Gates:** `make lint-compose` renders with `--profile '*'` under `env -i`,
-    once with the example `.env` against `compose/tests/invariants.jq` (allowed
-    keys and exact mounts per service, so `privileged`, `pid: host` or an extra
-    mount fail), once without the env files (`--no-env-resolution`) against
-    `compose/tests/inline-env.jq` (an allow-list of inline env keys, so no RPC URL
-    lands in the tracked file) and once with an empty `.env` against
-    `compose/tests/fail-closed.jq`. All print `<service>: <invariant>` per violation; `make test-scripts` pins
-    which one fires for each broken variant (`LINT_COMPOSE_FILE`, not Compose's own
+  - **Gates:** `make lint-compose` renders with `--profile '*'` under `env -i`, three
+    times:
+    - with the example `.env`, against `compose/tests/invariants.jq`: allowed keys
+      and exact mounts per service, so `privileged`, `pid: host` or an extra mount
+      fail;
+    - with every service env file pointed at `/dev/null`, against
+      `compose/tests/inline-env.jq`: an allow-list of inline env keys, so no RPC URL
+      lands in the tracked file;
+    - with an empty `.env`, against `compose/tests/fail-closed.jq`.
+
+    All print `<service>: <invariant>` per violation; `make test-scripts` pins which
+    one fires for each broken variant (`LINT_COMPOSE_FILE`, not Compose's own
     `COMPOSE_FILE`). `make security` scans it.
+  - **The allow-lists are deliberate friction.** A new key, mount or inline env var
+    in `compose.yaml` fails the lint until it is added to the matching list in
+    `compose/tests/*.jq`, and the PR should say why. Env var names follow upstream
+    `decdn/sponsord` (`crates/*/src/config.rs`); re-check them when bumping images.
+  - **CI's Compose is older than a dev box's.** The runner's release mishandled
+    `config --no-env-resolution` (v2.33 lacks it), which is why the inline-env render
+    uses `/dev/null` env files instead. Before relying on a newer `config` flag, try
+    it under an older release: `docker run --rm -v "$PWD:/w" -w /w docker:27-cli
+    docker compose …`.
 
 - **`charts/decdn-node/`** — the same node on Kubernetes: a one-replica StatefulSet (one
   release = one identity) on the upstream daemon-only image (`ghcr.io/decdn/decdn-node`;
@@ -264,7 +281,7 @@ make lint-ansible     # vendor collections + ansible-lint (production profile)
 make molecule         # every ansible/molecule/*/ scenario in parallel (Docker; JOBS=<n>)
 make lint-helm        # chart: lint + render tests + kubeconform + schema keys
 make lint-alloy       # grafana_alloy config against the real pinned Alloy binary
-make lint-compose     # compose/ invariants
+make lint-compose     # compose/ invariants (three renders, compose/tests/*.jq)
 make lint-cloud-init  # cloud-init/user-data.yaml: schema + invariants (no secrets, release mode, lock)
 make test-scripts     # Makefile guards, release gate, lint-compose/lint-cloud-init negatives
 make security         # KICS over ansible/, the rendered chart and compose/
