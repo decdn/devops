@@ -125,16 +125,18 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
-- `grafana_alloy` no longer ships URL credentials to Grafana Cloud Loki (#84).
-  The journald pipeline forwarded every line verbatim, so a daemon error that
+- `grafana_alloy` no longer ships URL credentials in journald lines to Grafana
+  Cloud Loki (#84). Every line was forwarded verbatim, so a daemon error that
   quoted the RPC URL (sponsord's `error sending request for url (…)`) put its
   provider API key in Loki. A new `loki.process "redact_urls"` stage now runs on
-  every unit's line before anything else. It replaces userinfo, path, query and
-  fragment with `<redacted>` and keeps the scheme and host, including in JSON
-  that escapes the URL (`https:\/\/…`, `\u0026`). Lines with no URL,
-  or with nothing after the host, are unchanged. The rendered `config.alloy`
-  changes on every host with Grafana Cloud logs on, so the next deploy restarts
-  Alloy once.
+  every unit's line ahead of the level stages. It replaces the userinfo with
+  `<redacted>` and everything after the host with `/<redacted>`, keeping the
+  scheme and host. That holds for passwords with unencoded `/ ? # @`, and for
+  URLs inside JSON that escapes them (`https:\/\/…`, `\u0026`, one level of
+  nesting). A URL with an `@` in its path loses its host. A line with no URL, or
+  with a URL that has no userinfo and nothing after its host, is unchanged. OTLP
+  logs and spans are not redacted (#86). The rendered `config.alloy` changes on
+  every host with Grafana Cloud logs on, so the next deploy restarts Alloy once.
 - A `release` install no longer fails intermittently at "Remove the download
   staging directory" with `rmtree failed: [Errno 2] No such file or directory:
   'S.gpg-agent.extra'`. Signature verification auto-started a `gpg-agent`

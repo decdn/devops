@@ -6,7 +6,7 @@
 //
 // Pipeline: scrape the node's /metrics and push it to Grafana Cloud Prometheus;
 // scrape the MACHINE (Alloy's in-process node_exporter) and Alloy itself; ship
-// journald, with URL credentials redacted, to Grafana Cloud Loki; receive OTLP traces (plus any logs/metrics
+// journald to Grafana Cloud Loki; receive OTLP traces (plus any logs/metrics
 // pushed over localhost) on gRPC 4317 / HTTP 4318 bound to loopback only; stamp
 // resource identity on everything, probabilistically sample traces, batch, then
 // export via OTLP/HTTP.
@@ -355,41 +355,51 @@ loki.source.journal "host" {
   forward_to     = [loki.process.redact_urls.receiver]
 }
 
-{# Credentials embedded in URLs never leave the host. An RPC URL usually carries
-   its provider API key in the path or query, and a daemon error can quote it
-   (sponsord's "error sending request for url (...)"; decdn-node strips URLs at
-   the source, decdn_common::redact). This runs on EVERY unit's line, first, and
-   has no knob: it is the secret model, not a cost guardrail.
+{# Credentials embedded in URLs do not leave the host in journald lines. An RPC
+   URL usually carries its provider API key, and a daemon error can quote it:
+   sponsord's "error sending request for url (...)" does. decdn-node also strips
+   URLs at the source (decdn_common::redact); sponsord does not, so for sponsord
+   this stage is the only guard. It runs on EVERY unit's line, ahead of the level
+   stages, and has no knob: it is the secret model, not a cost guardrail.
 
-   Keyed on "://" (or ":\/\/"), not a scheme list, so any scheme in any case
-   is caught (the same rule as upstream's redact_bare_urls). The scheme and
-   host survive, so the provider is still identifiable; userinfo, then
-   everything from the first / ? or # after the host, becomes <redacted>. A
-   URL with nothing after its host, and a line with no URL, pass through
-   unchanged. The redacted tail runs to whitespace, '"', '\"' or '\\': it
-   over-consumes punctuation such as a closing ')' on purpose (')' is legal in
-   a path, and leaking a key is worse than losing a bracket), but stops at the
-   JSON string delimiters so decdn-node's line stays valid JSON for the level
-   stage below. Other units may log JSON that escapes URL characters, so both
-   stages read through it: a separator may be '\/' (PHP's json_encode writes
-   https:\/\/host\/...), and the tail runs across every other escape, such as
-   Go encoding/json's \u0026 for '&', which would otherwise end it mid-query.
-   stage.replace rewrites every match on the line. Only URL-shaped text is
-   caught: a Debug-printed url::Url struct would still leak, which is why the
-   daemons redact at the source as well.
-   validate.sh runs these stages in the real Alloy against sample lines. #}
+   Both stages key on "://" (or JSON's ":\/\/"), not a scheme list, so any
+   scheme in any case is caught, as in upstream's redact_bare_urls. Unlike that
+   function, the scheme and host are kept, so the provider stays identifiable:
+     1. userinfo -> <redacted>. It runs to the LAST @ of the whitespace-free
+        token, so a password holding an unencoded / ? # or @ is covered too.
+        The cost: a URL with an @ in its path loses its host
+        (https://h/users/@x/y ships as https://<redacted>@x/<redacted>).
+     2. everything from the first / ? # (or \/) after the host -> /<redacted>,
+        whichever separator it was.
+   A URL with no userinfo and nothing after its host, and a line with no URL,
+   pass through unchanged.
+
+   The redacted text ends at whitespace, '"' or '\"' and over-consumes anything
+   else, such as a closing ')' (legal in a path; losing a bracket beats leaking
+   a key). JSON escapes are read as whole pairs (\u0026, \/, \\), so Go's
+   encoding/json, PHP's json_encode and one level of JSON nested in a JSON
+   string are all covered, and the line stays valid JSON for the level stage
+   below. stage.replace rewrites every match on the line.
+
+   Not covered: a \u002f-escaped separator, a fully percent-encoded URL, deeper
+   JSON nesting, a URL journald split across two records (lines over LineMax,
+   48K by default) and a Debug-printed url::Url struct. OTLP data does not pass
+   through here (#86). A line no expression matches ships as it was, so keep
+   `replace` a literal: a template that fails to render also passes the line
+   through. validate.sh runs these stages in the real Alloy against sample
+   lines. #}
 loki.process "redact_urls" {
   forward_to = [loki.process.daemon_level.receiver]
 
-  // userinfo: greedy, so it runs to the LAST @ of the authority.
+  // 1. userinfo (as upstream's redact_userinfo, which writes ***@ instead).
   stage.replace {
-    expression = `:\\?/\\?/([^/?#\s"\\]+)@`
+    expression = `:\\?/\\?/((?:\\[^\s"]|[^\s"\\])+)@`
     replace    = "<redacted>"
   }
 
-  // path, query and fragment.
+  // 2. path, query and fragment; the separator is normalised to /.
   stage.replace {
-    expression = `:\\?/\\?/[^/?#\s"\\]+((?:\\?/|[?#])(?:\\[^\s"\\]|[^\s"\\])*)`
+    expression = `:\\?/\\?/(?:\\[^\s"\\/]|[^/?#\s"\\])+((?:\\?/|[?#])(?:\\[^\s"]|[^\s"\\])*)`
     replace    = "/<redacted>"
   }
 }
@@ -399,9 +409,10 @@ loki.process "redact_urls" {
    them level="info" — WARN and ERROR included. The real level is the `level`
    field of the tracing-subscriber JSON body, e.g. {"level":"WARN",...}.
 
-   This runs after loki.source.journal, where the __journal* fields are already
-   gone, so it keys off the `unit` label journal_rules produced. The unit name
-   is the one decdn_node installs; it is also hard-coded in the journal_rules
+   This runs after loki.source.journal (via redact_urls, which rewrites only
+   the line), where the __journal* fields are already gone, so it keys off the
+   `unit` label journal_rules produced. The unit name is the one decdn_node
+   installs; it is also hard-coded in the journal_rules
    priority exemption above and the service_name rule below — a rename must be
    mirrored in all three (validate.sh pins them).
 
