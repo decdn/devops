@@ -300,7 +300,10 @@ samples_json() { # nanosecond timestamp
   {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"error"},"values":[
     ["$1","m-other-error"],
     ["$1","o-twourls wss://SECRET-USER@a.example/SECRET-A and HTTP://b.example?SECRET-B=1 end"],
-    ["$1","o-nopath https://c.example:443 done"]]},
+    ["$1","o-nopath https://c.example:443 done"],
+    ["$1","o-escslash {\"url\":\"https:\\\\/\\\\/u:SECRET-ESCPASS@esc.example\\\\/v2\\\\/SECRET-ESCKEY?x=SECRET-ESCQ\"}"],
+    ["$1","o-escamp {\"url\":\"https://amp.example/v2/k?a=1\\\\u0026b=SECRET-AMP\"}"],
+    ["$1","o-escquote {\"m\":\"say \\\\\"https://q.example/v2/SECRET-QK\\\\\" ok\"}"]]},
   {"stream":{"journal__systemd_unit":"decdn-node.service","journal_priority_keyword":"info"},"values":[
     ["$1","{\"level\":\"TRACE\",\"fields\":{\"message\":\"m-trace\"}}"],
     ["$1","{\"level\":\" DEBUG\",\"fields\":{\"message\":\"m-debug\"}}"],
@@ -411,7 +414,7 @@ no_secrets() {
 
 # Defaults (guardrail "debug|trace"), sponsord not enabled: its plain-text lines
 # are not re-levelled and stand at journald's info.
-run_level_harness defaults.alloy 21
+run_level_harness defaults.alloy 24
 kept s-trace info sponsord.service
 kept s-error info sponsord.service
 kept m-warn-uc warning decdn-node.service
@@ -438,6 +441,12 @@ redacted m-rpcurl 'via https://<redacted>@rpc.example.io:8545/<redacted> failed'
 kept m-rpcurl warning decdn-node.service
 # every URL on the line, any scheme in any case, a query with no path
 redacted o-twourls 'o-twourls wss://<redacted>@a.example/<redacted> and HTTP://b.example/<redacted> end'
+# JSON another unit may write (needles are as loki.echo prints them, logfmt-
+# escaped): PHP's \/ separators, Go's \u0026 for '&' mid-query, and a URL
+# quoted inside a JSON string, whose \" must survive so the JSON stays valid
+redacted o-escslash 'https:\\/\\/<redacted>@esc.example/<redacted>\"}"'
+redacted o-escamp 'https://amp.example/<redacted>\"}"'
+redacted o-escquote 'say \\\"https://q.example/<redacted>\\\" ok\"}"'
 unchanged 'o-nopath https://c.example:443 done'   # nothing after the host: untouched
 unchanged 'm-text is not json'                    # no URL: untouched
 echo "ok: URL credentials are redacted before the level stages (defaults)"
@@ -445,7 +454,7 @@ echo "ok: URL credentials are redacted before the level stages (defaults)"
 # Guardrail "info|debug|trace": the daemon's every line is journald-info, so it
 # must be judged by its JSON level — errors and warnings survive, and lines with
 # no JSON level are never dropped for a priority they did not choose.
-run_level_harness priorityinfo.alloy 10
+run_level_harness priorityinfo.alloy 13
 no_secrets
 dropped s-error                          # sponsord not enabled: not exempt either
 dropped s-rpcurl
@@ -465,7 +474,7 @@ dropped m-other-debug
 echo "ok: daemon log level follows the JSON body (info in the guardrail)"
 
 # sponsord enabled: its level is parsed from the plain-text line.
-run_level_harness sponsordonly.alloy 19
+run_level_harness sponsordonly.alloy 22
 no_secrets
 kept s-rpcurl error sponsord.service     # the "Error: " match still sees the redacted line
 kept s-info info sponsord.service
@@ -481,7 +490,7 @@ echo "ok: sponsord log level follows its text line (defaults)"
 
 # Co-located, guardrail "info|debug|trace": both daemons exempt from the
 # journald-priority drop and judged by the level they logged.
-run_level_harness colocated.alloy 16
+run_level_harness colocated.alloy 19
 no_secrets
 kept s-rpcurl error sponsord.service
 kept m-rpcurl warning decdn-node.service

@@ -235,7 +235,8 @@ deliberately lean and every lever is a variable:
   leaves the host: userinfo, path, query and fragment become `<redacted>`, so
   `https://u:p@rpc.example.io/v2/KEY?x=y` ships as
   `https://<redacted>@rpc.example.io/<redacted>`. Scheme and host are kept, so the
-  provider is still identifiable. An RPC URL usually carries its provider API key,
+  provider is still identifiable. URLs inside JSON that escapes them (`\/`,
+  `\u0026`) are caught too. An RPC URL usually carries its provider API key,
   and a daemon error can quote it. The redaction has no knob.
 - decdn-node's `level` label comes from its JSON `level` field, not the journald
   priority (journald reports every stdout line as `info`), and the priority drop

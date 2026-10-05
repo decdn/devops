@@ -130,7 +130,8 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   quoted the RPC URL (sponsord's `error sending request for url (…)`) put its
   provider API key in Loki. A new `loki.process "redact_urls"` stage now runs on
   every unit's line before anything else. It replaces userinfo, path, query and
-  fragment with `<redacted>` and keeps the scheme and host. Lines with no URL,
+  fragment with `<redacted>` and keeps the scheme and host, including in JSON
+  that escapes the URL (`https:\/\/…`, `\u0026`). Lines with no URL,
   or with nothing after the host, are unchanged. The rendered `config.alloy`
   changes on every host with Grafana Cloud logs on, so the next deploy restarts
   Alloy once.

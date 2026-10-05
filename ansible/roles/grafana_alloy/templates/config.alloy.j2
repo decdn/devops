@@ -361,30 +361,35 @@ loki.source.journal "host" {
    the source, decdn_common::redact). This runs on EVERY unit's line, first, and
    has no knob: it is the secret model, not a cost guardrail.
 
-   Keyed on "://", not a scheme list, so any scheme in any case is caught (the
-   same rule as upstream's redact_bare_urls). The scheme and host survive, so
-   the provider is still identifiable; userinfo, then everything from the first
-   / ? or # after the host, becomes <redacted>. A URL with nothing after its
-   host, and a line with no URL, pass through unchanged. The redacted tail runs
-   to whitespace, '"' or '\': it over-consumes punctuation such as a closing ')'
-   on purpose (')' is legal in a path, and leaking a key is worse than losing a
-   bracket), but stops at the JSON string delimiters so decdn-node's line stays
-   valid JSON for the level stage below. stage.replace rewrites every match on
-   the line. Only URL-shaped text is caught: a Debug-printed url::Url struct
-   would still leak, which is why the daemons redact at the source as well.
+   Keyed on "://" (or ":\/\/"), not a scheme list, so any scheme in any case
+   is caught (the same rule as upstream's redact_bare_urls). The scheme and
+   host survive, so the provider is still identifiable; userinfo, then
+   everything from the first / ? or # after the host, becomes <redacted>. A
+   URL with nothing after its host, and a line with no URL, pass through
+   unchanged. The redacted tail runs to whitespace, '"', '\"' or '\\': it
+   over-consumes punctuation such as a closing ')' on purpose (')' is legal in
+   a path, and leaking a key is worse than losing a bracket), but stops at the
+   JSON string delimiters so decdn-node's line stays valid JSON for the level
+   stage below. Other units may log JSON that escapes URL characters, so both
+   stages read through it: a separator may be '\/' (PHP's json_encode writes
+   https:\/\/host\/...), and the tail runs across every other escape, such as
+   Go encoding/json's \u0026 for '&', which would otherwise end it mid-query.
+   stage.replace rewrites every match on the line. Only URL-shaped text is
+   caught: a Debug-printed url::Url struct would still leak, which is why the
+   daemons redact at the source as well.
    validate.sh runs these stages in the real Alloy against sample lines. #}
 loki.process "redact_urls" {
   forward_to = [loki.process.daemon_level.receiver]
 
   // userinfo: greedy, so it runs to the LAST @ of the authority.
   stage.replace {
-    expression = `://([^/?#\s"\\]+)@`
+    expression = `:\\?/\\?/([^/?#\s"\\]+)@`
     replace    = "<redacted>"
   }
 
   // path, query and fragment.
   stage.replace {
-    expression = `://[^/?#\s"\\]+([/?#][^\s"\\]*)`
+    expression = `:\\?/\\?/[^/?#\s"\\]+((?:\\?/|[?#])(?:\\[^\s"\\]|[^\s"\\])*)`
     replace    = "/<redacted>"
   }
 }
