@@ -1,34 +1,60 @@
 ---
-# Three behaviours a green converge + idempotence cannot prove:
-#   1. Rotating the Turnstile secret OUT OF BAND (the operator replaces the file)
-#      and re-running the role restarts the onramp onto it, and only the onramp:
-#      the daemon has nothing new to pick up.
-#   2. The /healthz readiness gate is FATAL: an onramp that never binds (the stub
-#      refuses to start while its marker exists) fails the converge at the role's
-#      report task.
-#   3. The role never silently replaces a Caddyfile it did not write: with its
-#      marker gone, the converge must stop at the refusal, then succeed once
-#      sponsord_onramp_caddy_overwrite_config confirms the takeover.
-# The host is left healthy on the role's Caddyfile for verify.yml.
-- name: Side effect — Turnstile rotation, the fatal readiness gate, a foreign Caddyfile
+# What a green converge + idempotence cannot prove:
+#   1. Rotating the Turnstile secret OUT OF BAND restarts the onramp onto it, and
+#      only the onramp (a no-op re-run first proves nothing else restarts it).
+#   2. The /healthz readiness gate is FATAL, and a failed run records nothing: the
+#      restart-input record keeps the last healthy inputs until a run succeeds.
+#   3. With no record, a running onramp is restarted (it was never confirmed
+#      healthy on its inputs), and a daemon restart brings the onramp back by
+#      itself (PartOf=, Restart=on-failure, no start limit).
+#   4. A custom gate page is installed, read by the onramp, and removed again.
+#   5. proxy "none": no client-IP header, the public URL as given, and a warning
+#      that the role's Caddy is still installed.
+#   6. ACME mode: the Caddyfile has no `tls internal`, Caddy's http redirect
+#      answers, and a certificate that cannot be issued only warns. With the
+#      internal CA, a broken upstream behind Caddy fails the run.
+#   7. The role never silently replaces a Caddyfile it did not write; the package's
+#      untouched default it does replace.
+# The host is left healthy on the role's own Caddyfile, `tls internal`, for verify.
+- name: Side effect — rotation, the fatal gate and the restart-input record
   hosts: all
   become: true
+  vars:
+    _or_record: /etc/sponsord/.onramp-inputs.sha256
   tasks:
-    - name: Read the unit states before the rotation
+    - name: Read the unit states before anything changes
       ansible.builtin.systemd_service:
         name: "{{ item }}"
       register: _or_before
       loop: [sponsord-onramp, sponsord]
 
-    - name: Assert the onramp was running cleanly before the rotation
+    - name: Assert the onramp was running cleanly
       ansible.builtin.assert:
         that:
           - _or_before.results[0].status.ActiveState == 'active'
           - _or_before.results[0].status.MainPID | int > 0
         fail_msg: >-
-          Expected sponsord-onramp active before the rotation (got
+          Expected sponsord-onramp active (got
           ActiveState={{ _or_before.results[0].status.ActiveState }}):
           journalctl -u sponsord-onramp -e
+
+    # include_role here, import_playbook in the converge: if the two contexts
+    # resolved any input differently, the onramp would restart for that alone, and
+    # the rotation check below would pass for the wrong reason.
+    - name: Re-run the onramp with nothing changed
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    - name: Read the onramp after the no-op run
+      ansible.builtin.systemd_service:
+        name: sponsord-onramp
+      register: _or_noop
+
+    - name: Require the no-op run to have left the onramp alone
+      ansible.builtin.assert:
+        that:
+          - _or_noop.status.MainPID == _or_before.results[0].status.MainPID
+        fail_msg: A re-run with no input changed restarted sponsord-onramp.
 
     - name: Rotate the Turnstile secret out of band
       ansible.builtin.copy:
@@ -58,6 +84,12 @@
           (must change) and the daemon's {{ _or_before.results[1].status.MainPID }} ->
           {{ _or_after.results[1].status.MainPID }} (must not).
 
+    - name: Hash the Turnstile secret the onramp is now healthy on
+      ansible.builtin.stat:
+        path: /etc/sponsord/turnstile-secret
+        checksum_algorithm: sha256
+      register: _or_secret_b
+
     - name: Stop the onramp, then make it refuse to start
       ansible.builtin.systemd_service:
         name: sponsord-onramp
@@ -68,6 +100,13 @@
         dest: /etc/sponsord/onramp-stub-unhealthy
         content: ""
         mode: "0644"
+
+    # A changed input on the failing run: the record must not take it.
+    - name: Rotate the Turnstile secret once more
+      ansible.builtin.copy:
+        dest: /etc/sponsord/turnstile-secret
+        content: "1x0000000000000000000000000000000CC\n"
+        mode: "0600"
 
     - name: Converge against an onramp that never becomes healthy
       block:
@@ -89,6 +128,20 @@
             fail_msg: >-
               Expected the role to fail at its readiness report, but it failed at
               "{{ ansible_failed_task.name }}".
+
+        - name: Read the restart-input record after the failed run
+          ansible.builtin.slurp:
+            src: "{{ _or_record }}"
+          register: _or_rec_failed
+
+        # Field order: token, Turnstile secret, env file, gate page, unit, binary.
+        - name: Require the failed run to have left the record on the healthy inputs
+          ansible.builtin.assert:
+            that:
+              - (_or_rec_failed.content | b64decode).split()[1] == _or_secret_b.stat.checksum
+            fail_msg: >-
+              The record moved to the inputs of a run whose onramp never became
+              healthy; the next converge would not restart it onto them.
       always:
         - name: Remove the refuse-to-start marker
           ansible.builtin.file:
@@ -99,8 +152,235 @@
       ansible.builtin.include_role:
         name: sponsord_onramp
 
-    # A Caddyfile without the marker on a host where Caddy is already installed is
-    # exactly what an operator's own Caddy looks like to the role.
+    - name: Hash the Turnstile secret now in place
+      ansible.builtin.stat:
+        path: /etc/sponsord/turnstile-secret
+        checksum_algorithm: sha256
+      register: _or_secret_c
+
+    - name: Read the restart-input record after the recovery
+      ansible.builtin.slurp:
+        src: "{{ _or_record }}"
+      register: _or_rec_ok
+
+    - name: Require the record to follow the inputs once the onramp is healthy
+      ansible.builtin.assert:
+        that:
+          - (_or_rec_ok.content | b64decode).split()[1] == _or_secret_c.stat.checksum
+        fail_msg: The healthy run did not record the Turnstile secret it started on.
+
+- name: Side effect — a missing record, and a daemon restart
+  hosts: all
+  become: true
+  tasks:
+    - name: Read the onramp before the record is removed
+      ansible.builtin.systemd_service:
+        name: sponsord-onramp
+      register: _or_norec_before
+
+    - name: Remove the restart-input record
+      ansible.builtin.file:
+        path: /etc/sponsord/.onramp-inputs.sha256
+        state: absent
+
+    - name: Converge with no record
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    - name: Read the onramp and the record after that converge
+      ansible.builtin.systemd_service:
+        name: sponsord-onramp
+      register: _or_norec_after
+
+    - name: Stat the rewritten record
+      ansible.builtin.stat:
+        path: /etc/sponsord/.onramp-inputs.sha256
+      register: _or_norec_rec
+
+    - name: Require a restart and a fresh record
+      ansible.builtin.assert:
+        that:
+          - _or_norec_after.status.MainPID != _or_norec_before.status.MainPID
+          - _or_norec_rec.stat.exists
+        fail_msg: >-
+          With no record, a running onramp must be restarted (it was never confirmed
+          healthy on its inputs) and the record written again.
+
+    - name: Restart the daemon
+      ansible.builtin.systemd_service:
+        name: sponsord
+        state: restarted
+
+    # The onramp restarts with the daemon (PartOf=), usually before the daemon
+    # listens; it must exit, retry and come back on its own, with no converge.
+    - name: Wait for the onramp to come back by itself
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/healthz
+        status_code: 200
+        timeout: 5
+      register: _or_partof
+      retries: 30
+      delay: 1
+      until: _or_partof.status == 200
+
+    - name: Read the onramp after the daemon restart
+      ansible.builtin.systemd_service:
+        name: sponsord-onramp
+      register: _or_partof_unit
+
+    - name: Require the onramp to have restarted with the daemon
+      ansible.builtin.assert:
+        that:
+          - _or_partof_unit.status.ActiveState == 'active'
+          - _or_partof_unit.status.MainPID != _or_norec_after.status.MainPID
+        fail_msg: The onramp did not restart with the daemon (PartOf=sponsord.service).
+
+- name: Side effect — a custom gate page
+  hosts: all
+  become: true
+  vars:
+    _or_page: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/files/gate.html"
+  tasks:
+    - name: Converge with a custom gate page
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_gate_template_src: "{{ _or_page }}"
+
+    - name: Stat the installed page and read the env file
+      ansible.builtin.stat:
+        path: /etc/sponsord/onramp-gate.html
+      register: _or_page_stat
+
+    - name: Read the env file with the page set
+      ansible.builtin.slurp:
+        src: /etc/sponsord/sponsord-onramp.env
+      register: _or_page_env
+
+    # The stub reads the page at start, as the onramp's dynamic user: the role's
+    # /healthz gate passing already proves it was readable.
+    - name: Require the page installed root-owned, world-readable and configured
+      ansible.builtin.assert:
+        that:
+          - _or_page_stat.stat.isreg
+          - _or_page_stat.stat.mode == '0644'
+          - _or_page_stat.stat.pw_name == 'root'
+          - "'ONRAMP_GATE_TEMPLATE=/etc/sponsord/onramp-gate.html' in (_or_page_env.content | b64decode)"
+        fail_msg: The custom gate page is not installed, or not configured.
+
+    - name: Converge without the page again
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    - name: Stat the page after it was dropped
+      ansible.builtin.stat:
+        path: /etc/sponsord/onramp-gate.html
+      register: _or_page_gone
+
+    - name: Read the env file without the page
+      ansible.builtin.slurp:
+        src: /etc/sponsord/sponsord-onramp.env
+      register: _or_page_env_gone
+
+    - name: Require the page and its setting gone
+      ansible.builtin.assert:
+        that:
+          - not _or_page_gone.stat.exists
+          - "'ONRAMP_GATE_TEMPLATE' not in (_or_page_env_gone.content | b64decode)"
+        fail_msg: The dropped gate page is still installed or configured.
+
+- name: Side effect — bring your own proxy
+  hosts: all
+  become: true
+  tasks:
+    - name: Converge with proxy "none"
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_proxy: none
+        sponsord_onramp_public_url: https://downloads.molecule.test
+
+    - name: Read the env file in proxy "none" mode
+      ansible.builtin.slurp:
+        src: /etc/sponsord/sponsord-onramp.env
+      register: _or_none_env
+
+    # With an arbitrary proxy in front, trusting X-Forwarded-For would let clients
+    # pick the address the rate limits key on.
+    - name: Require no client-IP header, the given public URL, and the stale-Caddy warning
+      ansible.builtin.assert:
+        that:
+          - "'ONRAMP_CLIENT_IP_HEADER' not in _env"
+          - "'ONRAMP_PUBLIC_URL=https://downloads.molecule.test\n' in _env"
+          - sponsord_onramp_stale_caddy.rc == 0
+        fail_msg: "{{ _env }}"
+      vars:
+        _env: "{{ _or_none_env.content | b64decode }}"
+
+- name: Side effect — ACME, and a broken upstream behind Caddy
+  hosts: all
+  become: true
+  tasks:
+    # No public DNS points at a container, so no certificate can be issued: the
+    # role must still finish, on the redirect probe, with only the ACME warning.
+    - name: Converge in ACME mode
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_caddy_tls: acme
+        sponsord_onramp_readiness_retries: 2
+
+    - name: Read the ACME-mode Caddyfile
+      ansible.builtin.slurp:
+        src: /etc/caddy/Caddyfile
+      register: _or_acme_caddy
+
+    - name: Require ACME's Caddyfile, and the certificate failure judged advisory
+      ansible.builtin.assert:
+        that:
+          - "'tls internal' not in (_or_acme_caddy.content | b64decode)"
+          - sponsord_onramp_caddy_redirect.status == 308
+          - sponsord_onramp_caddy_probe.rc in [35, 60]
+        fail_msg: >-
+          ACME mode: tls internal still present, the redirect probe got
+          {{ sponsord_onramp_caddy_redirect.status | default('none') }}, or curl exit
+          {{ sponsord_onramp_caddy_probe.rc }} is not a pending-certificate failure.
+
+    - name: Gather package facts for the Caddy tasks run alone
+      ansible.builtin.package_facts:
+
+    # Caddy pointed at a port nothing listens on: TLS works (internal CA), the
+    # upstream answers 502, and that must fail the run.
+    - name: Run the Caddy tasks against a dead upstream
+      block:
+        - name: Point Caddy at a port nothing listens on
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+            tasks_from: caddy
+          vars:
+            sponsord_onramp_port: 8099
+            sponsord_onramp_readiness_retries: 2
+
+        - name: Fail — the Caddy probe let a dead upstream through
+          ansible.builtin.fail:
+            msg: The role finished although Caddy could not reach the onramp.
+      rescue:
+        - name: Require the failure to come from the Caddy probe report
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Report an onramp that is not reachable through Caddy'
+            fail_msg: >-
+              Expected the Caddy probe to fail the run, but it failed at
+              "{{ ansible_failed_task.name }}".
+
+    - name: Converge back onto the internal CA and the real upstream
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+- name: Side effect — a Caddyfile someone else wrote, and the package's default
+  hosts: all
+  become: true
+  tasks:
     - name: Replace the Caddyfile with one this role did not write
       ansible.builtin.copy:
         dest: /etc/caddy/Caddyfile
@@ -146,3 +426,29 @@
         name: sponsord_onramp
       vars:
         sponsord_onramp_caddy_overwrite_config: true
+
+    # What a first run leaves when it installs Caddy and stops before templating.
+    - name: Put the package's own default Caddyfile back
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          cd "$(mktemp -d)"
+          apt-get download caddy >/dev/null
+          dpkg-deb --fsys-tarfile caddy_*.deb | tar -xO ./etc/caddy/Caddyfile > /etc/caddy/Caddyfile
+      changed_when: true
+
+    - name: Converge over the package's default Caddyfile, unconfirmed
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    - name: Read the Caddyfile after replacing the default
+      ansible.builtin.slurp:
+        src: /etc/caddy/Caddyfile
+      register: _or_after_default
+
+    - name: Require the role's Caddyfile in place of the default
+      ansible.builtin.assert:
+        that:
+          - "'MANAGED BY the sponsord_onramp role' in (_or_after_default.content | b64decode)"
+        fail_msg: The role did not take over the caddy package's untouched default Caddyfile.

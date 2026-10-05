@@ -11,8 +11,10 @@ the public side of the deCDN onboarding sponsor. It serves:
 
 It holds no wallet. For each person who passes the gate it asks the
 [`sponsord`](../sponsord/README.md) daemon on the same host for a capability, using
-the daemon's API token. So the host must be in `sponsord_hosts` as well as
-`sponsord_onramp_hosts`, and the role checks that it is.
+the daemon's API token. So the daemon must run on the same host: in this repo, list
+the host in `sponsord_hosts` as well as `sponsord_onramp_hosts`. The role fails
+early when the daemon's token file is missing, and its `/healthz` gate fails when
+the daemon is unreachable.
 
 ## What it does
 
@@ -48,19 +50,24 @@ the daemon's API token. So the host must be in `sponsord_hosts` as well as
   every restart input (the token, the Turnstile secret, the env file, the gate page,
   the unit, the binary) restarts the onramp when one changes outside the role.
 - **Puts Caddy in front** (`sponsord_onramp_proxy: caddy`, the default):
-  - Installs the distribution's `caddy` package. No third-party apt repository is
-    added.
+  - Installs the distribution's `caddy` package (Debian main; on Ubuntu it is in
+    **universe**, which must be enabled). No third-party apt repository is added.
   - Writes `/etc/caddy/Caddyfile`: TLS for `sponsord_onramp_domain`, then a reverse
     proxy to the onramp on loopback. The file is validated with `caddy validate`
-    before it lands, and the admin API is off, so nothing on the host can
-    reconfigure the proxy.
-  - Opens tcp/80 (ACME challenge, https redirect) and tcp/443, through
-    `playbooks/group_vars/all.yml`.
-  - Probes `https://<domain>/healthz` through Caddy on the host. With ACME a failure
-    only warns, since the certificate can lag DNS. With `tls internal` it fails the
-    deploy.
-  - Refuses to replace a Caddyfile it did not write on a host where Caddy was
-    already installed, unless you set `sponsord_onramp_caddy_overwrite_config: true`.
+    before it lands. The admin API is off, so nothing on the host can reconfigure
+    the running proxy over its admin endpoint (:2019), and HTTP/3 is off, so udp/443
+    stays closed.
+  - Needs tcp/80 (ACME challenge, https redirect) and tcp/443 open. This repo's
+    playbooks open both (`playbooks/group_vars/all.yml`); from your own playbook, add
+    them to `baseline_extra_inbound` yourself.
+  - Probes the domain through Caddy on the host. Plain http must answer with Caddy's
+    https redirect, and `https://<domain>/healthz` must answer through TLS; both
+    failures are fatal. One exception: with ACME, a certificate that is not issued
+    yet (the TLS handshake fails, or the certificate cannot be verified) only warns,
+    since it can lag DNS.
+  - Refuses to replace a `/etc/caddy/Caddyfile` that it did not write and that is
+    not the caddy package's untouched default, unless you set
+    `sponsord_onramp_caddy_overwrite_config: true`.
 
 ## Before the first deploy
 
@@ -126,7 +133,7 @@ only way to reach the onramp: `CF-Connecting-IP` behind Cloudflare, or
 `X-Forwarded-For` if your proxy appends the client address. Otherwise clients can
 choose their own address and get around the rate limits. Switching from `caddy`
 to `none` closes the firewall holes but leaves the Caddy package installed and
-running; remove it yourself.
+running on 80/443; the role warns about it on every run until you remove it.
 
 ## Observability
 

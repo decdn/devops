@@ -11,7 +11,7 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `sponsord_onramp` role: deploys `sponsord-onramp` (decdn/sponsord), the public
   side of the sponsor: the Cloudflare Turnstile gate, the `decdn.sh` / `decdn.ps1`
   installers and the API the `decdn-sponsored` CLI polls. It runs on the daemon's
-  host (it asserts the host is also in `sponsord_hosts`) and reads the daemon's own
+  host (the token gate and `/healthz` fail without the daemon) and reads the daemon's own
   `/etc/sponsord/api-token`.
   - Install: a local binary (`sponsord_onramp_install_method: manual`, the default
     until upstream tags a release; `sponsord_onramp_release_target_dir` follows

@@ -1,10 +1,11 @@
 ---
 # Caddy in front of the onramp: the host's only public HTTP listener (tcp/80 for
-# the ACME challenge and the https redirect, tcp/443). playbooks/group_vars/all.yml
-# opens both in the baseline firewall for hosts in sponsord_onramp_hosts while
-# sponsord_onramp_proxy is "caddy". The distro package brings its own hardened unit
-# (user caddy, CAP_NET_BIND_SERVICE only); main.yml has already refused a Caddy
-# this role does not own.
+# the ACME challenge and the https redirect, tcp/443). This repo's
+# playbooks/group_vars/all.yml opens both in the baseline firewall for hosts in
+# sponsord_onramp_hosts while sponsord_onramp_proxy is "caddy". The distro package
+# brings its own unit (user caddy, CAP_NET_BIND_SERVICE as its only ambient
+# capability, PrivateTmp, ProtectSystem=full); main.yml has already refused a
+# Caddyfile this role does not own.
 
 # curl: the probe at the end of this file.
 - name: Install Caddy from the distribution
@@ -15,11 +16,11 @@
     cache_valid_time: 3600
 
 # `caddy validate` loads the config the way `caddy run` does (it also provisions
-# the TLS automation), so a Caddyfile that would not start never lands.
+# the TLS automation), so a Caddyfile that does not parse or provision never lands.
 - name: Template the Caddyfile
   ansible.builtin.template:
     src: Caddyfile.j2
-    dest: "{{ sponsord_onramp_caddyfile }}"
+    dest: "{{ _sponsord_onramp_caddyfile }}"
     owner: root
     group: root
     mode: "0644"
@@ -38,10 +39,28 @@
     state: started
   when: not ansible_check_mode or 'caddy' in ansible_facts.packages
 
+# Caddy serves the site at all: plain http answers with its https redirect. No
+# certificate is involved, so this holds from the first run, ACME or not.
+- name: Probe Caddy's http redirect for the domain
+  ansible.builtin.uri:
+    url: http://127.0.0.1/healthz
+    headers:
+      Host: "{{ sponsord_onramp_domain }}"
+    follow_redirects: none
+    status_code: 308
+    timeout: 5
+  register: sponsord_onramp_caddy_redirect
+  retries: "{{ sponsord_onramp_readiness_retries }}"
+  delay: "{{ sponsord_onramp_readiness_delay }}"
+  until: sponsord_onramp_caddy_redirect.status | default(-1) == 308
+  changed_when: false
+  when: not ansible_check_mode
+
 # The whole chain, as a user would reach it but pinned to this host: TLS for the
-# domain, the proxy, the onramp. With ACME the certificate can lag (DNS not yet
-# pointed here, a rate limit), so that probe only warns; with Caddy's internal CA
-# nothing outside the host is involved, so it is fatal.
+# domain, the proxy, the onramp. Fatal, except that with ACME a certificate that is
+# not issued yet (DNS not pointed here, a rate limit) only warns: Caddy then aborts
+# the handshake (curl 35) or serves one curl cannot verify (60). Any other failure
+# (a 502 from a dead upstream, nothing on 443, a hang) is a fault either way.
 - name: Probe the onramp through Caddy
   ansible.builtin.command:
     argv: >-
@@ -66,20 +85,20 @@
         sudo journalctl -u caddy -e
   when:
     - not ansible_check_mode
-    - sponsord_onramp_caddy_tls == 'internal'
     - sponsord_onramp_caddy_probe.rc != 0
+    - sponsord_onramp_caddy_tls == 'internal' or sponsord_onramp_caddy_probe.rc not in [35, 60]
 
 - name: Warn that the public certificate is not in place yet
   ansible.builtin.debug:
     msg: |-
-      WARNING: https://{{ sponsord_onramp_domain }}/healthz did not answer through Caddy
-      on this host yet (curl exit {{ sponsord_onramp_caddy_probe.rc }}:
-      {{ sponsord_onramp_caddy_probe.stderr | trim }}). With ACME that usually means the
-      certificate is not issued yet: check that the domain's A/AAAA records point at
-      this host and that tcp/80 and tcp/443 reach it, then read
+      WARNING: https://{{ sponsord_onramp_domain }} has no trusted certificate yet
+      (curl exit {{ sponsord_onramp_caddy_probe.rc }}: {{ sponsord_onramp_caddy_probe.stderr | trim }}).
+      Caddy serves the site (its http redirect answered), so ACME has not finished:
+      check that the domain's A/AAAA records point at this host and that tcp/80 and
+      tcp/443 reach it, then read
         sudo journalctl -u caddy -e
       Users cannot reach the onramp until this answers.
   when:
     - not ansible_check_mode
     - sponsord_onramp_caddy_tls == 'acme'
-    - sponsord_onramp_caddy_probe.rc != 0
+    - sponsord_onramp_caddy_probe.rc in [35, 60]

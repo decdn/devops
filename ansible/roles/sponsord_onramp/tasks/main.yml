@@ -5,17 +5,10 @@
 # before the binary is installed. The Turnstile widget and the release pins are
 # operator inputs — see roles/sponsord_onramp/README.md.
 
-# --- Placement ---------------------------------------------------------------------
-# The onramp calls the daemon on loopback with the daemon's own API token, and the
-# sponsord play that runs before this one is what makes the daemon healthy.
-- name: Require the host to run the sponsord daemon too
-  ansible.builtin.assert:
-    that:
-      - "'sponsord_hosts' in group_names"
-    fail_msg: >-
-      {{ inventory_hostname }} is in sponsord_onramp_hosts but not in sponsord_hosts.
-      The onramp needs the sponsord daemon on the same host (it reads the daemon's
-      API token and calls it on loopback). Add the host to sponsord_hosts too.
+# The onramp needs the sponsord daemon on the same host: it reads the daemon's API
+# token file and calls it on loopback. Nothing here names an inventory group; the
+# token gate below and the /healthz gate (the onramp binds only after reaching the
+# daemon) are what prove the daemon is there.
 
 # --- Install method + target ----------------------------------------------------
 - name: Require a valid install method
@@ -181,6 +174,22 @@
     - sponsord_onramp_network | length > 0
     - sponsord_network | default('') | length > 0
 
+# Also when the daemon has no profile but an explicit chain id: the onramp's
+# profile must be that chain's.
+- name: Require the onramp's network to be the daemon's chain
+  ansible.builtin.assert:
+    that:
+      - _sponsord_onramp_profile.chain_id | string == sponsord_chain_id | string
+    fail_msg: >-
+      sponsord_onramp_network "{{ sponsord_onramp_network }}" is chain
+      {{ _sponsord_onramp_profile.chain_id }}, but the daemon's sponsord_chain_id is
+      {{ sponsord_chain_id }}. Its CapacityBond and SlashJudge would belong to another
+      chain. Set the onramp's contract addresses for chain {{ sponsord_chain_id }}
+      explicitly and clear sponsord_onramp_network.
+  when:
+    - sponsord_onramp_network | length > 0
+    - sponsord_chain_id | default('') | string | length > 0
+
 - name: Report a contract address overridden in inventory
   ansible.builtin.debug:
     msg: >-
@@ -242,7 +251,9 @@
     that:
       # A DNS name: labels of letters, digits and inner hyphens, at least one dot.
       - sponsord_onramp_domain is match('^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$')
-      - sponsord_onramp_acme_email == '' or sponsord_onramp_acme_email is match('^[^@\s]+@[^@\s]+$')
+      - >-
+        sponsord_onramp_acme_email == ''
+        or sponsord_onramp_acme_email is match('^[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,63}$')
     fail_msg: >-
       sponsord_onramp_proxy "caddy" needs sponsord_onramp_domain, the DNS name users
       reach (got "{{ sponsord_onramp_domain }}"), and sponsord_onramp_acme_email must be
@@ -361,8 +372,9 @@
     fail_msg: >-
       {{ sponsord_onramp_api_token_file }} is
       {{ 'missing' if not sponsord_onramp_secret_stat.results[0].stat.exists else 'not a regular file' }}.
-      The sponsord role creates it; run the sponsord play on this host first
-      (`make deploy-sponsord` runs both).
+      The onramp runs beside the sponsord daemon and uses its token, which the sponsord
+      role creates: deploy sponsord on this host first (in this repo, list the host in
+      sponsord_hosts too; `make deploy-sponsord` runs both).
   when: not (ansible_check_mode and not sponsord_onramp_secret_stat.results[0].stat.exists)
 
 - name: Require the Turnstile secret as a regular file
@@ -399,46 +411,103 @@
   register: sponsord_onramp_turnstile_grep
   changed_when: false
   check_mode: false
-  failed_when: false
+  # 1 = no non-blank character (reported below); 2 = grep could not read the file.
+  failed_when: sponsord_onramp_turnstile_grep.rc not in [0, 1]
 
 - name: Report an empty Turnstile secret
   ansible.builtin.fail:
     msg: >-
       {{ sponsord_onramp_turnstile_secret_file }} is empty. Write the widget's secret
-      key into it (see the previous task's message for the recipe).
-  when: sponsord_onramp_turnstile_grep.rc != 0
+      key into it, as root: umask 077; printf '%s' '<secret>' | sudo tee
+      {{ sponsord_onramp_turnstile_secret_file }} >/dev/null
+  when: sponsord_onramp_turnstile_grep.rc == 1
 
 - name: Read whether Caddy is already installed
   ansible.builtin.package_facts:
   when: sponsord_onramp_proxy == 'caddy'
 
 # Before any mutation: a Caddyfile someone else wrote is never replaced silently.
+# It is judged by the file, not by whether the package is installed: a Caddy run
+# from a static binary leaves no dpkg trace, and apt keeps an existing conffile.
+- name: Check the Caddyfile
+  ansible.builtin.stat:
+    path: "{{ _sponsord_onramp_caddyfile }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: md5
+  register: sponsord_onramp_caddyfile_stat
+  when: sponsord_onramp_proxy == 'caddy'
+
 - name: Check the Caddyfile for this role's marker
   ansible.builtin.command:
-    argv: [grep, -qF, "MANAGED BY the sponsord_onramp role", "{{ sponsord_onramp_caddyfile }}"]
+    argv: [grep, -qF, "MANAGED BY the sponsord_onramp role", "{{ _sponsord_onramp_caddyfile }}"]
   register: sponsord_onramp_caddyfile_marker
   changed_when: false
   check_mode: false
-  failed_when: false
+  # 1 = no marker; 2 = unreadable, which must not pass for "no marker".
+  failed_when: sponsord_onramp_caddyfile_marker.rc not in [0, 1]
   when:
     - sponsord_onramp_proxy == 'caddy'
-    - "'caddy' in ansible_facts.packages"
+    - sponsord_onramp_caddyfile_stat.stat.isreg | default(false)
+
+# The package's own default Caddyfile (a first run that installed Caddy and then
+# stopped before templating leaves exactly that) is safe to replace. dpkg records
+# its md5 among the package's conffiles; empty when the package is not installed.
+- name: Read the packaged Caddyfile's checksum
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      { dpkg-query -W -f='${Conffiles}\n' caddy 2>/dev/null || true; } \
+        | awk -v f={{ _sponsord_onramp_caddyfile | quote }} '$1 == f { print $2 }'
+  register: sponsord_onramp_caddyfile_pristine
+  changed_when: false
+  check_mode: false
+  when:
+    - sponsord_onramp_proxy == 'caddy'
+    - sponsord_onramp_caddyfile_marker.rc | default(0) == 1
 
 - name: Refuse to replace a Caddyfile this role did not write
   ansible.builtin.assert:
     that:
-      - sponsord_onramp_caddy_overwrite_config
+      - sponsord_onramp_caddyfile_stat.stat.isreg
+      - >-
+        sponsord_onramp_caddy_overwrite_config
+        or sponsord_onramp_caddyfile_marker.rc | default(0) == 0
+        or (sponsord_onramp_caddyfile_pristine.stdout | default('') | trim | length > 0
+            and sponsord_onramp_caddyfile_pristine.stdout | trim == sponsord_onramp_caddyfile_stat.stat.checksum)
     fail_msg: >-
-      Caddy was installed on this host before this role and
-      {{ sponsord_onramp_caddyfile }} is not the role's (no "MANAGED BY the
-      sponsord_onramp role" line). The role owns that whole file, so it would discard
-      whatever else this Caddy serves. Move the other sites elsewhere (or onto your own
-      proxy, with sponsord_onramp_proxy "none"), or set
+      {{ _sponsord_onramp_caddyfile }} exists and is not the role's (no "MANAGED BY the
+      sponsord_onramp role" line, and not the caddy package's untouched default), or
+      is not a regular file. The role owns that whole file, so it would discard
+      whatever else this Caddy serves. Move the other sites elsewhere (or onto your
+      own proxy, with sponsord_onramp_proxy "none"), or set
       sponsord_onramp_caddy_overwrite_config: true to let the role replace it.
   when:
     - sponsord_onramp_proxy == 'caddy'
-    - "'caddy' in ansible_facts.packages"
-    - sponsord_onramp_caddyfile_marker.rc != 0
+    - sponsord_onramp_caddyfile_stat.stat.exists
+
+# Switching to "none" closes the firewall holes but leaves the role's Caddy running
+# on 80/443 (your own proxy could not bind them). The role removes nothing.
+- name: Check for a Caddyfile this role wrote while proxy was "caddy"
+  ansible.builtin.command:
+    argv: [grep, -qF, "MANAGED BY the sponsord_onramp role", "{{ _sponsord_onramp_caddyfile }}"]
+  register: sponsord_onramp_stale_caddy
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  when: sponsord_onramp_proxy == 'none'
+
+- name: Warn that the role's Caddy is still installed
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: sponsord_onramp_proxy is "none", but {{ _sponsord_onramp_caddyfile }} is
+      this role's, so its Caddy may still be running and holding tcp/80 and tcp/443
+      (the firewall no longer opens them). Remove it: sudo systemctl disable --now
+      caddy && sudo apt-get remove caddy.
+  when:
+    - sponsord_onramp_proxy == 'none'
+    - sponsord_onramp_stale_caddy.rc | default(1) == 0
 
 # --- Install, configure, start ------------------------------------------------------
 - name: Install the sponsord-onramp binary

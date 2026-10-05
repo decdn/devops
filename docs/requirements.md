@@ -44,9 +44,10 @@ On Ubuntu 25.10 and later, `sudo` is sudo-rs; see the `ansible_become_exe` note 
   provider's security group or firewall, which the host cannot see.
 - **A sponsord-onramp host (Ansible only) also needs inbound tcp/80 and tcp/443** for
   Caddy, from anywhere: 443 serves the onramp, 80 answers the ACME challenge and
-  redirects to https. `baseline` opens both for hosts in `sponsord_onramp_hosts`; open
-  them in the provider's firewall too, and point the domain's A/AAAA records at the
-  host.
+  redirects to https. `baseline` opens both for hosts in `sponsord_onramp_hosts` while
+  `sponsord_onramp_proxy` is `caddy` (the default; `none` opens neither); open them in
+  the provider's firewall too, and point the domain's A/AAAA records at the host.
+  Caddy comes from the distribution: on Ubuntu, enable the **universe** component.
 - **Outbound:** HTTPS to your RPC provider and to any cache origin; QUIC/UDP to peers;
   HTTPS to the iroh relays (upstream's defaults unless you set your own).
 - **NAT:** a node without direct inbound reachability still works through iroh relays,

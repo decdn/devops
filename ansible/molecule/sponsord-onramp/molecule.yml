@@ -22,7 +22,7 @@
 # `baseline` is skipped (real-host-only — see ../default/molecule.yml), so the
 # tcp/80 + tcp/443 holes are covered by tests/firewall-holes instead. Release
 # mode is covered for the sponsord role (../sponsord), whose install tasks this
-# role's mirror. The broken-input matrix lives in ../validation.
+# role mirrors. The broken-input matrix lives in ../validation.
 driver:
   name: docker
 platforms:
@@ -83,6 +83,8 @@ provisioner:
         sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc
         sponsord_onramp_domain: onramp.molecule.test
         sponsord_onramp_caddy_tls: internal
+        # Renders (and so validates) the Caddyfile's global email option.
+        sponsord_onramp_acme_email: ops@molecule.test
         sponsord_onramp_turnstile_sitekey: 1x00000000000000000000AA
         # Must equal EXPECTED_BRAND in files/sponsord-onramp-stub: quotes and a
         # dollar sign prove the env file's quoting ($$ is molecule's escape).

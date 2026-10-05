@@ -26,7 +26,8 @@
 
 # After the daemon's play, whose /healthz gate is fatal, so the onramp starts
 # against a daemon that is up. Baseline and Alloy already ran for these hosts
-# above (the role asserts each one is also in sponsord_hosts).
+# above for hosts that are also in sponsord_hosts, which every one must be: the
+# onramp uses the daemon on its own host.
 - name: Provision sponsord-onramp
   hosts: sponsord_onramp_hosts
   become: true

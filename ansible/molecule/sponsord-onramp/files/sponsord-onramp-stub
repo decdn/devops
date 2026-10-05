@@ -13,8 +13,12 @@ without a release or a Turnstile account:
                      - ONRAMP_TURNSTILE_SECRET_FILE readable and non-empty;
                      - ONRAMP_BRAND_NAME, when set, equal to EXPECTED_BRAND byte for
                        byte (proves the role's EnvironmentFile quoting);
-                     - the daemon at ONRAMP_DAEMON_URL answers /healthz (upstream
-                       reads its /v1/info at start and exits if it can't).
+                     - ONRAMP_BIND and ONRAMP_DAEMON_URL set (no fallback, so a
+                       template that drops either is caught);
+                     - ONRAMP_GATE_TEMPLATE, when set, readable by this unit;
+                     - the daemon at ONRAMP_DAEMON_URL answers /v1/info for the
+                       token in ONRAMP_DAEMON_TOKEN_FILE (upstream reads /v1/info at
+                       start and exits if it can't).
                    Any violation exits 1 with the reason on stderr (the journal).
                    The marker file UNHEALTHY_MARKER makes it exit 1 on start,
                    which is how the scenario proves the readiness gate is fatal.
@@ -33,7 +37,7 @@ UNHEALTHY_MARKER = "/etc/sponsord/onramp-stub-unhealthy"
 # Must match sponsord_onramp_brand_name in the scenario's inventory.
 EXPECTED_BRAND = 'deCDN "molecule" $HOME'
 REQUIRED = (
-    "ONRAMP_PUBLIC_URL", "ONRAMP_RPC_URL", "ONRAMP_CAPACITY_BOND_ADDR", "ONRAMP_TURNSTILE_SITEKEY",
+    "ONRAMP_BIND", "ONRAMP_DAEMON_URL", "ONRAMP_PUBLIC_URL", "ONRAMP_RPC_URL", "ONRAMP_CAPACITY_BOND_ADDR", "ONRAMP_TURNSTILE_SITEKEY",
     "ONRAMP_DECDN_RELEASE", "ONRAMP_DECDN_SUMS_SHA256", "ONRAMP_CLI_RELEASE", "ONRAMP_CLI_SUMS_SHA256",
 )
 
@@ -66,16 +70,25 @@ def check_startup():
             die(f"{var} is not set")
     if os.environ.get("ONRAMP_BRAND_NAME", EXPECTED_BRAND) != EXPECTED_BRAND:
         die("ONRAMP_BRAND_NAME does not match the inventory literal (EnvironmentFile quoting broke it)")
-    if len(read_secret("ONRAMP_DAEMON_TOKEN_FILE")) < 32:
+    token = read_secret("ONRAMP_DAEMON_TOKEN_FILE")
+    if len(token) < 32:
         die("daemon token is shorter than 32 bytes")
     read_secret("ONRAMP_TURNSTILE_SECRET_FILE")
-    daemon = os.environ.get("ONRAMP_DAEMON_URL", "http://127.0.0.1:8090")
+    template = os.environ.get("ONRAMP_GATE_TEMPLATE")
+    if template:
+        try:
+            with open(template, "rb") as f:
+                f.read()
+        except OSError as e:
+            die(f"ONRAMP_GATE_TEMPLATE {template}: {e}")
+    daemon = os.environ["ONRAMP_DAEMON_URL"]
+    req = urllib.request.Request(f"{daemon}/v1/info", headers={"Authorization": "Bearer " + token.decode()})
     try:
-        with urllib.request.urlopen(f"{daemon}/healthz", timeout=5) as r:
+        with urllib.request.urlopen(req, timeout=5) as r:
             if r.status != 200:
                 die(f"daemon {daemon} answered {r.status}")
     except OSError as e:
-        die(f"daemon {daemon} is unreachable: {e}")
+        die(f"daemon {daemon}/v1/info failed (unreachable, or the token is not the daemon's): {e}")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -106,7 +119,7 @@ def main():
         print(f"sponsord-onramp-stub: unexpected arguments {sys.argv[1:]}", file=sys.stderr)
         sys.exit(2)
     check_startup()
-    host, _, port = os.environ.get("ONRAMP_BIND", "127.0.0.1:8080").rpartition(":")
+    host, _, port = os.environ["ONRAMP_BIND"].rpartition(":")
     HTTPServer((host, int(port)), Handler).serve_forever()
 
 

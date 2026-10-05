@@ -78,14 +78,14 @@ sponsord_onramp_public_url: >-
 # "internal": Caddy's own local CA, for staging and tests; browsers will not trust it.
 sponsord_onramp_caddy_tls: acme           # "acme" | "internal"
 sponsord_onramp_acme_email: ""            # optional ACME account contact
-# The role owns /etc/caddy/Caddyfile. On a host where Caddy was installed before
-# this role and that file lacks the role's marker, the role refuses to replace it
-# unless this is true.
+# The role owns /etc/caddy/Caddyfile. If that file exists without the role's marker
+# and is not the package's untouched default, it belongs to someone else, and the
+# role refuses to replace it unless this is true.
 sponsord_onramp_caddy_overwrite_config: false
-sponsord_onramp_caddyfile: /etc/caddy/Caddyfile
 # The header Caddy (or your proxy) puts the client address in; the onramp rate
-# limits and gates by it. Caddy without trusted_proxies replaces any incoming
-# X-Forwarded-For, so the right-most address is the real client. With your own
+# limits and gates by it. Caddy (without trusted_proxies) sets X-Forwarded-For to
+# the client it saw, discarding any client-sent value, and the onramp uses the
+# right-most entry, so clients cannot choose their address. With your own
 # proxy, set it only if that proxy is the ONLY way in (CF-Connecting-IP behind
 # Cloudflare); otherwise clients pick their own address. "" = the TCP peer.
 sponsord_onramp_client_ip_header: "{{ 'X-Forwarded-For' if sponsord_onramp_proxy == 'caddy' else '' }}"
@@ -118,15 +118,17 @@ sponsord_onramp_fund_rate_per_min: ""         # [10] POST /v1/fund per address; 
 sponsord_onramp_poll_rate_per_min: ""         # [120] GET /v1/capability per address; 0 = off
 
 # --- Files on the host ----------------------------------------------------------
-# Under the daemon's directory: the onramp reads the daemon's own API token.
+# Beside the daemon's files: the directory and the API token follow the sponsord
+# role's sponsord_etc / sponsord_api_token_file when inventory sets them (the
+# fallbacks match roles/sponsord/defaults/main.yml).
 sponsord_onramp_etc: "{{ sponsord_etc | default('/etc/sponsord') }}"
-sponsord_onramp_api_token_file: "{{ sponsord_api_token_file | default('/etc/sponsord/api-token') }}"
-sponsord_onramp_turnstile_secret_file: /etc/sponsord/turnstile-secret   # operator-provisioned (0600)
-sponsord_onramp_env_file: /etc/sponsord/sponsord-onramp.env              # non-secret (0644, role-owned)
-sponsord_onramp_gate_template_file: /etc/sponsord/onramp-gate.html       # when _src is set (0644)
+sponsord_onramp_api_token_file: "{{ sponsord_api_token_file | default(sponsord_onramp_etc ~ '/api-token') }}"
+sponsord_onramp_turnstile_secret_file: "{{ sponsord_onramp_etc }}/turnstile-secret"   # operator-provisioned (0600)
+sponsord_onramp_env_file: "{{ sponsord_onramp_etc }}/sponsord-onramp.env"             # non-secret (0644, role-owned)
+sponsord_onramp_gate_template_file: "{{ sponsord_onramp_etc }}/onramp-gate.html"      # when _src is set (0644)
 # sha256 record of every restart input (token, Turnstile secret, env file, gate
 # page, unit, binary) as of the last converge that saw the onramp healthy.
-sponsord_onramp_inputs_checksum_file: /etc/sponsord/.onramp-inputs.sha256
+sponsord_onramp_inputs_checksum_file: "{{ sponsord_onramp_etc }}/.onramp-inputs.sha256"
 
 sponsord_onramp_bin: /usr/local/bin/sponsord-onramp
 

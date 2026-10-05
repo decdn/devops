@@ -316,11 +316,11 @@ samples_json() { # nanosecond timestamp
     ["$1","s-plain an unlevelled line"],
     ["$1","Error: s-rpcurl read PaymentPool.usdc(): error sending request for url (https://arb-sepolia.example-provider.io/v2/SECRET-KEY?x=SECRET-Q)"]]},
   {"stream":{"journal__systemd_unit":"sponsord-onramp.service","journal_priority_keyword":"info"},"values":[
-    ["$1","2026-10-05T07:59:11.000001Z DEBUG sponsord_onramp::http: r-debug"],
-    ["$1","2026-10-05T07:59:11.000002Z  INFO sponsord_onramp: r-info"],
-    ["$1","2026-10-05T07:59:11.000003Z  WARN sponsord_onramp::gate::turnstile: r-warn"],
-    ["$1","Error: r-raw the daemon at http://127.0.0.1:8090 is unreachable"],
-    ["$1","r-plain an unlevelled line"]]},
+    ["$1","2026-10-05T07:59:11.000001Z DEBUG sponsord_onramp::http: ro-debug"],
+    ["$1","2026-10-05T07:59:11.000002Z  INFO sponsord_onramp: ro-info"],
+    ["$1","2026-10-05T07:59:11.000003Z  WARN sponsord_onramp::gate::turnstile: ro-warn"],
+    ["$1","Error: ro-raw the daemon at http://127.0.0.1:8090 is unreachable"],
+    ["$1","ro-plain an unlevelled line"]]},
   {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"info"},"values":[
     ["$1","{\"level\":\"ERROR\",\"fields\":{\"message\":\"m-other-info\"}}"]]},
   {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"error"},"values":[
@@ -463,8 +463,8 @@ kept m-weird info decdn-node.service    # a non-string level is not a label valu
 kept m-text info decdn-node.service     # not JSON: journald's stands
 kept m-other-info info other.service    # another unit's JSON is never re-levelled
 kept m-other-error error other.service
-kept r-warn info sponsord-onramp.service  # onramp not enabled: journald's level
-kept r-debug info sponsord-onramp.service
+kept ro-warn info sponsord-onramp.service  # onramp not enabled: journald's level
+kept ro-debug info sponsord-onramp.service
 dropped m-trace                          # TRACE is not a journald keyword, so listed
 dropped m-debug                          # padded + lower-cased before the drop
 dropped m-other-debug                    # the journald-priority drop, other units
@@ -523,7 +523,7 @@ kept m-nolevel info decdn-node.service
 kept m-weird info decdn-node.service
 kept m-text info decdn-node.service
 kept m-other-error error other.service
-dropped r-warn                           # onramp not enabled: judged at journald's info
+dropped ro-warn                           # onramp not enabled: judged at journald's info
 dropped m-info
 dropped m-trace
 dropped m-debug
@@ -544,7 +544,7 @@ kept s-plain info sponsord.service       # any other unlevelled line: journald's
 dropped s-trace
 dropped s-debug
 kept m-error error decdn-node.service    # the node's JSON stage is unaffected
-kept r-warn info sponsord-onramp.service  # the onramp is not enabled here
+kept ro-warn info sponsord-onramp.service  # the onramp is not enabled here
 echo "ok: sponsord log level follows its text line (defaults)"
 
 # Co-located, guardrail "info|debug|trace": both daemons exempt from the
@@ -563,20 +563,20 @@ dropped s-info
 dropped s-trace
 dropped m-info
 dropped m-other-info
-dropped r-warn                           # the onramp is not enabled: not exempt
-dropped r-raw
+dropped ro-warn                           # the onramp is not enabled: not exempt
+dropped ro-raw
 echo "ok: both daemons judged by their own level (info in the guardrail)"
 
 # The onramp too: exempt, and levelled from its plain-text line like sponsord.
 run_level_harness colocatedonramp.alloy 32
 no_secrets
-kept r-warn warning sponsord-onramp.service
-kept r-raw error sponsord-onramp.service  # its exit error, with the daemon URL redacted
-kept r-plain info sponsord-onramp.service # exempt: no level of its own to judge by
+kept ro-warn warning sponsord-onramp.service
+kept ro-raw error sponsord-onramp.service # its exit error: an error
+kept ro-plain info sponsord-onramp.service # exempt: no level of its own to judge by
 kept s-warn warning sponsord.service      # sponsord's stage is unaffected
 kept m-error error decdn-node.service
-dropped r-info
-dropped r-debug
+dropped ro-info
+dropped ro-debug
 echo "ok: the onramp judged by its own level (info in the guardrail)"
 
 # --- Gate 2: every ExecStart flag exists -------------------------------------

@@ -31,12 +31,13 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
    overrides `node.toml`), keeps the keystore password off the PVC, and refuses
    secret-bearing keys in `config`.
 2. **Localhost-only by default.** Service daemons bind `127.0.0.1` (e.g. the node's metrics
-   and admin RPC). A service that must accept public traffic declares exactly one hole (the
-   node's QUIC udp/4433) via `baseline_extra_inbound`; if a service ever needs an HTTP-facing
-   public path, front it with an explicit reverse proxy that terminates auth + TLS. Never
-   bind a *backend* to `0.0.0.0` or expose its raw port. The one HTTP-facing service today,
-   `sponsord-onramp`, binds loopback behind the `sponsord_onramp` role's Caddy (tcp/80 +
-   tcp/443), and its own gate (Turnstile) is the auth.
+   and admin RPC). A service that must accept public traffic declares its holes explicitly
+   via `baseline_extra_inbound` (today: the node's QUIC udp/4433, and tcp/80 + tcp/443 for
+   the `sponsord_onramp` role's Caddy). An HTTP-facing service is fronted by an explicit
+   reverse proxy that terminates TLS (and auth, where the service needs it), and the
+   backend stays on loopback. Never bind a *backend* to `0.0.0.0` or expose its raw port.
+   `sponsord-onramp` is public by design: its Turnstile gate guards the one action that
+   spends (`POST /v1/fund`), and per-address rate limits cover the rest.
    **Kubernetes exception (chart only):** the node's metrics bind `0.0.0.0` inside the pod
    so kubelet probes and Prometheus can reach them. That is allowed only behind a
    ClusterIP-only Service and the chart's NetworkPolicy (metrics ingress limited to
@@ -163,8 +164,9 @@ addresses) the repo carries, and they carry their upstream commit.
 
 - **`ansible/roles/sponsord_onramp`** — `sponsord-onramp`, sponsord's public side (the
   Turnstile gate, the installers, the `decdn-sponsored` CLI API), as a second play of
-  `playbooks/sponsord.yml` on `sponsord_onramp_hosts` (asserted to be in `sponsord_hosts`
-  too: it reads the daemon's `/etc/sponsord/api-token` and calls it on loopback).
+  `playbooks/sponsord.yml` on `sponsord_onramp_hosts` (which must also be in
+  `sponsord_hosts`: it reads the daemon's `/etc/sponsord/api-token` and calls it on
+  loopback; the token gate and `/healthz` fail without it, no group name is checked).
   - **Install / unit / gate:** the sponsord role's patterns, copied: manual or
     GPG-verified `sponsord-onramp-v*` release (the KEYS are the sponsord role's file,
     via `role_path`), `DynamicUser` with the token and the operator-provisioned
@@ -255,7 +257,8 @@ make build / galaxy-check          # the decdn.node collection
 `ansible/inventory/hosts.yml` is git-ignored and a real fleet lives in a private overlay.
 Inventory-adjacent group_vars do not load for an overlay, so anything every host needs
 regardless of inventory lives in `ansible/playbooks/group_vars/`. The public firewall holes
-(`baseline_extra_inbound`, today the node's udp/4433) are built from a host's groups in
+(`baseline_extra_inbound`, today the node's udp/4433, plus tcp/80 + tcp/443 on
+`sponsord_onramp_hosts` with `sponsord_onramp_proxy: caddy`) are built from a host's groups in
 `all.yml` (`_baseline_service_inbound`). `decdn_nodes.yml` and `sponsord_hosts.yml` both set
 `baseline_extra_inbound` to that list, so a co-located host renders one firewall in every play.
 `ansible/tests/firewall-holes/` (run by `make test-scripts`) pins the result per host shape.

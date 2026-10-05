@@ -83,7 +83,8 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 - **Localhost-only by default.** Backends bind `127.0.0.1`. A service that must accept
   public traffic declares its port explicitly, and the node declares exactly one:
   udp/4433. The sponsor's public onramp (Ansible only) stays on loopback too, behind
-  Caddy on tcp/80 + tcp/443. On Kubernetes, metrics bind `0.0.0.0` in the pod only behind a ClusterIP
+  Caddy on tcp/80 + tcp/443 (the default; with `sponsord_onramp_proxy: none` you bring
+  the proxy and open its ports). On Kubernetes, metrics bind `0.0.0.0` in the pod only behind a ClusterIP
   Service and a NetworkPolicy.
 - **Default-deny inbound** (Ansible's `baseline`, nftables). SSH is the only
   universally open port; extra public ports are declared via `baseline_extra_inbound`.

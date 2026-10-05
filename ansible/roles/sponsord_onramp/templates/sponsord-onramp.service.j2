@@ -35,7 +35,7 @@ Restart=on-failure
 RestartSec=5
 
 # --- Hardening -------------------------------------------------------------
-# Stateless: no StateDirectory, nothing on disk is writable.
+# Stateless: no StateDirectory; nothing on disk is writable beyond its private /tmp.
 DynamicUser=true
 NoNewPrivileges=true
 ProtectSystem=strict

@@ -10,14 +10,21 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 playbooks="$here/../../playbooks"
 
-got="$(
-  # From this directory, so ansible/ansible.cfg (inventory, become) is not read.
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# Each host writes its resolved list to <host>.json with the core copy module (the
+# json stdout callback lives in ansible.posix, which a core-only install lacks).
+# From this directory, so ansible/ansible.cfg (inventory, become) is not read.
+(
   cd "$here"
-  ANSIBLE_LOAD_CALLBACK_PLUGINS=1 ANSIBLE_STDOUT_CALLBACK=json ANSIBLE_DEPRECATION_WARNINGS=0 \
-    ansible all -i "$here/inventory.yml" --playbook-dir "$playbooks" \
-      -m ansible.builtin.debug -a var=baseline_extra_inbound </dev/null \
-  | jq -S '[.plays[0].tasks[0].hosts | to_entries[] | {key, value: .value.baseline_extra_inbound}] | from_entries'
-)"
+  ANSIBLE_DEPRECATION_WARNINGS=0 ansible all -i "$here/inventory.yml" --playbook-dir "$playbooks" \
+    -m ansible.builtin.copy \
+    -a "dest=$work/{{ inventory_hostname }}.json content={{ baseline_extra_inbound | to_json }} mode=0600" \
+    </dev/null >"$work/ansible.log" 2>&1
+) || { cat "$work/ansible.log" >&2; echo "ansible could not resolve the inventory" >&2; exit 1; }
+got="$(cd "$work" && jq -S -n '[inputs | {key: (input_filename | rtrimstr(".json")), value: .}] | from_entries' ./*.json \
+  | jq -S 'with_entries(.key |= ltrimstr("./"))')"
 want="$(jq -S . "$here/expected.json")"
 
 if [[ "$got" != "$want" ]]; then
@@ -25,4 +32,11 @@ if [[ "$got" != "$want" ]]; then
   diff <(echo "$want") <(echo "$got") >&2 || true
   exit 1
 fi
+# all.yml falls back to two role defaults outside the roles' plays; they must agree.
+roles="$here/../../roles"
+grep -qE '^decdn_bind_port: 4433([[:space:]]|$)' "$roles/decdn_node/defaults/main.yml" \
+  || { echo "decdn_bind_port's default is not 4433: update the fallback in playbooks/group_vars/all.yml" >&2; exit 1; }
+grep -qE '^sponsord_onramp_proxy: caddy([[:space:]]|$)' "$roles/sponsord_onramp/defaults/main.yml" \
+  || { echo "sponsord_onramp_proxy's default is not caddy: update the fallback in playbooks/group_vars/all.yml" >&2; exit 1; }
+
 echo "baseline_extra_inbound matches for $(jq -r 'keys | join(", ")' <<<"$want")"

@@ -111,7 +111,8 @@ the overlay carries its own: create them next to its `hosts.yml`, starting from 
 `inventory/group_vars/` and `inventory/host_vars/` are **not** loaded for it. Add child groups
 of your own when hosts differ by group (an origin, an egress cap on metered bandwidth), each
 with a `group_vars/<group>.yml`. Settings every host needs regardless of
-inventory, currently the public firewall holes (the node's udp/4433), live in
+inventory, currently the public firewall holes (the node's udp/4433, and tcp/80 +
+tcp/443 for Caddy on `sponsord_onramp_hosts`), live in
 `playbooks/group_vars/`, so an overlay can't drop them: `all.yml` builds the list from the
 host's groups and `decdn_nodes.yml` / `sponsord_hosts.yml` apply it. Override
 `baseline_extra_inbound` per host in `host_vars` if you have to. Playbook group_vars beat
@@ -314,18 +315,18 @@ make lint-alloy     # render grafana_alloy's templates, then `alloy validate` th
 for every role, must be rejected by their own asserts), `generate-keystore` (opt-in
 host-side wallet), `host-env` (host-provisioned `/etc/decdn/decdn.env`),
 `slow-readiness` (advisory `/metrics` probe timeout), `grafana-cloud` (the opt-in
-observability wiring — see [Grafana Cloud observability](#grafana-cloud-observability-opt-in))
+observability wiring — see [Grafana Cloud observability](#grafana-cloud-observability-opt-in)),
 `grafana-cloud-token` (the same wiring with the API token carried through
 git-ignored inventory instead: role-authored env file + provenance record),
 `os-matrix` (default's plays on Debian 13, Ubuntu 24.04 and Ubuntu 26.04; `default`
 itself is Debian 12), `lifecycle` (a `decdn_network` profile with an override, both
-backup scopes decrypted and checked, a rejected and a real decommission) and
+backup scopes decrypted and checked, a rejected and a real decommission),
 `sponsord` (`playbooks/sponsord.yml` on a host with no node: generated token, credential
 rotation restart, the fatal `/healthz` gate, Alloy scraping sponsord and not the node;
 `grafana-cloud` covers sponsord co-located with a node) and `sponsord-onramp` (the
 onramp beside its daemon, behind the real distro Caddy with `tls internal`: the https
-chain, the client address Caddy passes on, a Turnstile rotation restart, the fatal
-`/healthz` gate, a refused foreign Caddyfile).
+chain, the client address Caddy passes on, ACME and `none` modes, a Turnstile rotation
+restart, the fatal gates, a refused foreign Caddyfile).
 They are independent, so they run concurrently, and each line of output is prefixed with its scenario name
 because the runs interleave. `make molecule-serial` is the escape hatch when that
 interleaving gets in the way of reading a failure.

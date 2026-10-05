@@ -6,7 +6,8 @@ a release, a chain or a funded treasury:
 
   * `--version` -> print a version line and exit 0 (the role's version backstop).
   * no argument -> enforce the startup contract the real daemon enforces, then
-                   serve /healthz and /metrics on SPONSORD_BIND until killed:
+                   serve /healthz, /metrics and a bearer-checked /v1/info on
+                   SPONSORD_BIND until killed:
                      - SPONSORD_RPC_URL, _CHAIN_ID, _PAYMENT_POOL_ADDR, _POOL_ID set
                        (_CHAIN_ID is stricter than upstream, which defaults it;
                        the role always renders it);
@@ -41,6 +42,11 @@ UNHEALTHY_MARKER = "/etc/sponsord/stub-unhealthy"
 EXPECTED_RPC_URL = "https://rpc.example.invalid/?key=$HOME$(touch /tmp/sponsord-rpc-expanded)&q=o'brien \"x\""
 
 
+# Set by check_startup; /v1/info answers only a caller presenting it, as the real
+# daemon's authenticated routes do (the onramp reads /v1/info at start).
+API_TOKEN = b""
+
+
 def die(msg):
     print(f"sponsord-stub: {msg}", file=sys.stderr)
     sys.exit(1)
@@ -69,7 +75,9 @@ def check_startup():
             die(f"{var} is not set")
     if os.environ.get("SPONSORD_MOLECULE_RPC_LITERAL") == "1" and os.environ["SPONSORD_RPC_URL"] != EXPECTED_RPC_URL:
         die("SPONSORD_RPC_URL does not match the inventory literal (EnvironmentFile quoting broke it)")
-    if len(read_secret("SPONSORD_API_TOKEN_FILE")) < 32:
+    global API_TOKEN
+    API_TOKEN = read_secret("SPONSORD_API_TOKEN_FILE")
+    if len(API_TOKEN) < 32:
         die("API token is shorter than 32 bytes")
     read_secret("SPONSORD_TREASURY_PASSWORD_FILE")
     keystore = os.environ.get("SPONSORD_TREASURY_KEYSTORE")
@@ -97,6 +105,11 @@ class Handler(BaseHTTPRequestHandler):
             body, ctype = b'{"ok":true}', "application/json"
         elif self.path == "/metrics":
             body, ctype = b"sponsord_pool_topups_total 0\n", "text/plain; version=0.0.4"
+        elif self.path == "/v1/info":
+            if self.headers.get("Authorization", "").encode() != b"Bearer " + API_TOKEN:
+                self.send_error(401)
+                return
+            body, ctype = b'{"stub":true}', "application/json"
         else:
             self.send_error(404)
             return

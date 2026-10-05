@@ -6,6 +6,11 @@
   become: true
   gather_facts: false
   tasks:
+    - name: Load the onramp's network profile mirror
+      ansible.builtin.include_vars:
+        # Relative to this playbook's directory.
+        file: ../../roles/sponsord_onramp/vars/main/networks.yml
+
     - name: Stat the onramp's files
       ansible.builtin.stat:
         path: "{{ item }}"
@@ -41,9 +46,9 @@
           - "'ONRAMP_DAEMON_URL=http://127.0.0.1:8090' in _env"
           - "'ONRAMP_PUBLIC_URL=https://onramp.molecule.test' in _env"
           - "'ONRAMP_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc' in _env"
-          # From the network profile mirror (the daemon's sponsord_network).
-          - "'ONRAMP_CAPACITY_BOND_ADDR=0x' in _env"
-          - "'ONRAMP_SLASH_JUDGE_ADDR=0x' in _env"
+          # Exactly the mirror's addresses for the daemon's sponsord_network.
+          - "('ONRAMP_CAPACITY_BOND_ADDR=' ~ _profile.capacity_bond_address ~ '\n') in _env"
+          - "('ONRAMP_SLASH_JUDGE_ADDR=' ~ _profile.slash_judge_address ~ '\n') in _env"
           - "'ONRAMP_CLIENT_IP_HEADER=X-Forwarded-For' in _env"
           - "'ONRAMP_FUND_RATE_PER_MIN=0' in _env"
           - "'ONRAMP_TTL_SECS' not in _env"
@@ -53,6 +58,7 @@
         fail_msg: "{{ _env }}"
       vars:
         _env: "{{ _or_text.results[0].content | b64decode }}"
+        _profile: "{{ _sponsord_onramp_network_profiles['arbitrum-sepolia'] }}"
 
     - name: Require the role's Caddyfile, with its admin API off
       ansible.builtin.assert:
@@ -61,6 +67,8 @@
           - "'admin off' in _caddy"
           - "'onramp.molecule.test {' in _caddy"
           - "'tls internal' in _caddy"
+          - "'protocols h1 h2' in _caddy"
+          - "'email ops@molecule.test' in _caddy"
           - "'reverse_proxy 127.0.0.1:8080' in _caddy"
           - "'not the onramp' not in _caddy"
         fail_msg: "{{ _caddy }}"
@@ -143,13 +151,15 @@
       register: _or_xff
       changed_when: false
 
-    - name: Require the right-most address to be the real client
+    # Caddy without trusted_proxies REPLACES the header, so the forged address must
+    # be gone entirely, not just pushed left of the real one.
+    - name: Require the client address Caddy saw, and nothing else
       ansible.builtin.assert:
         that:
-          - (_or_xff.stdout.split(',') | last | trim) == '127.0.0.1'
+          - (_or_xff.stdout | trim) == '127.0.0.1'
         fail_msg: >-
-          The onramp saw X-Forwarded-For "{{ _or_xff.stdout }}": its right-most address
-          must be the client Caddy saw (127.0.0.1), not the forged 203.0.113.9.
+          The onramp saw X-Forwarded-For "{{ _or_xff.stdout }}": it must be exactly the
+          client Caddy saw (127.0.0.1), without the forged 203.0.113.9.
 
     - name: Read the Alloy config
       ansible.builtin.slurp:

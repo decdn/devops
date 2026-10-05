@@ -24,8 +24,9 @@
 # post-template `decdn config validate` gate still fails the deploy. It therefore
 # mutates the host, which is why this scenario has a prepare.yml staging wallet
 # material. It runs after the decdn_node assert-only cases so it cannot interfere
-# with them; the grafana_alloy and sponsord cases follow it and clean up after
-# themselves.
+# with them; the grafana_alloy, sponsord and (in a second play) sponsord_onramp
+# cases follow it and clean up after themselves (the onramp section notes its own
+# host-state cases).
 - name: Converge (expect validation failures)
   hosts: all
   become: true
@@ -2130,8 +2131,8 @@
     sponsord_onramp_cli_sums_sha256: "2222222222222222222222222222222222222222222222222222222222222222"
   tasks:
     # --- sponsord_onramp: each case breaks ONE input over the valid baseline in play
-    # vars. All but the last three abort at an assert before any host mutation; those
-    # stage /etc/sponsord files and remove them again.
+    # vars. All but the last four abort at an assert before any host mutation; those
+    # stage /etc/sponsord (and /etc/caddy) files and remove them again.
     - name: "Case onramp-release-version — release mode with no pinned version"
       block:
         - name: Run sponsord_onramp with release mode with no pinned version
@@ -2411,6 +2412,84 @@
             decdn_rejected: "{{ decdn_rejected + ['onramp-ip-header'] }}"
           when: ansible_failed_task.name == "Validate the client IP header name"
 
+    - name: "Case onramp-network-chain — a daemon chain id other than the onramp's profile"
+      block:
+        - name: Run sponsord_onramp with a daemon chain id other than the onramp's profile
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_chain_id: 1
+      rescue:
+        - name: Record onramp-network-chain rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-network-chain'] }}"
+          when: ansible_failed_task.name == "Require the onramp's network to be the daemon's chain"
+
+    - name: "Case onramp-proxy — a quoted overwrite confirmation"
+      block:
+        - name: Run sponsord_onramp with a quoted overwrite confirmation
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_caddy_overwrite_config: "false"
+      rescue:
+        - name: Record onramp-proxy rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-proxy'] }}"
+          when: ansible_failed_task.name == "Validate the proxy settings"
+
+    - name: "Case onramp-proxy — a misspelt TLS mode"
+      block:
+        - name: Run sponsord_onramp with a misspelt TLS mode
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_caddy_tls: interal
+      rescue:
+        - name: Record onramp-proxy rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-proxy'] }}"
+          when: ansible_failed_task.name == "Validate the proxy settings"
+
+    - name: "Case onramp-domain — an ACME email that would break the Caddyfile"
+      block:
+        - name: Run sponsord_onramp with an ACME email that would break the Caddyfile
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_acme_email: "ops}@example.org"
+      rescue:
+        - name: Record onramp-domain rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-domain'] }}"
+          when: ansible_failed_task.name == "Require a domain for Caddy"
+
+    - name: "Case onramp-rpc — a public RPC URL that injects a second variable"
+      block:
+        - name: Run sponsord_onramp with a public RPC URL that injects a second variable
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_rpc_url: "https://rpc.example.invalid/a\nONRAMP_BIND=0.0.0.0:8080"
+      rescue:
+        - name: Record onramp-rpc rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-rpc'] }}"
+          when: ansible_failed_task.name == "Require a public RPC URL with no credentials in it"
+
+    - name: "Case onramp-limit — a rate limit with a unit"
+      block:
+        - name: Run sponsord_onramp with a rate limit with a unit
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_poll_rate_per_min: "10m"
+      rescue:
+        - name: Record onramp-limit rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-limit'] }}"
+          when: ansible_failed_task.name == "Validate the onramp's limits"
+
     - name: "Case onramp-token — no daemon API token on the host"
       block:
         - name: Run sponsord_onramp with no daemon API token on the host
@@ -2504,6 +2583,37 @@
             path: /etc/sponsord
             state: absent
 
+    # Caddy run from a static binary leaves no dpkg trace: the file alone decides.
+    - name: "Case onramp-caddyfile — a foreign Caddyfile with no caddy package"
+      block:
+        - name: Stage the API token, the Turnstile secret and a foreign Caddyfile
+          ansible.builtin.shell:
+            cmd: |
+              set -eu
+              mkdir -p /etc/sponsord /etc/caddy
+              umask 077
+              printf '%064d' 0 > /etc/sponsord/api-token
+              echo 'not-empty' > /etc/sponsord/turnstile-secret
+              printf 'other.example {\n  respond "theirs"\n}\n' > /etc/caddy/Caddyfile
+          changed_when: true
+
+        - name: Run sponsord_onramp against the foreign Caddyfile
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+      rescue:
+        - name: Record onramp-caddyfile rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-caddyfile'] }}"
+          when: ansible_failed_task.name == "Refuse to replace a Caddyfile this role did not write"
+      always:
+        - name: Remove the foreign-Caddyfile fixtures
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/sponsord
+            - /etc/caddy
+
     - name: Confirm every bad value was rejected by the role's own validation
       ansible.builtin.assert:
         that:
@@ -2549,4 +2659,6 @@
            "onramp-domain", "onramp-public-url", "onramp-public-url", "onramp-rpc",
            "onramp-rpc", "onramp-rpc", "onramp-rpc", "onramp-public-url", "onramp-sitekey", "onramp-pin",
            "onramp-pin", "onramp-limit", "onramp-ip-header", "onramp-token",
-           "onramp-turnstile", "onramp-turnstile", "onramp-turnstile-empty"]
+           "onramp-turnstile", "onramp-turnstile", "onramp-turnstile-empty",
+           "onramp-network-chain", "onramp-proxy", "onramp-proxy", "onramp-domain",
+           "onramp-rpc", "onramp-limit", "onramp-caddyfile"]
