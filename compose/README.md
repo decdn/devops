@@ -279,9 +279,11 @@ the proxy.
 As for the node, run these from the repository root with `sudo`.
 
 - **Logs:** `sudo docker compose -f compose/compose.yaml logs -f sponsord sponsord-onramp caddy`.
-- **Stop:** `sudo docker compose -f compose/compose.yaml stop sponsord-onramp sponsord`.
-  On SIGTERM sponsord waits for a pool top-up it already sent, up to 120 s. Stopping
-  sponsord alone leaves the onramp running, answering users with errors.
+- **Stop:** `sudo docker compose -f compose/compose.yaml stop caddy sponsord-onramp sponsord`
+  (leave out `caddy` without that profile). On SIGTERM sponsord waits for a pool
+  top-up it already sent, up to 120 s. Stopping sponsord alone leaves the onramp
+  running, and stopping both leaves Caddy on tcp/80 and tcp/443 answering with
+  errors.
 - **Restart:** `sudo docker compose -f compose/compose.yaml restart sponsord` restarts
   the onramp too, because the onramp reads the daemon's limits only at start.
 - **Config change:** edit the env file, then
@@ -354,8 +356,12 @@ Then set `SPONSORD_IMAGE_REPO` / `SPONSORD_IMAGE_DIGEST` and
   it, so an unset one renders a value its service refuses: an invalid image
   reference, an unknown user, an onramp domain with a non-numeric port. That service
   fails to start; the others are unaffected.
-- `make lint-compose` (CI job `compose`) renders this file with every profile on, once
-  with the example `.env` and once with an empty one, and fails if any of those
-  properties regress ([`tests/invariants.jq`](tests/invariants.jq),
+- No secret is written in this file: each service may set only its listener,
+  secret-file paths and public URL inline, and everything else (`DECDN_RPC_URL`,
+  `SPONSORD_RPC_URL`, …) comes from its env file on the host.
+- `make lint-compose` (CI job `compose`) renders this file with every profile on:
+  with the example `.env`, without the env files, and with an empty `.env`. It fails
+  if any of those properties regress ([`tests/invariants.jq`](tests/invariants.jq),
+  [`tests/inline-env.jq`](tests/inline-env.jq),
   [`tests/fail-closed.jq`](tests/fail-closed.jq)); `make test-scripts` checks it
   rejects broken variants.

@@ -227,11 +227,12 @@ jobs:
       - name: cloud-init invariants
         run: make lint-cloud-init
 
-  # Docker Compose path: render compose/compose.yaml with every profile on, with its
-  # example env files and with an empty .env, and assert the invariants its README
-  # promises (compose/tests/*.jq: host network, nothing published, images by digest,
-  # read-only rootfs, no capabilities, exact mounts, loopback listeners, graceful
-  # stop, unset variables that fail closed). Runs only when compose/ or the root
+  # Docker Compose path: render compose/compose.yaml with every profile on (with its
+  # example env files, without env files, with an empty .env) and assert the
+  # invariants its README promises (compose/tests/*.jq: host network, nothing
+  # published, images by digest, read-only rootfs, no capabilities, exact mounts,
+  # loopback listeners, no secret inline, graceful stop, unset variables that fail
+  # closed). Runs only when compose/ or the root
   # Makefile changed.
   compose:
     needs: changes

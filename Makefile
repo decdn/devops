@@ -72,15 +72,20 @@ security-compose:    ## KICS scan of compose/ (pinned engine image)
 		--report-formats json,sarif --output-path /repo/kics-results/compose \
 		--no-progress --fail-on high
 
-# Renders compose/compose.yaml with every profile on, twice, and checks each render:
+# Renders compose/compose.yaml with every profile on, three times, and checks each:
 #  - with the example .env, against compose/tests/invariants.jq: the properties the
 #    README promises (host network, nothing published, images by digest, read-only
 #    rootfs, no capabilities beyond Caddy's NET_BIND_SERVICE, exact security_opt,
 #    non-root users, each container's exact mounts, loopback sponsord listeners,
 #    secret files only, stop graces long enough for each daemon's drain);
+#  - with the env files left out (--no-env-resolution), against
+#    compose/tests/inline-env.jq: compose.yaml itself sets only the allowed
+#    environment keys, so no secret (DECDN_RPC_URL, SPONSORD_RPC_URL) moves into the
+#    tracked file;
 #  - with an empty .env, against compose/tests/fail-closed.jq: an unset variable
 #    renders a value its service refuses, since compose.yaml cannot use `:?`.
-# Both run under `env -i`, because the caller's shell variables would override the
+# check <jq program> <.env file> [extra `config` flags] does one of them. All run
+# under `env -i`, because the caller's shell variables would override the
 # .env and the lint would check something other than the committed defaults.
 # LINT_COMPOSE_FILE (not Compose's own COMPOSE_FILE, which operators export) is
 # overridable so tests/scripts-test.sh can feed it broken variants.
@@ -93,7 +98,7 @@ lint-compose:        ## render compose/ with its examples and check its security
 			SPONSORD_SECRET_ENV_FILE=$(CURDIR)/compose/sponsord-secret.env.example \
 			SPONSORD_ENV_FILE=$(CURDIR)/compose/sponsord.env.example \
 			SPONSORD_ONRAMP_ENV_FILE=$(CURDIR)/compose/sponsord-onramp.env.example \
-			docker compose -f '$(LINT_COMPOSE_FILE)' --env-file "$$2" --profile '*' config --format json)" \
+			docker compose -f '$(LINT_COMPOSE_FILE)' --env-file "$$2" --profile '*' config "$${@:3}" --format json)" \
 			|| { echo "lint-compose: docker compose could not render $(LINT_COMPOSE_FILE) (see above)" >&2; exit 2; }; \
 		[ -n "$$rendered" ] || { echo "lint-compose: docker compose rendered nothing" >&2; exit 2; }; \
 		violations="$$(jq -r -f "$$1" <<<"$$rendered")" \
@@ -102,6 +107,7 @@ lint-compose:        ## render compose/ with its examples and check its security
 			|| { sed 's/^/  /' <<<"$$violations" >&2; echo "$(LINT_COMPOSE_FILE) violates an invariant (see $$1)" >&2; exit 1; }; \
 	}; \
 	check compose/tests/invariants.jq compose/.env.example; \
+	check compose/tests/inline-env.jq compose/.env.example --no-env-resolution; \
 	check compose/tests/fail-closed.jq /dev/null
 	@echo "compose invariants hold: $(LINT_COMPOSE_FILE)"
 
