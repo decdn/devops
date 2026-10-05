@@ -57,10 +57,13 @@ security-helm:       ## KICS scan of the decdn-node chart's rendered manifests (
 		--no-progress --fail-on high
 
 # One query is excluded, deliberately: "Volume Has Sensitive Host Directory"
-# (1c1325ff-…) fires on the read-only /etc/decdn mount. That directory is the node's
-# own config dir, mounted :ro, and keeping the Ansible host layout is what lets the
-# host CLI, backups and restores (docs/lifecycle.md) work unchanged. The two MEDIUMs
-# (host network, no healthcheck) are the documented design; see compose/README.md.
+# (1c1325ff-…) flags every host-path mount: /etc/decdn (ro) and /var/lib/decdn, the
+# /etc/sponsord credential files (ro, one file each) and /var/lib/caddy. They are
+# the Ansible roles' host layout, which is what lets the host CLI, backups and
+# restores (docs/lifecycle.md) work unchanged; lint-compose pins each container's
+# exact mounts instead. The MEDIUMs (host
+# network, no healthcheck, Caddy's NET_BIND_SERVICE) and the INFO (both sponsord
+# containers mount the API token) are the documented design; see compose/README.md.
 security-compose:    ## KICS scan of compose/ (pinned engine image)
 	mkdir -p kics-results
 	docker run --rm --user $(shell id -u):$(shell id -g) -w /repo -v "$(CURDIR):/repo" $(KICS_IMAGE) \
@@ -69,27 +72,38 @@ security-compose:    ## KICS scan of compose/ (pinned engine image)
 		--report-formats json,sarif --output-path /repo/kics-results/compose \
 		--no-progress --fail-on high
 
-# Renders compose/compose.yaml with the example env files and asserts the invariants
-# the README promises: host networking and no published ports (so metrics and the
-# admin RPC stay loopback), a digest-pinned image, read-only rootfs, every capability
-# dropped, no-new-privileges, and a stop grace long enough for the daemon's drain.
-COMPOSE_INVARIANTS := .services["decdn-node"] as $$s | \
-	($$s.network_mode == "host") and ($$s.ports == null) and \
-	($$s.image | test("@sha256:[0-9a-f]{64}$$")) and ($$s.read_only == true) and \
-	($$s.cap_drop == ["ALL"]) and ($$s.security_opt | index("no-new-privileges:true") != null) and \
-	($$s.stop_signal == "SIGTERM") and ($$s.stop_grace_period == "5m0s") and \
-	($$s.user | test("^[0-9]+:[0-9]+$$"))
-
-# COMPOSE_FILE is overridable so tests/scripts-test.sh can feed it broken variants.
-COMPOSE_FILE ?= compose/compose.yaml
+# Renders compose/compose.yaml with every profile on, twice, and checks each render:
+#  - with the example .env, against compose/tests/invariants.jq: the properties the
+#    README promises (host network, nothing published, images by digest, read-only
+#    rootfs, no capabilities beyond Caddy's NET_BIND_SERVICE, exact security_opt,
+#    non-root users, each container's exact mounts, loopback sponsord listeners,
+#    secret files only, stop graces long enough for each daemon's drain);
+#  - with an empty .env, against compose/tests/fail-closed.jq: an unset variable
+#    renders a value its service refuses, since compose.yaml cannot use `:?`.
+# Both run under `env -i`, because the caller's shell variables would override the
+# .env and the lint would check something other than the committed defaults.
+# LINT_COMPOSE_FILE (not Compose's own COMPOSE_FILE, which operators export) is
+# overridable so tests/scripts-test.sh can feed it broken variants.
+LINT_COMPOSE_FILE ?= compose/compose.yaml
 lint-compose:        ## render compose/ with its examples and check its security invariants (needs docker, jq)
 	@set -o pipefail; \
-	rendered="$$(DECDN_ENV_FILE=$(CURDIR)/compose/decdn.env.example docker compose -f '$(COMPOSE_FILE)' \
-		--env-file compose/.env.example config --format json)" \
-		|| { echo "lint-compose: docker compose could not render $(COMPOSE_FILE) (see above)" >&2; exit 2; }; \
-	jq -e '$(COMPOSE_INVARIANTS)' <<<"$$rendered" >/dev/null \
-		|| { echo "$(COMPOSE_FILE) violates an invariant (see the lint-compose comment in Makefile)" >&2; exit 1; }
-	@echo "compose invariants hold"
+	check() { \
+		rendered="$$(env -i PATH="$$PATH" HOME="$$HOME" \
+			DECDN_ENV_FILE=$(CURDIR)/compose/decdn.env.example \
+			SPONSORD_SECRET_ENV_FILE=$(CURDIR)/compose/sponsord-secret.env.example \
+			SPONSORD_ENV_FILE=$(CURDIR)/compose/sponsord.env.example \
+			SPONSORD_ONRAMP_ENV_FILE=$(CURDIR)/compose/sponsord-onramp.env.example \
+			docker compose -f '$(LINT_COMPOSE_FILE)' --env-file "$$2" --profile '*' config --format json)" \
+			|| { echo "lint-compose: docker compose could not render $(LINT_COMPOSE_FILE) (see above)" >&2; exit 2; }; \
+		[ -n "$$rendered" ] || { echo "lint-compose: docker compose rendered nothing" >&2; exit 2; }; \
+		violations="$$(jq -r -f "$$1" <<<"$$rendered")" \
+			|| { printf '%s\n' "$$violations" >&2; echo "lint-compose: $$1 failed (see above)" >&2; exit 2; }; \
+		[ -z "$$violations" ] \
+			|| { sed 's/^/  /' <<<"$$violations" >&2; echo "$(LINT_COMPOSE_FILE) violates an invariant (see $$1)" >&2; exit 1; }; \
+	}; \
+	check compose/tests/invariants.jq compose/.env.example; \
+	check compose/tests/fail-closed.jq /dev/null
+	@echo "compose invariants hold: $(LINT_COMPOSE_FILE)"
 
 # The cloud-init user-data (cloud-init/README.md): `cloud-init schema` for its shape, then
 # cloud-init/tests/lint.py for what a schema cannot see. That covers no secrets, no

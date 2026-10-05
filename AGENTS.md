@@ -205,13 +205,33 @@ addresses) the repo carries, and they carry their upstream commit.
   user-data through cloud-init (skipping `baseline`) against a locally signed release
   mirror, and is the suite's only coverage of the release download and verify path.
 
-- **`compose/`** — the same node under Docker Compose on one host: the upstream image,
-  always by digest (`compose.yaml` builds `DECDN_IMAGE_REPO@DECDN_IMAGE_DIGEST`), the
-  role's host layout (`/etc/decdn` read-only, `/var/lib/decdn`), host
-  networking (so loopback metrics/admin stay loopback and Docker publishes no ports),
-  read-only rootfs, no capabilities, 300 s SIGTERM grace. `make lint-compose` asserts
-  those invariants (and `make test-scripts` that it rejects broken variants);
-  `make security` scans it.
+- **`compose/`** — the node and the sponsor under Docker Compose on one host. The
+  node: the upstream image, always by digest (`compose.yaml` builds
+  `DECDN_IMAGE_REPO@DECDN_IMAGE_DIGEST`), the role's host layout (`/etc/decdn`
+  read-only, `/var/lib/decdn`), host networking (so loopback metrics/admin stay
+  loopback and Docker publishes no ports), read-only rootfs, no capabilities, 300 s
+  SIGTERM grace. Every service sits behind a
+  profile (`COMPOSE_PROFILES` in `.env`): `node`, `sponsord`, `onramp` (also starts
+  `sponsord`) and `caddy`.
+  - **sponsord / onramp:** the roles' `/etc/sponsord/` layout, except that the
+    credential files belong to a host `sponsord` account (bind mounts keep owner and
+    mode, and upstream rejects a group-readable keystore). They are mounted
+    read-only one by one into `/run/secrets/`. Listeners and secret paths are set in
+    `environment:`, which beats env files, because the release images default to
+    `0.0.0.0`.
+  - **Caddy:** the official image by digest, non-root, keeping only
+    `NET_BIND_SERVICE`; `compose/Caddyfile` mirrors the role's.
+  - **No `${VAR:?}`:** Compose interpolates disabled services too, so a required
+    variable would break other profiles. An unset variable renders a value its
+    service refuses instead (invalid image reference, unknown user, a domain with a
+    non-numeric port).
+  - **Gates:** `make lint-compose` renders with `--profile '*'` under `env -i`,
+    once with the example `.env` against `compose/tests/invariants.jq` (allowed
+    keys and exact mounts per service, so `privileged`, `pid: host` or an extra
+    mount fail) and once with an empty `.env` against `compose/tests/fail-closed.jq`.
+    Both print `<service>: <invariant>` per violation; `make test-scripts` pins
+    which one fires for each broken variant (`LINT_COMPOSE_FILE`, not Compose's own
+    `COMPOSE_FILE`). `make security` scans it.
 
 - **`charts/decdn-node/`** — the same node on Kubernetes: a one-replica StatefulSet (one
   release = one identity) on the upstream daemon-only image (`ghcr.io/decdn/decdn-node`;

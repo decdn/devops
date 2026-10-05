@@ -1,0 +1,26 @@
+# The public side of sponsord-onramp under Compose (the `caddy` profile), the same
+# as the sponsord_onramp role's Caddyfile: TLS for SPONSORD_ONRAMP_DOMAIN (from
+# .env), then a reverse proxy to the onramp on loopback. Caddy redirects http to
+# https and, with no trusted_proxies, replaces any client-sent X-Forwarded-For with
+# the real client address, which the onramp rate limits by. So
+# ONRAMP_CLIENT_IP_HEADER=X-Forwarded-For is safe behind this file; with another
+# proxy, see sponsord-onramp.env.example.
+{
+	# No admin API: nothing on this host can reconfigure the running proxy over
+	# the admin endpoint (:2019). A Caddyfile change needs a restart:
+	# `docker compose restart caddy`.
+	admin off
+	# HTTP/1.1 and HTTP/2 only: HTTP/3 would need udp/443, which this setup does
+	# not ask you to open.
+	servers {
+		protocols h1 h2
+	}
+	# An optional ACME account contact:
+	# email ops@example.org
+}
+
+{$SPONSORD_ONRAMP_DOMAIN} {
+	# Caddy's local CA, for staging and tests only (browsers do not trust it):
+	# tls internal
+	reverse_proxy 127.0.0.1:8080
+}

@@ -15,7 +15,7 @@ day-2 tooling for operators anywhere. Four ways to deploy the same node:
 |------|-----|------------|
 | **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published as the `decdn.node` Galaxy collection. | [`ansible/README.md`](ansible/README.md) |
 | **cloud-init** (`cloud-init/`) | One VM, no control machine: paste the user-data into your provider's "create server" form. It runs the Ansible playbook on the host itself, hardening included. | [`cloud-init/README.md`](cloud-init/README.md) |
-| **Docker Compose** (`compose/`) | One host that already runs Docker. | [`compose/README.md`](compose/README.md) |
+| **Docker Compose** (`compose/`) | One host that already runs Docker. Also runs the onboarding sponsor (`sponsord` + its onramp) behind profiles. | [`compose/README.md`](compose/README.md) |
 | **Helm** (`charts/decdn-node/`) | Kubernetes, one release per node. | [`charts/decdn-node/README.md`](charts/decdn-node/README.md) |
 
 Supported hosts: Debian 12/13 and Ubuntu 24.04/26.04 on x86_64 or aarch64. Network,
@@ -82,9 +82,9 @@ This is the canonical statement; the per-path READMEs add only what is specific 
   you choose.
 - **Localhost-only by default.** Backends bind `127.0.0.1`. A service that must accept
   public traffic declares its port explicitly, and the node declares exactly one:
-  udp/4433. The sponsor's public onramp (Ansible only) stays on loopback too, behind
-  Caddy on tcp/80 + tcp/443 (the default; with `sponsord_onramp_proxy: none` you bring
-  the proxy and open its ports). On Kubernetes, metrics bind `0.0.0.0` in the pod only behind a ClusterIP
+  udp/4433. The sponsor's public onramp (Ansible and Compose) stays on loopback too,
+  behind Caddy on tcp/80 + tcp/443 (the default on Ansible, the `caddy` profile on
+  Compose; otherwise you bring the proxy and open its ports). On Kubernetes, metrics bind `0.0.0.0` in the pod only behind a ClusterIP
   Service and a NetworkPolicy.
 - **Default-deny inbound** (Ansible's `baseline`, nftables). SSH is the only
   universally open port; extra public ports are declared via `baseline_extra_inbound`.
@@ -101,7 +101,7 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 |------|------------|
 | [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `sponsord.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
 | [`cloud-init/`](cloud-init/README.md) | The cloud-init deploy path: `user-data.yaml`, the on-host `bootstrap.sh`, and the pinned ansible-core and collections it installs. |
-| [`compose/`](compose/README.md) | The Docker Compose deploy path. |
+| [`compose/`](compose/README.md) | The Docker Compose deploy path: the node, `sponsord`, `sponsord-onramp` and Caddy, one profile each. |
 | [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart, with vendored dashboards and alert rules in `files/monitoring/`. |
 | [`docs/`](docs/requirements.md) | Cross-path operator docs: requirements, lifecycle. |
 | `scripts/` | Generators for the upstream mirrors (network profiles, monitoring) and the release gate. |
