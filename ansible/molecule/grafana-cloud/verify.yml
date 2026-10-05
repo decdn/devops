@@ -46,6 +46,13 @@
             '127.0.0.1:4318' in ga_config
           - >-
             '127.0.0.1:9090' in ga_config
+          # Co-located sponsord: its own scrape beside the node's.
+          - >-
+            'prometheus.scrape "decdn_node"' in ga_config
+          - >-
+            'prometheus.scrape "sponsord"' in ga_config
+          - >-
+            '"__address__" = "127.0.0.1:8090"' in ga_config
           - >-
             '0.0.0.0' not in ga_config
           - >-
@@ -317,7 +324,7 @@
           The alloy account is not a member of systemd-journal and adm, so
           loki.source.journal would start without error and collect nothing.
 
-    - name: Assert both services are running
+    - name: Assert every service is running
       ansible.builtin.assert:
         that:
           - >-
@@ -326,7 +333,12 @@
           - >-
             'decdn-node.service' in ansible_facts.services
             and ansible_facts.services['decdn-node.service'].state == 'running'
-        fail_msg: "alloy or decdn-node is not running — journalctl -u alloy -e / -u decdn-node -e"
+          - >-
+            'sponsord.service' in ansible_facts.services
+            and ansible_facts.services['sponsord.service'].state == 'running'
+        fail_msg: >-
+          alloy, decdn-node or sponsord is not running — journalctl -u alloy -e /
+          -u decdn-node -e / -u sponsord -e
 
 # A host-managed env file is never rendered by the role, so only the provenance
 # checksum can notice an out-of-band rotation. Prove that signal restarts the
@@ -379,6 +391,7 @@
         grafana_alloy_loki_url: https://logs-prod-xx.molecule.invalid/loki/api/v1/push
         grafana_alloy_prom_username: 1234567
         grafana_alloy_batch_send_size: 512
+        grafana_alloy_sponsord_enabled: true
 
     - name: Read Alloy's PID after the host-side credential edit
       ansible.builtin.command:

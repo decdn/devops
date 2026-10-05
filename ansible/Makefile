@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN Ansible project.
 # Always run from the ansible/ directory.
-.PHONY: deps lint check deploy backup decommission molecule molecule-serial molecule-fanout molecule-all build galaxy-check
+.PHONY: deps lint check deploy check-sponsord deploy-sponsord backup decommission molecule molecule-serial molecule-fanout molecule-all build galaxy-check
 SHELL := /bin/bash
 
 # Install the required Galaxy collections (>= constraints in requirements.yml)
@@ -43,20 +43,20 @@ INVENTORY ?= inventory/hosts.yml
 # A missing or unparseable inventory fails the run. Ansible's default only warns,
 # skips the `hosts: decdn_nodes` play and exits 0, so a mistyped INVENTORY= would
 # report a successful deploy that did nothing. This applies to the playbook targets
-# (check/deploy/backup/decommission) only:
+# (check/deploy/check-sponsord/deploy-sponsord/backup/decommission) only:
 # ansible.cfg can't set it globally, because ansible-lint's own syntax checks run
 # with no inventory present.
 strict_inventory = ANSIBLE_INVENTORY_UNPARSED_FAILED=True
 
 # Fail loud on the two ways a run can look scoped but silently be fleet-wide. Scoped to
-# the playbook targets (check/deploy/backup/decommission) via MAKECMDGOALS so an
+# the playbook targets (check/deploy[-sponsord]/backup/decommission) via MAKECMDGOALS so an
 # unrelated `make lint` is never blocked. NOTE: this
 # does not catch an argument that is well-formed but selects nothing — `--tags` with a
 # typo (decdn-node vs decdn_node) runs zero tasks and still exits 0. See ansible/README.md.
-ifneq ($(filter check deploy backup decommission,$(MAKECMDGOALS)),)
+ifneq ($(filter check deploy check-sponsord deploy-sponsord backup decommission,$(MAKECMDGOALS)),)
   # Echo back the goal the operator actually typed, so the hint never nudges a
   # `make check` dry-run toward the mutating `make deploy`.
-  scoped_goal := $(firstword $(filter check deploy backup decommission,$(MAKECMDGOALS)))
+  scoped_goal := $(firstword $(filter check deploy check-sponsord deploy-sponsord backup decommission,$(MAKECMDGOALS)))
   ifeq ($(origin LIMIT),environment)
     $(error LIMIT is set in your environment ($(LIMIT)) and would silently scope this run. Unset it or pass it on the command line: make $(scoped_goal) LIMIT=<host>)
   endif
@@ -92,6 +92,14 @@ check:
 deploy:
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/site.yml $(limit_arg) $(ANSIBLE_ARGS)
 
+# sponsord alone (playbooks/sponsord.yml, hosts in sponsord_hosts). check/deploy
+# above already include it via site.yml; these leave every decdn-node untouched.
+check-sponsord:
+	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/sponsord.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
+
+deploy-sponsord:
+	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/sponsord.yml $(limit_arg) $(ANSIBLE_ARGS)
+
 # Encrypted backup of each node (identity by default; -e decdn_backup_scope=full for
 # the whole data dir, which stops the node for the copy). One host at a time.
 # Needs decdn_backup_age_recipients. See docs/lifecycle.md.
@@ -104,16 +112,17 @@ decommission:
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/decommission.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # --- Tests -------------------------------------------------------------------
-# Containerised converge + idempotence + verify of the decdn_node role against a
-# stub daemon (needs Docker; a privileged systemd container). See molecule/.
+# Containerised converge + idempotence + verify of the roles against stub daemons
+# (needs Docker; privileged systemd containers). See molecule/.
 # Scenarios: default (rendered values + idempotence), schema (config key-set drift
-# against the upstream field list), validation (bad knobs, both roles, must be
+# against the upstream field list), validation (bad knobs, every role, must be
 # rejected by their own asserts), generate-keystore (opt-in host-side wallet),
 # host-env (host-provisioned /etc/decdn/decdn.env), slow-readiness (advisory
 # /metrics probe timeout), grafana-cloud and grafana-cloud-token (opt-in Grafana
 # Cloud observability, host-provisioned vs inventory token), os-matrix (default's
-# plays on Debian 13, Ubuntu 24.04 and 26.04) and lifecycle (network profile,
-# backup + decommission). The glob below is the authority; this list is a guide.
+# plays on Debian 13, Ubuntu 24.04 and 26.04), lifecycle (network profile,
+# backup + decommission) and sponsord (the sponsord role on a host with no node,
+# through playbooks/sponsord.yml, on Debian 12 and Ubuntu 24.04). The glob below is the authority; this list is a guide.
 #
 # The scenarios run concurrently: distinct container names, no published host ports,
 # per-scenario ephemeral dirs, and what they share on the control machine (the
@@ -200,8 +209,8 @@ molecule-all: deps
 	molecule test --all
 
 # --- Galaxy collection (decdn.node) ------------------------------------------
-# Stage baseline + decdn_node + grafana_alloy into a clean collection tree and build the
-# artifact under build/. Only the three roles ship; see galaxy/README.md. Publishing
+# Stage baseline + decdn_node + grafana_alloy + sponsord into a clean collection tree and
+# build the artifact under build/. Only the four roles ship; see galaxy/README.md. Publishing
 # runs from a vX.Y.Z tag in .github/workflows/release.yml (see RELEASING.md).
 build:
 	./galaxy/build.sh

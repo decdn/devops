@@ -275,6 +275,47 @@
         grafana_alloy_bin_effective: /usr/bin/alloy
         grafana_alloy_logs_drop_priority_regex: 'info|debug|trace'
 
+    # A host that runs only sponsord (playbooks/group_vars/all.yml derives these
+    # toggles from sponsord_hosts): no decdn-node scrape or identity relabeller, a
+    # sponsord scrape on a non-default port with its own identity.
+    - name: Render the sponsord-only configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/sponsordonly.{{ item.ext }}"
+        mode: "0644"
+      loop: *ga_render_pair
+      loop_control:
+        label: "sponsordonly.{{ item.ext }}"
+      vars:
+        _ga_instance_id: sponsord-1
+        _ga_journal_groups: [systemd-journal, adm]
+        grafana_alloy_bin_effective: /usr/bin/alloy
+        grafana_alloy_deployment_environment: production
+        grafana_alloy_region: US
+        grafana_alloy_node_enabled: false
+        grafana_alloy_sponsord_enabled: true
+        sponsord_port: 18090
+
+    # A host in both decdn_nodes and sponsord_hosts: both scrapes, both identities.
+    # With an info-dropping guardrail, so validate.sh's level harness proves both
+    # daemons are judged by the level they logged, not journald's.
+    - name: Render the co-located node + sponsord configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/colocated.{{ item.ext }}"
+        mode: "0644"
+      loop: *ga_render_pair
+      loop_control:
+        label: "colocated.{{ item.ext }}"
+      vars:
+        _ga_instance_id: decdn-node-1
+        _ga_journal_groups: [systemd-journal, adm]
+        grafana_alloy_bin_effective: /usr/bin/alloy
+        grafana_alloy_deployment_environment: production
+        grafana_alloy_region: US
+        grafana_alloy_sponsord_enabled: true
+        grafana_alloy_logs_drop_priority_regex: 'info|debug|trace'
+
     - name: Export the pinned release for the validation script
       ansible.builtin.copy:
         dest: "{{ _ga_render_dir }}/pin.env"

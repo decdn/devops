@@ -17,3 +17,7 @@
       tags: [observability, decdn_node, node]
     - role: decdn_node
       tags: [decdn_node, node]
+
+# sponsord on hosts in sponsord_hosts (none unless the inventory defines the group).
+- name: Provision sponsord
+  ansible.builtin.import_playbook: sponsord.yml

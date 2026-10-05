@@ -236,6 +236,24 @@ assert_lacks hostonly.service 'SupplementaryGroups' "journal groups while logs a
 assert_lacks legacy.service 'SupplementaryGroups' "journal groups while logs are disabled"
 echo "ok: machine-monitoring render matrix"
 
+# --- Gate 1b': which daemons are scraped follows the per-host toggles -----------
+assert_lacks defaults.alloy 'prometheus.scrape "sponsord"' "a sponsord scrape while it is disabled"
+assert_lacks defaults.alloy 'sponsord\\.service' "a sponsord log rule while it is disabled"
+assert_lacks sponsordonly.alloy 'prometheus.scrape "decdn_node"' "the node scrape on a host without a node"
+assert_lacks sponsordonly.alloy 'prometheus.relabel "decdn_identity"' "the node identity relabeller on a host without a node"
+assert_has sponsordonly.alloy 'prometheus.scrape "sponsord"' "the sponsord scrape"
+assert_has sponsordonly.alloy '"__address__" = "127.0.0.1:18090"' "the sponsord listener from sponsord_port"
+assert_has sponsordonly.alloy '"job"         = "sponsord"' "the sponsord job label"
+assert_has sponsordonly.alloy 'forward_to      = [prometheus.relabel.sponsord_identity.receiver]' "the sponsord scrape feeding its own identity"
+assert_has sponsordonly.alloy 'replacement  = "sponsord"' "the sponsord metric service_name"
+assert_has sponsordonly.alloy 'regex         = "sponsord\\.service"' "the sponsord log-stream unit match"
+assert_has sponsordonly.alloy 'replacement   = "sponsord"' "the sponsord log-stream service_name"
+assert_has sponsordonly.alloy '(decdn-node|sponsord|alloy|ssh|sshd)' "sponsord in the systemd collector's unit list"
+assert_has colocated.alloy 'prometheus.scrape "decdn_node"' "the node scrape on a co-located host"
+assert_has colocated.alloy 'prometheus.scrape "sponsord"' "the sponsord scrape on a co-located host"
+assert_has colocated.alloy '"__address__" = "127.0.0.1:8090"' "the default sponsord listener"
+echo "ok: per-daemon scrape toggles"
+
 # --- Gate 1c: the daemon's level comes from its JSON body ----------------------
 # Loading proves syntax, not behaviour. Run the RENDERED journal_rules and
 # loki.process "daemon_level" blocks in the real Alloy, fed sample lines through
@@ -259,6 +277,15 @@ samples_json() { # nanosecond timestamp
 {"streams":[
   {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"debug"},"values":[
     ["$1","m-other-debug"]]},
+  {"stream":{"journal__systemd_unit":"sponsord.service","journal_priority_keyword":"info"},"values":[
+    ["$1","2026-10-05T07:59:10.000001Z TRACE sponsord: s-trace"],
+    ["$1","2026-10-05T07:59:10.000002Z DEBUG sponsord_core::keeper: s-debug"],
+    ["$1","2026-10-05T07:59:10.000003Z  INFO sponsord: s-info"],
+    ["$1","2026-10-05T07:59:10.000004Z  WARN sponsord_core::keeper: s-warn"],
+    ["$1","2026-10-05T07:59:10.000005Z ERROR sponsord: s-error"],
+    ["$1","Error: s-raw read PaymentPool.usdc()"],
+    ["$1","Caused by: s-cause connection refused"],
+    ["$1","s-plain an unlevelled line"]]},
   {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"info"},"values":[
     ["$1","{\"level\":\"ERROR\",\"fields\":{\"message\":\"m-other-info\"}}"]]},
   {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"error"},"values":[
@@ -356,8 +383,11 @@ dropped() { # marker
   ! grep -qF "$1" "$harness_log" || harness_fail "$1 should have been dropped"
 }
 
-# Defaults (guardrail "debug|trace").
-run_level_harness defaults.alloy 9
+# Defaults (guardrail "debug|trace"), sponsord not enabled: its plain-text lines
+# are not re-levelled and stand at journald's info.
+run_level_harness defaults.alloy 17
+kept s-trace info sponsord.service
+kept s-error info sponsord.service
 kept m-warn-uc warning decdn-node.service
 kept m-warn-lc warning decdn-node.service
 kept m-error error decdn-node.service
@@ -376,6 +406,7 @@ echo "ok: daemon log level follows the JSON body (defaults)"
 # must be judged by its JSON level — errors and warnings survive, and lines with
 # no JSON level are never dropped for a priority they did not choose.
 run_level_harness priorityinfo.alloy 7
+dropped s-error                          # sponsord not enabled: not exempt either
 kept m-warn-uc warning decdn-node.service
 kept m-warn-lc warning decdn-node.service
 kept m-error error decdn-node.service
@@ -389,6 +420,34 @@ dropped m-debug
 dropped m-other-info
 dropped m-other-debug
 echo "ok: daemon log level follows the JSON body (info in the guardrail)"
+
+# sponsord enabled: its level is parsed from the plain-text line.
+run_level_harness sponsordonly.alloy 15
+kept s-info info sponsord.service
+kept s-warn warning sponsord.service
+kept s-error error sponsord.service
+kept s-raw error sponsord.service        # anyhow's exit error: an error
+kept s-cause error sponsord.service       # ... and its cause chain
+kept s-plain info sponsord.service       # any other unlevelled line: journald's stands
+dropped s-trace
+dropped s-debug
+kept m-error error decdn-node.service    # the node's JSON stage is unaffected
+echo "ok: sponsord log level follows its text line (defaults)"
+
+# Co-located, guardrail "info|debug|trace": both daemons exempt from the
+# journald-priority drop and judged by the level they logged.
+run_level_harness colocated.alloy 12
+kept s-warn warning sponsord.service
+kept s-error error sponsord.service
+kept s-raw error sponsord.service
+kept s-plain info sponsord.service       # exempt: no level of its own to judge by
+kept m-error error decdn-node.service
+kept m-text info decdn-node.service
+dropped s-info
+dropped s-trace
+dropped m-info
+dropped m-other-info
+echo "ok: both daemons judged by their own level (info in the guardrail)"
 
 # --- Gate 2: every ExecStart flag exists -------------------------------------
 # `alloy run` ignores nothing: an unknown flag exits non-zero, i.e. a systemd

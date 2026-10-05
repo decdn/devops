@@ -1,0 +1,212 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    # --- Files and modes ------------------------------------------------------------
+    - name: Stat the sponsord files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      register: _sp_files
+      loop:
+        - /etc/sponsord/api-token
+        - /etc/sponsord/treasury-keystore.json
+        - /etc/sponsord/treasury-password
+        - /etc/sponsord/secret.env
+        - /etc/sponsord/.secret.env.sha256
+        - /etc/sponsord/.inputs.sha256
+
+    - name: Require every secret and record to be a root-only regular file
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg
+          - item.stat.pw_name == 'root'
+          - item.stat.mode == '0600'
+        fail_msg: "{{ item.item }}: expected root 0600 regular file, got {{ item.stat }}"
+        quiet: true
+      loop: "{{ _sp_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Read the generated API token's length
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: set -o pipefail; tr -d '\n' < /etc/sponsord/api-token | wc -c
+      register: _sp_token_len
+      changed_when: false
+
+    - name: Require a 64-hex-character token
+      ansible.builtin.assert:
+        that:
+          - _sp_token_len.stdout | int == 64
+
+    - name: Read the token hash side_effect saved before its converges
+      ansible.builtin.slurp:
+        src: /root/molecule-sponsord-token-before
+      register: _sp_token_before
+
+    - name: Hash the API token now
+      ansible.builtin.stat:
+        path: /etc/sponsord/api-token
+        checksum_algorithm: sha256
+      register: _sp_token_now
+
+    - name: Read the unit state now
+      ansible.builtin.systemd_service:
+        name: sponsord
+      register: _sp_unit
+
+    - name: Require sponsord running on an API token that was never regenerated
+      ansible.builtin.assert:
+        that:
+          - _sp_unit.status.ActiveState == 'active'
+          - _sp_token_now.stat.checksum == (_sp_token_before.content | b64decode | trim)
+        fail_msg: >-
+          Expected sponsord active (it is {{ _sp_unit.status.ActiveState }}) and the
+          generated API token unchanged across three converges.
+
+    # --- Config ---------------------------------------------------------------------
+    - name: Read sponsord.env
+      ansible.builtin.slurp:
+        src: /etc/sponsord/sponsord.env
+      register: _sp_env
+
+    - name: Require the non-secret settings and nothing secret
+      ansible.builtin.assert:
+        that:
+          - "'SPONSORD_BIND=127.0.0.1:8090' in _sp_env_text"
+          # From the arbitrum-sepolia profile (vars/main/networks.yml).
+          - "'SPONSORD_CHAIN_ID=421614' in _sp_env_text"
+          - "'SPONSORD_PAYMENT_POOL_ADDR=0x351E5544471e11638b89DF8E3A3299c28E00cEc3' in _sp_env_text"
+          - "'SPONSORD_POOL_ID=0x' in _sp_env_text"
+          # Set knobs are emitted (0 included), unset ones are not.
+          - "'SPONSORD_MAX_TTL_SECS=3600' in _sp_env_text"
+          - "'SPONSORD_POOL_LOW_WATER_MICRO_USDC=0' in _sp_env_text"
+          - "'SPONSORD_MAX_SPENDING_CAP' not in _sp_env_text"
+          - "'SPONSORD_POOL_REFILL' not in _sp_env_text"
+          - "'RPC_URL' not in _sp_env_text"
+          - "'TOKEN' not in _sp_env_text"
+          - "'PASSWORD' not in _sp_env_text"
+        fail_msg: "Unexpected sponsord.env:\n{{ _sp_env_text }}"
+      vars:
+        _sp_env_text: "{{ _sp_env.content | b64decode }}"
+
+    - name: Require the RPC URL not to have been shell-expanded anywhere
+      ansible.builtin.stat:
+        path: /tmp/sponsord-rpc-expanded
+      register: _sp_expanded
+      failed_when: _sp_expanded.stat.exists
+
+    - name: Hash secret.env
+      ansible.builtin.stat:
+        path: /etc/sponsord/secret.env
+        checksum_algorithm: sha256
+      register: _sp_secret_env
+
+    - name: Read the secret.env provenance record
+      ansible.builtin.slurp:
+        src: /etc/sponsord/.secret.env.sha256
+      register: _sp_secret_rec
+
+    # A wrong source token would silently disable the adoption guard.
+    - name: Require the record to name the role and the current file
+      ansible.builtin.assert:
+        that:
+          - (_sp_secret_rec.content | b64decode).split() == ['inventory', _sp_secret_env.stat.checksum]
+        fail_msg: "Unexpected record: {{ _sp_secret_rec.content | b64decode | trim }}"
+
+    # --- Unit -----------------------------------------------------------------------
+    - name: Read the unit
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/sponsord.service
+      register: _sp_unit_file
+
+    - name: Require credentials and hardening in the unit
+      ansible.builtin.assert:
+        that:
+          - item in (_sp_unit_file.content | b64decode)
+        fail_msg: "sponsord.service lacks: {{ item }}"
+        quiet: true
+      loop:
+        - DynamicUser=true
+        # kics-scan ignore-line (a credential file PATH in the unit, not a secret)
+        - LoadCredential=api-token:/etc/sponsord/api-token
+        # kics-scan ignore-line (a credential file PATH in the unit, not a secret)
+        - LoadCredential=treasury-password:/etc/sponsord/treasury-password
+        - LoadCredential=treasury-keystore.json:/etc/sponsord/treasury-keystore.json
+        - Environment=SPONSORD_TREASURY_KEYSTORE=%t/sponsord/treasury-keystore.json
+        - RuntimeDirectoryMode=0700
+        - EnvironmentFile=/etc/sponsord/secret.env
+        - NoNewPrivileges=true
+        - ProtectSystem=strict
+        - CapabilityBoundingSet=
+        - MemoryDenyWriteExecute=true
+        # The plain-text level parsing in grafana_alloy depends on it.
+        - Environment=NO_COLOR=1
+        - SystemCallFilter=@system-service
+        - TimeoutStopSec=120
+
+    # --- Listener -------------------------------------------------------------------
+    - name: List TCP listeners
+      ansible.builtin.command:
+        cmd: ss -Hltn
+      register: _sp_ss
+      changed_when: false
+
+    - name: Require sponsord on loopback only
+      ansible.builtin.assert:
+        that:
+          - _sp_ss.stdout is search('127\.0\.0\.1:8090\s')
+          - _sp_ss.stdout is not search('(0\.0\.0\.0|\*|\[::\]):8090\s')
+        fail_msg: "{{ _sp_ss.stdout }}"
+
+    # The keystore the daemon reads: a 0600 copy, in the unit's private 0700 runtime
+    # directory, of the operator's file (not of some other credential).
+    # With DynamicUser=, /run/sponsord is a symlink into the 0700 /run/private/.
+    - name: Stat the runtime directory and the keystore copy
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: true
+        checksum_algorithm: sha256
+      register: _sp_runtime
+      loop:
+        - /run/sponsord
+        - /run/sponsord/treasury-keystore.json
+        - /etc/sponsord/treasury-keystore.json
+
+    - name: Require the private runtime copy of the keystore
+      ansible.builtin.assert:
+        that:
+          - _sp_runtime.results[0].stat.isdir and _sp_runtime.results[0].stat.mode == '0700'
+          - _sp_runtime.results[1].stat.isreg and _sp_runtime.results[1].stat.mode == '0600'
+          - _sp_runtime.results[1].stat.checksum == _sp_runtime.results[2].stat.checksum
+        fail_msg: "{{ _sp_runtime.results | map(attribute='stat') | list | to_json }}"
+
+    - name: Require /healthz to answer
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8090/healthz
+        return_content: true
+      register: _sp_health
+      failed_when: _sp_health.json.ok is not true
+
+    # --- Alloy (standalone host) ----------------------------------------------------
+    - name: Read the rendered Alloy config
+      ansible.builtin.slurp:
+        src: /etc/alloy/config.alloy
+      register: _sp_alloy
+
+    - name: Require the sponsord scrape and no decdn-node scrape
+      ansible.builtin.assert:
+        that:
+          - "'prometheus.scrape \"sponsord\"' in _sp_alloy_text"
+          - "'\"__address__\" = \"127.0.0.1:8090\"' in _sp_alloy_text"
+          - "'prometheus.scrape \"decdn_node\"' not in _sp_alloy_text"
+          # The journald service_name rule (3 spaces; the metric rule has 2).
+          - "'replacement   = \"sponsord\"' in _sp_alloy_text"
+        fail_msg: >-
+          The Alloy config on a sponsord-only host must scrape sponsord and not the
+          node (playbooks/group_vars/all.yml toggles).
+      vars:
+        _sp_alloy_text: "{{ _sp_alloy.content | b64decode }}"

@@ -54,8 +54,8 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
 
 ```
 ansible/                # the deployment project (DevSec-hardened, lean roles)
-  playbooks/            # site.yml (decdn node), backup.yml, decommission.yml
-  roles/                # baseline, decdn_node, grafana_alloy
+  playbooks/            # site.yml (decdn node + sponsord), sponsord.yml, backup.yml, decommission.yml
+  roles/                # baseline, decdn_node, grafana_alloy, sponsord
   inventory/ galaxy/ molecule/    # see ansible/README.md
 cloud-init/             # user-data.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
 compose/                # Docker Compose deploy path for a single host (see its README.md)
@@ -69,7 +69,8 @@ scripts/                # upstream-mirror generators + the release gate
 ```
 
 **Generated mirrors of upstream — regenerate, never hand-edit:**
-`ansible/roles/decdn_node/vars/main/networks.yml` (`scripts/sync-network-profiles.py`),
+`ansible/roles/decdn_node/vars/main/networks.yml` and its subset
+`ansible/roles/sponsord/vars/main/networks.yml` (both `scripts/sync-network-profiles.py`),
 `charts/decdn-node/files/monitoring/` (`scripts/sync-monitoring.sh`) and
 `ansible/molecule/schema/files/schema-keys.txt` (`gen-schema-keys.py`). The weekly
 `upstream-drift` workflow flags staleness. These are the only protocol facts (contract
@@ -124,6 +125,36 @@ addresses) the repo carries, and they carry their upstream commit.
   touched. **`make lint-alloy` is the gate that matters** — the molecule stub exits 0 for
   everything, so only the real pinned binary proves the rendered config loads. See
   `ansible/roles/grafana_alloy/README.md`.
+
+- **`ansible/roles/sponsord`** — the deCDN onboarding sponsor (`decdn/sponsord`): the
+  treasury wallet's signer for capped capabilities plus the PaymentPool keeper. It is
+  independent of the node, so `playbooks/sponsord.yml` (`make deploy-sponsord`, also
+  imported by `site.yml`) targets its own `sponsord_hosts` group, standalone or
+  co-located with a node.
+  - **Install:** manual binary by default, or a GPG-verified `sponsord-v*` release
+    (none cut yet).
+  - **Unit:** `DynamicUser`; the API token (generated on the host, never replaced),
+    treasury keystore and password (operator-provisioned) are `LoadCredential=`
+    credentials, never env. The keystore is re-copied at 0600 into the unit's
+    `RuntimeDirectory` by `ExecStartPre`, because systemd 254+ writes credentials 0440
+    and upstream rejects a group-readable keystore. Debian 12's systemd 252 hides
+    this (0400); the `molecule/sponsord` Ubuntu 24.04 platform catches it, because
+    the stub enforces upstream's keystore mode check.
+  - **RPC URL:** in `0600 /etc/sponsord/secret.env`, with the same dual-home and
+    provenance guards as `decdn_rpc_url`. A host-provisioned file may carry
+    `SPONSORD_RPC_URL` only (an EnvironmentFile overrides every other setting).
+  - **Listener:** loopback only (asserted), no firewall hole.
+  - **Config gate:** sponsord has no `config validate` and only env/flag config, so
+    `/healthz` after start is the gate, and it is **fatal**. The daemon binds only
+    after the keystore decrypts and the on-chain pool-owner check passes.
+  - **Alloy toggles:** `playbooks/group_vars/all.yml` derives
+    `grafana_alloy_node_enabled` / `grafana_alloy_sponsord_enabled` from group
+    membership. They are host-scoped so a co-located host's two plays render one
+    config.
+  - **Molecule:** under docker, `/` must be `--make-rshared` (see
+    `molecule/sponsord/prepare.yml`) or every credential directory is empty.
+  - **Not in cloud-init:** its lint only allows `decdn_nodes`.
+  - The public `sponsord-onramp` is not deployed yet.
 
 - **`cloud-init/`** — the Ansible path with no control machine. `user-data.yaml` carries
   only public material (the lint refuses secret-looking keys, credentials in URLs and
@@ -190,18 +221,20 @@ make security         # KICS over ansible/, the rendered chart and compose/
 # Ansible — run from ansible/
 make deps                          # vendor pinned Galaxy collections
 make check / deploy                # site.yml; fleet-wide unless LIMIT=<host>; INVENTORY=<overlay>
+make check-sponsord / deploy-sponsord   # sponsord.yml only (sponsord_hosts)
 make backup / decommission LIMIT=… # lifecycle playbooks (decommission requires LIMIT)
 make build / galaxy-check          # the decdn.node collection
 ```
 
 **Inventory is private; the firewall hole is not.** This repo is public, so
 `ansible/inventory/hosts.yml` is git-ignored and a real fleet lives in a private overlay.
-Inventory-adjacent group_vars do not load for an overlay, so anything every node needs regardless of inventory (today only the udp/4433
-`baseline_extra_inbound` hole) lives in `ansible/playbooks/group_vars/decdn_nodes.yml`.
+Inventory-adjacent group_vars do not load for an overlay, so anything every node needs regardless of inventory (today the udp/4433
+`baseline_extra_inbound` hole) lives in `ansible/playbooks/group_vars/decdn_nodes.yml`, and
+the Alloy per-daemon toggles every host needs in `ansible/playbooks/group_vars/all.yml`.
 Don't move it back under `inventory/`.
 
-**Galaxy collection (`decdn.node`).** The three roles (`baseline` + `decdn_node` +
-`grafana_alloy`) ship as a
+**Galaxy collection (`decdn.node`).** The four roles (`baseline` + `decdn_node` +
+`grafana_alloy` + `sponsord`) ship as a
 distributable collection. The overlay lives in `ansible/galaxy/` and is staged into a clean
 collection tree by `galaxy/build.sh` — there is **no** `galaxy.yml` at the `ansible/` root
 (that would make ansible-lint treat the deploy project as a collection). Build/validate with

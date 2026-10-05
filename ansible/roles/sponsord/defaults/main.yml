@@ -1,0 +1,123 @@
+---
+# sponsord role defaults. sponsord is the deCDN onboarding sponsor: it holds the
+# treasury wallet that owns one PaymentPool pool, signs capped, expiring
+# capabilities for callers that present its API token, and tops the pool up from
+# the treasury when it runs low. It is independent of the node: it needs an RPC
+# endpoint and the PaymentPool contract, never a local decdn-node.
+#
+# Per-host values belong in host_vars/<host>/ (non-secret in main.yml, the RPC URL
+# — if the role should author it — in the git-ignored secret.yml). Upstream:
+# github.com/decdn/sponsord, docs/operator.md.
+
+# --- Install method -----------------------------------------------------------
+# "release": download the pinned sponsord-v<version> GitHub Release tarball and
+# verify it against the GPG-signed SHA256SUMS. "manual": copy a locally-built
+# binary from the control machine. Upstream has cut NO sponsord-v* tag yet, so
+# "release" has nothing to fetch and the default is "manual"; flip it and pin
+# sponsord_version once a release exists.
+sponsord_install_method: manual    # "release" | "manual"
+sponsord_manual_bin_src: ""        # manual: control-machine path to the sponsord binary
+# Alternative to sponsord_manual_bin_src: the control-machine `target/release` dir.
+# The role derives the binary path from it (falling back to the cross / `--target`
+# output dir target/<triple>/release) and checks it is an ELF for the host's
+# architecture before shipping it. sponsord_manual_bin_src wins when both are set.
+sponsord_release_target_dir: ""
+
+# --- Release to install (REQUIRED in "release" mode) ---------------------------
+sponsord_version: ""               # e.g. "0.1.0" -> tag sponsord-v0.1.0
+# Release target triple, derived from the host's gathered architecture (see
+# vars/main/arch.yml). Set it explicitly only for a play with gather_facts: false.
+sponsord_target: "{{ _sponsord_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
+sponsord_release_base: "https://github.com/decdn/sponsord/releases/download"
+# Verify SHA256SUMS.asc against sponsord_release_keyring before trusting the
+# manifest. Set false only for an air-gapped mirror that strips the signature.
+sponsord_verify_release_signature: true
+# Defaults to the copy of upstream's KEYS vendored with this role.
+sponsord_release_keyring: sponsord-release-KEYS.asc
+
+# --- Chain ----------------------------------------------------------------------
+# Network profile. Set sponsord_network to a chain upstream's `decdn config init
+# --chain <name>` knows (today only "arbitrum-sepolia") and chain_id plus the
+# PaymentPool address default to that deployment's manifest values, mirrored into
+# vars/main/networks.yml by scripts/sync-network-profiles.py. An explicit inventory
+# value still wins. Leave it "" to supply both yourself.
+sponsord_network: ""
+# The selected profile ({} when sponsord_network is "" or unknown — the role
+# asserts the name first). Internal: set sponsord_network, not this.
+_sponsord_profile: "{{ _sponsord_network_profiles.get(sponsord_network, {}) }}"
+sponsord_chain_id: "{{ _sponsord_profile.get('chain_id', '') }}"
+sponsord_payment_pool_address: "{{ _sponsord_profile.get('payment_pool_address', '') }}"
+# REQUIRED. The pool this treasury owns: 0x + 64 hex, printed by `decdn pool open`
+# run once from the treasury wallet (docs/operator.md upstream). The daemon checks
+# at boot that the treasury keystore's address owns it on-chain and exits if not.
+sponsord_pool_id: ""
+
+# The RPC endpoint (SPONSORD_RPC_URL). It may embed a provider API key, so it has
+# TWO homes, exactly like decdn_node's decdn_rpc_url: leave it "" and provision a
+# 0600 /etc/sponsord/secret.env on the host (files/secret.env.example) so the
+# secret never touches the control machine, or set it in the git-ignored
+# host_vars/<host>/secret.yml and the role authors that file for you.
+sponsord_rpc_url: ""               # SENSITIVE
+
+# --- Listener -------------------------------------------------------------------
+# One listener carries the authenticated API and the unauthenticated /healthz and
+# /metrics. It stays on IPv4 loopback (AGENTS.md hard rule 2): the onramp that calls
+# it runs on the same host, and the role asserts the address is 127.x.
+sponsord_bind_address: 127.0.0.1
+sponsord_port: 8090
+
+# --- Issuance + keeper limits -----------------------------------------------------
+# "" omits the variable so the binary's own default applies (shown in brackets).
+# These are economic decisions for the operator, not facts this repo carries.
+sponsord_max_spending_cap_micro_usdc: ""   # [5000000 = $5] largest cap per capability
+sponsord_max_ttl_secs: ""                  # [172800 = 48h] longest capability TTL
+sponsord_pool_low_water_micro_usdc: ""     # [20000000 = $20] top up below this
+sponsord_pool_refill_micro_usdc: ""        # [100000000 = $100] each top-up adds this
+sponsord_pool_watch_interval_secs: ""      # [3600] how often the keeper checks the pool
+
+# --- Secrets on the host --------------------------------------------------------
+# Root-owned under sponsord_etc: the secret files 0600, sponsord.env 0644 (it holds
+# no secret). systemd reads the API token, treasury keystore and password as root
+# and hands them to the DynamicUser service as credentials (LoadCredential=); the
+# unit copies the keystore 0600 into its private runtime directory, because
+# upstream rejects the 0440 credential file systemd 254+ writes. secret.env reaches
+# the daemon as an EnvironmentFile.
+sponsord_etc: /etc/sponsord
+sponsord_env_file: /etc/sponsord/sponsord.env          # non-secret settings (0644, role-owned)
+sponsord_secret_env_file: /etc/sponsord/secret.env     # SPONSORD_RPC_URL (0600)
+sponsord_api_token_file: /etc/sponsord/api-token       # bearer token (0600)
+sponsord_treasury_keystore_file: /etc/sponsord/treasury-keystore.json   # operator-provisioned (0600)
+sponsord_treasury_password_file: /etc/sponsord/treasury-password        # operator-provisioned (0600)
+# "<source> <sha256>" record of who last wrote secret.env (the role from inventory,
+# or the operator on the host), as decdn_node's decdn_env_checksum_file. Written as
+# soon as the file is final, so a failed run cannot leave it stale. Restarts are
+# tracked by sponsord_inputs_checksum_file, not by this.
+sponsord_secret_env_checksum_file: /etc/sponsord/.secret.env.sha256
+# Confirm that rendering secret.env from inventory may discard a host-side edit.
+# Consulted only when the record proves the host's file is not the one this role
+# last wrote.
+sponsord_secret_env_overwrite_host_file: false
+# sha256 record of every restart input (credentials, both env files, unit, binary)
+# as of the last converge that saw the daemon healthy. A rotated credential, an
+# out-of-band edit, or a restart lost to a failed run is caught on the next converge.
+sponsord_inputs_checksum_file: /etc/sponsord/.inputs.sha256
+
+# Generate the API token on the host when sponsord_api_token_file is absent (32
+# random bytes, hex). An existing token is never replaced: the onramp holds a copy.
+# false = the operator provisions it (>= 32 bytes, one line).
+sponsord_generate_api_token: true
+
+sponsord_bin: /usr/local/bin/sponsord
+
+# systemd TimeoutStopSec. On SIGTERM the daemon stops serving, then waits for a
+# pool top-up it has already sent to settle; there is no internal timeout, so this
+# is the cap before SIGKILL.
+sponsord_stop_timeout_sec: 120
+
+# --- Readiness --------------------------------------------------------------------
+# The daemon binds only after it has decrypted the keystore and confirmed on-chain
+# that the treasury owns sponsord_pool_id, so /healthz answering 200 is the role's
+# config gate (sponsord has no `config validate`). Unlike decdn_node's advisory
+# probe, a timeout here FAILS the deploy. Window = retries x delay (~60s).
+sponsord_readiness_retries: 30
+sponsord_readiness_delay: 2

@@ -1,0 +1,281 @@
+---
+# Three behaviours a green converge + idempotence cannot prove:
+#   1. Rotating a credential OUT OF BAND (the operator replaces the treasury
+#      password file) and re-running the role restarts the daemon onto it. Without
+#      this the daemon keeps the old credential behind a green deploy.
+#   2. The /healthz readiness gate is FATAL: a daemon that never binds (the stub
+#      refuses to start while its marker exists) fails the converge at the role's
+#      report task, rather than passing on a Type=simple unit stuck restarting.
+#   3. secret.env's two homes and the provenance guards between them: an empty
+#      sponsord_rpc_url must not adopt the role's own file; a handed-over file is
+#      recorded `host` and locked to 0600; a host edit restarts the daemon; an
+#      inventory URL must not overwrite the host's file until confirmed.
+# The host is left healthy, back on the inventory-authored secret.env, for
+# verify.yml.
+- name: Side effect — credential rotation and the fatal readiness gate
+  hosts: all
+  become: true
+  tasks:
+    - name: Read the unit state before the rotation
+      ansible.builtin.systemd_service:
+        name: sponsord
+      register: _sp_before
+
+    - name: Assert sponsord was running cleanly before the rotation
+      ansible.builtin.assert:
+        that:
+          - _sp_before.status.ActiveState == 'active'
+          - _sp_before.status.MainPID | int > 0
+          - _sp_before.status.NRestarts == '0'
+        fail_msg: >-
+          Expected sponsord active with no automatic restarts before the rotation (got
+          ActiveState={{ _sp_before.status.ActiveState }},
+          NRestarts={{ _sp_before.status.NRestarts }}): journalctl -u sponsord -e
+
+    - name: Hash the generated API token before the second converge
+      ansible.builtin.stat:
+        path: /etc/sponsord/api-token
+        checksum_algorithm: sha256
+      register: _sp_token_before
+
+    - name: Save the token hash for verify.yml
+      ansible.builtin.copy:
+        dest: /root/molecule-sponsord-token-before
+        content: "{{ _sp_token_before.stat.checksum }}\n"
+        mode: "0600"
+
+    - name: Rotate the treasury password out of band
+      ansible.builtin.copy:
+        dest: /etc/sponsord/treasury-password
+        content: "molecule-rotated\n"
+        mode: "0600"
+
+    - name: Converge again after the rotation
+      ansible.builtin.include_role:
+        name: sponsord
+
+    - name: Read the unit state after the rotation converge
+      ansible.builtin.systemd_service:
+        name: sponsord
+      register: _sp_after
+
+    # Checked here, before the readiness case below stops the daemon (which changes
+    # the PID regardless).
+    - name: Require the rotation to have restarted sponsord
+      ansible.builtin.assert:
+        that:
+          - _sp_after.status.ActiveState == 'active'
+          - _sp_after.status.MainPID != _sp_before.status.MainPID
+        fail_msg: >-
+          sponsord kept PID {{ _sp_before.status.MainPID }} after its treasury password
+          was rotated and the role re-ran: the daemon is still on the old credential.
+
+    - name: Stop the daemon, then make it refuse to start
+      ansible.builtin.systemd_service:
+        name: sponsord
+        state: stopped
+
+    - name: Stage the stub's refuse-to-start marker
+      ansible.builtin.copy:
+        dest: /etc/sponsord/stub-unhealthy
+        content: ""
+        mode: "0644"
+
+    - name: Converge against a daemon that never becomes healthy
+      block:
+        - name: Run the role with a short readiness window
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_readiness_retries: 3
+            sponsord_readiness_delay: 1
+
+        - name: Fail — the readiness gate let an unhealthy daemon through
+          ansible.builtin.fail:
+            msg: The role finished although sponsord never answered /healthz.
+      rescue:
+        - name: Require the failure to come from the readiness gate itself
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Report a sponsord that did not become healthy'
+            fail_msg: >-
+              Expected the role to fail at its readiness report, but it failed at
+              "{{ ansible_failed_task.name }}".
+      always:
+        - name: Remove the refuse-to-start marker
+          ansible.builtin.file:
+            path: /etc/sponsord/stub-unhealthy
+            state: absent
+
+    # The failed run wrote no records (they come after the gate), so this run sees
+    # the same inputs and only has to bring the daemon back.
+    - name: Converge once more to leave the host healthy
+      ansible.builtin.include_role:
+        name: sponsord
+
+- name: Side effect — secret.env provenance
+  hosts: all
+  become: true
+  vars:
+    _sp_env: /etc/sponsord/secret.env
+    _sp_rec: /etc/sponsord/.secret.env.sha256
+  tasks:
+    # 1. secret.yml "went missing": the file is byte-for-byte the role's own.
+    - name: Hash secret.env before the adoption attempt
+      ansible.builtin.stat:
+        path: "{{ _sp_env }}"
+        checksum_algorithm: sha256
+      register: _sp_env_before
+
+    - name: Run with no inventory RPC URL against the role-authored file
+      block:
+        - name: Run the role with sponsord_rpc_url empty
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_rpc_url: ""
+
+        - name: Fail — the role adopted its own file as host-provisioned
+          ansible.builtin.fail:
+            msg: An empty sponsord_rpc_url silently adopted the role-authored secret.env.
+      rescue:
+        - name: Require the adoption guard to be what stopped it
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Refuse to adopt a role-authored secret.env as host-provisioned'
+            fail_msg: "Expected the adoption guard, got \"{{ ansible_failed_task.name }}\"."
+
+    - name: Hash secret.env after the refused adoption
+      ansible.builtin.stat:
+        path: "{{ _sp_env }}"
+        checksum_algorithm: sha256
+      register: _sp_env_after
+
+    - name: Require the refused run to leave secret.env untouched
+      ansible.builtin.assert:
+        that:
+          - _sp_env_after.stat.checksum == _sp_env_before.stat.checksum
+
+    # 2. A deliberate handover: drop the record, loosen the mode. The role must take
+    #    the file as the operator's, lock it down, and owe no restart (same bytes).
+    - name: Read the unit state before the handover
+      ansible.builtin.systemd_service:
+        name: sponsord
+      register: _sp_unit_a
+
+    - name: Hand secret.env to the host (discard the record, loosen the mode)
+      ansible.builtin.shell:
+        cmd: rm -f {{ _sp_rec }} && chmod 0644 {{ _sp_env }}
+      changed_when: true
+
+    - name: Converge with the host-provisioned secret.env
+      ansible.builtin.include_role:
+        name: sponsord
+      vars:
+        sponsord_rpc_url: ""
+
+    - name: Read secret.env, its record and the unit after the handover
+      ansible.builtin.stat:
+        path: "{{ _sp_env }}"
+        checksum_algorithm: sha256
+      register: _sp_env_host
+
+    - name: Read the provenance record after the handover
+      ansible.builtin.slurp:
+        src: "{{ _sp_rec }}"
+      register: _sp_rec_host
+
+    - name: Read the unit state after the handover
+      ansible.builtin.systemd_service:
+        name: sponsord
+      register: _sp_unit_b
+
+    - name: Require a locked, host-recorded file and no restart
+      ansible.builtin.assert:
+        that:
+          - _sp_env_host.stat.mode == '0600'
+          - (_sp_rec_host.content | b64decode).split() == ['host', _sp_env_host.stat.checksum]
+          - _sp_unit_b.status.MainPID == _sp_unit_a.status.MainPID
+        fail_msg: >-
+          Expected secret.env 0600 (got {{ _sp_env_host.stat.mode }}), record
+          "host {{ _sp_env_host.stat.checksum }}" (got "{{ _sp_rec_host.content | b64decode | trim }}")
+          and no restart (PID {{ _sp_unit_a.status.MainPID }} -> {{ _sp_unit_b.status.MainPID }}).
+
+    # 3. The operator edits the host file: the next converge must restart onto it.
+    - name: Edit secret.env on the host
+      ansible.builtin.lineinfile:
+        path: "{{ _sp_env }}"
+        line: "# molecule host edit"
+        mode: "0600"
+
+    - name: Converge after the host edit
+      ansible.builtin.include_role:
+        name: sponsord
+      vars:
+        sponsord_rpc_url: ""
+
+    - name: Read the unit state after the host edit
+      ansible.builtin.systemd_service:
+        name: sponsord
+      register: _sp_unit_c
+
+    - name: Require the host edit to have restarted sponsord
+      ansible.builtin.assert:
+        that:
+          - _sp_unit_c.status.ActiveState == 'active'
+          - _sp_unit_c.status.MainPID != _sp_unit_b.status.MainPID
+
+    # 4. An inventory URL against the host's (edited) file: refused, file kept.
+    - name: Run with the inventory URL against the host's file
+      block:
+        - name: Run the role with the inventory URL (group_vars)
+          ansible.builtin.include_role:
+            name: sponsord
+
+        - name: Fail — the role overwrote the host's file unconfirmed
+          ansible.builtin.fail:
+            msg: An inventory sponsord_rpc_url overwrote a host-provisioned secret.env without confirmation.
+      rescue:
+        - name: Require the overwrite guard to be what stopped it
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require confirmation to overwrite a secret.env this role did not write'
+            fail_msg: "Expected the overwrite guard, got \"{{ ansible_failed_task.name }}\"."
+
+    - name: Require the host edit to survive the refused overwrite
+      ansible.builtin.command:
+        cmd: grep -qx '# molecule host edit' {{ _sp_env }}
+      changed_when: false
+
+    # 5. Confirmed: the role takes the file back and restarts onto it.
+    - name: Converge with the overwrite confirmed
+      ansible.builtin.include_role:
+        name: sponsord
+      vars:
+        sponsord_secret_env_overwrite_host_file: true
+
+    - name: Read the provenance record after the takeover
+      ansible.builtin.slurp:
+        src: "{{ _sp_rec }}"
+      register: _sp_rec_inv
+
+    - name: Read the unit state after the takeover
+      ansible.builtin.systemd_service:
+        name: sponsord
+      register: _sp_unit_d
+
+    - name: Require an inventory record, the edit gone and a restart
+      ansible.builtin.assert:
+        that:
+          - (_sp_rec_inv.content | b64decode).split()[0] == 'inventory'
+          - _sp_unit_d.status.MainPID != _sp_unit_c.status.MainPID
+        fail_msg: >-
+          Expected record source "inventory" (got
+          "{{ _sp_rec_inv.content | b64decode | trim }}") and a restart.
+
+    - name: Require the host edit to be gone
+      ansible.builtin.command:
+        cmd: grep -qx '# molecule host edit' {{ _sp_env }}
+      register: _sp_edit_gone
+      changed_when: false
+      failed_when: _sp_edit_gone.rc != 1

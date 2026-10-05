@@ -50,6 +50,9 @@
 {% if ga_otlp_user | length > 0 %}{{ ga_otlp_user | tojson }}{% else %}coalesce(sys.env("GC_OTLP_USERNAME"), {{ ga_endpoint(grafana_alloy_prom_username, 'GC_PROM_USERNAME') }}){% endif %}
 {%- endmacro %}
 
+{# The decdn-node scrape, off on a host that runs no node (grafana_alloy_node_enabled;
+   playbooks/group_vars/all.yml derives it from the decdn_nodes group). #}
+{% if grafana_alloy_node_enabled | bool %}
 prometheus.scrape "decdn_node" {
   targets = [
     { "__address__" = "127.0.0.1:{{ decdn_metrics_port | default(9090) }}",
@@ -85,6 +88,40 @@ prometheus.relabel "decdn_identity" {
 {% endfor %}
 }
 
+{% endif %}
+{% if grafana_alloy_sponsord_enabled | bool %}
+{# sponsord's own /metrics (pool balance, keeper top-ups, issued capabilities) on
+   its loopback listener — the same port as its API, but /metrics needs no token.
+   Its own relabel, because the shared identity stamps service_name=decdn-node. #}
+prometheus.scrape "sponsord" {
+  targets = [
+    { "__address__" = {{ (sponsord_bind_address | default('127.0.0.1') ~ ':' ~ sponsord_port | default(8090)) | tojson }},
+      "instance"    = "{{ _ga_instance_id }}",
+      "job"         = {{ grafana_alloy_sponsord_job | tojson }} },
+  ]
+  forward_to      = [prometheus.relabel.sponsord_identity.receiver]
+  scrape_interval = {{ grafana_alloy_scrape_interval | to_json }}
+}
+
+{% set ga_sponsord_labels = [
+     ["service_name", grafana_alloy_sponsord_service_name],
+     ["service_namespace", grafana_alloy_service_namespace],
+     ["service_instance_id", _ga_instance_id],
+     ["deployment_environment", grafana_alloy_deployment_environment],
+     ["region", grafana_alloy_region],
+   ] %}
+prometheus.relabel "sponsord_identity" {
+  forward_to = [prometheus.remote_write.cloud.receiver]
+{% for name, value in ga_sponsord_labels if value | length > 0 %}
+
+  rule {
+    target_label = {{ name | tojson }}
+    replacement  = {{ value | tojson }}
+  }
+{% endfor %}
+}
+
+{% endif %}
 prometheus.remote_write "cloud" {
   endpoint {
     url = {{ ga_endpoint(grafana_alloy_prom_url, 'GC_PROM_REMOTE_WRITE_URL') }}
@@ -269,10 +306,10 @@ loki.relabel "journal_rules" {
   // Cost guardrail: the regex is anchored to the WHOLE value by Prometheus
   // relabel semantics, so "debug" drops debug and nothing else.
   //
-  // decdn-node is exempt: journald reports every line it writes as info, so
+  // decdn-node{% if grafana_alloy_sponsord_enabled | bool %} and sponsord are{% else %} is{% endif %} exempt: journald reports every line it writes as info, so
   // judging it by priority would be judging it by a level it never set (a
   // regex containing "info" would drop its errors). loki.process
-  // "daemon_level" below applies the same regex to its real, JSON level. The
+  // "daemon_level" below applies the same regex to its real{% if not grafana_alloy_sponsord_enabled | bool %}, JSON{% endif %} level. The
   // exemption blanks a scratch copy of the keyword for that one unit; like
   // every __-prefixed label it never leaves this ruleset.
   rule {
@@ -282,7 +319,7 @@ loki.relabel "journal_rules" {
 
   rule {
     source_labels = ["__journal__systemd_unit"]
-    regex         = "decdn-node\\.service"
+    regex         = {{ ('(?:decdn-node|sponsord)\\.service' if grafana_alloy_sponsord_enabled | bool else 'decdn-node\\.service') | tojson }}
     target_label  = "__priority_guardrail"
     replacement   = ""
   }
@@ -337,16 +374,9 @@ loki.source.journal "host" {
    with no level, or an unexpected value — leaves decdn_level unset (the
    template stage deletes a key it renders empty), so stage.labels and
    stage.drop skip the line and its journald level stands. #}
-loki.process "daemon_level" {
-  forward_to = [loki.relabel.journal_identity.receiver]
-
-  stage.match {
-    selector = `{unit="decdn-node.service"}`
-
-    stage.json {
-      expressions = { decdn_level = "level" }
-    }
-
+{# The stages after a daemon's own level extraction are identical for both
+   daemons: normalise, label, and apply the guardrail to the real level. #}
+{% macro ga_daemon_level_stages() %}
     stage.template {
       source   = "decdn_level"
       template = {% raw %}`{{ $l := ToLower (TrimSpace (print .Value)) }}{{ if eq $l "warn" "warning" }}warning{{ else if eq $l "trace" "debug" "info" "error" }}{{ $l }}{{ end }}`{% endraw +%}
@@ -365,7 +395,49 @@ loki.process "daemon_level" {
       expression = {{ ('^(?:' ~ grafana_alloy_logs_drop_priority_regex ~ ')$') | tojson }}
     }
 {% endif %}
+{%- endmacro %}
+loki.process "daemon_level" {
+  forward_to = [loki.relabel.journal_identity.receiver]
+
+  stage.match {
+    selector = `{unit="decdn-node.service"}`
+
+    stage.json {
+      expressions = { decdn_level = "level" }
+    }
+
+{{ ga_daemon_level_stages() }}  }
+{% if grafana_alloy_sponsord_enabled | bool %}
+
+  // sponsord logs tracing-subscriber's plain-text format with colour off
+  // (NO_COLOR=1 in its unit): "<timestamp>  WARN <target>: <message>". The
+  // level is the second whitespace-separated field.
+  stage.match {
+    selector = `{unit="sponsord.service"}`
+
+    stage.regex {
+      expression = `^\S+\s+(?P<decdn_level>TRACE|DEBUG|INFO|WARN|ERROR)\s`
+    }
+
+{{ ga_daemon_level_stages() }}  }
+
+  // What sponsord writes raw when it exits on an error carries no level field:
+  // anyhow's "Error: ..." and "Caused by:" lines, and a panic message. They are
+  // the lines that say WHY it stopped, so they are errors. Any other unlevelled
+  // line keeps its journald level.
+  stage.match {
+    selector = `{unit="sponsord.service"} |~ "^(Error: |Caused by:|thread '.+' panicked)"`
+
+    stage.template {
+      source   = "decdn_level"
+      template = "error"
+    }
+
+    stage.labels {
+      values = { level = "decdn_level" }
+    }
   }
+{% endif %}
 }
 
 {# Same job/instance pair as the host metrics above — Grafana Cloud's Linux
@@ -407,6 +479,17 @@ loki.relabel "journal_identity" {
     regex         = "decdn-node\\.service"
     target_label  = "service_name"
     replacement   = {{ grafana_alloy_service_name | tojson }}
+  }
+{% endif %}
+{% if grafana_alloy_sponsord_enabled | bool and grafana_alloy_sponsord_service_name | length > 0 %}
+{# The same for sponsord's stream (the unit roles/sponsord installs; also named in
+   the journal_rules exemption and the daemon_level selector above). #}
+
+  rule {
+    source_labels = ["unit"]
+    regex         = "sponsord\\.service"
+    target_label  = "service_name"
+    replacement   = {{ grafana_alloy_sponsord_service_name | tojson }}
   }
 {% endif %}
 }

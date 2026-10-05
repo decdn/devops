@@ -1,0 +1,744 @@
+---
+# Provision sponsord: validate, place secrets, install, configure, start, gate on
+# /healthz. Every pure-input assert runs before the first host mutation, and every
+# gate (host files included) before the binary is installed. The pool itself
+# (`decdn pool open` from the treasury wallet, then funding that wallet) is an
+# operator action — see roles/sponsord/README.md.
+
+# --- Install method + target ----------------------------------------------------
+- name: Require a valid install method
+  ansible.builtin.assert:
+    that:
+      - sponsord_install_method in ["release", "manual"]
+    fail_msg: >-
+      sponsord_install_method must be "release" (pinned GitHub Release tarball) or
+      "manual" (copy a locally-built binary from the control machine).
+
+# Upstream decdn/sponsord has cut no sponsord-v* tag yet; this names the cause
+# instead of surfacing a bare 404 from get_url.
+- name: Require a pinned release version
+  ansible.builtin.assert:
+    that:
+      - sponsord_version | length > 0
+    fail_msg: >-
+      sponsord_install_method "release" requires sponsord_version (e.g. "0.1.0") and
+      a matching sponsord-v<version> GitHub Release. Until upstream cuts one, build
+      the binary from a decdn/sponsord checkout and use sponsord_install_method
+      "manual".
+  when: sponsord_install_method == "release"
+
+- name: Validate sponsord_verify_release_signature is a real boolean
+  ansible.builtin.assert:
+    that:
+      - sponsord_verify_release_signature is boolean
+    fail_msg: >-
+      sponsord_verify_release_signature must be a boolean (true/false). Leave it true
+      unless you install from a mirror that strips SHA256SUMS.asc.
+  when: sponsord_install_method == "release"
+
+# Explicit sponsord_manual_bin_src never consults the triple, so it skips this.
+- name: Resolve the sponsord target triple
+  when: >-
+    sponsord_install_method == "release"
+    or (sponsord_release_target_dir | length > 0 and sponsord_manual_bin_src | length == 0)
+  block:
+    - name: Require a supported target triple
+      ansible.builtin.assert:
+        that:
+          - sponsord_target in _sponsord_arch_targets.values()
+        fail_msg: >-
+          sponsord_target resolved to "{{ sponsord_target }}", which is not one of the
+          Linux targets upstream releases ({{ _sponsord_arch_targets.values() | join(', ') }}).
+          It is derived from the host's gathered architecture
+          ("{{ ansible_facts.get('architecture', 'not gathered') }}"): gather facts
+          or set sponsord_target explicitly.
+
+    - name: Require the target triple to match the host architecture
+      ansible.builtin.assert:
+        that:
+          - _sponsord_arch_targets[ansible_facts['architecture']] == sponsord_target
+        fail_msg: >-
+          sponsord_target is {{ sponsord_target }}, but this host is
+          {{ ansible_facts['architecture'] }} and needs
+          {{ _sponsord_arch_targets[ansible_facts['architecture']] }}. Drop the explicit
+          sponsord_target (it is derived from the host) or fix it for this host.
+      when: ansible_facts.get('architecture', '') in _sponsord_arch_targets
+
+# Resolve + validate the manual binary on the CONTROL MACHINE before copying it.
+# An explicit sponsord_manual_bin_src is copied verbatim (a test stub is legitimately
+# not an ELF); sponsord_release_target_dir is searched (plus the cross output dir
+# target/<triple>/release) and the result must be an ELF for the host, which
+# catches a Mach-O from a host-native `cargo build` on macOS at deploy time.
+- name: Resolve and validate the manual binary source
+  when: sponsord_install_method == "manual"
+  block:
+    - name: Require a manual binary source
+      ansible.builtin.assert:
+        that:
+          - sponsord_manual_bin_src | length > 0 or sponsord_release_target_dir | length > 0
+        fail_msg: >-
+          sponsord_install_method "manual" needs sponsord_manual_bin_src (a
+          control-machine path to the sponsord binary) or sponsord_release_target_dir
+          (the control-machine target/release dir of a decdn/sponsord checkout).
+
+    # Internal facts, never a set_fact on sponsord_manual_bin_src itself: an
+    # include_role `vars:` value would outrank it, and a derived path would leak
+    # into every later include on the same host. A trailing slash is stripped so
+    # `dirname` lands on target/, not target/release.
+    - name: Decide whether target-dir resolution applies
+      ansible.builtin.set_fact:
+        _sponsord_use_dir: "{{ sponsord_manual_bin_src | length == 0 }}"
+        _sponsord_target_dir: "{{ sponsord_release_target_dir | regex_replace('/+$', '') }}"
+        _sponsord_bin_src: "{{ sponsord_manual_bin_src }}"
+
+    - name: Stat the binary in each candidate directory
+      ansible.builtin.stat:
+        path: "{{ item }}/sponsord"
+      register: _sponsord_bin_stat
+      loop:
+        - "{{ _sponsord_target_dir }}"
+        - "{{ (_sponsord_target_dir | dirname) ~ '/' ~ sponsord_target ~ '/release' }}"
+      loop_control:
+        label: "{{ item }}"
+      delegate_to: localhost
+      become: false
+      when: _sponsord_use_dir | bool
+
+    - name: Select the first candidate directory that holds the binary
+      ansible.builtin.set_fact:
+        _sponsord_resolved_dir: >-
+          {{ (_sponsord_bin_stat.results | selectattr('stat.exists') | map(attribute='item')
+              | first) | default('', true) }}
+      when: _sponsord_use_dir | bool
+
+    - name: Fail if no candidate directory held the binary
+      ansible.builtin.assert:
+        that:
+          - _sponsord_resolved_dir | length > 0
+        fail_msg: >-
+          No sponsord binary under sponsord_release_target_dir
+          ({{ sponsord_release_target_dir }}) or its cross output dir
+          ({{ (_sponsord_target_dir | dirname) ~ '/' ~ sponsord_target ~ '/release' }}).
+          Build it in a decdn/sponsord checkout — `cargo build --release -p sponsord`,
+          or cross-compiling for the host,
+          `cross build --release -p sponsord --target {{ sponsord_target }}`.
+      when: _sponsord_use_dir | bool
+
+    - name: Derive the effective binary source path
+      ansible.builtin.set_fact:
+        _sponsord_bin_src: "{{ _sponsord_resolved_dir ~ '/sponsord' }}"
+      when: _sponsord_use_dir | bool
+
+    - name: Identify the on-disk format of the resolved binary
+      ansible.builtin.command:
+        argv: [file, -b, --, "{{ _sponsord_bin_src }}"]
+      register: _sponsord_bin_file
+      changed_when: false
+      check_mode: false
+      delegate_to: localhost
+      become: false
+      when: _sponsord_use_dir | bool
+
+    - name: Require the binary to be an ELF for the host's architecture
+      ansible.builtin.assert:
+        that:
+          - "'ELF' in _sponsord_bin_file.stdout"
+          - _sponsord_arch_file_tokens[sponsord_target] in _sponsord_bin_file.stdout
+        fail_msg: >-
+          {{ _sponsord_bin_src }} is "{{ _sponsord_bin_file.stdout }}" — not an ELF
+          {{ _sponsord_arch_file_tokens[sponsord_target] }} binary for {{ sponsord_target }}.
+          Cross-compile for the host: `cross build --release -p sponsord --target
+          {{ sponsord_target }}`.
+      when: _sponsord_use_dir | bool
+
+# --- Chain ------------------------------------------------------------------------
+- name: Require a known sponsord_network
+  ansible.builtin.assert:
+    that:
+      - sponsord_network == "" or sponsord_network in _sponsord_network_profiles
+    fail_msg: >-
+      sponsord_network "{{ sponsord_network }}" is not a known network. Known:
+      {{ _sponsord_network_profiles.keys() | join(', ') }}. Leave it "" to set
+      sponsord_chain_id and sponsord_payment_pool_address yourself.
+
+# A chain_id from inventory that points at another chain would silently pair that
+# chain with this profile's PaymentPool address.
+- name: Require chain_id to match the network profile
+  ansible.builtin.assert:
+    that:
+      - sponsord_chain_id | int == _sponsord_profile.chain_id | int
+    fail_msg: >-
+      sponsord_chain_id is {{ sponsord_chain_id }}, but sponsord_network
+      "{{ sponsord_network }}" is chain {{ _sponsord_profile.chain_id }}. Drop
+      sponsord_chain_id from inventory (the profile supplies it) or clear
+      sponsord_network.
+  when: sponsord_network | length > 0
+
+- name: Report a PaymentPool address overridden in inventory
+  ansible.builtin.debug:
+    msg: >-
+      sponsord_network "{{ sponsord_network }}" is in use, but inventory overrides
+      sponsord_payment_pool_address. The inventory value wins over the profile; make
+      sure that is deliberate (a stale hand-copied address is the usual cause).
+  when:
+    - sponsord_network | length > 0
+    - (sponsord_payment_pool_address | lower) != (_sponsord_profile.payment_pool_address | lower)
+
+- name: Require chain, PaymentPool and pool id
+  ansible.builtin.assert:
+    that:
+      - sponsord_chain_id | string is match('^[0-9]+$')
+      - sponsord_chain_id | int > 0
+      - sponsord_payment_pool_address is match('^0x[0-9a-fA-F]{40}$')
+      - sponsord_payment_pool_address != '0x' ~ '0' * 40
+      - sponsord_pool_id is match('^0x[0-9a-fA-F]{64}$')
+      - sponsord_pool_id != '0x' ~ '0' * 64
+    fail_msg: >-
+      A positive sponsord_chain_id, sponsord_payment_pool_address (0x + 40 hex, not
+      zero) and sponsord_pool_id (0x + 64 hex, not zero) are required. Set
+      sponsord_network (e.g. "arbitrum-sepolia") to take chain_id and the PaymentPool
+      address from the role's mirror of upstream's deployment manifest — never
+      hand-copy them — and sponsord_pool_id to the id `decdn pool open` printed when
+      the treasury wallet opened its pool.
+
+# --- Listener + limits --------------------------------------------------------------
+# AGENTS.md hard rule 2. The API is bearer-authenticated but /metrics is not, and
+# the onramp that calls it runs on the same host. IPv4 loopback only: the value is
+# parsed as a SocketAddr, so "localhost" would not start, and Alloy scrapes it as
+# host:port.
+- name: Require the listener to stay on loopback
+  ansible.builtin.assert:
+    that:
+      - sponsord_bind_address is match('^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$')
+      - sponsord_port | string is match('^[0-9]+$')
+      - sponsord_port | int >= 1
+      - sponsord_port | int <= 65535
+    fail_msg: >-
+      sponsord_bind_address must be an IPv4 loopback address (got
+      "{{ sponsord_bind_address }}") and sponsord_port a TCP port (got
+      "{{ sponsord_port }}"). /metrics has no auth and the API holds the treasury's
+      signing power; exposing it is an architecture change, not a config tweak.
+      Front it with a reverse proxy that terminates auth + TLS (AGENTS.md hard rule 2).
+
+- name: Validate the issuance and keeper limits
+  ansible.builtin.assert:
+    that:
+      - item.value | string is match('^[0-9]+$')
+      - item.key == 'sponsord_pool_low_water_micro_usdc' or item.value | int > 0
+    fail_msg: >-
+      {{ item.key }} must be "" (upstream default) or a non-negative integer
+      ({{ 'zero allowed' if item.key == 'sponsord_pool_low_water_micro_usdc' else 'greater than zero' }}),
+      got "{{ item.value }}".
+  loop: "{{ _sponsord_limits | dict2items | rejectattr('value', 'equalto', '') | list }}"
+  loop_control:
+    label: "{{ item.key }}"
+  vars:
+    _sponsord_limits:
+      sponsord_max_spending_cap_micro_usdc: "{{ sponsord_max_spending_cap_micro_usdc }}"
+      sponsord_max_ttl_secs: "{{ sponsord_max_ttl_secs }}"
+      sponsord_pool_low_water_micro_usdc: "{{ sponsord_pool_low_water_micro_usdc }}"
+      sponsord_pool_refill_micro_usdc: "{{ sponsord_pool_refill_micro_usdc }}"
+      sponsord_pool_watch_interval_secs: "{{ sponsord_pool_watch_interval_secs }}"
+
+- name: Validate the role's boolean knobs
+  ansible.builtin.assert:
+    that:
+      - sponsord_generate_api_token is boolean
+      - sponsord_secret_env_overwrite_host_file is boolean
+    fail_msg: >-
+      sponsord_generate_api_token and sponsord_secret_env_overwrite_host_file must be
+      booleans (true/false), not quoted strings.
+
+# --- RPC URL: inventory or host-provisioned secret.env ------------------------------
+# The same two authoring paths, provenance record and guards as decdn_node's
+# decdn_rpc_url (#39) — see the long comments in roles/decdn_node/tasks/main.yml.
+#   sponsord_rpc_url set   -> the role authors secret.env (OVERWRITES the host's)
+#   sponsord_rpc_url empty -> the operator wrote secret.env on the host; the role
+#                             never reads it back, it only locks it down and greps
+# The record "<source> <sha256>" tells a file the role wrote from one the operator
+# owns, and a changed hash means an out-of-band edit.
+- name: Validate the inventory RPC URL is one-line EnvironmentFile data
+  ansible.builtin.assert:
+    that:
+      - sponsord_rpc_url | string is match('^[^\x00-\x1f\x7f]*\Z')
+    fail_msg: >-
+      sponsord_rpc_url must contain no ASCII control characters; the role renders it
+      as one EnvironmentFile assignment.
+  no_log: true
+  when: sponsord_rpc_url | length > 0
+
+- name: Check for a host-provisioned secret environment file
+  ansible.builtin.stat:
+    path: "{{ sponsord_secret_env_file }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: sponsord_secret_env_pre_stat
+
+- name: Read the secret.env checksum this role last recorded
+  ansible.builtin.slurp:
+    src: "{{ sponsord_secret_env_checksum_file }}"
+  register: sponsord_secret_env_recorded
+  # A missing record is normal (first converge); any other read error is not, and
+  # treating it as "no record" would silently disable the provenance guards.
+  failed_when: >-
+    sponsord_secret_env_recorded.failed
+    and 'not found' not in (sponsord_secret_env_recorded.msg | default(''))
+  changed_when: false
+
+- name: Resolve secret.env provenance
+  ansible.builtin.set_fact:
+    sponsord_secret_env_record_source: "{{ (_rec.split() | length == 2) | ternary(_rec.split()[0], '') }}"
+    sponsord_secret_env_recorded_sum: "{{ (_rec.split() | length == 2) | ternary(_rec.split()[1], '') }}"
+  vars:
+    _rec: "{{ sponsord_secret_env_recorded.content | default('') | b64decode | trim }}"
+
+- name: Require an RPC endpoint — inventory value or a host-provisioned secret.env
+  ansible.builtin.assert:
+    that:
+      - sponsord_rpc_url | length > 0 or sponsord_secret_env_pre_stat.stat.exists
+    fail_msg: |-
+      No RPC endpoint: sponsord_rpc_url is empty and {{ sponsord_secret_env_file }}
+      does not exist on this host. The URL may embed a provider API key, so the
+      preferred posture is to provision it on the host. Run this on the TARGET:
+        umask 077
+        sudo mkdir -p {{ sponsord_etc }}
+        echo 'SPONSORD_RPC_URL=https://…' | sudo tee {{ sponsord_secret_env_file }} >/dev/null
+        sudo chmod 600 {{ sponsord_secret_env_file }}
+      Or set sponsord_rpc_url in the git-ignored host_vars/<host>/secret.yml and the
+      role will author the file for you.
+
+# Not a symlink or directory: the lock-down below chowns/chmods this path as root.
+- name: Require secret.env to be a regular file
+  ansible.builtin.assert:
+    that:
+      - sponsord_secret_env_pre_stat.stat.isreg | default(false)
+    fail_msg: >-
+      {{ sponsord_secret_env_file }} exists but is not a regular file
+      (symlink/directory/device). Replace it with a real file.
+  when: sponsord_secret_env_pre_stat.stat.exists
+
+# An empty sponsord_rpc_url also happens when secret.yml is simply missing (a fresh
+# clone, an undecrypted vault). Adopting the role's own stale file as
+# operator-provisioned would deploy green on the old endpoint.
+- name: Refuse to adopt a role-authored secret.env as host-provisioned
+  ansible.builtin.assert:
+    that:
+      - sponsord_secret_env_record_source != 'inventory'
+        or sponsord_secret_env_recorded_sum != (sponsord_secret_env_pre_stat.stat.checksum | default(''))
+    fail_msg: >-
+      sponsord_rpc_url is empty, but {{ sponsord_secret_env_file }} is byte-for-byte
+      the file THIS ROLE last wrote from inventory — the value has gone missing from
+      the control machine (an absent secret.yml, an undecrypted vault) rather than
+      being handed to the host. Restore sponsord_rpc_url, or hand the file over
+      explicitly by discarding the role's provenance record:
+      sudo rm {{ sponsord_secret_env_checksum_file }}
+  when: sponsord_rpc_url | length == 0
+
+- name: Require confirmation to overwrite a secret.env this role did not write
+  ansible.builtin.assert:
+    that:
+      - sponsord_secret_env_overwrite_host_file | bool
+    fail_msg: >-
+      sponsord_rpc_url is set, but {{ sponsord_secret_env_file }} on this host is not
+      a file this role authored (record "{{ sponsord_secret_env_record_source }}"
+      and/or its checksum no longer matches). Rendering it from inventory would
+      discard whatever the host's copy holds. Clear sponsord_rpc_url to keep the
+      host's copy, or set sponsord_secret_env_overwrite_host_file: true.
+  when:
+    - sponsord_rpc_url | length > 0
+    - sponsord_secret_env_pre_stat.stat.exists
+    - sponsord_secret_env_recorded_sum | length > 0
+    - >-
+      sponsord_secret_env_record_source != 'inventory'
+      or sponsord_secret_env_recorded_sum != (sponsord_secret_env_pre_stat.stat.checksum | default(''))
+
+# --- Treasury wallet (operator-provisioned) ------------------------------------------
+# follow: false — a symlink is refused, because the lock-down below would otherwise
+# chmod its target as root. (The daemon itself reads a 0600 copy the unit makes at
+# start, never this path.)
+- name: Check the treasury keystore and password files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+    get_checksum: false
+  register: sponsord_treasury_stat
+  loop:
+    - "{{ sponsord_treasury_keystore_file }}"
+    - "{{ sponsord_treasury_password_file }}"
+
+- name: Require the treasury keystore and password as regular files
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+    fail_msg: |-
+      {{ item.item }} is {{ 'missing' if not item.stat.exists else 'not a regular file (symlink/directory?)' }}.
+      sponsord signs with the TREASURY wallet — the one that owns sponsord_pool_id
+      on-chain — and the role never creates it. Create it once with the decdn CLI
+      (`decdn key-gen`), open and fund the pool from it (`decdn pool open`), then
+      copy the keystore JSON and its password onto this host, as root:
+        umask 077
+        sudo mkdir -p {{ sponsord_etc }}
+        sudo install -m 0600 treasury-keystore.json {{ sponsord_treasury_keystore_file }}
+        sudo install -m 0600 treasury-password {{ sponsord_treasury_password_file }}
+      Keep only a few top-ups' worth of USDC plus gas in that wallet: it is a hot key.
+  loop: "{{ sponsord_treasury_stat.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Check for a provisioned API token
+  ansible.builtin.stat:
+    path: "{{ sponsord_api_token_file }}"
+    follow: false
+  register: sponsord_api_token_pre_stat
+
+- name: Require an API token file when generation is off
+  ansible.builtin.assert:
+    that:
+      - sponsord_api_token_pre_stat.stat.isreg | default(false)
+    fail_msg: >-
+      sponsord_generate_api_token is false and {{ sponsord_api_token_file }} is not
+      a regular file. Provision a token of at least 32 bytes on the host
+      (`umask 077; openssl rand -hex 32 | sudo tee {{ sponsord_api_token_file }}`),
+      or set sponsord_generate_api_token: true.
+  when: not sponsord_generate_api_token
+
+- name: Require the API token path to be a regular file when present
+  ansible.builtin.assert:
+    that:
+      - sponsord_api_token_pre_stat.stat.isreg | default(false)
+    fail_msg: "{{ sponsord_api_token_file }} exists but is not a regular file (symlink/directory?)."
+  when: sponsord_api_token_pre_stat.stat.exists
+
+# --- Secrets ------------------------------------------------------------------------
+- name: Create the sponsord config directory
+  ansible.builtin.file:
+    path: "{{ sponsord_etc }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Generated on the host (never on the control machine) and never replaced: the
+# onramp holds a copy. umask first so the file is never briefly readable.
+- name: Generate the API token on the host
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      umask 077
+      od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > {{ sponsord_api_token_file | quote }}
+    creates: "{{ sponsord_api_token_file }}"
+  when: sponsord_generate_api_token
+
+- name: Lock down the credential files (ownership + mode only)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: root
+    group: root
+    mode: "0600"
+    follow: false
+  loop:
+    - "{{ sponsord_api_token_file }}"
+    - "{{ sponsord_treasury_keystore_file }}"
+    - "{{ sponsord_treasury_password_file }}"
+  # Under --check a generated token is only simulated, so it may not exist yet.
+  when: not (ansible_check_mode and item == sponsord_api_token_file and not sponsord_api_token_pre_stat.stat.exists)
+
+# Upstream refuses a token under 32 bytes at start; say so here instead. wc reads
+# only the length, so the token never leaves the host.
+- name: Measure the API token
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: set -o pipefail; tr -d '\r\n' < {{ sponsord_api_token_file | quote }} | wc -c
+  register: sponsord_api_token_len
+  changed_when: false
+  check_mode: false
+  when: not (ansible_check_mode and not sponsord_api_token_pre_stat.stat.exists)
+
+- name: Require an API token of at least 32 bytes
+  ansible.builtin.assert:
+    that:
+      - sponsord_api_token_len.stdout | int >= 32
+    fail_msg: >-
+      {{ sponsord_api_token_file }} holds {{ sponsord_api_token_len.stdout | trim }}
+      bytes; sponsord requires at least 32. Replace it
+      (`umask 077; openssl rand -hex 32 | sudo tee {{ sponsord_api_token_file }}`) and
+      give the onramp the same value.
+  when: sponsord_api_token_len.stdout is defined
+
+- name: Lock down a host-provisioned secret.env (ownership + mode only)
+  ansible.builtin.file:
+    path: "{{ sponsord_secret_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when: sponsord_rpc_url | length == 0
+
+# grep -q keeps the secret out of stdout and argv; never slurp it.
+- name: Confirm a host-provisioned secret.env carries a non-empty SPONSORD_RPC_URL
+  ansible.builtin.command:
+    cmd: grep -qE '^[[:space:]]*SPONSORD_RPC_URL=[^[:space:]]' {{ sponsord_secret_env_file | quote }}
+  register: sponsord_secret_env_grep
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  when: sponsord_rpc_url | length == 0
+
+- name: Report a host-provisioned secret.env with no usable SPONSORD_RPC_URL
+  ansible.builtin.fail:
+    msg: >-
+      {{ sponsord_secret_env_file }} carries no `SPONSORD_RPC_URL=` line with a
+      non-whitespace value (grep exited {{ sponsord_secret_env_grep.rc | default('-') }}
+      {{ sponsord_secret_env_grep.stderr | default('', true) }}),
+      so the daemon would start with no chain endpoint. Add one — single-quote a value
+      containing a space, quote, backslash or `$`, because systemd skips a line it
+      cannot parse:
+      echo 'SPONSORD_RPC_URL=https://your-endpoint.example/rpc' | sudo tee -a
+      {{ sponsord_secret_env_file }} >/dev/null
+  when:
+    - sponsord_rpc_url | length == 0
+    - sponsord_secret_env_grep.rc | default(1) != 0
+
+# secret.env is an EnvironmentFile, and those override the unit's Environment= and
+# every other setting: a pasted upstream sponsord.env.example would quietly replace
+# the validated bind address, pool and contract (a public listener, or a green
+# deploy against a stale PaymentPool). Only SPONSORD_RPC_URL belongs here. The
+# check prints key NAMES only, so no value leaves the host.
+- name: List any keys besides SPONSORD_RPC_URL in a host-provisioned secret.env
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      { grep -oE '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=' \
+          {{ sponsord_secret_env_file | quote }} || true; } \
+        | sed -E 's/^[[:space:]]*(export[[:space:]]+)?//; s/[[:space:]]*=$//' \
+        | { grep -vx SPONSORD_RPC_URL || true; }
+  register: sponsord_secret_env_extra_keys
+  changed_when: false
+  check_mode: false
+  when: sponsord_rpc_url | length == 0
+
+- name: Refuse keys besides SPONSORD_RPC_URL in a host-provisioned secret.env
+  ansible.builtin.assert:
+    that:
+      - sponsord_secret_env_extra_keys.stdout | length == 0
+    fail_msg: >-
+      {{ sponsord_secret_env_file }} sets {{ sponsord_secret_env_extra_keys.stdout_lines | join(', ') }}.
+      It may carry SPONSORD_RPC_URL only: an EnvironmentFile overrides every other
+      setting of the unit, so these would silently replace what this role validated
+      (bind address, chain, PaymentPool, pool id, credential paths). Remove them from
+      the file and set the matching sponsord_* variables in inventory instead.
+  when: sponsord_rpc_url | length == 0
+
+# After every gate, so a deploy that stops at one has notified no restart for a unit
+# that may not exist yet. A run that fails LATER loses its pending restart (Ansible
+# runs no handlers for a failed host); the inputs record below catches that.
+- name: Install the sponsord binary
+  ansible.builtin.import_tasks: install.yml
+
+- name: Write secret.env (inventory-supplied)
+  ansible.builtin.copy:
+    dest: "{{ sponsord_secret_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    # to_json emits the double-quoted, C-escaped form systemd's EnvironmentFile
+    # parser expects (see decdn_node's env-file task for the full rationale).
+    content: |
+      SPONSORD_RPC_URL={{ sponsord_rpc_url | string | to_json(ensure_ascii=false) }}
+  no_log: true
+  notify: Restart sponsord
+  when: sponsord_rpc_url | length > 0
+
+# Provenance only ("who wrote secret.env"), so it is written as soon as the file is
+# final, not after the health gate: a run that wrote the file and then failed must
+# still be recorded as having written it, or the next run would refuse to overwrite
+# the role's own file, or adopt it as the operator's. Restarts are tracked
+# separately by the restart-inputs record below.
+- name: Re-stat secret.env now that it is final
+  ansible.builtin.stat:
+    path: "{{ sponsord_secret_env_file }}"
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: sponsord_secret_env_post_stat
+
+- name: Record who wrote secret.env, and its checksum
+  ansible.builtin.copy:
+    dest: "{{ sponsord_secret_env_checksum_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: >
+      {{ (sponsord_rpc_url | length > 0) | ternary('inventory', 'host') }}
+      {{ sponsord_secret_env_post_stat.stat.checksum }}
+  # In check mode the inventory write is only simulated, so there may be nothing to hash.
+  when: (sponsord_secret_env_post_stat.stat.checksum | default('')) | length > 0
+
+# --- Config + unit ------------------------------------------------------------------
+- name: Template the non-secret sponsord.env
+  ansible.builtin.template:
+    src: sponsord.env.j2
+    dest: "{{ sponsord_env_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart sponsord
+
+- name: Install the sponsord systemd unit
+  ansible.builtin.template:
+    src: sponsord.service.j2
+    dest: /etc/systemd/system/sponsord.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart sponsord
+
+# --- Restart inputs -----------------------------------------------------------------
+# Everything the daemon starts from: the credentials, both env files, the unit and
+# the binary. Their hashes are recorded only once the daemon is healthy (end of this
+# file), so whatever left the running daemon on stale inputs is caught on the next
+# converge — an operator rotating a credential or editing a host-provisioned
+# secret.env out of band, or an earlier run that changed a file and then failed
+# before its restart handler ran. An ABSENT record counts only
+# when the daemon is already running (below).
+- name: Hash the restart inputs
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: sponsord_inputs_stat
+  loop:
+    - "{{ sponsord_api_token_file }}"
+    - "{{ sponsord_treasury_keystore_file }}"
+    - "{{ sponsord_treasury_password_file }}"
+    - "{{ sponsord_secret_env_file }}"
+    - "{{ sponsord_env_file }}"
+    - /etc/systemd/system/sponsord.service
+    - "{{ sponsord_bin }}"
+
+- name: Read the restart-input checksums this role last recorded
+  ansible.builtin.slurp:
+    src: "{{ sponsord_inputs_checksum_file }}"
+  register: sponsord_inputs_recorded
+  failed_when: sponsord_inputs_recorded.failed and 'not found' not in (sponsord_inputs_recorded.msg | default(''))
+  changed_when: false
+
+# With no record, a daemon that is ALREADY running was never confirmed healthy on
+# these inputs (an earlier run timed out at the gate, then the daemon came up on
+# whatever it had then), so it cannot be trusted to be on them now. On a truly
+# fresh host the unit is not active and nothing is owed. Read-only.
+- name: Read whether sponsord is already running
+  ansible.builtin.systemd_service:
+    name: sponsord
+  register: sponsord_is_active
+
+- name: Summarise the restart-input checksums
+  ansible.builtin.set_fact:
+    sponsord_inputs_sums: >-
+      {{ sponsord_inputs_stat.results | map(attribute='stat') | map('default', {}, true)
+         | map(attribute='checksum', default='') | join(' ') }}
+    sponsord_inputs_recorded_sums: "{{ sponsord_inputs_recorded.content | default('') | b64decode | trim }}"
+
+- name: Note restart inputs that changed since the daemon last started healthy
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'A credential, env file, the unit or the binary differs from what sponsord was
+      last confirmed healthy on (rotated or edited on the host, or changed by a run
+      that failed before restarting)' if sponsord_inputs_recorded_sums | length > 0
+      else 'sponsord is running but was never confirmed healthy on its current inputs' }}
+      — restarting sponsord.
+  changed_when: true
+  notify: Restart sponsord
+  when: >-
+    (sponsord_inputs_recorded_sums | length > 0 and sponsord_inputs_sums != sponsord_inputs_recorded_sums)
+    or (sponsord_inputs_recorded_sums | length == 0
+        and sponsord_is_active.status.ActiveState | default('') == 'active')
+
+- name: Apply pending sponsord changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start sponsord
+  ansible.builtin.systemd:
+    name: sponsord
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# --- Readiness (fatal) ------------------------------------------------------------
+# The listener binds only after the keystore decrypts and the on-chain owner check
+# passes, so this is the deploy's config gate. Retry while nothing answers (-1);
+# any answer other than 200 is a fault and stops the retries at once. The journal
+# is NOT echoed here: a provider error can quote the RPC URL, and this output lands
+# on the control machine.
+# KICS flags plain HTTP here; the target is the loopback listener asserted above.
+- name: Wait for sponsord /healthz
+  ansible.builtin.uri:
+    url: "http://{{ sponsord_bind_address }}:{{ sponsord_port }}/healthz"
+    status_code: 200
+    return_content: true
+    # A listener that accepts and then hangs must not stretch the window ~30x.
+    timeout: 5
+  register: sponsord_health
+  retries: "{{ sponsord_readiness_retries }}"
+  delay: "{{ sponsord_readiness_delay }}"
+  until: sponsord_health.status | default(-1) != -1
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Report a sponsord that did not become healthy
+  ansible.builtin.fail:
+    msg: |-
+      sponsord did not answer 200 on http://{{ sponsord_bind_address }}:{{ sponsord_port }}/healthz
+      within ~{{ (sponsord_readiness_retries | int) * (sponsord_readiness_delay | int) }}s
+      (last status {{ sponsord_health.status | default('none') }}). It binds only after
+      decrypting the treasury keystore and confirming on-chain that the treasury owns
+      sponsord_pool_id, so the usual causes are a wrong password, a pool id owned by a
+      different wallet, the wrong chain/PaymentPool address, or an unreachable RPC
+      endpoint. Read the reason on the host:
+        sudo journalctl -u sponsord -e
+  when:
+    - not ansible_check_mode
+    - sponsord_health.status | default(-1) != 200 or sponsord_health.json.ok | default(false) is not true
+
+# /healthz is a constant answer, so the 200 alone does not prove it came from THIS
+# unit: something else holding the port would pass while sponsord crash-loops on
+# EADDRINUSE. The listener must belong to the running unit's main process.
+- name: Read the sponsord unit state
+  ansible.builtin.systemd_service:
+    name: sponsord
+  register: sponsord_unit_state
+  when: not ansible_check_mode
+
+- name: Read the owner of the sponsord listener
+  ansible.builtin.command:
+    argv: [ss, -Hltnp, "sport = :{{ sponsord_port }}"]
+  register: sponsord_listener
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Require the listener to belong to the running sponsord unit
+  ansible.builtin.assert:
+    that:
+      - sponsord_unit_state.status.ActiveState == 'active'
+      - sponsord_unit_state.status.SubState == 'running'
+      - ('pid=' ~ sponsord_unit_state.status.MainPID ~ ',') in sponsord_listener.stdout
+    fail_msg: >-
+      Something answered /healthz on {{ sponsord_bind_address }}:{{ sponsord_port }},
+      but it is not the sponsord unit (state
+      {{ sponsord_unit_state.status.ActiveState }}/{{ sponsord_unit_state.status.SubState }},
+      MainPID {{ sponsord_unit_state.status.MainPID }}; listeners:
+      {{ sponsord_listener.stdout | default('none', true) }}). Another service holds
+      the port, so sponsord cannot bind it: free the port or set sponsord_port.
+  when: not ansible_check_mode
+
+# --- Records (the daemon is now running on these inputs) -----------------------------
+- name: Record the restart-input checksums
+  ansible.builtin.copy:
+    dest: "{{ sponsord_inputs_checksum_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ sponsord_inputs_sums }}\n"
+  when: not ansible_check_mode

@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest      # Docker is preinstalled
     # ~4m41s at JOBS=3 with 8 scenarios. os-matrix (3 containers) and lifecycle took the
     # suite to ~10m at JOBS=3 on a local 16-thread box; re-measure from CI's first run.
+    # sponsord added a 12th scenario (2 containers, Debian 12 + Ubuntu 24.04).
     # A bound, not a target: without one a wedged privileged systemd container burns
     # the 360-minute default, and with cancel-in-progress above, some branch-protection
     # setups read the resulting cancelled check as "not failed" rather than as a failure.

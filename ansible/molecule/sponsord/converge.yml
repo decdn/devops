@@ -1,0 +1,7 @@
+---
+# The real standalone entry point, not include_role: this is what proves
+# playbooks/group_vars/all.yml turns the node scrape off on a sponsord-only host.
+# Variables come from molecule.yml's inventory group_vars (sponsord_hosts); baseline
+# is skipped there.
+- name: Converge
+  ansible.builtin.import_playbook: ../../playbooks/sponsord.yml

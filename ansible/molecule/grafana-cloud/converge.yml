@@ -1,7 +1,10 @@
 ---
 # Positive path only — see molecule.yml for scope and ../validation for the
-# negative (block/rescue) matrix. Both roles run in sequence: Alloy first so its
-# receivers exist before the daemon is started and exports spans at them.
+# negative (block/rescue) matrix. The roles run in sequence: Alloy first so its
+# receivers exist before the daemon is started and exports spans at them, then
+# sponsord on the same host — the CO-LOCATED shape (a host in both decdn_nodes and
+# sponsord_hosts), so Alloy must scrape both daemons. ../sponsord covers a
+# sponsord-only host.
 #
 # The stub does not serve /metrics, so decdn_node's readiness probe would sit out
 # its full advisory window (~60s of retries); decdn_readiness_* below bounds that
@@ -53,8 +56,22 @@
     # so every gate and the template must coerce it instead of taking its length
     # or emitting a bare number into a string field.
     grafana_alloy_prom_username: 1234567
+
+    # --- Co-located sponsord (what playbooks/group_vars/all.yml derives for a host
+    # in both groups; set by hand here because this converge uses roles, not the
+    # playbook) -------------------------------------------------------------------
+    grafana_alloy_sponsord_enabled: true
+    sponsord_install_method: manual
+    sponsord_manual_bin_src: "{{ _proj_dir }}/molecule/sponsord/files/sponsord-stub"
+    sponsord_network: arbitrum-sepolia
+    sponsord_pool_id: "0x00000000000000000000000000000000000000000000000000000000000000aa"
+    sponsord_rpc_url: "https://rpc.example.invalid/"
+    sponsord_readiness_retries: 10
+    sponsord_readiness_delay: 1
   roles:
     - role: grafana_alloy
       tags: [observability]
     - role: decdn_node
       tags: [decdn_node, node]
+    - role: sponsord
+      tags: [sponsord]

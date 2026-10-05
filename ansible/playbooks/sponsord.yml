@@ -1,0 +1,21 @@
+---
+# sponsord: the deCDN onboarding sponsor (treasury signer + PaymentPool keeper).
+#   baseline -> grafana_alloy (opt-in, off by default) -> sponsord
+# Standalone entry point (`make deploy-sponsord`), also imported by site.yml. It
+# needs no decdn-node on the host and opens no firewall hole: its only listener is
+# loopback, for the onramp on the same host. A host in both decdn_nodes and
+# sponsord_hosts runs baseline and Alloy once per play; both converge to the same
+# state, because Alloy's per-daemon toggles are host-scoped
+# (playbooks/group_vars/all.yml), not play-scoped.
+# Opening and funding the treasury's pool is an operator action — see
+# roles/sponsord/README.md.
+- name: Provision sponsord
+  hosts: sponsord_hosts
+  become: true
+  roles:
+    - role: baseline
+      tags: [baseline]
+    - role: grafana_alloy
+      tags: [observability, sponsord]
+    - role: sponsord
+      tags: [sponsord]

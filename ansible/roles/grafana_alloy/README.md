@@ -195,9 +195,10 @@ Binary/package removal is manual.
 
 | Signal | Job label | Where it shows up |
 | --- | --- | --- |
-| Node `/metrics` | `decdn-node` | your own dashboards/queries |
+| Node `/metrics` | `decdn-node` | your own dashboards/queries (`grafana_alloy_node_enabled`) |
+| sponsord `/metrics` | `sponsord` | pool balance, top-ups, keeper failures, issued capabilities (`grafana_alloy_sponsord_enabled`); `service_name=sponsord` |
 | Machine metrics | `integrations/node_exporter` | Grafana Cloud's **Linux Server** integration dashboards + alerts, unmodified |
-| journald | `integrations/node_exporter` | the same integration's logs dashboards (correlated by `instance`); the daemon's own unit (`decdn-node.service`) also carries `service_name=<grafana_alloy_service_name>` (default `decdn-node`) |
+| journald | `integrations/node_exporter` | the same integration's logs dashboards (correlated by `instance`); the daemon's own unit (`decdn-node.service`) also carries `service_name=<grafana_alloy_service_name>` (default `decdn-node`), and `sponsord.service` carries `service_name=sponsord` when that scrape is on |
 | Alloy self-metrics | `integrations/alloy` | agent health |
 | Traces | — | Application Observability |
 
@@ -235,6 +236,12 @@ deliberately lean and every lever is a variable:
   regex is applied to that JSON level for this unit. Values follow journald's
   keywords, so query `level="warning"`, not `warn`; TRACE becomes `trace`. Lines
   that are not JSON keep the journald level and are never priority-dropped.
+- sponsord, when `grafana_alloy_sponsord_enabled` is on, gets the same treatment
+  from its plain-text lines (`<timestamp>  WARN <target>: …`; its unit sets
+  `NO_COLOR=1`). The raw lines it writes when it exits on an error (`Error: …`,
+  `Caused by: …`, a panic) are labelled `error`. Other unlevelled lines keep
+  journald's level. With the toggle off, nothing re-levels its stream, so an
+  info-dropping priority regex would drop its warnings and errors too.
 
 ## Hardening: the two relaxations machine monitoring requires
 
@@ -270,7 +277,7 @@ upstream version/sha256). Highlights:
 | `grafana_alloy_host_metrics_enabled` | `true` | Machine metrics (Alloy's in-process `node_exporter`) |
 | `grafana_alloy_host_collectors` | 13 collectors | Replacement set; `_host_extra_collectors` adds, `_host_disable_collectors` vetoes |
 | `grafana_alloy_host_scrape_interval` | `60s` | Host metrics only; the node keeps `30s` |
-| `grafana_alloy_host_systemd_unit_include` | `(decdn-node\|alloy\|ssh\|sshd)\.service` | Scope of the per-unit `systemd` collector |
+| `grafana_alloy_host_systemd_unit_include` | `(decdn-node\|sponsord\|alloy\|ssh\|sshd)\.service` | Scope of the per-unit `systemd` collector |
 | `grafana_alloy_logs_enabled` | `true` | journald → Grafana Cloud Loki |
 | `grafana_alloy_logs_max_age` | `12h` | Bounds the catch-up burst after an outage |
 | `grafana_alloy_self_metrics_enabled` | `true` | Alloy's own health |
@@ -279,6 +286,9 @@ upstream version/sha256). Highlights:
 | `grafana_alloy_env_checksum_file` | `/etc/grafana-alloy.env.sha256` | Provenance record (`<source> <sha256>`) enabling the adoption/overwrite guards; must remain exactly `<grafana_alloy_secret_file>.sha256` |
 | `grafana_alloy_overwrite_host_file` | `false` | Explicit opt-in letting an inventory token rewrite a hand-edited/untracked env file (all-or-nothing: extra `GC_*` lines are discarded) |
 | `grafana_alloy_node_job` / `_host_job` / `_self_job` / `_logs_job` | see table above | Job labels; the `integrations/…` ones are what Grafana Cloud's dashboards match |
+| `grafana_alloy_node_enabled` | `true` | Scrape decdn-node's `/metrics`. This repo's playbooks set it from membership of `decdn_nodes` (`playbooks/group_vars/all.yml`) |
+| `grafana_alloy_sponsord_enabled` | `false` | Scrape sponsord's `/metrics`, label and re-level its journald stream. Set from membership of `sponsord_hosts` by the same file |
+| `grafana_alloy_sponsord_job` / `_sponsord_service_name` | `sponsord` / `sponsord` | sponsord's job label and `service_name` |
 
 Label variables (`service_name`, `service_namespace`, `instance_id`,
 `deployment_environment`, `region`) ship on most series, spans and log lines —
@@ -329,9 +339,10 @@ Three layers, because the first one cannot prove correctness on its own:
    container with no D-Bus and no real journal, so the `systemd` collector and
    journald collect nothing there — expected, and not what this layer proves.
 2. **`make lint-alloy`** (CI job `alloy-config`) — renders these templates in
-   eight variable combinations (defaults, minimal identity, fully overridden,
+   twelve variable combinations (defaults, minimal identity, fully overridden,
    host-metrics-only, logs-only, every sub-knob off, inventory-supplied
-   endpoints, vetoed collector + blanked node job) and feeds them to the REAL pinned Alloy binary: `alloy validate`
+   endpoints, OTLP username fallback, vetoed collector + blanked node job,
+   info-dropping guardrail, sponsord-only, node + sponsord co-located) and feeds them to the REAL pinned Alloy binary: `alloy validate`
    (component graph, not just syntax), a check that every `ExecStart` flag exists
    in `alloy run --help`, and greps proving each Jinja branch actually switched —
    including that "every sub-knob off" reproduces the pre-machine-monitoring

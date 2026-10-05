@@ -1,0 +1,80 @@
+# MANAGED BY the sponsord role — do not edit by hand.
+#
+# sponsord signs capabilities with the treasury wallet and tops its PaymentPool
+# pool up. It listens on loopback only ({{ sponsord_bind_address }}:{{ sponsord_port }}:
+# the bearer-authenticated API plus unauthenticated /healthz and /metrics) and
+# keeps no state. The API token, treasury keystore and password never sit in the
+# environment: systemd reads the root-only files under {{ sponsord_etc }} and hands
+# them to this unit as credentials, readable only by its dynamic user. The RPC URL
+# does reach it as an environment variable, from the 0600 secret.env.
+[Unit]
+Description=sponsord: capability signing and pool top-ups
+Documentation=https://github.com/decdn/sponsord
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart={{ sponsord_bin }}
+
+# The RPC URL (may embed an API key; 0600 root), then the non-secret settings.
+# A later file wins on a repeated key, so the role's validated settings win over
+# anything stray in secret.env (the role also refuses any key there but
+# SPONSORD_RPC_URL). Both override the Environment= lines below.
+EnvironmentFile={{ sponsord_secret_env_file }}
+EnvironmentFile={{ sponsord_env_file }}
+# Plain-text logs into journald, without ANSI colour codes.
+Environment=NO_COLOR=1
+
+# Credentials land at $CREDENTIALS_DIRECTORY (%d), readable only by this unit.
+LoadCredential=api-token:{{ sponsord_api_token_file }}
+LoadCredential=treasury-password:{{ sponsord_treasury_password_file }}
+LoadCredential=treasury-keystore.json:{{ sponsord_treasury_keystore_file }}
+Environment=SPONSORD_API_TOKEN_FILE=%d/api-token
+Environment=SPONSORD_TREASURY_PASSWORD_FILE=%d/treasury-password
+# The keystore cannot be read from %d directly: systemd 254+ writes credentials
+# 0440, and upstream refuses a keystore with any group/other bit. So it is copied
+# at 0600 into this unit's private 0700 runtime directory (tmpfs, removed when the
+# unit stops). The file is the ENCRYPTED keystore; the password stays in %d.
+RuntimeDirectory=sponsord
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/bin/install -m 0600 %d/treasury-keystore.json %t/sponsord/treasury-keystore.json
+Environment=SPONSORD_TREASURY_KEYSTORE=%t/sponsord/treasury-keystore.json
+
+# On SIGTERM the daemon stops serving, then waits for a top-up it already sent;
+# TimeoutStopSec is the cap before SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec={{ sponsord_stop_timeout_sec }}
+Restart=on-failure
+RestartSec=5
+
+# --- Hardening -------------------------------------------------------------
+# Stateless: no StateDirectory, nothing on disk is writable.
+DynamicUser=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+CapabilityBoundingSet=
+# AF_INET/AF_INET6 for the listener and the RPC endpoint; AF_UNIX + AF_NETLINK
+# for the libc resolver.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

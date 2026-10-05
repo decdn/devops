@@ -2,13 +2,14 @@
 
 Deploy and harden a **public [deCDN](https://decdn.org) node**. This collection is
 the public, reusable slice of the [`decdn/devops`](https://github.com/decdn/devops)
-repository — three roles and nothing else:
+repository — four roles and nothing else:
 
 | Role | Purpose |
 |------|---------|
 | `decdn.node.baseline` | Debian/Ubuntu host baseline — nftables default-deny inbound, fail2ban, unattended-upgrades, chrony, an admin sudo user, then DevSec OS + SSH hardening (applied last). |
 | `decdn.node.decdn_node` | The `decdn-node` daemon under a hardened systemd unit — from locally built binaries (the default until upstream tags a release) or a GPG-verified release tarball; public QUIC udp/4433, loopback metrics + admin RPC. `decdn_network` sets the chain from upstream's manifest; `tasks_from: backup` / `decommission` for day 2. |
-| `decdn.node.grafana_alloy` | Opt-in Grafana Cloud observability agent — loopback-only Alloy receiver and hardened telemetry export. |
+| `decdn.node.grafana_alloy` | Opt-in Grafana Cloud observability agent — loopback-only Alloy receiver and hardened telemetry export; scrapes the node, `sponsord`, or both (`grafana_alloy_node_enabled` / `grafana_alloy_sponsord_enabled`). |
+| `decdn.node.sponsord` | The `sponsord` onboarding sponsor (treasury signer + PaymentPool keeper), standalone or beside a node — local binary or GPG-verified `sponsord-v*` release, `DynamicUser` unit with the API token and treasury wallet as systemd credentials, loopback-only API, `/healthz` deploy gate. `sponsord_network` sets the chain and PaymentPool from upstream's manifest. |
 
 ## Requirements
 
@@ -79,6 +80,7 @@ full variable list, the eth-keystore prerequisite, and day-2 ops:
 - [`roles/baseline`](https://github.com/decdn/devops/tree/main/ansible/roles/baseline)
 - [`roles/decdn_node`](https://github.com/decdn/devops/tree/main/ansible/roles/decdn_node)
 - [`roles/grafana_alloy`](https://github.com/decdn/devops/tree/main/ansible/roles/grafana_alloy)
+- [`roles/sponsord`](https://github.com/decdn/devops/tree/main/ansible/roles/sponsord)
 
 ## Security model
 

@@ -1,0 +1,17 @@
+---
+# Playbook-adjacent group_vars for every host (see decdn_nodes.yml beside this for
+# why playbook-adjacent: they load for any INVENTORY=, an overlay included).
+#
+# Which daemons the opt-in Grafana Alloy agent scrapes, derived from the groups a
+# host is in, so a sponsord-only host does not scrape a decdn-node /metrics that
+# does not exist, and a co-located host gets both. Host-scoped on purpose: site.yml
+# runs grafana_alloy once per play on a co-located host, and play vars would make
+# the two runs render different configs.
+#
+# Precedence: these beat role defaults, and ALSO the inventory's group_vars/all.yml
+# and group vars written inline in hosts.yml, so an override placed in either of
+# those is silently ignored. They lose only to the inventory's
+# group_vars/<group>.yml for a named group (decdn_nodes, sponsord_hosts, …) and to
+# host_vars, so override them there.
+grafana_alloy_node_enabled: "{{ 'decdn_nodes' in group_names }}"
+grafana_alloy_sponsord_enabled: "{{ 'sponsord_hosts' in group_names }}"

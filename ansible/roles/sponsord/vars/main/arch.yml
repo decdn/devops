@@ -1,0 +1,16 @@
+---
+# Host architecture (ansible_facts['architecture']) -> the upstream release target
+# triple. These are the two Linux targets decdn/sponsord's release builds (LINUX in
+# .github/scripts/release_plan.py);
+# the defaults derive sponsord_target from this map and tasks/main.yml asserts the
+# result is one of its values. Role vars, not defaults: the supported set is a fact
+# about upstream's release matrix, not an operator knob.
+_sponsord_arch_targets:
+  x86_64: x86_64-unknown-linux-gnu
+  aarch64: aarch64-unknown-linux-gnu
+
+# sponsord_target -> the architecture token `file -b` prints for a matching ELF,
+# used by the manual dir-mode binary check.
+_sponsord_arch_file_tokens:
+  x86_64-unknown-linux-gnu: x86-64
+  aarch64-unknown-linux-gnu: aarch64

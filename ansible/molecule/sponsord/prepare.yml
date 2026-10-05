@@ -1,0 +1,68 @@
+---
+# Stage what an operator provisions before the first deploy:
+#   1. the treasury keystore + password (placeholders, staged at 0644 so verify.yml
+#      can attribute the 0600 lock-down to the role);
+#   2. the Grafana Cloud credential env file (as ../grafana-cloud/prepare.yml);
+#   3. a unit drop-in that switches the stub's byte-for-byte RPC URL check on.
+# The API token is NOT staged: the role must generate it.
+#
+# CONTAINER-ONLY step first: systemd builds each unit's LoadCredential= ramfs in a
+# helper mount namespace and moves it into /run/credentials/<unit>, which reaches
+# PID 1's namespace only when / has shared propagation. systemd sets that itself
+# when it boots a real host; under docker the container's / is private, so without
+# this every credential directory comes up EMPTY and sponsord cannot start.
+- name: Prepare
+  hosts: all
+  become: true
+  tasks:
+    # ansible.posix.mount cannot change propagation, hence the command.
+    - name: Give / shared mount propagation, as systemd does on a real host  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: mount --make-rshared /
+      changed_when: true
+
+    - name: Create the sponsord config directory
+      ansible.builtin.file:
+        path: /etc/sponsord
+        state: directory
+        mode: "0755"
+
+    - name: Stage a placeholder treasury keystore
+      ansible.builtin.copy:
+        dest: /etc/sponsord/treasury-keystore.json
+        content: "{{ '{}' }}\n"
+        mode: "0644"
+
+    - name: Stage a placeholder treasury password
+      ansible.builtin.copy:
+        dest: /etc/sponsord/treasury-password
+        content: "molecule-placeholder\n"
+        mode: "0644"
+
+    - name: Stage the Grafana Cloud credential fixture on the host
+      ansible.builtin.copy:
+        dest: /etc/grafana-alloy.env
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+          GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+          GC_PROM_USERNAME=999888777
+          GC_OTLP_USERNAME=999888779
+          GC_LOKI_USERNAME=999888778
+          GC_API_TOKEN=molecule-test-token
+
+    - name: Create the sponsord unit drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/sponsord.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Switch on the stub's RPC literal check
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/sponsord.service.d/molecule.conf
+        mode: "0644"
+        content: |
+          [Service]
+          Environment=SPONSORD_MOLECULE_RPC_LITERAL=1

@@ -1,0 +1,37 @@
+---
+# Shared config for sponsord hosts (playbooks/sponsord.yml, also run by site.yml).
+# Uncomment and fill in; per-host values can move to host_vars/<host>/main.yml.
+# Full variable list: roles/sponsord/defaults/main.yml and roles/sponsord/README.md.
+#
+# Before the first deploy, on the host as root (the role never creates the wallet):
+#   /etc/sponsord/treasury-keystore.json   the treasury keystore (decdn key-gen), 0600
+#   /etc/sponsord/treasury-password        its password, 0600
+#   /etc/sponsord/secret.env               SPONSORD_RPC_URL=… (or sponsord_rpc_url in
+#                                          a git-ignored host_vars/<host>/secret.yml)
+# The API token is generated on the host at /etc/sponsord/api-token.
+
+# --- Binary ------------------------------------------------------------------------
+# Until upstream tags a sponsord-v* release: a decdn/sponsord checkout's target dir
+# (`cargo build --release -p sponsord`; the role checks the ELF matches the host).
+# sponsord_release_target_dir: /path/to/sponsord/target/release
+# Once a release exists:
+# sponsord_install_method: release
+# sponsord_version: "0.1.0"
+
+# --- Chain + pool ------------------------------------------------------------------
+# chain_id and the PaymentPool address from upstream's deployment manifest.
+# sponsord_network: arbitrum-sepolia
+# The pool `decdn pool open` printed when the treasury wallet opened it (REQUIRED).
+# sponsord_pool_id: "0x…"
+
+# --- Limits ("" = the daemon's default) ---------------------------------------------
+# sponsord_max_spending_cap_micro_usdc: ""   # [5000000 = $5]
+# sponsord_max_ttl_secs: ""                  # [172800 = 48h]
+# sponsord_pool_low_water_micro_usdc: ""     # [20000000 = $20]
+# sponsord_pool_refill_micro_usdc: ""        # [100000000 = $100]
+
+# --- Grafana Cloud (opt-in) --------------------------------------------------------
+# Same agent as the node's. On a sponsord-only host the region label has no
+# decdn_region to fall back on, so set it here.
+# decdn_grafana_cloud_enabled: true
+# grafana_alloy_region: US
