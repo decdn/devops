@@ -237,6 +237,21 @@ if command -v cloud-init >/dev/null; then
     "$userdata" > "$work/ci-colocated.yaml"
   expect 0 "lint-cloud-init accepts a node co-located with sponsord" \
     make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-colocated.yaml"
+  ci_variant "onramp nested under children" 'sponsord_hosts may hold only hosts and vars, not' '/^      sponsord_onramp_hosts:$/,/^$/{s/^      /          /}; s/^          sponsord_onramp_hosts:$/        children:\n&/' "$sponsorud"
+  ci_variant "query in the onramp RPC URL" 'sponsord_onramp_rpc_url must be a public http(s) URL' 's#^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME"$#\1sponsord_onramp_rpc_url: "https://rpc.example/?api_key=x"#' "$sponsorud"
+  ci_variant "fragment in the onramp RPC URL" 'sponsord_onramp_rpc_url must be a public http(s) URL' 's#^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME"$#\1sponsord_onramp_rpc_url: "https://rpc.example/rpc\#k"#' "$sponsorud"
+  ci_variant "onramp RPC URL in another group" 'set sponsord_onramp_rpc_url only in sponsord_onramp_hosts.vars' "s#$spnet#&\\n\\1sponsord_onramp_rpc_url: https://rpc.example/#" "$sponsorud"
+  expect 0 "lint-cloud-init accepts a public onramp RPC URL" make -s -C "$repo" lint-cloud-init \
+    CLOUD_INIT_FILE="$(sed -E 's#^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME"$#\1sponsord_onramp_rpc_url: "https://sepolia-rollup.arbitrum.io/rpc"#' "$sponsorud" > "$work/ci-public-rpc.yaml"; echo "$work/ci-public-rpc.yaml")"
+  # Ansible applies one baseline_sudo_users list, never the union of two groups'.
+  ci_variant "two admin lists" 'set baseline_sudo_users in one place' 's/^(\s*)sponsord_onramp_install_method: release$/&\n\1baseline_sudo_users: [{name: bob, keys: ["ssh-ed25519 AAAA bob"]}]/' "$sponsorud"
+  # The Makefile itself: an empty list checks nothing, and a bad file fails the whole list.
+  expect 2 "lint-cloud-init refuses an empty CLOUD_INIT_FILE" make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE=
+  if make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-stage-1-not-run.yaml $userdata" >"$work/out" 2>&1; then
+    fail "lint-cloud-init accepted a list whose first file is broken"
+  fi
+  grep -qF 'runcmd must be exactly' "$work/out" || { cat "$work/out" >&2; fail "lint-cloud-init failed the list for another reason"; }
+  pass "lint-cloud-init fails a list whose first file is broken"
   # Non-secret knobs whose names look secret must still pass.
   sed -E "s#$net#&\\n\\1baseline_sudo_passwordless: false\\n\\1decdn_keystore_file: /var/lib/decdn/keystore.json#" \
     "$userdata" > "$work/ci-knobs.yaml"

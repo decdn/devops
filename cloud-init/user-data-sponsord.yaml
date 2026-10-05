@@ -39,7 +39,8 @@ write_files:
 
   # The Ansible inventory for this host. Everything the playbook needs that is not a
   # secret lives here. More knobs: ansible/roles/*/defaults/main.yml. To run a node on
-  # the same host, add the decdn_nodes group from user-data.yaml.
+  # the same host, add the decdn_nodes group from user-data.yaml without its
+  # baseline_* settings: the admin account is set once, below.
   - path: /etc/decdn-bootstrap/inventory.yml
     owner: root:root
     permissions: "0600"

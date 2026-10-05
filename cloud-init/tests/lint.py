@@ -56,9 +56,9 @@ TEST_ONLY_MARKER = "TEST-ONLY-skip-baseline"
 GROUPS = ("decdn_nodes", "sponsord_hosts", "sponsord_onramp_hosts")
 BASE_GROUPS = {"decdn_nodes", "sponsord_hosts"}
 
-# Knobs that decide the install's trust, by the group whose role reads them: allowed
-# only in that group's vars (checked there), because a host var or another group could
-# override the checked value.
+# Knobs this lint checks, by the group whose role reads them: allowed only in that
+# group's vars (checked there), because a host var or another group could override the
+# checked value. All but the last decide the install's trust.
 PINNED_VARS = {
     "decdn_node_install_method": "decdn_nodes",
     "decdn_node_generate_keystore": "decdn_nodes",
@@ -67,6 +67,7 @@ PINNED_VARS = {
     "sponsord_verify_release_signature": "sponsord_hosts",
     "sponsord_onramp_install_method": "sponsord_onramp_hosts",
     "sponsord_onramp_verify_release_signature": "sponsord_onramp_hosts",
+    "sponsord_onramp_rpc_url": "sponsord_onramp_hosts",
 }
 # Knobs a user-data may not set at all: a different signing key would make "verified"
 # meaningless, and bootstrap.sh's secret gate looks for the secrets at the roles'
@@ -90,10 +91,16 @@ SECRET_KEY_ALLOW = {
     "decdn_keystore_file",
     "decdn_keystore_password_file",
     "grafana_alloy_secret_file",
-    # Public by design: the onramp serves it to every user. The role's preflight refuses
-    # userinfo and a query in it, and URL_CREDENTIALS below still applies.
+    # Public by design: the onramp serves it to every user. PUBLIC_RPC_URL below holds it
+    # to the role's own format check (no userinfo, query or fragment), here, before the
+    # user-data ships it. A key in the URL's path cannot be told from a public path.
     "sponsord_onramp_rpc_url",
 }
+# The format roles/sponsord_onramp/tasks/main.yml asserts for sponsord_onramp_rpc_url.
+# Run here too: by the time the role refuses a keyed URL, the user-data has already
+# published the key through the instance metadata.
+PUBLIC_RPC_URL = re.compile(r"https?://[^/?#@]+(/[^?#]*)?")
+PUBLIC_RPC_URL_BAD_CHARS = re.compile(r"[\s'\"`$\\{}]")
 # user:password@ (or token@) in any URL.
 URL_CREDENTIALS = re.compile(r"[a-z][a-z0-9+.-]*://[^/\s@]+@", re.I)
 # NAME=value for a secret-looking variable, in file contents or a command.
@@ -271,12 +278,23 @@ def main():
         violation("inventory: localhost must be in decdn_nodes or sponsord_hosts (site.yml's host patterns)")
     if "sponsord_onramp_hosts" in present and "sponsord_hosts" not in present:
         violation("inventory: sponsord_onramp_hosts needs sponsord_hosts too (the onramp runs beside the daemon)")
-    groups = {g: inventory.get(g) or {} for g in present}
+    groups = {}
+    for g in present:
+        group = inventory.get(g) or {}
+        if not isinstance(group, dict):
+            violation(f"inventory: {g} must be a mapping of hosts and vars")
+            group = {}
+        # Only what this lint inspects. A `children:` group would add hosts and drop
+        # pinned knobs where nothing below looks.
+        if set(group) - {"hosts", "vars"}:
+            violation(f"inventory: {g} may hold only hosts and vars, not {sorted(set(group) - {'hosts', 'vars'})}")
+        groups[g] = group
     connection = None
     for g, group in groups.items():
         hosts = group.get("hosts") or {}
-        if set(hosts) != {"localhost"}:
-            violation(f"inventory: {g} must hold exactly localhost, not {sorted(hosts)}")
+        if not isinstance(hosts, dict) or set(hosts) != {"localhost"}:
+            violation(f"inventory: {g} must hold exactly localhost, not {sorted(hosts) if isinstance(hosts, dict) else hosts}")
+            continue
         host = hosts.get("localhost")
         if isinstance(host, dict) and "ansible_connection" in host:
             connection = host["ansible_connection"]
@@ -287,7 +305,7 @@ def main():
             violation(f"inventory: {p}: set {k} only in {PINNED_VARS[k]}.vars, where it is checked")
         if k in FORBIDDEN_VARS:
             violation(f"inventory: {p}: {k} may not be overridden here")
-    gv = {g: group.get("vars") or {} for g, group in groups.items()}
+    gv = {g: group.get("vars") if isinstance(group.get("vars"), dict) else {} for g, group in groups.items()}
     if "decdn_nodes" in gv:
         iv = gv["decdn_nodes"]
         if iv.get("decdn_node_install_method") != "release":
@@ -305,8 +323,28 @@ def main():
                       "the binary against its signature)")
         if gv[g].get(f"{prefix}_verify_release_signature", True) is not True:
             violation(f"inventory: {prefix}_verify_release_signature must not be turned off")
-    users = [u for v in gv.values() for u in (v.get("baseline_sudo_users") or [])]
-    if not users or not all(isinstance(u, dict) and u.get("name") and u.get("keys") for u in users):
+    if "sponsord_onramp_hosts" in gv:
+        # Unset is the role's to refuse (it is required); the placeholder is the template's.
+        url = gv["sponsord_onramp_hosts"].get("sponsord_onramp_rpc_url", "CHANGE_ME")
+        if url != "CHANGE_ME" and (not isinstance(url, str) or not PUBLIC_RPC_URL.fullmatch(url)
+                                   or PUBLIC_RPC_URL_BAD_CHARS.search(url)):
+            violation("inventory: sponsord_onramp_rpc_url must be a public http(s) URL with no userinfo, query "
+                      "or fragment (the onramp serves it to every user; a keyed URL belongs to sponsord)")
+    # Ansible applies one baseline_sudo_users list, the one from the highest-precedence
+    # place that sets it, not the union. So it may be set once, and that list is checked.
+    sudo_lists = {}
+    for g, group in groups.items():
+        hosts = group.get("hosts")
+        host = hosts.get("localhost") if isinstance(hosts, dict) else None
+        for where, scope in ((f"{g}.vars", gv[g]), (f"{g}.hosts.localhost", host)):
+            if isinstance(scope, dict) and "baseline_sudo_users" in scope:
+                sudo_lists[where] = scope["baseline_sudo_users"]
+    if len(sudo_lists) > 1:
+        violation(f"inventory: set baseline_sudo_users in one place, not {sorted(sudo_lists)}: Ansible applies "
+                  "one of the lists, not their union, so the other accounts would not exist")
+    users = next(iter(sudo_lists.values()), None) or []
+    if not isinstance(users, list) or not users \
+            or not all(isinstance(u, dict) and u.get("name") and u.get("keys") for u in users):
         violation("inventory: baseline_sudo_users needs at least one named account, each with keys (lockout guard)")
 
     # --- Stage 1 --------------------------------------------------------------------

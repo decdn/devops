@@ -126,16 +126,15 @@ ansible-galaxy collection install --force -p collections -r "$repo/cloud-init/co
 # --- 2. Checks before touching the host ----------------------------------------
 ansible-playbook -i "$INVENTORY" playbooks/site.yml --syntax-check
 
-# A group the inventory does not define lists no hosts (with a warning, on stderr).
-in_group() {
-  local members
-  members=$(ansible -i "$INVENTORY" "$1" --list-hosts 2>/dev/null)
-  grep -qE '^\s+localhost$' <<<"$members"
-}
 declare -A member=()
 groups_in=()
 for g in "${HOST_GROUPS[@]}"; do
-  if in_group "$g"; then
+  # A group the inventory does not define lists no hosts and exits 0 (with a warning).
+  # Any other failure must stop the run: read as "not a member", it would skip that
+  # group's secrets.
+  members=$(ansible -i "$INVENTORY" "$g" --list-hosts) \
+    || die "could not list group $g in $INVENTORY (see the ansible error above)"
+  if grep -qE '^\s+localhost$' <<<"$members"; then
     member[$g]=1
     groups_in+=("$g")
   fi

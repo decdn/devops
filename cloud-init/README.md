@@ -25,7 +25,9 @@ There are two templates. They share the bootstrap and differ only in their inven
 | [`user-data-sponsord.yaml`](user-data-sponsord.yaml) | a sponsor host: `sponsord` and `sponsord-onramp` behind Caddy ([Sponsor host](#sponsor-host)) | `/etc/sponsord/{secret.env,treasury-keystore.json,treasury-password,turnstile-secret}` |
 
 To run both on one VM, copy the `decdn_nodes` group from `user-data.yaml` into the sponsor
-template's inventory. The bootstrap then waits for both sets of secrets.
+template's inventory, leaving out its `baseline_*` settings. Ansible applies one
+`baseline_sudo_users` list, not the union of two groups', so the lint wants it set once.
+The bootstrap then waits for both sets of secrets.
 
 > **Upstream has not published a release yet.** The node installs only from a
 > GPG-verified release tarball (`release` mode). The `manual` mode would install
@@ -254,7 +256,10 @@ Day 2 is in the role READMEs. Rotate a secret by replacing its file and running
   `make lint-cloud-init` checks both templates and fails on:
   - any file written besides the bootstrap's own four, and any encoded file content;
   - any secret-looking key (RPC URL, password, token, private key, keystore,
-    `decdn_extra_env`), except `sponsord_onramp_rpc_url`, which is public by design;
+    `decdn_extra_env`), except `sponsord_onramp_rpc_url`, which is public by design.
+    That one is accepted only in `sponsord_onramp_hosts.vars`, and only in the role's
+    own format: no userinfo, query or fragment. A key in its path cannot be detected;
+    use a public endpoint.
   - a `NAME=value` assignment of a secret-looking variable anywhere, including
     commands;
   - a URL with embedded credentials;
@@ -263,8 +268,9 @@ Day 2 is in the role READMEs. Rotate a secret by replacing its file and running
   - any override of a signing key or of a secret's path, since the bootstrap gate
     looks for the secrets at the roles' defaults;
   - an inventory group other than `decdn_nodes`, `sponsord_hosts` and
-    `sponsord_onramp_hosts`, a host other than localhost, or the onramp without
-    `sponsord_hosts`.
+    `sponsord_onramp_hosts`, a group holding anything but `hosts` and `vars` (no
+    `children:`), a host other than localhost, or the onramp without `sponsord_hosts`;
+  - `baseline_sudo_users` set in more than one place.
 - **Everything is pinned.**
   - This repo: by commit SHA (checked after checkout), or by tag, which is weaker
     because a tag can be moved.

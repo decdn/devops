@@ -125,13 +125,15 @@ lint-compose:        ## render compose/ with its examples and check its security
 CLOUD_INIT_FILE ?= cloud-init/user-data.yaml cloud-init/user-data-sponsord.yaml
 lint-cloud-init:     ## schema-check the cloud-init/ user-data templates and their invariants (needs cloud-init, shellcheck, yq)
 	@command -v cloud-init >/dev/null || { echo "lint-cloud-init: needs cloud-init on PATH" >&2; exit 2; }
+	@# An empty list would loop zero times and report success with nothing checked.
+	@test -n "$(strip $(CLOUD_INIT_FILE))" || { echo "lint-cloud-init: CLOUD_INIT_FILE is empty" >&2; exit 2; }
 	@for f in $(CLOUD_INIT_FILE); do \
 		cloud-init schema -c "$$f" >/dev/null 2>&1 \
 			|| { cloud-init schema -c "$$f" 2>&1 | grep -v WARNING >&2; \
 			     echo "lint-cloud-init: $$f is not a valid cloud-config (see above)" >&2; exit 2; }; \
 		cloud-init/tests/lint.py "$$f" || exit; \
 	done
-	@echo "cloud-init invariants hold"
+	@echo "cloud-init invariants hold: $(strip $(CLOUD_INIT_FILE))"
 
 # The guard rails nothing else exercises: ansible/Makefile's scoping guards, the
 # release gate, the lint-compose and lint-cloud-init negative cases, and (with
