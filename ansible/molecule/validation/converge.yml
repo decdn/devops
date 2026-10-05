@@ -1,8 +1,8 @@
 ---
 # NEGATIVE-path scenario: proves the role's fail-loud tuning-knob validation actually
 # REJECTS bad values (AGENTS.md hard-rule 4), so a regression that weakens an assert
-# fails CI. Each case runs decdn_node with a VALID required config plus ONE bad
-# optional knob, wrapped in block/rescue. The role aborts at its validation asserts
+# fails CI. Each case runs one role (decdn_node, grafana_alloy or sponsord) with a
+# VALID required config plus ONE bad input, wrapped in block/rescue. The role aborts at its validation asserts
 # (which for the tuning-knob cases run before any host mutation), so those cases
 # don't interfere and no service starts. The env-file cases below are the
 # exception — see the ordering note.
@@ -22,7 +22,9 @@
 # config and has to reach the END of the role, because what it proves is that the
 # post-template `decdn config validate` gate still fails the deploy. It therefore
 # mutates the host, which is why this scenario has a prepare.yml staging wallet
-# material. It runs last so it cannot interfere with the assert-only cases above.
+# material. It runs after the decdn_node assert-only cases so it cannot interfere
+# with them; the grafana_alloy and sponsord cases follow it and clean up after
+# themselves.
 - name: Converge (expect validation failures)
   hosts: all
   become: true
@@ -43,6 +45,12 @@
     decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
     # REQUIRED upstream (ADR 011/031) — the role asserts it with the other three.
     decdn_content_blacklist_address: "0x4444444444444444444444444444444444444444"
+    # Valid sponsord baseline for the sponsord-* cases (unused by the others).
+    sponsord_manual_bin_src: >-
+      {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/sponsord/files/sponsord-stub
+    sponsord_network: arbitrum-sepolia
+    sponsord_pool_id: "0x00000000000000000000000000000000000000000000000000000000000000aa"
+    sponsord_rpc_url: "https://rpc.example.invalid/"
   tasks:
     - name: Initialize the rejected-by-validation tracker
       ansible.builtin.set_fact:
@@ -1622,6 +1630,484 @@
             - /etc/grafana-alloy.env.sha256
             - /var/lib/grafana-alloy-record-fixture
 
+    # --- sponsord: each case breaks ONE input over the valid baseline in play vars ---
+    # All but the last two abort at an assert before any host mutation.
+    - name: "Case sponsord-release-version — release mode with no pinned version"
+      block:
+        - name: Run sponsord with release mode with no pinned version
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_install_method: release
+            sponsord_version: ""
+      rescue:
+        - name: Record sponsord-release-version rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-release-version'] }}"
+          when: ansible_failed_task.name == "Require a pinned release version"
+
+    - name: "Case sponsord-manual-src — manual mode with no binary source"
+      block:
+        - name: Run sponsord with manual mode with no binary source
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_manual_bin_src: ""
+      rescue:
+        - name: Record sponsord-manual-src rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-manual-src'] }}"
+          when: ansible_failed_task.name == "Require a manual binary source"
+
+    - name: "Case sponsord-network-unknown — an unknown network profile"
+      block:
+        - name: Run sponsord with an unknown network profile
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_network: nope
+      rescue:
+        - name: Record sponsord-network-unknown rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-network-unknown'] }}"
+          when: ansible_failed_task.name == "Require a known sponsord_network"
+
+    - name: "Case sponsord-network-chain — a chain_id that contradicts the profile"
+      block:
+        - name: Run sponsord with a chain_id that contradicts the profile
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_chain_id: 1
+      rescue:
+        - name: Record sponsord-network-chain rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-network-chain'] }}"
+          when: ansible_failed_task.name == "Require chain_id to match the network profile"
+
+    - name: "Case sponsord-pool-id — a pool id that is not 32 bytes"
+      block:
+        - name: Run sponsord with a pool id that is not 32 bytes
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_pool_id: "0x1234"
+      rescue:
+        - name: Record sponsord-pool-id rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-pool-id'] }}"
+          when: ansible_failed_task.name == "Require chain, PaymentPool and pool id"
+
+    - name: "Case sponsord-zero-address — the zero PaymentPool address"
+      block:
+        - name: Run sponsord with the zero PaymentPool address
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_payment_pool_address: "0x0000000000000000000000000000000000000000"
+      rescue:
+        - name: Record sponsord-zero-address rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-zero-address'] }}"
+          when: ansible_failed_task.name == "Require chain, PaymentPool and pool id"
+
+    - name: "Case sponsord-bind — a wildcard listener"
+      block:
+        - name: Run sponsord with a wildcard listener
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_bind_address: "0.0.0.0"
+      rescue:
+        - name: Record sponsord-bind rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-bind'] }}"
+          when: ansible_failed_task.name == "Require the listener to stay on loopback"
+
+    - name: "Case sponsord-limit — a zero TTL"
+      block:
+        - name: Run sponsord with a zero TTL
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_max_ttl_secs: 0
+      rescue:
+        - name: Record sponsord-limit rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-limit'] }}"
+          when: ansible_failed_task.name == "Validate the issuance and keeper limits"
+
+    - name: "Case sponsord-limit — a refill in float notation"
+      block:
+        - name: Run sponsord with a refill in float notation
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_pool_refill_micro_usdc: "1e6"
+      rescue:
+        - name: Record sponsord-limit rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-limit'] }}"
+          when: ansible_failed_task.name == "Validate the issuance and keeper limits"
+
+    - name: "Case sponsord-bool — a quoted boolean"
+      block:
+        - name: Run sponsord with a quoted boolean
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            # kics-scan ignore-line (a quoted boolean under test, not a secret)
+            sponsord_generate_api_token: "yes"
+      rescue:
+        - name: Record sponsord-bool rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-bool'] }}"
+          when: ansible_failed_task.name == "Validate the role's boolean knobs"
+
+    - name: "Case sponsord-rpc-newline — an RPC URL that injects a second variable"
+      block:
+        - name: Run sponsord with an RPC URL that injects a second variable
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_rpc_url: "https://rpc.example.invalid/\nSPONSORD_BIND=0.0.0.0:8090"
+      rescue:
+        - name: Record sponsord-rpc-newline rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-rpc-newline'] }}"
+          when: ansible_failed_task.name == "Validate the inventory RPC URL is one-line EnvironmentFile data"
+
+    - name: "Case sponsord-rpc-gate — no RPC URL and no host secret.env"
+      block:
+        - name: Run sponsord with no RPC URL and no host secret.env
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_rpc_url: ""
+      rescue:
+        - name: Record sponsord-rpc-gate rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-rpc-gate'] }}"
+          when: ansible_failed_task.name == "Require an RPC endpoint — inventory value or a host-provisioned secret.env"
+
+    - name: "Case sponsord-treasury — no treasury keystore on the host"
+      block:
+        - name: Run sponsord with no treasury keystore on the host
+          ansible.builtin.include_role:
+            name: sponsord
+      rescue:
+        - name: Record sponsord-treasury rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-treasury'] }}"
+          when: ansible_failed_task.name == "Require the treasury keystore and password as regular files"
+
+    # The role's root lock-down would otherwise chmod the link's target.
+    - name: "Case sponsord-treasury — a symlinked treasury keystore"
+      block:
+        - name: Stage a password file and a keystore that is a symlink
+          ansible.builtin.shell:
+            cmd: |
+              set -eu
+              mkdir -p /etc/sponsord
+              echo placeholder > /etc/sponsord/treasury-password
+              echo '{}' > /root/sponsord-keystore-target.json
+              ln -sfn /root/sponsord-keystore-target.json /etc/sponsord/treasury-keystore.json
+          changed_when: true
+
+        - name: Run sponsord against the symlinked keystore
+          ansible.builtin.include_role:
+            name: sponsord
+      rescue:
+        - name: Record sponsord-treasury (symlink) rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-treasury'] }}"
+          when: ansible_failed_task.name == "Require the treasury keystore and password as regular files"
+      always:
+        - name: Remove the symlink fixtures
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/sponsord
+            - /root/sponsord-keystore-target.json
+
+    # Reaches past every pure-input assert and stops at the host-side token length
+    # check, before the binary is installed (so no restart is left pending for a
+    # unit that does not exist). It still touches /etc/sponsord, so it cleans up.
+    - name: "Case sponsord-token — an operator-provisioned API token under 32 bytes"
+      block:
+        - name: Stage the treasury files and a short token
+          ansible.builtin.shell:
+            cmd: |
+              set -eu
+              umask 077
+              mkdir -p /etc/sponsord
+              echo '{}' > /etc/sponsord/treasury-keystore.json
+              echo placeholder > /etc/sponsord/treasury-password
+              echo too-short > /etc/sponsord/api-token
+          changed_when: true
+
+        - name: Run sponsord with the short token and generation off
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            # kics-scan ignore-line (a boolean switch, not a secret)
+            sponsord_generate_api_token: false
+      rescue:
+        - name: Record sponsord-token rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-token'] }}"
+          when: ansible_failed_task.name == "Require a single-line API token of at least 32 bytes"
+      always:
+        - name: Remove the sponsord fixtures
+          ansible.builtin.file:
+            path: /etc/sponsord
+            state: absent
+
+    # Every octet must be 0-255, not merely 1-3 digits: 127.999.0.1 would pass a
+    # digit-count pattern and only fail later, when the daemon cannot parse it.
+    - name: "Case sponsord-bind — a loopback-looking address with an octet above 255"
+      block:
+        - name: Run sponsord with bind address 127.999.0.1
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_bind_address: "127.999.0.1"
+      rescue:
+        - name: Record sponsord-bind (octet) rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-bind'] }}"
+          when: ansible_failed_task.name == "Require the listener to stay on loopback"
+
+    # An existing secret.env with NO provenance record is the operator's: an
+    # inventory URL must not replace it without sponsord_secret_env_overwrite_host_file.
+    - name: "Case sponsord-overwrite-untracked — inventory URL over an unrecorded host file"
+      block:
+        - name: Stage a host secret.env with no provenance record
+          ansible.builtin.shell:
+            cmd: |
+              set -eu
+              umask 077
+              mkdir -p /etc/sponsord
+              echo 'SPONSORD_RPC_URL=https://operator.example.invalid/' > /etc/sponsord/secret.env
+          changed_when: true
+
+        - name: Run sponsord with the inventory URL
+          ansible.builtin.include_role:
+            name: sponsord
+      rescue:
+        - name: Record sponsord-overwrite-untracked rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-overwrite-untracked'] }}"
+          when: ansible_failed_task.name == "Require confirmation to overwrite a secret.env this role did not write"
+      always:
+        - name: Remove the unrecorded secret.env fixture
+          ansible.builtin.file:
+            path: /etc/sponsord
+            state: absent
+
+    # Long enough, but two lines: upstream would start on it, and no client could
+    # send it in an Authorization header.
+    - name: "Case sponsord-token — a provisioned API token with a line break inside"
+      block:
+        - name: Stage the treasury files and a two-line token
+          ansible.builtin.shell:
+            cmd: |
+              set -eu
+              umask 077
+              mkdir -p /etc/sponsord
+              echo '{}' > /etc/sponsord/treasury-keystore.json
+              echo placeholder > /etc/sponsord/treasury-password
+              printf '%s\n%s\n' 0123456789abcdef0123456789abcdef 0123456789abcdef > /etc/sponsord/api-token
+          changed_when: true
+
+        - name: Run sponsord with the two-line token and generation off
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            # kics-scan ignore-line (a boolean switch, not a secret)
+            sponsord_generate_api_token: false
+      rescue:
+        - name: Record sponsord-token (multi-line) rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-token'] }}"
+          when: ansible_failed_task.name == "Require a single-line API token of at least 32 bytes"
+      always:
+        - name: Remove the multi-line token fixtures
+          ansible.builtin.file:
+            path: /etc/sponsord
+            state: absent
+
+    # --- sponsord: sponsord_release_target_dir resolution (control machine) ---------
+    # One per-run controller tempdir for the three dir-mode cases (see binary-format
+    # above for why not a fixed path). The role resolves into an internal fact, so
+    # sponsord_manual_bin_src is passed as "" per case with nothing to restore.
+    - name: Create a per-run target-dir root on the control machine (sponsord-dir-*)
+      ansible.builtin.tempfile:
+        state: directory
+        path: "{{ _decdn_ctl_tmp }}"
+        prefix: sponsord-molecule-dir.
+      register: _sp_dir_tmp
+      delegate_to: localhost
+      become: false
+
+    - name: Run the sponsord dir-mode cases
+      vars:
+        _sp_triple: >-
+          {{ {'x86_64': 'x86_64-unknown-linux-gnu',
+              'aarch64': 'aarch64-unknown-linux-gnu'}[ansible_facts['architecture']] }}
+      block:
+        - name: "Case sponsord-dir-missing — no binary in the target dir or its cross dir"
+          block:
+            - name: Create an empty target/release on the control machine
+              ansible.builtin.file:
+                path: "{{ _sp_dir_tmp.path }}/empty/target/release"
+                state: directory
+                mode: "0755"
+              delegate_to: localhost
+              become: false
+
+            - name: Run sponsord pointed at the empty target dir
+              ansible.builtin.include_role:
+                name: sponsord
+              vars:
+                sponsord_manual_bin_src: ""
+                sponsord_release_target_dir: "{{ _sp_dir_tmp.path }}/empty/target/release"
+          rescue:
+            - name: Record sponsord-dir-missing rejection (only if its assert failed)
+              ansible.builtin.set_fact:
+                decdn_rejected: "{{ decdn_rejected + ['sponsord-dir-missing'] }}"
+              when: ansible_failed_task.name == "Fail if no candidate directory held the binary"
+
+        - name: "Case sponsord-dir-format — the target dir holds a non-ELF binary"
+          block:
+            - name: Create target/release on the control machine
+              ansible.builtin.file:
+                path: "{{ _sp_dir_tmp.path }}/script/target/release"
+                state: directory
+                mode: "0755"
+              delegate_to: localhost
+              become: false
+
+            - name: Stage the Python stub as the binary
+              ansible.builtin.copy:
+                src: "{{ sponsord_manual_bin_src }}"
+                dest: "{{ _sp_dir_tmp.path }}/script/target/release/sponsord"
+                mode: "0755"
+              delegate_to: localhost
+              become: false
+
+            - name: Run sponsord pointed at the non-ELF target dir
+              ansible.builtin.include_role:
+                name: sponsord
+              vars:
+                sponsord_manual_bin_src: ""
+                sponsord_release_target_dir: "{{ _sp_dir_tmp.path }}/script/target/release"
+          rescue:
+            - name: Record sponsord-dir-format rejection (only if its assert failed)
+              ansible.builtin.set_fact:
+                decdn_rejected: "{{ decdn_rejected + ['sponsord-dir-format'] }}"
+              when: ansible_failed_task.name == "Require the binary to be an ELF for the host's architecture"
+
+        # POSITIVE: the plain dir is empty, the cross output dir holds an ELF for this
+        # host, and the dir is given with a trailing slash (which must not shift the
+        # cross dir one level down). Resolution passes, so the role runs on to the
+        # treasury gate — counted only if it resolved the cross path exactly.
+        - name: "Case sponsord-dir-cross — falls back to target/<triple>/release"
+          block:
+            - name: Create target/release and the cross output dir on the control machine
+              ansible.builtin.file:
+                path: "{{ item }}"
+                state: directory
+                mode: "0755"
+              loop:
+                - "{{ _sp_dir_tmp.path }}/cross/target/release"
+                - "{{ _sp_dir_tmp.path }}/cross/target/{{ _sp_triple }}/release"
+              delegate_to: localhost
+              become: false
+
+            - name: Stage an ELF for this host only in the cross output dir
+              ansible.builtin.copy:
+                src: /bin/true
+                dest: "{{ _sp_dir_tmp.path }}/cross/target/{{ _sp_triple }}/release/sponsord"
+                mode: "0755"
+              delegate_to: localhost
+              become: false
+
+            - name: Run sponsord pointed at target/release/ (trailing slash)
+              ansible.builtin.include_role:
+                name: sponsord
+              vars:
+                sponsord_manual_bin_src: ""
+                sponsord_release_target_dir: "{{ _sp_dir_tmp.path }}/cross/target/release/"
+          rescue:
+            - name: Record sponsord-dir-cross (only if it resolved the cross dir and stopped at the treasury)
+              ansible.builtin.set_fact:
+                decdn_rejected: "{{ decdn_rejected + ['sponsord-dir-cross'] }}"
+              when:
+                - ansible_failed_task.name == "Require the treasury keystore and password as regular files"
+                - _sponsord_bin_src == _sp_dir_tmp.path ~ '/cross/target/' ~ _sp_triple ~ '/release/sponsord'
+      always:
+        - name: Remove the target-dir fixtures from the control machine
+          ansible.builtin.file:
+            path: "{{ _sp_dir_tmp.path }}"
+            state: absent
+          delegate_to: localhost
+          become: false
+
+    # --- sponsord: host-provisioned secret.env (stop before install) ----------------
+    # Each stages the treasury files so the role reaches its secret.env content
+    # checks, which run before the binary is installed, and removes /etc/sponsord
+    # (the token the role generated included) afterwards.
+    - name: "Case sponsord-secret-env — host-provisioned file cases"
+      vars:
+        _sp_cases:
+          - tag: sponsord-rpc-unusable
+            content: "SPONSORD_RPC_URL=\n"
+            task: Report a host-provisioned secret.env with no usable SPONSORD_RPC_URL
+          - tag: sponsord-secret-env-keys
+            content: "SPONSORD_RPC_URL=https://rpc.example.invalid/\nSPONSORD_BIND=0.0.0.0:8090\n"
+            task: Refuse keys besides SPONSORD_RPC_URL in a host-provisioned secret.env
+          - tag: sponsord-secret-env-keys
+            content: "SPONSORD_RPC_URL=https://rpc.example.invalid/\nexport SPONSORD_POOL_ID=0x01\n"
+            task: Refuse keys besides SPONSORD_RPC_URL in a host-provisioned secret.env
+      ansible.builtin.include_tasks: includes/sponsord-secret-env-case.yml
+      loop: "{{ _sp_cases }}"
+      loop_control:
+        loop_var: _sp_case
+        label: "{{ _sp_case.tag }}"
+
+    # A symlinked secret.env: the host lock-down would chmod the link's target.
+    - name: "Case sponsord-secret-env-symlink — secret.env is a symlink"
+      block:
+        - name: Stage secret.env as a symlink
+          ansible.builtin.shell:
+            cmd: |
+              set -eu
+              mkdir -p /etc/sponsord
+              echo 'SPONSORD_RPC_URL=https://rpc.example.invalid/' > /root/sponsord-secret-target
+              ln -sfn /root/sponsord-secret-target /etc/sponsord/secret.env
+          changed_when: true
+
+        - name: Run sponsord against the symlinked secret.env
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_rpc_url: ""
+      rescue:
+        - name: Record sponsord-secret-env-symlink rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-secret-env-symlink'] }}"
+          when: ansible_failed_task.name == "Require secret.env to be a regular file"
+      always:
+        - name: Remove the secret.env symlink fixtures
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/sponsord
+            - /root/sponsord-secret-target
+
     - name: Confirm every bad value was rejected by the role's own validation
       ansible.builtin.assert:
         that:
@@ -1629,8 +2115,8 @@
           # lets one broken sibling hide behind another case that uses the same gate.
           - decdn_rejected | sort == _decdn_expected | sort
         fail_msg: >-
-          Neither decdn_node nor grafana_alloy rejected every bad value at their
-          validation asserts.
+          decdn_node, grafana_alloy and sponsord did not reject every bad value at
+          their validation asserts.
           Expected {{ _decdn_expected | sort }}, got {{ decdn_rejected | sort }} —
           a missing tag means that bad value slipped past validation (it would reach
           the daemon/crash-loop it at config load, or ship credentials insecurely).
@@ -1653,4 +2139,12 @@
            "otlp-username-env", "token-shape", "token-shape", "token-collision",
            "credential-knobs", "token-all-or-nothing", "token-all-or-nothing",
            "provenance-record", "provenance-record",
-           "managed-paths", "managed-paths", "managed-paths", "managed-paths", "managed-paths"]
+           "managed-paths", "managed-paths", "managed-paths", "managed-paths", "managed-paths",
+           "sponsord-release-version", "sponsord-manual-src", "sponsord-network-unknown",
+           "sponsord-network-chain", "sponsord-pool-id", "sponsord-zero-address", "sponsord-bind",
+           "sponsord-limit", "sponsord-limit", "sponsord-bool", "sponsord-rpc-newline",
+           "sponsord-rpc-gate", "sponsord-treasury", "sponsord-treasury", "sponsord-token",
+           "sponsord-dir-missing", "sponsord-dir-format", "sponsord-dir-cross",
+           "sponsord-bind", "sponsord-overwrite-untracked", "sponsord-token",
+           "sponsord-rpc-unusable", "sponsord-secret-env-keys", "sponsord-secret-env-keys",
+           "sponsord-secret-env-symlink"]

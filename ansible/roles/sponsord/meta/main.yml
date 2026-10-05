@@ -1,0 +1,16 @@
+---
+galaxy_info:
+  role_name: sponsord
+  author: deCDN Contributors
+  description: >-
+    deCDN onboarding sponsor (sponsord) — release-tarball or manual local-binary
+    install, hardened DynamicUser systemd unit with credentials, loopback API.
+  license: MIT
+  min_ansible_version: "2.15"
+  galaxy_tags: [decdn, sponsord, systemd, web3, debian]
+  platforms:
+    - name: Debian
+      versions: [bookworm, trixie]
+    - name: Ubuntu
+      versions: [noble, resolute]
+dependencies: []

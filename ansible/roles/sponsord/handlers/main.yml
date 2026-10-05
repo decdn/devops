@@ -1,0 +1,10 @@
+---
+# Reloads systemd itself rather than relying on a separate "Reload systemd"
+# handler running first: a same-named handler loaded later (baseline's
+# devsec.hardening.os_hardening defines one) shadows the role's own and would run
+# AFTER this restart, starting sponsord from systemd's cached copy of the unit.
+- name: Restart sponsord
+  ansible.builtin.systemd:
+    name: sponsord
+    state: restarted
+    daemon_reload: true

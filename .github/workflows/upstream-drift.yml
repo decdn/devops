@@ -3,7 +3,8 @@ name: Upstream drift
 
 # Three things in this repo mirror decdn/decdn and go stale when upstream moves:
 #   - roles/decdn_node/vars/main/networks.yml  (contract addresses; upstream
-#     redeploys change every one of them at once)
+#     redeploys change every one of them at once) and its subset
+#     roles/sponsord/vars/main/networks.yml (the same script and check)
 #   - charts/decdn-node/files/monitoring/      (dashboards + alert rules)
 #   - ansible/molecule/schema/files/schema-keys.txt  (the node.toml key inventory)
 # This job regenerates each from upstream main and fails when a committed copy

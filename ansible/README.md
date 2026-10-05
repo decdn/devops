@@ -8,13 +8,16 @@ hardened host baseline. The roles also ship as the `decdn.node` Galaxy collectio
 | **`site.yml`** | Harden the host and deploy the public **deCDN node** (`decdn-node`). | `make check` / `make deploy` |
 | `backup.yml` | Encrypted backup of a node's identity or full state. | `make backup` |
 | `decommission.yml` | Stop a node and remove its service (keeps the identity; no on-chain steps). | `make decommission` |
+| `sponsord.yml` | Harden the host and deploy **sponsord**, the onboarding sponsor, on hosts in `sponsord_hosts`, with or without a node. Also run by `site.yml`. | `make check-sponsord` / `make deploy-sponsord` |
 
 ```
 baseline        host hardening: DevSec os/ssh, nftables default-deny inbound,
    │            fail2ban, unattended-upgrades, chrony, an admin sudo user
    ├─ grafana_alloy   opt-in Grafana Cloud agent (metrics, journald, traces), loopback-only
-   └─ decdn_node      public QUIC udp/4433; metrics + admin loopback; signed-tarball or
-                      local-build install; hardened systemd unit; backup/decommission
+   ├─ decdn_node      public QUIC udp/4433; metrics + admin loopback; signed-tarball or
+   │                  local-build install; hardened systemd unit; backup/decommission
+   └─ sponsord        treasury signer + PaymentPool keeper; loopback API; DynamicUser
+                      unit with systemd credentials; standalone or beside a node
 ```
 
 ## Security model
@@ -245,6 +248,25 @@ guardrails and rollback: [`roles/grafana_alloy/README.md`](roles/grafana_alloy/R
 To import upstream's decdn dashboards and alert rules into that stack, see
 [`charts/decdn-node/files/monitoring/`](../charts/decdn-node/files/monitoring/README.md).
 
+### sponsord (optional)
+
+The fourth role, `sponsord`, deploys the deCDN onboarding sponsor. It holds the
+treasury wallet that owns a PaymentPool pool, signs capabilities for its onramp and
+keeps the pool topped up. It needs no node. Put its host in the `sponsord_hosts` group:
+a dedicated host or a node host listed in both groups. Then run
+`make deploy-sponsord`; `make deploy` covers it too.
+
+- **You provision** the treasury keystore and password on the host. The role never
+  creates that wallet.
+- **The API token** is generated on the host.
+- **The RPC URL** is dual-homed like `decdn_rpc_url`.
+- **Observability:** with Grafana Cloud on, Alloy scrapes sponsord on hosts in
+  `sponsord_hosts` and the node on hosts in `decdn_nodes`
+  (`playbooks/group_vars/all.yml`).
+
+Setup and variables: [`roles/sponsord/README.md`](roles/sponsord/README.md). The public
+`sponsord-onramp` is not deployed by this repo yet.
+
 ### Backup and decommission
 
 ```bash
@@ -273,15 +295,18 @@ make lint-alloy     # render grafana_alloy's templates, then `alloy validate` th
 
 `make molecule` runs every scenario under `molecule/`: **`default`** (described below),
 `schema` (config key-set drift against the upstream field list), `validation` (bad knobs,
-for both roles, must be rejected by their own asserts), `generate-keystore` (opt-in
+for every role, must be rejected by their own asserts), `generate-keystore` (opt-in
 host-side wallet), `host-env` (host-provisioned `/etc/decdn/decdn.env`),
 `slow-readiness` (advisory `/metrics` probe timeout), `grafana-cloud` (the opt-in
 observability wiring — see [Grafana Cloud observability](#grafana-cloud-observability-opt-in))
 `grafana-cloud-token` (the same wiring with the API token carried through
 git-ignored inventory instead: role-authored env file + provenance record),
 `os-matrix` (default's plays on Debian 13, Ubuntu 24.04 and Ubuntu 26.04; `default`
-itself is Debian 12) and `lifecycle` (a `decdn_network` profile with an override, both
-backup scopes decrypted and checked, a rejected and a real decommission).
+itself is Debian 12), `lifecycle` (a `decdn_network` profile with an override, both
+backup scopes decrypted and checked, a rejected and a real decommission) and
+`sponsord` (`playbooks/sponsord.yml` on a host with no node: generated token, credential
+rotation restart, the fatal `/healthz` gate, Alloy scraping sponsord and not the node;
+`grafana-cloud` covers sponsord co-located with a node).
 They are independent, so they run concurrently, and each line of output is prefixed with its scenario name
 because the runs interleave. `make molecule-serial` is the escape hatch when that
 interleaving gets in the way of reading a failure.
@@ -289,7 +314,7 @@ interleaving gets in the way of reading a failure.
 `grafana-cloud` runs against a *stub* Alloy that exits 0 for every subcommand, so it
 proves the role's plumbing but cannot prove the rendered `config.alloy` is loadable.
 That gap is closed by `make lint-alloy` (repo root; CI job `alloy-config`), which renders
-the templates in eight variable combinations — including one with every observability
+the templates in twelve variable combinations — including one with every observability
 sub-knob off, which must reproduce the pre-machine-monitoring pipeline exactly — and runs
 the **real**, digest-pinned Alloy
 binary's `alloy validate` over them plus a check that every `ExecStart` flag actually
@@ -335,12 +360,12 @@ the RPC URL when it is not provisioned on the host instead). Highlights:
 
 ## Packaging as a Galaxy collection (`decdn.node`)
 
-The three roles (`baseline`, `decdn_node`, `grafana_alloy`) are also packaged as the
+The four roles (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`) are also packaged as the
 distributable **`decdn.node`** collection, for operators who bring their own playbooks.
 
 The collection overlay lives in [`galaxy/`](galaxy/) (`galaxy.yml`, the collection
 `README.md`/`CHANGELOG.md`, `meta/runtime.yml`, `build.sh`). It is deliberately **not**
-a `galaxy.yml` at the project root: `galaxy/build.sh` stages only the three roles into a
+a `galaxy.yml` at the project root: `galaxy/build.sh` stages only the four roles into a
 clean `ansible_collections/decdn/node/` tree and builds the artifact, so this project
 stays a plain Ansible project (the `make deploy`/`lint` flow is unchanged).
 

@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Stub sponsord binary for the Molecule scenarios.
+
+Stands in for the real `sponsord` so the role can be exercised end to end without
+a release, a chain or a funded treasury:
+
+  * `--version` -> print a version line and exit 0 (the role's version backstop).
+  * no argument -> enforce the startup contract the real daemon enforces, then
+                   serve /healthz and /metrics on SPONSORD_BIND until killed:
+                     - SPONSORD_RPC_URL, _CHAIN_ID, _PAYMENT_POOL_ADDR, _POOL_ID set
+                       (_CHAIN_ID is stricter than upstream, which defaults it;
+                       the role always renders it);
+                     - SPONSORD_API_TOKEN_FILE readable and >= 32 bytes;
+                     - SPONSORD_TREASURY_PASSWORD_FILE readable and non-empty;
+                     - SPONSORD_TREASURY_KEYSTORE a regular file, not a symlink,
+                       with no group/other permission bits (upstream's check),
+                       holding JSON (catches a copy of the wrong credential).
+                   Any violation exits 1 with the reason on stderr (the journal),
+                   so the role's /healthz gate sees a daemon that never binds.
+                   With SPONSORD_MOLECULE_RPC_LITERAL=1 (a unit drop-in the
+                   sponsord scenario's prepare.yml installs), SPONSORD_RPC_URL must
+                   equal EXPECTED_RPC_URL byte for byte, which proves the role's
+                   EnvironmentFile quoting.
+                   The marker file UNHEALTHY_MARKER makes it exit 1 on start,
+                   which is how a scenario proves the readiness gate is fatal.
+  * anything else -> exit 2.
+
+No protocol behaviour: the scenarios verify host prep, secrets, unit hardening
+and loopback binding, not capability signing.
+"""
+import json
+import os
+import stat
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+VERSION = "sponsord 0.0.0-molecule-stub"
+UNHEALTHY_MARKER = "/etc/sponsord/stub-unhealthy"
+# Must match sponsord_rpc_url in the scenario's inventory, which carries shell
+# metacharacters and quotes on purpose.
+EXPECTED_RPC_URL = "https://rpc.example.invalid/?key=$HOME$(touch /tmp/sponsord-rpc-expanded)&q=o'brien \"x\""
+
+
+def die(msg):
+    print(f"sponsord-stub: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def read_secret(var):
+    path = os.environ.get(var)
+    if not path:
+        die(f"{var} is not set")
+    try:
+        with open(path, "rb") as f:
+            value = f.read()
+    except OSError as e:
+        die(f"{var}: cannot read {path}: {e}")
+    value = value.removesuffix(b"\n").removesuffix(b"\r")
+    if not value:
+        die(f"{var}: {path} is empty")
+    return value
+
+
+def check_startup():
+    if os.path.exists(UNHEALTHY_MARKER):
+        die(f"{UNHEALTHY_MARKER} exists: refusing to start")
+    for var in ("SPONSORD_RPC_URL", "SPONSORD_CHAIN_ID", "SPONSORD_PAYMENT_POOL_ADDR", "SPONSORD_POOL_ID"):
+        if not os.environ.get(var):
+            die(f"{var} is not set")
+    if os.environ.get("SPONSORD_MOLECULE_RPC_LITERAL") == "1" and os.environ["SPONSORD_RPC_URL"] != EXPECTED_RPC_URL:
+        die("SPONSORD_RPC_URL does not match the inventory literal (EnvironmentFile quoting broke it)")
+    if len(read_secret("SPONSORD_API_TOKEN_FILE")) < 32:
+        die("API token is shorter than 32 bytes")
+    read_secret("SPONSORD_TREASURY_PASSWORD_FILE")
+    keystore = os.environ.get("SPONSORD_TREASURY_KEYSTORE")
+    if not keystore:
+        die("SPONSORD_TREASURY_KEYSTORE is not set")
+    try:
+        st = os.lstat(keystore)
+    except OSError as e:
+        die(f"keystore {keystore}: {e}")
+    if not stat.S_ISREG(st.st_mode):
+        die(f"keystore {keystore} is not a regular file")
+    if st.st_mode & 0o077:
+        die(f"keystore {keystore} is mode {oct(st.st_mode & 0o777)}: group/other bits set")
+    # A keystore is JSON; a copy of the wrong credential (the password) is not.
+    try:
+        with open(keystore, "rb") as f:
+            json.load(f)
+    except (OSError, ValueError) as e:
+        die(f"keystore {keystore} is not JSON: {e}")
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/healthz":
+            body, ctype = b'{"ok":true}', "application/json"
+        elif self.path == "/metrics":
+            body, ctype = b"sponsord_pool_topups_total 0\n", "text/plain; version=0.0.4"
+        else:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def main():
+    if sys.argv[1:] == ["--version"]:
+        print(VERSION)
+        return
+    if sys.argv[1:]:
+        print(f"sponsord-stub: unexpected arguments {sys.argv[1:]}", file=sys.stderr)
+        sys.exit(2)
+    check_startup()
+    host, _, port = os.environ.get("SPONSORD_BIND", "127.0.0.1:8090").rpartition(":")
+    HTTPServer((host, int(port)), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()

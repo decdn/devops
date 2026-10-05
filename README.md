@@ -97,7 +97,7 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 
 | Path | What it is |
 |------|------------|
-| [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
+| [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `sponsord.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
 | [`cloud-init/`](cloud-init/README.md) | The cloud-init deploy path: `user-data.yaml`, the on-host `bootstrap.sh`, and the pinned ansible-core and collections it installs. |
 | [`compose/`](compose/README.md) | The Docker Compose deploy path. |
 | [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart, with vendored dashboards and alert rules in `files/monitoring/`. |

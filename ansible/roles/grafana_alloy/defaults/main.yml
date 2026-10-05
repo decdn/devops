@@ -135,6 +135,21 @@ grafana_alloy_scrape_interval: 30s
 # dashboards, recording rules and alerts.
 grafana_alloy_node_job: decdn-node
 
+# Which daemons on this host to scrape. The node scrape stays on by default (the
+# role's original behaviour); a host that runs only sponsord turns it off. This
+# repo's playbooks derive both from group membership (playbooks/group_vars/all.yml:
+# decdn_nodes / sponsord_hosts), so set them here only when using the role from
+# your own playbook.
+grafana_alloy_node_enabled: true
+# sponsord's loopback /metrics (roles/sponsord: sponsord_bind_address:sponsord_port,
+# default 127.0.0.1:8090), with its own job and service_name. It also labels
+# sponsord's journald stream: a service_name, and a `level` parsed from each line.
+# That exempts sponsord.service from the journald-priority guardrail, which is then
+# applied to the parsed level instead.
+grafana_alloy_sponsord_enabled: false
+grafana_alloy_sponsord_job: sponsord
+grafana_alloy_sponsord_service_name: sponsord
+
 # --- Host (machine) metrics ---------------------------------------------------
 # Alloy's built-in node_exporter. Runs IN-PROCESS: no extra listener, no extra
 # port, no firewall hole (AGENTS.md hard rule 2 is unaffected). Stamped with the
@@ -196,7 +211,7 @@ grafana_alloy_host_disk_device_exclude: '^(ram|loop|fd|(h|s|v|xv)d[a-z]|nvme\d+n
 # Per-unit state, deliberately scoped: one series set per unit on the box is a
 # real cost, and only these units matter. Units must match include AND NOT match
 # exclude.
-grafana_alloy_host_systemd_unit_include: '(decdn-node|alloy|ssh|sshd)\.service'
+grafana_alloy_host_systemd_unit_include: '(decdn-node|sponsord|alloy|ssh|sshd)\.service'
 grafana_alloy_host_systemd_unit_exclude: '.+\.(automount|device|mount|scope|slice)'
 
 # --- Agent self-monitoring ----------------------------------------------------

@@ -50,3 +50,13 @@ decdn_nodes:
   #   big_disk:
   #     hosts:
   #       decdn-node-2:
+
+# OPTIONAL: sponsord, the onboarding sponsor (treasury signer + PaymentPool keeper) —
+# provisioned by playbooks/sponsord.yml (`make deploy-sponsord`) and by site.yml. It
+# needs no node: give it its own host, or list a node host here as well to co-locate
+# them. Its knobs are in group_vars/sponsord_hosts.yml; the treasury keystore and
+# password are provisioned on the host (roles/sponsord/README.md).
+# sponsord_hosts:
+#   hosts:
+#     sponsord-1:
+#       ansible_host: REPLACE_WITH_SPONSORD_VPS_IP_OR_DNS

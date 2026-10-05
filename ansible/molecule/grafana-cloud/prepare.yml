@@ -1,14 +1,23 @@
 ---
-# Stage the host-provisioned fixtures both roles' gates demand:
+# Stage the host-provisioned fixtures all three roles' gates demand:
 #   1. decdn_node's operator keystore + node identity + password (same trick as
 #      ../default/prepare.yml — placeholders at 0644 that the role locks to 0600).
 #   2. The Grafana Cloud credential env file for grafana_alloy, which unlike those
 #      is asserted ALREADY-SECURED by preflight (the role never rewrites it), so
 #      stage it directly at root:root 0600 with all four required keys.
+#   3. sponsord's operator-provisioned treasury keystore + password, plus shared
+#      propagation on / so its LoadCredential= directories are not empty (see
+#      ../sponsord/prepare.yml: a container-only step).
 - name: Prepare
   hosts: all
   become: true
   tasks:
+    # ansible.posix.mount cannot change propagation, hence the command.
+    - name: Give / shared mount propagation, as systemd does on a real host  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: mount --make-rshared /
+      changed_when: true
+
     - name: Ensure data + config directories exist
       ansible.builtin.file:
         path: "{{ item }}"
@@ -17,6 +26,18 @@
       loop:
         - /var/lib/decdn
         - /etc/decdn
+        - /etc/sponsord
+
+    - name: Stage placeholder sponsord treasury keystore + password
+      ansible.builtin.copy:
+        dest: "{{ item.dest }}"
+        content: "{{ item.content }}"
+        mode: "0600"
+      loop:
+        - {dest: /etc/sponsord/treasury-keystore.json, content: "{{ '{}' }}\n"}
+        - {dest: /etc/sponsord/treasury-password, content: "molecule-placeholder\n"}
+      loop_control:
+        label: "{{ item.dest }}"
 
     # Staged looser than target so verify.yml can attribute the 0600 lock-down
     # to the role rather than to what prepare pre-set.
