@@ -163,14 +163,36 @@ else
   skipped+=("lint-cloud-init negatives (needs cloud-init on PATH; CI installs it)")
 fi
 
-# --- baseline firewall holes per host shape (playbooks/group_vars) ------------------
+# --- baseline firewall holes per host shape, and playbook guards ---------------------
 if command -v ansible >/dev/null; then
   expect 0 "firewall holes resolve per host shape, co-located included" \
     "$repo/ansible/tests/firewall-holes/check.sh"
+  # playbooks/sponsord.yml refuses an onramp host outside sponsord_hosts. Its guard
+  # play is lifted out with yq and run alone (running the whole playbook would need
+  # the roles' collections just to parse), from a directory without ansible.cfg,
+  # against a fixture nothing connects to.
+  if command -v yq >/dev/null; then
+    yq '[.[] | select(.name == "Require every sponsord-onramp host to be a sponsord host")]' \
+      "$repo/ansible/playbooks/sponsord.yml" > "$work/guard.yml"
+    [[ "$(yq 'length' "$work/guard.yml")" == 1 ]] \
+      || fail "playbooks/sponsord.yml has no single sponsord-onramp placement play"
+    guard() { # <limit>
+      (cd "$repo/ansible/tests/playbook-guards" && ANSIBLE_DEPRECATION_WARNINGS=0 \
+        ansible-playbook -i inventory.yml "$work/guard.yml" --limit "$1" </dev/null)
+    }
+    expect 0 "sponsord.yml accepts an onramp host that is also a sponsord host" guard both
+    expect 2 "sponsord.yml refuses an onramp host outside sponsord_hosts" guard onramp-only
+    grep -q "is in sponsord_onramp_hosts but not in sponsord_hosts" "$work/out" \
+      || { cat "$work/out" >&2; fail "the onramp-only refusal did not come from the placement check"; }
+  elif [[ -n ${CI:-} ]]; then
+    fail "yq is not on PATH in CI; the playbook-guard cases would be skipped"
+  else
+    skipped+=("playbook guards (needs yq)")
+  fi
 elif [[ -n ${CI:-} ]]; then
   fail "ansible is not on PATH in CI; the firewall-holes check would be skipped"
 else
-  skipped+=("firewall holes (needs ansible-core on PATH)")
+  skipped+=("firewall holes and playbook guards (need ansible-core on PATH)")
 fi
 
 # --- upstream-mirror generators (optional: needs a decdn/decdn checkout) --------------

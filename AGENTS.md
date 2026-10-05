@@ -166,7 +166,9 @@ addresses) the repo carries, and they carry their upstream commit.
   Turnstile gate, the installers, the `decdn-sponsored` CLI API), as a second play of
   `playbooks/sponsord.yml` on `sponsord_onramp_hosts` (which must also be in
   `sponsord_hosts`: it reads the daemon's `/etc/sponsord/api-token` and calls it on
-  loopback; the token gate and `/healthz` fail without it, no group name is checked).
+  loopback). The playbook's first play enforces that membership (tested by
+  `make test-scripts`); the role checks no group name, so collection users keep their
+  own groups, and its token gate and `/healthz` fail without a daemon.
   - **Install / unit / gate:** the sponsord role's patterns, copied: manual or
     GPG-verified `sponsord-onramp-v*` release (the KEYS are the sponsord role's file,
     via `role_path`), `DynamicUser` with the token and the operator-provisioned

@@ -13,6 +13,24 @@
 # Opening and funding the treasury's pool is an operator action — see
 # roles/sponsord/README.md; the Turnstile widget and the release pins are too —
 # see roles/sponsord_onramp/README.md.
+# Before anything runs: an onramp host outside sponsord_hosts would skip the play
+# below (baseline hardening included) and get no firewall holes for Caddy, which
+# playbooks/group_vars/ derive from sponsord_hosts. The role itself checks no group
+# name, so the decdn.node collection does not impose this repo's groups on others.
+# tests/scripts-test.sh runs this play by its name.
+- name: Require every sponsord-onramp host to be a sponsord host
+  hosts: sponsord_onramp_hosts
+  gather_facts: false
+  tasks:
+    - name: Require the host in sponsord_hosts too
+      ansible.builtin.assert:
+        that:
+          - "'sponsord_hosts' in group_names"
+        fail_msg: >-
+          {{ inventory_hostname }} is in sponsord_onramp_hosts but not in sponsord_hosts.
+          The onramp runs beside the sponsord daemon and needs this playbook's baseline
+          and firewall holes, which come with sponsord_hosts: list the host there too.
+
 - name: Provision sponsord
   hosts: sponsord_hosts
   become: true
@@ -26,8 +44,7 @@
 
 # After the daemon's play, whose /healthz gate is fatal, so the onramp starts
 # against a daemon that is up. Baseline and Alloy already ran for these hosts
-# above for hosts that are also in sponsord_hosts, which every one must be: the
-# onramp uses the daemon on its own host.
+# above: the first play holds every one of them to sponsord_hosts.
 - name: Provision sponsord-onramp
   hosts: sponsord_onramp_hosts
   become: true

@@ -7,13 +7,18 @@
 # capability, PrivateTmp, ProtectSystem=full); main.yml has already refused a
 # Caddyfile this role does not own.
 
-# curl: the probe at the end of this file.
+# curl: the probe at the end of this file. policy_rc_d 101 stops the package's
+# maintainer scripts from starting Caddy on its stock config: the firewall already
+# has 80/443 open, so a run that failed after the install would leave that default
+# server public. Caddy first starts from the Restart caddy handler, once the
+# managed Caddyfile below has validated.
 - name: Install Caddy from the distribution
   ansible.builtin.apt:
     name: [caddy, curl]
     state: present
     update_cache: true
     cache_valid_time: 3600
+    policy_rc_d: 101
 
 # `caddy validate` loads the config the way `caddy run` does (it also provisions
 # the TLS automation), so a Caddyfile that does not parse or provision never lands.

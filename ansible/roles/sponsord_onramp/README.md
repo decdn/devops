@@ -12,9 +12,10 @@ the public side of the deCDN onboarding sponsor. It serves:
 It holds no wallet. For each person who passes the gate it asks the
 [`sponsord`](../sponsord/README.md) daemon on the same host for a capability, using
 the daemon's API token. So the daemon must run on the same host: in this repo, list
-the host in `sponsord_hosts` as well as `sponsord_onramp_hosts`. The role fails
-early when the daemon's token file is missing, and its `/healthz` gate fails when
-the daemon is unreachable.
+the host in `sponsord_hosts` as well as `sponsord_onramp_hosts` (`playbooks/sponsord.yml`
+refuses it otherwise). The role itself checks no group name: it fails early when
+the daemon's token file is missing, and its `/healthz` gate fails when the daemon
+is unreachable.
 
 ## What it does
 
@@ -52,6 +53,8 @@ the daemon is unreachable.
 - **Puts Caddy in front** (`sponsord_onramp_proxy: caddy`, the default):
   - Installs the distribution's `caddy` package (Debian main; on Ubuntu it is in
     **universe**, which must be enabled). No third-party apt repository is added.
+    The package is not allowed to start Caddy on its stock config: Caddy first
+    starts once the role's Caddyfile has validated.
   - Writes `/etc/caddy/Caddyfile`: TLS for `sponsord_onramp_domain`, then a reverse
     proxy to the onramp on loopback. The file is validated with `caddy validate`
     before it lands. The admin API is off, so nothing on the host can reconfigure
