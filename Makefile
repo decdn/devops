@@ -78,13 +78,15 @@ security-compose:    ## KICS scan of compose/ (pinned engine image)
 #    rootfs, no capabilities beyond Caddy's NET_BIND_SERVICE, exact security_opt,
 #    non-root users, each container's exact mounts, loopback sponsord listeners,
 #    secret files only, stop graces long enough for each daemon's drain);
-#  - with the env files left out (--no-env-resolution), against
+#  - with every service env file empty (/dev/null), against
 #    compose/tests/inline-env.jq: compose.yaml itself sets only the allowed
 #    environment keys, so no secret (DECDN_RPC_URL, SPONSORD_RPC_URL) moves into the
-#    tracked file;
+#    tracked file. (Not `config --no-env-resolution`: older Compose releases, such
+#    as the CI runner's, still merge the env files with it.)
 #  - with an empty .env, against compose/tests/fail-closed.jq: an unset variable
 #    renders a value its service refuses, since compose.yaml cannot use `:?`.
-# check <jq program> <.env file> [extra `config` flags] does one of them. All run
+# check <jq program> <.env file> <examples|none> does one of them: the service env
+# files are compose/'s examples, or /dev/null for each. All run
 # under `env -i`, because the caller's shell variables would override the
 # .env and the lint would check something other than the committed defaults.
 # LINT_COMPOSE_FILE (not Compose's own COMPOSE_FILE, which operators export) is
@@ -93,12 +95,13 @@ LINT_COMPOSE_FILE ?= compose/compose.yaml
 lint-compose:        ## render compose/ with its examples and check its security invariants (needs docker, jq)
 	@set -o pipefail; \
 	check() { \
+		mode="$$3"; ef() { if [ "$$mode" = none ]; then echo /dev/null; else echo "$(CURDIR)/compose/$$1"; fi; }; \
 		rendered="$$(env -i PATH="$$PATH" HOME="$$HOME" \
-			DECDN_ENV_FILE=$(CURDIR)/compose/decdn.env.example \
-			SPONSORD_SECRET_ENV_FILE=$(CURDIR)/compose/sponsord-secret.env.example \
-			SPONSORD_ENV_FILE=$(CURDIR)/compose/sponsord.env.example \
-			SPONSORD_ONRAMP_ENV_FILE=$(CURDIR)/compose/sponsord-onramp.env.example \
-			docker compose -f '$(LINT_COMPOSE_FILE)' --env-file "$$2" --profile '*' config "$${@:3}" --format json)" \
+			DECDN_ENV_FILE="$$(ef decdn.env.example)" \
+			SPONSORD_SECRET_ENV_FILE="$$(ef sponsord-secret.env.example)" \
+			SPONSORD_ENV_FILE="$$(ef sponsord.env.example)" \
+			SPONSORD_ONRAMP_ENV_FILE="$$(ef sponsord-onramp.env.example)" \
+			docker compose -f '$(LINT_COMPOSE_FILE)' --env-file "$$2" --profile '*' config --format json)" \
 			|| { echo "lint-compose: docker compose could not render $(LINT_COMPOSE_FILE) (see above)" >&2; exit 2; }; \
 		[ -n "$$rendered" ] || { echo "lint-compose: docker compose rendered nothing" >&2; exit 2; }; \
 		violations="$$(jq -r -f "$$1" <<<"$$rendered")" \
@@ -106,9 +109,9 @@ lint-compose:        ## render compose/ with its examples and check its security
 		[ -z "$$violations" ] \
 			|| { sed 's/^/  /' <<<"$$violations" >&2; echo "$(LINT_COMPOSE_FILE) violates an invariant (see $$1)" >&2; exit 1; }; \
 	}; \
-	check compose/tests/invariants.jq compose/.env.example; \
-	check compose/tests/inline-env.jq compose/.env.example --no-env-resolution; \
-	check compose/tests/fail-closed.jq /dev/null
+	check compose/tests/invariants.jq compose/.env.example examples; \
+	check compose/tests/inline-env.jq compose/.env.example none; \
+	check compose/tests/fail-closed.jq /dev/null examples
 	@echo "compose invariants hold: $(LINT_COMPOSE_FILE)"
 
 # The cloud-init user-data (cloud-init/README.md): `cloud-init schema` for its shape, then
