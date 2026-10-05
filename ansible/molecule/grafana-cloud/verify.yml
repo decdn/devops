@@ -134,6 +134,11 @@
             'loki.relabel "journal_rules"' in ga_config
           - >-
             '__journal__systemd_unit' in ga_config
+          # URL credentials are redacted before any journal line ships (#84).
+          - >-
+            'loki.process "redact_urls"' in ga_config
+          - >-
+            'forward_to     = [loki.process.redact_urls.receiver]' in ga_config
           # The daemon's level from its JSON body, not journald's priority
           # (which is info for every stdout line).
           - >-

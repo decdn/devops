@@ -206,6 +206,32 @@ Changing `grafana_alloy_host_job` / `grafana_alloy_logs_job` away from
 `integrations/node_exporter` silently un-wires the prebuilt dashboards; that is
 why they are knobs with a warning rather than hard-coded literals.
 
+## What is redacted before logs leave the host
+
+An RPC URL usually carries its provider API key, and a daemon error can quote
+it. So every journald line, from every unit, passes `loki.process "redact_urls"`
+before anything ships. It has no knob.
+
+- The userinfo becomes `<redacted>`, and everything from the first `/`, `?` or
+  `#` after the host becomes `/<redacted>`. The scheme and host are kept, so the
+  provider is still identifiable:
+  `https://u:p@rpc.example.io/v2/KEY?x=y` ships as
+  `https://<redacted>@rpc.example.io/<redacted>`.
+- A password with unencoded `/ ? # @` is covered. The price is that a URL with an
+  `@` in its path loses its host: `https://h/users/@x/y` ships as
+  `https://<redacted>@x/<redacted>`.
+- URLs inside JSON that escapes them are covered: `https:\/\/…`, `\u0026` and one
+  level of JSON nested in a JSON string. The JSON stays valid.
+- A line with no URL, or with a URL that has no userinfo and nothing after its
+  host, is unchanged.
+
+Not covered: `\u002f`-escaped separators, fully percent-encoded URLs, deeper JSON
+nesting, a URL journald splits across two records (lines over `LineMax`, 48K by
+default), and OTLP logs and spans ([#86](https://github.com/decdn/devops/issues/86)).
+decdn-node also strips URLs from its own errors; sponsord does not
+([decdn/sponsord#38](https://github.com/decdn/sponsord/issues/38)), so for its
+lines this stage is the only guard.
+
 ## Machine monitoring: what it costs and how to bound it
 
 Grafana Cloud bills on active series and log volume, so the defaults are
