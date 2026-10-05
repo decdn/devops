@@ -215,7 +215,8 @@ sudo systemd-run --pty --wait --collect -p User=decdn \
 
 - **Compose** ([`compose/`](../compose/README.md)) uses the same host paths
   (`/var/lib/decdn`, `/etc/decdn`), so the manual backup command and the restore steps
-  above apply unchanged; stop the node with `docker compose stop`.
+  above apply unchanged; stop the node with
+  `sudo docker compose -f compose/compose.yaml stop decdn-node`.
 - **Helm**: the identity lives in the operator-provisioned `existingSecret`, which you
   created off-cluster and should already hold elsewhere. The daemon's state is on the
   PVC; snapshot it with your storage's `VolumeSnapshot` support after scaling the
