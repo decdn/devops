@@ -1857,9 +1857,83 @@
         - name: Record sponsord-token rejection (only if its assert failed)
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['sponsord-token'] }}"
-          when: ansible_failed_task.name == "Require an API token of at least 32 bytes"
+          when: ansible_failed_task.name == "Require a single-line API token of at least 32 bytes"
       always:
         - name: Remove the sponsord fixtures
+          ansible.builtin.file:
+            path: /etc/sponsord
+            state: absent
+
+    # Every octet must be 0-255, not merely 1-3 digits: 127.999.0.1 would pass a
+    # digit-count pattern and only fail later, when the daemon cannot parse it.
+    - name: "Case sponsord-bind — a loopback-looking address with an octet above 255"
+      block:
+        - name: Run sponsord with bind address 127.999.0.1
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_bind_address: "127.999.0.1"
+      rescue:
+        - name: Record sponsord-bind (octet) rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-bind'] }}"
+          when: ansible_failed_task.name == "Require the listener to stay on loopback"
+
+    # An existing secret.env with NO provenance record is the operator's: an
+    # inventory URL must not replace it without sponsord_secret_env_overwrite_host_file.
+    - name: "Case sponsord-overwrite-untracked — inventory URL over an unrecorded host file"
+      block:
+        - name: Stage a host secret.env with no provenance record
+          ansible.builtin.shell:
+            cmd: |
+              set -eu
+              umask 077
+              mkdir -p /etc/sponsord
+              echo 'SPONSORD_RPC_URL=https://operator.example.invalid/' > /etc/sponsord/secret.env
+          changed_when: true
+
+        - name: Run sponsord with the inventory URL
+          ansible.builtin.include_role:
+            name: sponsord
+      rescue:
+        - name: Record sponsord-overwrite-untracked rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-overwrite-untracked'] }}"
+          when: ansible_failed_task.name == "Require confirmation to overwrite a secret.env this role did not write"
+      always:
+        - name: Remove the unrecorded secret.env fixture
+          ansible.builtin.file:
+            path: /etc/sponsord
+            state: absent
+
+    # Long enough, but two lines: upstream would start on it, and no client could
+    # send it in an Authorization header.
+    - name: "Case sponsord-token — a provisioned API token with a line break inside"
+      block:
+        - name: Stage the treasury files and a two-line token
+          ansible.builtin.shell:
+            cmd: |
+              set -eu
+              umask 077
+              mkdir -p /etc/sponsord
+              echo '{}' > /etc/sponsord/treasury-keystore.json
+              echo placeholder > /etc/sponsord/treasury-password
+              printf '%s\n%s\n' 0123456789abcdef0123456789abcdef 0123456789abcdef > /etc/sponsord/api-token
+          changed_when: true
+
+        - name: Run sponsord with the two-line token and generation off
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            # kics-scan ignore-line (a boolean switch, not a secret)
+            sponsord_generate_api_token: false
+      rescue:
+        - name: Record sponsord-token (multi-line) rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-token'] }}"
+          when: ansible_failed_task.name == "Require a single-line API token of at least 32 bytes"
+      always:
+        - name: Remove the multi-line token fixtures
           ansible.builtin.file:
             path: /etc/sponsord
             state: absent
@@ -2071,5 +2145,6 @@
            "sponsord-limit", "sponsord-limit", "sponsord-bool", "sponsord-rpc-newline",
            "sponsord-rpc-gate", "sponsord-treasury", "sponsord-treasury", "sponsord-token",
            "sponsord-dir-missing", "sponsord-dir-format", "sponsord-dir-cross",
+           "sponsord-bind", "sponsord-overwrite-untracked", "sponsord-token",
            "sponsord-rpc-unusable", "sponsord-secret-env-keys", "sponsord-secret-env-keys",
            "sponsord-secret-env-symlink"]

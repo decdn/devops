@@ -93,9 +93,8 @@ sponsord_treasury_password_file: /etc/sponsord/treasury-password        # operat
 # soon as the file is final, so a failed run cannot leave it stale. Restarts are
 # tracked by sponsord_inputs_checksum_file, not by this.
 sponsord_secret_env_checksum_file: /etc/sponsord/.secret.env.sha256
-# Confirm that rendering secret.env from inventory may discard a host-side edit.
-# Consulted only when the record proves the host's file is not the one this role
-# last wrote.
+# Confirm that rendering secret.env from inventory may replace a file the role did
+# not write: one whose record is missing, says `host`, or no longer matches.
 sponsord_secret_env_overwrite_host_file: false
 # sha256 record of every restart input (credentials, both env files, unit, binary)
 # as of the last converge that saw the daemon healthy. A rotated credential, an

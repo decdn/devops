@@ -1,5 +1,5 @@
 ---
-# Three behaviours a green converge + idempotence cannot prove:
+# Four behaviours a green converge + idempotence cannot prove:
 #   1. Rotating a credential OUT OF BAND (the operator replaces the treasury
 #      password file) and re-running the role restarts the daemon onto it. Without
 #      this the daemon keeps the old credential behind a green deploy.
@@ -10,8 +10,12 @@
 #      sponsord_rpc_url must not adopt the role's own file; a handed-over file is
 #      recorded `host` and locked to 0600; a host edit restarts the daemon; an
 #      inventory URL must not overwrite the host's file until confirmed.
-# The host is left healthy, back on the inventory-authored secret.env, for
-# verify.yml.
+#   4. release mode against prepare.yml's signed loopback mirror: a verified
+#      install writes the version stamp; a re-run needs no download; a bad
+#      checksum, a bad signature and a binary that is not the pinned version all
+#      fail at their own task and leave no stamp; manual mode clears the stamp.
+# The host is left healthy, back on the inventory-authored secret.env and the
+# manual install, for verify.yml.
 - name: Side effect — credential rotation and the fatal readiness gate
   hosts: all
   become: true
@@ -279,3 +283,211 @@
       register: _sp_edit_gone
       changed_when: false
       failed_when: _sp_edit_gone.rc != 1
+
+- name: Side effect — release mode against the signed loopback mirror
+  hosts: all
+  become: true
+  vars:
+    _sp_ver: 0.0.0-molecule-stub
+    _sp_base: http://127.0.0.1:8081/releases
+    _sp_eph: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+    _sp_keys: "{{ _sp_eph }}/sponsord-mirror-KEYS-{{ inventory_hostname }}.asc"
+    _sp_stamp: /usr/local/lib/sponsord/installed-version
+    _sp_rel: /srv/sponsord-mirror/www/releases/sponsord-v0.0.0-molecule-stub
+  tasks:
+    - name: Wait for the mirror to serve the signed manifest
+      ansible.builtin.uri:
+        url: "{{ _sp_base }}/sponsord-v{{ _sp_ver }}/SHA256SUMS.asc"
+      register: _sp_mirror_up
+      until: _sp_mirror_up.status == 200
+      retries: 10
+      delay: 1
+
+    # 1. A verified install records the stamp.
+    - name: Install the pinned release
+      ansible.builtin.include_role:
+        name: sponsord
+      vars:
+        sponsord_install_method: release
+        sponsord_version: "{{ _sp_ver }}"
+        sponsord_release_base: "{{ _sp_base }}"
+        sponsord_release_keyring: "{{ _sp_keys }}"
+
+    - name: Read the version stamp
+      ansible.builtin.slurp:
+        src: "{{ _sp_stamp }}"
+      register: _sp_stamp_1
+
+    - name: Require the stamp to name the installed release
+      ansible.builtin.assert:
+        that:
+          - (_sp_stamp_1.content | b64decode | trim) == _sp_ver
+
+    # 2. The stamp is what makes a re-run need no download.
+    - name: Stop the mirror
+      ansible.builtin.systemd_service:
+        name: molecule-sponsord-mirror
+        state: stopped
+
+    - name: Re-run the release install with the mirror down
+      ansible.builtin.include_role:
+        name: sponsord
+      vars:
+        sponsord_install_method: release
+        sponsord_version: "{{ _sp_ver }}"
+        sponsord_release_base: "{{ _sp_base }}"
+        sponsord_release_keyring: "{{ _sp_keys }}"
+
+    - name: Start the mirror again
+      ansible.builtin.systemd_service:
+        name: molecule-sponsord-mirror
+        state: started
+
+    # 3. A manifest with a valid signature but the wrong hash.
+    - name: Keep the good manifest and signature aside, then publish a signed bad hash
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          cd {{ _sp_rel | quote }}
+          cp SHA256SUMS /root/SHA256SUMS.good
+          cp SHA256SUMS.asc /root/SHA256SUMS.asc.good
+          f=$(awk '{print $2}' SHA256SUMS)
+          printf '%064d  %s\n' 0 "$f" > SHA256SUMS
+          rm -f SHA256SUMS.asc
+          GNUPGHOME=/srv/sponsord-mirror/gnupg gpg --batch --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
+          cp SHA256SUMS.asc /root/SHA256SUMS.asc.bad
+          chmod 0644 SHA256SUMS SHA256SUMS.asc
+          rm -f {{ _sp_stamp | quote }}
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Install against the bad checksum
+      block:
+        - name: Run the release install
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_install_method: release
+            sponsord_version: "{{ _sp_ver }}"
+            sponsord_release_base: "{{ _sp_base }}"
+            sponsord_release_keyring: "{{ _sp_keys }}"
+
+        - name: Fail — a tarball that does not match the manifest was installed
+          ansible.builtin.fail:
+            msg: The checksum check let a mismatching tarball through.
+      rescue:
+        - name: Require the checksum check to be what stopped it
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Verify the tarball against SHA256SUMS'
+            fail_msg: "Expected the checksum check, got \"{{ ansible_failed_task.name }}\"."
+
+    # 4. The good manifest with a signature over a different one.
+    - name: Publish the good manifest with the bad manifest's signature
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          cd {{ _sp_rel | quote }}
+          cp /root/SHA256SUMS.good SHA256SUMS
+          cp /root/SHA256SUMS.asc.bad SHA256SUMS.asc
+          chmod 0644 SHA256SUMS SHA256SUMS.asc
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Install against the mismatched signature
+      block:
+        - name: Run the release install
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_install_method: release
+            sponsord_version: "{{ _sp_ver }}"
+            sponsord_release_base: "{{ _sp_base }}"
+            sponsord_release_keyring: "{{ _sp_keys }}"
+
+        - name: Fail — a manifest with a bad signature was trusted
+          ansible.builtin.fail:
+            msg: The signature check let a mismatched signature through.
+      rescue:
+        - name: Require the signature check to be what stopped it
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Verify the SHA256SUMS signature against the release keyring'
+            fail_msg: "Expected the signature check, got \"{{ ansible_failed_task.name }}\"."
+
+    - name: Restore the good signature
+      ansible.builtin.copy:
+        src: /root/SHA256SUMS.asc.good
+        dest: "{{ _sp_rel }}/SHA256SUMS.asc"
+        remote_src: true
+        mode: "0644"
+
+    # Both failures keep their staging directory as evidence; remove it.
+    - name: Find the retained staging directories
+      ansible.builtin.find:
+        paths: /tmp
+        patterns: sponsord-install-*
+        file_type: directory
+      register: _sp_stages
+
+    - name: Require one retained staging directory per failed verification
+      ansible.builtin.assert:
+        that:
+          - _sp_stages.matched == 2
+        fail_msg: "Expected 2 retained staging dirs, found {{ _sp_stages.files | map(attribute='path') | list }}"
+
+    - name: Remove the retained staging directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ _sp_stages.files }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+    # 5. A signed, verified release whose binary is not the pinned version.
+    - name: Install a release whose binary reports another version
+      block:
+        - name: Run the release install of 0.0.9
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_install_method: release
+            sponsord_version: 0.0.9
+            sponsord_release_base: "{{ _sp_base }}"
+            sponsord_release_keyring: "{{ _sp_keys }}"
+
+        - name: Fail — a binary that is not the pinned version was accepted
+          ansible.builtin.fail:
+            msg: The version backstop accepted a binary reporting another version.
+      rescue:
+        - name: Require the version backstop to be what stopped it
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require the installed sponsord to run and match the pinned version'
+            fail_msg: "Expected the version backstop, got \"{{ ansible_failed_task.name }}\"."
+
+    - name: Check for a version stamp after the failed installs
+      ansible.builtin.stat:
+        path: "{{ _sp_stamp }}"
+      register: _sp_stamp_failed
+
+    - name: Require no stamp after the failed installs
+      ansible.builtin.assert:
+        that:
+          - not _sp_stamp_failed.stat.exists
+        fail_msg: A failed release install left a version stamp, so the next run would skip the download.
+
+    # 6. Back to manual (the scenario's group_vars): the stamp must go.
+    - name: Converge back to the manual install
+      ansible.builtin.include_role:
+        name: sponsord
+
+    - name: Check for a version stamp in manual mode
+      ansible.builtin.stat:
+        path: "{{ _sp_stamp }}"
+      register: _sp_stamp_manual
+
+    - name: Require manual mode to clear the stamp
+      ansible.builtin.assert:
+        that:
+          - not _sp_stamp_manual.stat.exists

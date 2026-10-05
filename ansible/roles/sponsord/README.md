@@ -131,11 +131,15 @@ yourself.
 
 ## Testing
 
-- `molecule/sponsord` runs `playbooks/sponsord.yml` on a host with no node,
-  against a stub daemon. It checks:
+- `molecule/sponsord` runs `playbooks/sponsord.yml` on a host with no node
+  (Debian 12 and Ubuntu 24.04), against a stub daemon. It checks:
   - idempotence;
   - a restart after a credential rotation;
   - that the `/healthz` gate fails the deploy when the daemon will not start;
+  - each `secret.env` hand-off between inventory and host, with its guards;
+  - release mode against a locally signed mirror: the version stamp, a re-run
+    with the mirror down, and rejection of a bad checksum, a bad signature and
+    a binary that is not the pinned version;
   - the Alloy toggles.
 - `molecule/grafana-cloud` co-locates sponsord with a node.
 - `molecule/validation` holds the negative cases.
