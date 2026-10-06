@@ -146,4 +146,6 @@ yourself.
     a binary that is not the pinned version;
   - the Alloy toggles.
 - `molecule/grafana-cloud` co-locates sponsord with a node.
+- `molecule/cloud-init-sponsord` deploys it from `cloud-init/user-data-sponsord.yaml`
+  (no control machine), in release mode, beside the onramp.
 - `molecule/validation` holds the negative cases.

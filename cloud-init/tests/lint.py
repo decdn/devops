@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 """Check the invariants cloud-init/README.md promises for a user-data file.
 
-Usage: lint.py <user-data.yaml>  (normally via `make lint-cloud-init`)
+Usage: lint.py <user-data.yaml>  (normally via `make lint-cloud-init`, which checks
+user-data.yaml, the node, and user-data-sponsord.yaml, the sponsor host)
 
 `cloud-init schema` checks the file's shape, including the `#cloud-config` header. This
 script checks what the schema cannot:
   * no secret anywhere:
     - write_files writes only the bootstrap's own four files, as plain text;
     - no key whose name looks secret-bearing (RPC URL, password, token, keystore
-      contents, private key, decdn_extra_env);
+      contents, private key, decdn_extra_env), except the onramp's public RPC URL;
     - no `NAME=value` assignment of a secret-looking variable in any string (file
       contents, commands);
     - no credentials embedded in a URL, and only the known keys in bootstrap.env;
   * nothing mentions the test-only switch that skips the host hardening;
-  * the node is installed from the release, verified against the vendored deCDN key,
-    and its wallet is generated on the host. The knobs that decide this may be set
-    only in decdn_nodes.vars, where this checks them; a host var would override them;
-  * the inventory puts localhost in decdn_nodes (site.yml's host pattern) with a local
-    connection, and names a keyed admin account (baseline's lockout guard);
+  * every service is installed from its release, verified against the vendored key,
+    and the node's wallet is generated on the host. The knobs that decide this may be
+    set only in their own group's vars, where this checks them; a host var or another
+    group's vars would override them. Nor may a user-data move the signing keys or the
+    secret files bootstrap.sh's gate looks for;
+  * the inventory holds only localhost, in decdn_nodes and/or sponsord_hosts (and
+    sponsord_onramp_hosts only beside sponsord_hosts), with a local connection, and
+    names a keyed admin account (baseline's lockout guard);
   * stage 1 and the login hint pass shellcheck, and runcmd runs exactly stage 1;
   * cloud-init/collections.lock.yml pins every collection in ansible/requirements.yml,
     at a version inside its range.
@@ -47,13 +51,34 @@ ENV_KEYS = {"DEVOPS_REPO", "DEVOPS_REF"}
 # A user-data that creates it, by write_files or a command, ships an unhardened host.
 TEST_ONLY_MARKER = "TEST-ONLY-skip-baseline"
 
-# Knobs that decide the install's trust: allowed only in decdn_nodes.vars (checked
-# there), because a host var or another group could override the checked value.
-PINNED_VARS = {"decdn_node_install_method", "decdn_node_generate_keystore",
-               "decdn_verify_release_signature"}
+# The groups a user-data may use. site.yml (which imports sponsord.yml) targets the
+# first two; the onramp runs beside sponsord, so its group needs sponsord_hosts too.
+GROUPS = ("decdn_nodes", "sponsord_hosts", "sponsord_onramp_hosts")
+BASE_GROUPS = {"decdn_nodes", "sponsord_hosts"}
+
+# Knobs this lint checks, by the group whose role reads them: allowed only in that
+# group's vars (checked there), because a host var or another group could override the
+# checked value. All but the last decide the install's trust.
+PINNED_VARS = {
+    "decdn_node_install_method": "decdn_nodes",
+    "decdn_node_generate_keystore": "decdn_nodes",
+    "decdn_verify_release_signature": "decdn_nodes",
+    "sponsord_install_method": "sponsord_hosts",
+    "sponsord_verify_release_signature": "sponsord_hosts",
+    "sponsord_onramp_install_method": "sponsord_onramp_hosts",
+    "sponsord_onramp_verify_release_signature": "sponsord_onramp_hosts",
+    "sponsord_onramp_rpc_url": "sponsord_onramp_hosts",
+}
 # Knobs a user-data may not set at all: a different signing key would make "verified"
-# meaningless, and bootstrap.sh's secret gate looks for the default env file path.
-FORBIDDEN_VARS = {"decdn_release_keyring", "decdn_env_file"}
+# meaningless, and bootstrap.sh's secret gate looks for the secrets at the roles'
+# default paths. sponsord's API token is always generated on the host.
+FORBIDDEN_VARS = {
+    "decdn_release_keyring", "decdn_env_file",
+    "sponsord_release_keyring", "sponsord_onramp_release_keyring",
+    "sponsord_etc", "sponsord_secret_env_file", "sponsord_treasury_keystore_file",
+    "sponsord_treasury_password_file", "sponsord_api_token_file", "sponsord_generate_api_token",
+    "sponsord_onramp_etc", "sponsord_onramp_api_token_file", "sponsord_onramp_turnstile_secret_file",
+}
 
 # A key whose NAME suggests it carries a secret. Public-key material is fine
 # (baseline_sudo_users[].keys), so match specific fragments, not "key" alone. extra_env
@@ -66,7 +91,16 @@ SECRET_KEY_ALLOW = {
     "decdn_keystore_file",
     "decdn_keystore_password_file",
     "grafana_alloy_secret_file",
+    # Public by design: the onramp serves it to every user. PUBLIC_RPC_URL below holds it
+    # to the role's own format check (no userinfo, query or fragment), here, before the
+    # user-data ships it. A key in the URL's path cannot be told from a public path.
+    "sponsord_onramp_rpc_url",
 }
+# The format roles/sponsord_onramp/tasks/main.yml asserts for sponsord_onramp_rpc_url.
+# Run here too: by the time the role refuses a keyed URL, the user-data has already
+# published the key through the instance metadata.
+PUBLIC_RPC_URL = re.compile(r"https?://[^/?#@]+(/[^?#]*)?")
+PUBLIC_RPC_URL_BAD_CHARS = re.compile(r"[\s'\"`$\\{}]")
 # user:password@ (or token@) in any URL.
 URL_CREDENTIALS = re.compile(r"[a-z][a-z0-9+.-]*://[^/\s@]+@", re.I)
 # NAME=value for a secret-looking variable, in file contents or a command.
@@ -219,8 +253,11 @@ def main():
     for i, line in enumerate(raw.splitlines(), 1):
         if URL_CREDENTIALS.search(line):
             violation(f"line {i}: a URL with embedded credentials")
-        if "DECDN_RPC_URL" in line and not line.lstrip().startswith("#"):
-            violation(f"line {i}: DECDN_RPC_URL belongs in /etc/decdn/decdn.env on the host, not in user-data")
+        if not line.lstrip().startswith("#"):
+            for var, home in (("DECDN_RPC_URL", "/etc/decdn/decdn.env"),
+                              ("SPONSORD_RPC_URL", "/etc/sponsord/secret.env")):
+                if var in line:
+                    violation(f"line {i}: {var} belongs in {home} on the host, not in user-data")
 
     env = {}
     for line in files.get(ENV_PATH, {}).get("content", "").splitlines():
@@ -232,28 +269,82 @@ def main():
     if not env.get("DEVOPS_REPO", "").startswith("https://"):
         violation("bootstrap.env: DEVOPS_REPO must be an https:// URL")
 
-    # --- The node and the inventory -------------------------------------------------
-    group = inventory.get("decdn_nodes") or {}
-    host = (group.get("hosts") or {}).get("localhost")
-    if not isinstance(host, dict) or host.get("ansible_connection") != "local":
-        violation("inventory: localhost must be in decdn_nodes with ansible_connection: local")
-    if set(inventory) - {"decdn_nodes"}:
-        violation(f"inventory: only the decdn_nodes group belongs here, not {sorted(set(inventory) - {'decdn_nodes'})}")
+    # --- The inventory ----------------------------------------------------------------
+    present = [g for g in GROUPS if g in inventory]
+    if set(inventory) - set(GROUPS):
+        violation(f"inventory: only the {', '.join(GROUPS)} groups belong here, "
+                  f"not {sorted(set(inventory) - set(GROUPS))}")
+    if not BASE_GROUPS & set(present):
+        violation("inventory: localhost must be in decdn_nodes or sponsord_hosts (site.yml's host patterns)")
+    if "sponsord_onramp_hosts" in present and "sponsord_hosts" not in present:
+        violation("inventory: sponsord_onramp_hosts needs sponsord_hosts too (the onramp runs beside the daemon)")
+    groups = {}
+    for g in present:
+        group = inventory.get(g) or {}
+        if not isinstance(group, dict):
+            violation(f"inventory: {g} must be a mapping of hosts and vars")
+            group = {}
+        # Only what this lint inspects. A `children:` group would add hosts and drop
+        # pinned knobs where nothing below looks.
+        if set(group) - {"hosts", "vars"}:
+            violation(f"inventory: {g} may hold only hosts and vars, not {sorted(set(group) - {'hosts', 'vars'})}")
+        groups[g] = group
+    connection = None
+    for g, group in groups.items():
+        hosts = group.get("hosts") or {}
+        if not isinstance(hosts, dict) or set(hosts) != {"localhost"}:
+            violation(f"inventory: {g} must hold exactly localhost, not {sorted(hosts) if isinstance(hosts, dict) else hosts}")
+            continue
+        host = hosts.get("localhost")
+        if isinstance(host, dict) and "ansible_connection" in host:
+            connection = host["ansible_connection"]
+    if connection != "local":
+        violation("inventory: localhost needs ansible_connection: local")
     for p, k in walk_keys(inventory):
-        if k in PINNED_VARS and p != f"decdn_nodes.vars.{k}":
-            violation(f"inventory: {p}: set {k} only in decdn_nodes.vars, where it is checked")
+        if k in PINNED_VARS and p != f"{PINNED_VARS[k]}.vars.{k}":
+            violation(f"inventory: {p}: set {k} only in {PINNED_VARS[k]}.vars, where it is checked")
         if k in FORBIDDEN_VARS:
             violation(f"inventory: {p}: {k} may not be overridden here")
-    iv = group.get("vars") or {}
-    if iv.get("decdn_node_install_method") != "release":
-        violation("inventory: decdn_node_install_method must be release (the only method that verifies "
-                  "the binaries against deCDN's signature)")
-    if iv.get("decdn_node_generate_keystore") is not True:
-        violation("inventory: decdn_node_generate_keystore must be true (the wallet is generated on the host)")
-    if iv.get("decdn_verify_release_signature", True) is not True:
-        violation("inventory: decdn_verify_release_signature must not be turned off")
-    users = iv.get("baseline_sudo_users") or []
-    if not users or not all(isinstance(u, dict) and u.get("name") and u.get("keys") for u in users):
+    gv = {g: group.get("vars") if isinstance(group.get("vars"), dict) else {} for g, group in groups.items()}
+    if "decdn_nodes" in gv:
+        iv = gv["decdn_nodes"]
+        if iv.get("decdn_node_install_method") != "release":
+            violation("inventory: decdn_node_install_method must be release (the only method that verifies "
+                      "the binaries against deCDN's signature)")
+        if iv.get("decdn_node_generate_keystore") is not True:
+            violation("inventory: decdn_node_generate_keystore must be true (the wallet is generated on the host)")
+        if iv.get("decdn_verify_release_signature", True) is not True:
+            violation("inventory: decdn_verify_release_signature must not be turned off")
+    for g, prefix in (("sponsord_hosts", "sponsord"), ("sponsord_onramp_hosts", "sponsord_onramp")):
+        if g not in gv:
+            continue
+        if gv[g].get(f"{prefix}_install_method") != "release":
+            violation(f"inventory: {prefix}_install_method must be release (the only method that verifies "
+                      "the binary against its signature)")
+        if gv[g].get(f"{prefix}_verify_release_signature", True) is not True:
+            violation(f"inventory: {prefix}_verify_release_signature must not be turned off")
+    if "sponsord_onramp_hosts" in gv:
+        # Unset is the role's to refuse (it is required); the placeholder is the template's.
+        url = gv["sponsord_onramp_hosts"].get("sponsord_onramp_rpc_url", "CHANGE_ME")
+        if url != "CHANGE_ME" and (not isinstance(url, str) or not PUBLIC_RPC_URL.fullmatch(url)
+                                   or PUBLIC_RPC_URL_BAD_CHARS.search(url)):
+            violation("inventory: sponsord_onramp_rpc_url must be a public http(s) URL with no userinfo, query "
+                      "or fragment (the onramp serves it to every user; a keyed URL belongs to sponsord)")
+    # Ansible applies one baseline_sudo_users list, the one from the highest-precedence
+    # place that sets it, not the union. So it may be set once, and that list is checked.
+    sudo_lists = {}
+    for g, group in groups.items():
+        hosts = group.get("hosts")
+        host = hosts.get("localhost") if isinstance(hosts, dict) else None
+        for where, scope in ((f"{g}.vars", gv[g]), (f"{g}.hosts.localhost", host)):
+            if isinstance(scope, dict) and "baseline_sudo_users" in scope:
+                sudo_lists[where] = scope["baseline_sudo_users"]
+    if len(sudo_lists) > 1:
+        violation(f"inventory: set baseline_sudo_users in one place, not {sorted(sudo_lists)}: Ansible applies "
+                  "one of the lists, not their union, so the other accounts would not exist")
+    users = next(iter(sudo_lists.values()), None) or []
+    if not isinstance(users, list) or not users \
+            or not all(isinstance(u, dict) and u.get("name") and u.get("keys") for u in users):
         violation("inventory: baseline_sudo_users needs at least one named account, each with keys (lockout guard)")
 
     # --- Stage 1 --------------------------------------------------------------------

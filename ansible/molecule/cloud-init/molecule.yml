@@ -5,6 +5,8 @@
 #               daemon packaged as release tarballs, with a SHA256SUMS signed by a
 #               throwaway GPG key, served on loopback. It also commits the working tree
 #               into a git repo in the container, for stage 1 to clone.
+#               (prepare and converge are built from includes/, which the
+#               ../cloud-init-sponsord scenario shares.)
 #   converge    seeds NoCloud with the user-data (placeholders filled, the repo, mirror
 #               and keyring pointed at the local ones) and runs cloud-init's boot stages.
 #               It then asserts that the host stopped cleanly at the secret gate.
@@ -16,8 +18,8 @@
 #   verify      checks the checkout is at the tag, a release-mode install, a
 #               host-generated wallet, a running daemon, and the pinned collection set.
 #
-# Release mode runs here and nowhere else in the suite: the role's download, GPG
-# signature check, SHA256SUMS check, extract and version stamp, against a mirror,
+# The node's release mode runs here and nowhere else in the suite: the role's download,
+# GPG signature check, SHA256SUMS check, extract and version stamp, against a mirror,
 # because upstream has not cut a release yet.
 #
 # Coverage boundary: `baseline` is skipped through bootstrap.sh's test-only switch

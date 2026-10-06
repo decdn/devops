@@ -61,7 +61,7 @@ ansible/                # the deployment project (DevSec-hardened, lean roles)
   playbooks/            # site.yml (decdn node + sponsord), sponsord.yml (+ onramp), backup.yml, decommission.yml
   roles/                # baseline, decdn_node, grafana_alloy, sponsord, sponsord_onramp
   inventory/ galaxy/ molecule/    # see ansible/README.md
-cloud-init/             # user-data.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
+cloud-init/             # user-data{,-sponsord}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
 compose/                # Docker Compose deploy path for a single host (see its README.md)
   compose.yaml          # profiles: node, sponsord, onramp (+ sponsord), caddy
   Caddyfile             # mirrors roles/sponsord_onramp/templates/Caddyfile.j2
@@ -164,7 +164,8 @@ addresses) the repo carries, and they carry their upstream commit.
     config.
   - **Molecule:** under docker, `/` must be `--make-rshared` (see
     `molecule/sponsord/prepare.yml`) or every credential directory is empty.
-  - **Not in cloud-init:** its lint only allows `decdn_nodes`.
+  - **cloud-init:** `cloud-init/user-data-sponsord.yaml` (with the onramp), release
+    mode only; see the `cloud-init/` bullet below.
 
 - **`ansible/roles/sponsord_onramp`** — `sponsord-onramp`, sponsord's public side (the
   Turnstile gate, the installers, the `decdn-sponsored` CLI API), as a second play of
@@ -189,25 +190,36 @@ addresses) the repo carries, and they carry their upstream commit.
     and checks the https chain and that a forged `X-Forwarded-For` cannot pick the
     client address.
 
-- **`cloud-init/`** — the Ansible path with no control machine. `user-data.yaml` carries
-  only public material (the lint refuses secret-looking keys, credentials in URLs and
-  unknown `bootstrap.env` keys) and a stage-1 `decdn-bootstrap`. That script clones this
-  repo at a pinned ref (a full SHA is verified after checkout) and execs
-  `cloud-init/bootstrap.sh`, which:
+- **`cloud-init/`** — the Ansible path with no control machine. Two templates,
+  `user-data.yaml` (a node) and `user-data-sponsord.yaml` (sponsord + onramp), share
+  stage 1 and differ only in their inventory. They carry only public material (the lint
+  refuses secret-looking keys, credentials in URLs and unknown `bootstrap.env` keys)
+  and a stage-1 `decdn-bootstrap`. That script clones this repo at a pinned ref (a full
+  SHA is verified after checkout) and execs `cloud-init/bootstrap.sh`, which:
   - installs ansible-core from the hash-locked `requirements.txt` into a venv (two pins
     split by Python marker: 2.19 for Debian 12's 3.11, 2.21 for 3.12 and later);
   - installs the exact collections from `collections.lock.yml`;
-  - runs `site.yml` against localhost. The inventory must put localhost in
-    `decdn_nodes`, or the play matches nothing and the udp/4433 hole never loads.
+  - runs `site.yml` (which imports `sponsord.yml`) against localhost. The inventory
+    must put localhost in `decdn_nodes` and/or `sponsord_hosts` (and in
+    `sponsord_hosts` whenever it is in `sponsord_onramp_hosts`), or the plays match
+    nothing and the firewall holes never load.
 
-  With no `/etc/decdn/decdn.env`, it runs `--tags baseline` only and records
-  `awaiting-secret`. The operator writes the file over SSH and re-runs `decdn-bootstrap`
-  for the full playbook (`release` install, host-generated wallet). The roles are used
-  unchanged, so a role change reaches this path without edits here. When
-  `ansible/requirements.yml` changes, re-sync the lock: `make lint-cloud-init` checks
-  it covers the requirements. The molecule `cloud-init` scenario boots the real
-  user-data through cloud-init (skipping `baseline`) against a locally signed release
-  mirror, and is the suite's only coverage of the release download and verify path.
+  Each group needs its secrets on the host first, at the role-default paths (the lint
+  forbids moving them): `/etc/decdn/decdn.env` for a node; `secret.env`, the treasury
+  keystore and password, and (onramp) `turnstile-secret` under `/etc/sponsord/`. While
+  any is missing it runs `--tags baseline` only, lists them in
+  `/var/lib/decdn-bootstrap/awaiting` and records `awaiting-secret`. The operator
+  writes them over SSH and re-runs `decdn-bootstrap` for the full playbook. Every
+  service is `release`-installed with signature verification (pinned by the lint, in
+  its own group's `vars`), and the node's wallet is host-generated. The roles are used
+  unchanged, so a role change reaches this path without edits here. A new secret file
+  in a role means a new entry in `bootstrap.sh`'s `SECRETS` and the lint's
+  `FORBIDDEN_VARS`. When `ansible/requirements.yml` changes, re-sync the lock:
+  `make lint-cloud-init` checks it covers the requirements. The molecule `cloud-init`
+  and `cloud-init-sponsord` scenarios boot the real templates through cloud-init
+  (skipping `baseline`) against a locally signed release mirror, built from the shared
+  `molecule/cloud-init/includes/`. They are the only coverage of the node's and the
+  onramp's release download and verify path.
 
 - **`compose/`** — the node and the sponsor under Docker Compose on one host. The
   node: the upstream image, always by digest (`compose.yaml` builds
@@ -282,7 +294,7 @@ make molecule         # every ansible/molecule/*/ scenario in parallel (Docker; 
 make lint-helm        # chart: lint + render tests + kubeconform + schema keys
 make lint-alloy       # grafana_alloy config against the real pinned Alloy binary
 make lint-compose     # compose/ invariants (three renders, compose/tests/*.jq)
-make lint-cloud-init  # cloud-init/user-data.yaml: schema + invariants (no secrets, release mode, lock)
+make lint-cloud-init  # cloud-init/user-data*.yaml: schema + invariants (no secrets, release mode, lock)
 make test-scripts     # Makefile guards, release gate, lint-compose/lint-cloud-init negatives
 make security         # KICS over ansible/, the rendered chart and compose/
 

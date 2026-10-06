@@ -1,0 +1,112 @@
+---
+# Shared by the cloud-init scenarios' prepare.yml: a release mirror on loopback
+# (http://127.0.0.1:8099/releases), so release mode runs without an upstream release.
+# Port 8099, not 8080: the onramp listens on 127.0.0.1:8080 by default.
+# Each release directory holds stub binaries packaged the way upstream names its
+# tarballs (one flat binary per archive, <name>-<version>-<target>.tar.gz) and a
+# SHA256SUMS signed by a throwaway key. The roles verify against that key
+# (/srv/mirror/KEYS.asc, passed as their release keyring) rather than the vendored
+# upstream KEYS, which is the only difference from a real release.
+#
+# Input, from the including play:
+#   mirror_releases: [{dir: <release directory>, bins: [{name: <binary>, src: <controller path>}]}]
+#   stub_version:    the version every archive is named for
+- name: Name the release target triple
+  ansible.builtin.set_fact:
+    _mirror_target: >-
+      {{ {'x86_64': 'x86_64-unknown-linux-gnu',
+          'aarch64': 'aarch64-unknown-linux-gnu'}[ansible_facts.architecture] }}
+
+# Each level explicitly: the file module gives parents it creates the leaf's mode, and
+# the server (a DynamicUser) must traverse down to every release directory.
+- name: Create the mirror's served tree
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: >-
+    {{ ['/srv/mirror', '/srv/mirror/www', '/srv/mirror/www/releases']
+       + (mirror_releases | map(attribute='dir') | map('regex_replace', '^', '/srv/mirror/www/releases/') | list) }}
+
+- name: Create the mirror's private directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - /srv/mirror/gnupg
+    - /srv/mirror/stage
+
+- name: Stage the stubs as the release binaries
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "/srv/mirror/stage/{{ item.name }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ mirror_releases | map(attribute='bins') | flatten }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Create the mirror's signing key
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      export GNUPGHOME=/srv/mirror/gnupg
+      gpg --batch --pinentry-mode loopback --passphrase '' \
+        --quick-gen-key 'molecule mirror <mirror@molecule.invalid>' ed25519 sign 1d
+      gpg --batch --armor --export > /srv/mirror/KEYS.asc
+    executable: /bin/bash
+    creates: /srv/mirror/KEYS.asc
+
+- name: Build, checksum and sign each release
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      export GNUPGHOME=/srv/mirror/gnupg
+      for bin in {{ item.bins | map(attribute='name') | map('quote') | join(' ') }}; do
+        tar -C /srv/mirror/stage -czf "$bin-{{ stub_version }}-{{ _mirror_target }}.tar.gz" "$bin"
+      done
+      sha256sum -- *.tar.gz > SHA256SUMS
+      gpg --batch --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
+      chmod 0644 -- *
+    chdir: "/srv/mirror/www/releases/{{ item.dir }}"
+    executable: /bin/bash
+    creates: "/srv/mirror/www/releases/{{ item.dir }}/SHA256SUMS.asc"
+  loop: "{{ mirror_releases }}"
+  loop_control:
+    label: "{{ item.dir }}"
+
+- name: Install the mirror's HTTP server unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/molecule-mirror.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Loopback release mirror for the cloud-init molecule scenarios
+      [Service]
+      ExecStart=/usr/bin/python3 -m http.server 8099 --bind 127.0.0.1 --directory /srv/mirror/www
+      DynamicUser=yes
+
+- name: Start the mirror
+  ansible.builtin.systemd_service:
+    name: molecule-mirror
+    state: started
+    daemon_reload: true
+
+- name: Wait for the mirror to serve each signed manifest
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:8099/releases/{{ item.dir }}/SHA256SUMS.asc"
+  register: mirror_up
+  until: mirror_up.status == 200
+  retries: 10
+  delay: 1
+  loop: "{{ mirror_releases }}"
+  loop_control:
+    label: "{{ item.dir }}"

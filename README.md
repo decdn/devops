@@ -14,7 +14,7 @@ day-2 tooling for operators anywhere. Four ways to deploy the same node:
 | Path | For | Start here |
 |------|-----|------------|
 | **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published as the `decdn.node` Galaxy collection. | [`ansible/README.md`](ansible/README.md) |
-| **cloud-init** (`cloud-init/`) | One VM, no control machine: paste the user-data into your provider's "create server" form. It runs the Ansible playbook on the host itself, hardening included. | [`cloud-init/README.md`](cloud-init/README.md) |
+| **cloud-init** (`cloud-init/`) | One VM, no control machine: paste the user-data into your provider's "create server" form. It runs the Ansible playbook on the host itself, hardening included. A second template boots the onboarding sponsor (`sponsord` + its onramp). | [`cloud-init/README.md`](cloud-init/README.md) |
 | **Docker Compose** (`compose/`) | One host that already runs Docker. Also runs the onboarding sponsor (`sponsord` + its onramp) behind profiles. | [`compose/README.md`](compose/README.md) |
 | **Helm** (`charts/decdn-node/`) | Kubernetes, one release per node. | [`charts/decdn-node/README.md`](charts/decdn-node/README.md) |
 
@@ -100,7 +100,7 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 | Path | What it is |
 |------|------------|
 | [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `sponsord.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
-| [`cloud-init/`](cloud-init/README.md) | The cloud-init deploy path: `user-data.yaml`, the on-host `bootstrap.sh`, and the pinned ansible-core and collections it installs. |
+| [`cloud-init/`](cloud-init/README.md) | The cloud-init deploy path: `user-data.yaml` (a node), `user-data-sponsord.yaml` (a sponsor host), the on-host `bootstrap.sh`, and the pinned ansible-core and collections it installs. |
 | [`compose/`](compose/README.md) | The Docker Compose deploy path: the node, `sponsord`, `sponsord-onramp` and Caddy, one profile each. |
 | [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart, with vendored dashboards and alert rules in `files/monitoring/`. |
 | [`docs/`](docs/requirements.md) | Cross-path operator docs: requirements, lifecycle. |

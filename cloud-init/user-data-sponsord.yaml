@@ -1,21 +1,24 @@
 #cloud-config
-# deCDN node bootstrap for a fresh Debian 12/13 or Ubuntu 24.04/26.04 VM (x86_64 or
-# aarch64). Paste this into your provider's "user data" / "cloud-init" field when creating
-# the server. The full walkthrough is in cloud-init/README.md of github.com/decdn/devops.
+# deCDN sponsor host bootstrap: sponsord (the onboarding sponsor's treasury signer and
+# PaymentPool keeper) and sponsord-onramp (its public gate, behind Caddy), for a fresh
+# Debian 12/13 or Ubuntu 24.04/26.04 VM (x86_64 or aarch64). Paste this into your
+# provider's "user data" / "cloud-init" field when creating the server. The full
+# walkthrough is in cloud-init/README.md of github.com/decdn/devops ("Sponsor host").
 #
 # Edit every value marked MUST-EDIT first. The bootstrap refuses to run while any
 # CHANGE_ME is left.
 #
 # NEVER PUT A SECRET IN THIS FILE. Any local process can read user-data from the instance
 # metadata service, and your provider keeps a copy in its console and API. That rules out
-# the RPC URL (it may embed an API key), passwords, keystores and tokens. Everything below
-# is public: an SSH *public* key, a version, a region. The RPC URL is written over SSH after
-# the first boot, and the node's wallet is generated on the host.
+# sponsord's RPC URL (it may embed an API key), the treasury keystore and its password,
+# and the Turnstile secret. Everything below is public: an SSH *public* key, versions, a
+# domain, a public RPC URL, a Turnstile sitekey. The secrets are written over SSH after
+# the first boot, and sponsord's API token is generated on the host.
 #
 # On first boot the host clones github.com/decdn/devops at DEVOPS_REF, installs a pinned
-# Ansible, and hardens itself (SSH, firewall, automatic patching). It then stops and waits
-# for its secret, /etc/decdn/decdn.env. `cloud-init status --wait` returns when it is done.
-# For a sponsor host (sponsord, sponsord-onramp), start from user-data-sponsord.yaml.
+# Ansible, and hardens itself (SSH, firewall with tcp/80 and tcp/443 open for Caddy,
+# automatic patching). It then stops and waits for its secrets under /etc/sponsord.
+# `cloud-init status --wait` returns when it is done.
 ---
 package_update: true
 packages:
@@ -35,13 +38,15 @@ write_files:
       DEVOPS_REF=CHANGE_ME
 
   # The Ansible inventory for this host. Everything the playbook needs that is not a
-  # secret lives here. More knobs: ansible/roles/*/defaults/main.yml.
+  # secret lives here. More knobs: ansible/roles/*/defaults/main.yml. To run a node on
+  # the same host, add the decdn_nodes group from user-data.yaml without its
+  # baseline_* settings: the admin account is set once, below.
   - path: /etc/decdn-bootstrap/inventory.yml
     owner: root:root
     permissions: "0600"
     content: |
       ---
-      decdn_nodes:
+      sponsord_hosts:
         hosts:
           localhost:
             ansible_connection: local
@@ -60,16 +65,43 @@ write_files:
           # Optional: accept SSH only from these CIDRs.
           # ssh_allow_cidrs: ["203.0.113.0/24"]
 
-          # The node, installed from the GPG-verified release tarballs.
-          decdn_node_install_method: release
-          decdn_node_version: "CHANGE_ME"      # MUST-EDIT: an upstream release, e.g. "0.2.0"
+          # sponsord, installed from the GPG-verified release tarball.
+          sponsord_install_method: release
+          sponsord_version: "CHANGE_ME"        # MUST-EDIT: an upstream release, e.g. "0.1.0"
           # Until upstream publishes a release, point this at a mirror that serves
-          # v<version>/{decdn-node,decdn}-<version>-<target>.tar.gz, SHA256SUMS and
-          # SHA256SUMS.asc. The signature is still checked against deCDN's release key.
-          # decdn_node_release_base: "https://mirror.example/decdn/releases/download"
-          decdn_node_generate_keystore: true   # the wallet is generated on the host
-          decdn_network: arbitrum-sepolia
-          decdn_region: "CHANGE_ME"            # MUST-EDIT: ISO 3166-1 alpha-2 of the VM's location, e.g. "DE"
+          # sponsord-v<version>/sponsord-<version>-<target>.tar.gz, SHA256SUMS and
+          # SHA256SUMS.asc. The signature is still checked against the vendored KEYS.
+          # sponsord_release_base: "https://mirror.example/decdn/sponsord/releases/download"
+          sponsord_network: arbitrum-sepolia
+          # MUST-EDIT: the pool the treasury owns, 0x + 64 hex, printed by `decdn pool open`.
+          sponsord_pool_id: "CHANGE_ME"
+
+      # The onramp runs beside the daemon, so localhost is in sponsord_hosts too.
+      sponsord_onramp_hosts:
+        hosts:
+          localhost:
+        vars:
+          # sponsord-onramp, installed from the GPG-verified release tarball.
+          sponsord_onramp_install_method: release
+          sponsord_onramp_version: "CHANGE_ME"       # MUST-EDIT: an upstream release, e.g. "0.1.0"
+          # Until upstream publishes a release, as above, for
+          # sponsord-onramp-v<version>/sponsord-onramp-<version>-<target>.tar.gz.
+          # sponsord_onramp_release_base: "https://mirror.example/decdn/sponsord/releases/download"
+          # Caddy terminates TLS with a certificate from ACME. The domain's A/AAAA records
+          # must point at this VM, and tcp/80 and tcp/443 must reach it.
+          sponsord_onramp_proxy: caddy
+          sponsord_onramp_domain: "CHANGE_ME"        # MUST-EDIT: e.g. "downloads.example.org"
+          # sponsord_onramp_acme_email: "ops@example.org"
+          # MUST-EDIT: the PUBLIC JSON-RPC endpoint users' decdn reads the chain through.
+          # It is served to every user, so never the keyed URL sponsord uses.
+          sponsord_onramp_rpc_url: "CHANGE_ME"
+          sponsord_onramp_turnstile_sitekey: "CHANGE_ME"   # MUST-EDIT: the widget's public sitekey
+          # MUST-EDIT: the releases the installers install, each with the SHA-256 of that
+          # release's SHA256SUMS (printed in decdn-sponsored's release notes).
+          sponsord_onramp_decdn_release: "CHANGE_ME"       # e.g. "v0.1.0"
+          sponsord_onramp_decdn_sums_sha256: "CHANGE_ME"   # 64 lowercase hex
+          sponsord_onramp_cli_release: "CHANGE_ME"         # e.g. "decdn-sponsored-v0.1.0"
+          sponsord_onramp_cli_sums_sha256: "CHANGE_ME"     # 64 lowercase hex
 
   # What an interactive login prints while the bootstrap is unfinished. It is written
   # here, not by the bootstrap, so that it is in place even if stage 1 fails.

@@ -1,0 +1,106 @@
+---
+# First boot of cloud-init/user-data-sponsord.yaml, filled in the way an operator would
+# with the values ../sponsord-onramp uses, and pointed at the local repo and mirror.
+# Two edits go beyond a placeholder: the keyrings (the mirror's throwaway key, as in
+# ../cloud-init) and `sponsord_onramp_caddy_tls: internal` (no ACME in a container).
+#
+# It then asserts the host stopped at the secret gate: state "awaiting-secret", all
+# four sponsor secrets listed, nothing of either service installed.
+- name: Converge — first boot of the sponsor user-data
+  hosts: all
+  become: true
+  vars:
+    userdata_src: >-
+      {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/../cloud-init/user-data-sponsord.yaml
+    # Stood up by prepare.yml.
+    mirror_base: http://127.0.0.1:8099/releases
+    mirror_key: /srv/mirror/KEYS.asc
+    userdata_edits:
+      - regexp: '^(\s*)DEVOPS_REPO=https://github\.com/decdn/devops\.git$'
+        replace: '\1DEVOPS_REPO=file:///srv/devops-src'
+      - regexp: '^(\s*)DEVOPS_REF=CHANGE_ME$'
+        replace: '\1DEVOPS_REF={{ src_sha }}'
+      - regexp: '^(\s*)- name: CHANGE_ME\b.*$'
+        replace: '\1- name: molecule'
+      - regexp: '^(\s*)- "CHANGE_ME"(.*)$'
+        replace: '\1- "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMolecule0000000000000000000000000000000000 molecule"'
+      # sponsord
+      - regexp: '^(\s*)sponsord_version: "CHANGE_ME".*$'
+        replace: '\1sponsord_version: "0.0.0-molecule-stub"'
+      - regexp: '^(\s*)# sponsord_release_base: .*$'
+        replace: '\1sponsord_release_base: "{{ mirror_base }}"\n\1sponsord_release_keyring: {{ mirror_key }}'
+      - regexp: '^(\s*)sponsord_pool_id: "CHANGE_ME".*$'
+        replace: '\1sponsord_pool_id: "0x00000000000000000000000000000000000000000000000000000000000000aa"'
+      # sponsord-onramp
+      - regexp: '^(\s*)sponsord_onramp_version: "CHANGE_ME".*$'
+        replace: '\1sponsord_onramp_version: "0.0.0-molecule-stub"'
+      - regexp: '^(\s*)# sponsord_onramp_release_base: .*$'
+        replace: >-
+          \1sponsord_onramp_release_base: "{{ mirror_base }}"\n\1sponsord_onramp_release_keyring: {{ mirror_key }}
+      - regexp: '^(\s*)sponsord_onramp_domain: "CHANGE_ME".*$'
+        replace: '\1sponsord_onramp_domain: onramp.molecule.test\n\1sponsord_onramp_caddy_tls: internal'
+      - regexp: '^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME".*$'
+        replace: '\1sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc'
+      - regexp: '^(\s*)sponsord_onramp_turnstile_sitekey: "CHANGE_ME".*$'
+        replace: '\1sponsord_onramp_turnstile_sitekey: 1x00000000000000000000AA'
+      - regexp: '^(\s*)sponsord_onramp_decdn_release: "CHANGE_ME".*$'
+        replace: '\1sponsord_onramp_decdn_release: v0.1.0'
+      - regexp: '^(\s*)sponsord_onramp_decdn_sums_sha256: "CHANGE_ME".*$'
+        replace: >-
+          \1sponsord_onramp_decdn_sums_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+      - regexp: '^(\s*)sponsord_onramp_cli_release: "CHANGE_ME".*$'
+        replace: '\1sponsord_onramp_cli_release: decdn-sponsored-v0.1.0'
+      - regexp: '^(\s*)sponsord_onramp_cli_sums_sha256: "CHANGE_ME".*$'
+        replace: >-
+          \1sponsord_onramp_cli_sums_sha256: "2222222222222222222222222222222222222222222222222222222222222222"
+  tasks:
+    - name: Seed the user-data and boot
+      ansible.builtin.include_tasks: ../cloud-init/includes/boot.yml
+
+    # --- Stopped at the secret gate -------------------------------------------------
+    - name: Read the bootstrap state
+      ansible.builtin.slurp:
+        src: /var/lib/decdn-bootstrap/state
+      register: bootstrap_state
+
+    - name: Read the list of missing secrets
+      ansible.builtin.slurp:
+        src: /var/lib/decdn-bootstrap/awaiting
+      register: awaiting
+
+    - name: Stat what must NOT exist before the secrets
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: premature
+      loop:
+        - /usr/local/bin/sponsord
+        - /usr/local/bin/sponsord-onramp
+        - /etc/systemd/system/sponsord.service
+        - /etc/systemd/system/sponsord-onramp.service
+
+    - name: Run the login hint
+      ansible.builtin.command:
+        cmd: sh /etc/profile.d/decdn-bootstrap.sh
+      register: login_hint
+      changed_when: false
+
+    - name: Assert the host is waiting for its secrets, and nothing more
+      vars:
+        want:
+          - /etc/sponsord/secret.env
+          - /etc/sponsord/treasury-keystore.json
+          - /etc/sponsord/treasury-password
+          - /etc/sponsord/turnstile-secret
+      ansible.builtin.assert:
+        that:
+          - bootstrap_state.content | b64decode | trim == 'awaiting-secret'
+          - awaiting.content | b64decode | split | list == want
+          - premature.results | selectattr('stat.exists') | list | length == 0
+          - login_hint.stdout is search('waiting for these secrets')
+          - login_hint.stdout is search('/etc/sponsord/treasury-keystore\.json')
+        fail_msg: >-
+          Expected state awaiting-secret listing {{ want }} with nothing installed.
+          Got state {{ bootstrap_state.content | b64decode | trim }}, awaiting
+          {{ awaiting.content | b64decode | to_json }}, present:
+          {{ premature.results | selectattr('stat.exists') | map(attribute='item') | list }},
+          hint {{ login_hint.stdout | to_json }}.

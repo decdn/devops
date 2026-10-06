@@ -165,19 +165,23 @@ variant "caddy always on"          "caddy: profiles are [caddy]"                
 # install step cannot quietly drop these cases.
 if command -v cloud-init >/dev/null; then
   userdata="$repo/cloud-init/user-data.yaml"
-  expect 0 "lint-cloud-init accepts cloud-init/user-data.yaml" make -s -C "$repo" lint-cloud-init
+  sponsorud="$repo/cloud-init/user-data-sponsord.yaml"
+  expect 0 "lint-cloud-init accepts both cloud-init/ templates" make -s -C "$repo" lint-cloud-init
   sed '1s/^#cloud-config$/# cloud-config/' "$userdata" > "$work/ci-header.yaml"
   if make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-header.yaml" >"$work/out" 2>&1 \
     || ! grep -q 'is not a valid cloud-config' "$work/out"; then
     cat "$work/out" >&2; fail "lint-cloud-init did not reject a missing #cloud-config header as invalid"
   fi
   pass "lint-cloud-init rejects: no #cloud-config header (schema)"
-  # <name> <expected message fragment> <sed expression>: the fragment pins WHICH
-  # invariant fired, since one edit can trip several.
+  # <name> <expected message fragment> <sed expression> [<template>]: the fragment pins
+  # WHICH invariant fired, since one edit can trip several. The template defaults to
+  # the node's user-data.yaml.
   ci_variant() {
-    sed -E "$3" "$userdata" > "$work/ci-$1.yaml"
-    cmp -s "$userdata" "$work/ci-$1.yaml" && fail "variant $1 did not change user-data.yaml"
-    if make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-$1.yaml" >"$work/out" 2>&1; then
+    # No spaces in the file name: CLOUD_INIT_FILE is a list.
+    local src=${4:-$userdata} out="$work/ci-${1// /-}.yaml"
+    sed -E "$3" "$src" > "$out"
+    cmp -s "$src" "$out" && fail "variant $1 did not change ${src##*/}"
+    if make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$out" >"$work/out" 2>&1; then
       fail "lint-cloud-init accepted: $1"
     fi
     grep -q 'violates an invariant' "$work/out" || { cat "$work/out" >&2; fail "lint-cloud-init failed for another reason: $1"; }
@@ -205,14 +209,49 @@ if command -v cloud-init >/dev/null; then
   ci_variant "install method as a host var" 'set decdn_node_install_method only in decdn_nodes.vars' "s#$loc#&\\n\\1decdn_node_install_method: manual#"
   ci_variant "another signing key"         'decdn_release_keyring may not be overridden' "s#$net#&\\n\\1decdn_release_keyring: /tmp/KEYS.asc#"
   ci_variant "another env file path"       'decdn_env_file may not be overridden' "s#$net#&\\n\\1decdn_env_file: /etc/decdn/other.env#"
-  ci_variant "another inventory group"     'only the decdn_nodes group belongs here' 's#^(\s*)decdn_nodes:$#\1all: {vars: {decdn_verify_release_signature: false}}\n&#'
+  ci_variant "another inventory group"     'only the decdn_nodes, sponsord_hosts, sponsord_onramp_hosts groups belong here' 's#^(\s*)decdn_nodes:$#\1all: {vars: {decdn_verify_release_signature: false}}\n&#'
   # Shape
-  ci_variant "localhost outside decdn_nodes" 'localhost must be in decdn_nodes' 's/^(\s*)decdn_nodes:$/\1decdn_hosts:/'
+  ci_variant "localhost outside decdn_nodes" 'localhost must be in decdn_nodes or sponsord_hosts' 's/^(\s*)decdn_nodes:$/\1decdn_hosts:/'
   ci_variant "admin account without keys"  'baseline_sudo_users needs at least one named account' '/^\s*keys:$/,+1d'
   ci_variant "stage 1 not run"             'runcmd must be exactly' 's#^  - \[/usr/local/sbin/decdn-bootstrap\]$#  - [/bin/true]#'
   ci_variant "stage 1 failure masked"      'runcmd must be exactly' 's#^  - \[/usr/local/sbin/decdn-bootstrap\]$#  - "/usr/local/sbin/decdn-bootstrap || true"#'
   # shellcheck disable=SC2016 # a literal $DEVOPS_REPO: the variant unquotes it in stage 1
   ci_variant "shellcheck-dirty stage 1"    'decdn-bootstrap fails shellcheck' 's#git clone --quiet --no-checkout "\$DEVOPS_REPO"#git clone --quiet --no-checkout $DEVOPS_REPO#'
+  # The sponsor host (user-data-sponsord.yaml)
+  spnet='^(\s*)sponsord_network: arbitrum-sepolia$'
+  onproxy='^(\s*)sponsord_onramp_proxy: caddy$'
+  ci_variant "sponsord RPC URL in the inventory" 'sponsord_hosts.vars.sponsord_rpc_url looks secret-bearing' "s#$spnet#&\\n\\1sponsord_rpc_url: https://rpc.example/#" "$sponsorud"
+  ci_variant "SPONSORD_RPC_URL in bootstrap.env" 'bootstrap.env: unexpected key SPONSORD_RPC_URL' "s#$ref#&\\n\\1SPONSORD_RPC_URL=https://rpc.example/key#" "$sponsorud"
+  ci_variant "Turnstile secret in the inventory" 'sponsord_onramp_turnstile_secret looks secret-bearing' "s#$onproxy#&\\n\\1sponsord_onramp_turnstile_secret: x#" "$sponsorud"
+  ci_variant "credentials in the onramp RPC URL" 'a URL with embedded credentials' 's#^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME"$#\1sponsord_onramp_rpc_url: "https://user:key@rpc.example/"#' "$sponsorud"
+  ci_variant "sponsord manual install"     'sponsord_install_method must be release' 's/^(\s*)sponsord_install_method: release$/\1sponsord_install_method: manual/' "$sponsorud"
+  ci_variant "onramp manual install"       'sponsord_onramp_install_method must be release' 's/^(\s*)sponsord_onramp_install_method: release$/\1sponsord_onramp_install_method: manual/' "$sponsorud"
+  ci_variant "sponsord signature off as a host var" 'set sponsord_verify_release_signature only in sponsord_hosts.vars' "s#$loc#&\\n\\1sponsord_verify_release_signature: false#" "$sponsorud"
+  ci_variant "onramp pin in another group" 'set sponsord_onramp_install_method only in sponsord_onramp_hosts.vars' "s#$spnet#&\\n\\1sponsord_onramp_install_method: release#" "$sponsorud"
+  ci_variant "another sponsord signing key" 'sponsord_release_keyring may not be overridden' "s#$spnet#&\\n\\1sponsord_release_keyring: /tmp/KEYS.asc#" "$sponsorud"
+  ci_variant "another treasury keystore path" 'sponsord_treasury_keystore_file may not be overridden' "s#$spnet#&\\n\\1sponsord_treasury_keystore_file: /tmp/k.json#" "$sponsorud"
+  ci_variant "onramp without sponsord_hosts" 'sponsord_onramp_hosts needs sponsord_hosts too' 's/^(\s*)sponsord_hosts:$/\1decdn_nodes:/' "$sponsorud"
+  ci_variant "another host in the onramp group" 'sponsord_onramp_hosts must hold exactly localhost' '/^\s*sponsord_onramp_hosts:$/,/^\s*vars:$/ s/^(\s*)localhost:$/&\n\1other.example:/' "$sponsorud"
+  # A node and a sponsor on one host: the node template plus the sponsord groups.
+  sed -E 's/^(\s*)decdn_region: .*$/&\n      sponsord_hosts:\n        hosts:\n          localhost:\n        vars:\n          sponsord_install_method: release\n          sponsord_version: "0.1.0"\n      sponsord_onramp_hosts:\n        hosts:\n          localhost:\n        vars:\n          sponsord_onramp_install_method: release/' \
+    "$userdata" > "$work/ci-colocated.yaml"
+  expect 0 "lint-cloud-init accepts a node co-located with sponsord" \
+    make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-colocated.yaml"
+  ci_variant "onramp nested under children" 'sponsord_hosts may hold only hosts and vars, not' '/^      sponsord_onramp_hosts:$/,/^$/{s/^      /          /}; s/^          sponsord_onramp_hosts:$/        children:\n&/' "$sponsorud"
+  ci_variant "query in the onramp RPC URL" 'sponsord_onramp_rpc_url must be a public http(s) URL' 's#^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME"$#\1sponsord_onramp_rpc_url: "https://rpc.example/?api_key=x"#' "$sponsorud"
+  ci_variant "fragment in the onramp RPC URL" 'sponsord_onramp_rpc_url must be a public http(s) URL' 's#^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME"$#\1sponsord_onramp_rpc_url: "https://rpc.example/rpc\#k"#' "$sponsorud"
+  ci_variant "onramp RPC URL in another group" 'set sponsord_onramp_rpc_url only in sponsord_onramp_hosts.vars' "s#$spnet#&\\n\\1sponsord_onramp_rpc_url: https://rpc.example/#" "$sponsorud"
+  expect 0 "lint-cloud-init accepts a public onramp RPC URL" make -s -C "$repo" lint-cloud-init \
+    CLOUD_INIT_FILE="$(sed -E 's#^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME"$#\1sponsord_onramp_rpc_url: "https://sepolia-rollup.arbitrum.io/rpc"#' "$sponsorud" > "$work/ci-public-rpc.yaml"; echo "$work/ci-public-rpc.yaml")"
+  # Ansible applies one baseline_sudo_users list, never the union of two groups'.
+  ci_variant "two admin lists" 'set baseline_sudo_users in one place' 's/^(\s*)sponsord_onramp_install_method: release$/&\n\1baseline_sudo_users: [{name: bob, keys: ["ssh-ed25519 AAAA bob"]}]/' "$sponsorud"
+  # The Makefile itself: an empty list checks nothing, and a bad file fails the whole list.
+  expect 2 "lint-cloud-init refuses an empty CLOUD_INIT_FILE" make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE=
+  if make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-stage-1-not-run.yaml $userdata" >"$work/out" 2>&1; then
+    fail "lint-cloud-init accepted a list whose first file is broken"
+  fi
+  grep -qF 'runcmd must be exactly' "$work/out" || { cat "$work/out" >&2; fail "lint-cloud-init failed the list for another reason"; }
+  pass "lint-cloud-init fails a list whose first file is broken"
   # Non-secret knobs whose names look secret must still pass.
   sed -E "s#$net#&\\n\\1baseline_sudo_passwordless: false\\n\\1decdn_keystore_file: /var/lib/decdn/keystore.json#" \
     "$userdata" > "$work/ci-knobs.yaml"

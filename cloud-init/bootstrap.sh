@@ -1,25 +1,30 @@
 #!/usr/bin/env bash
 # Stage 2 of the cloud-init bootstrap (see README.md). Stage 1 is the small
-# /usr/local/sbin/decdn-bootstrap that user-data.yaml writes. It takes a lock, records
+# /usr/local/sbin/decdn-bootstrap that the user-data writes. It takes a lock, records
 # "running", clones this repo at the pinned ref, verifies the checkout, then execs this
 # script from it.
 #
-# This script turns the host into a node by running ansible/playbooks/site.yml against
-# localhost:
+# This script converges the host by running ansible/playbooks/site.yml against
+# localhost. site.yml imports sponsord.yml, so one playbook serves a node
+# (user-data.yaml), a sponsor host (user-data-sponsord.yaml) or both, by the inventory's
+# groups:
 #   1. Install the pinned ansible-core into a venv, with hashes enforced
 #      (requirements.txt), and the pinned Galaxy collections (collections.lock.yml).
-#   2. Syntax-check site.yml and check that the inventory puts localhost in decdn_nodes.
-#      Without that membership the play matches no host and exits 0, and the udp/4433
-#      hole in playbooks/group_vars/decdn_nodes.yml never loads.
-#   3. Pick the phase:
-#      - no /etc/decdn/decdn.env: run `baseline` only (SSH, firewall, patching,
-#        the admin account), then record "awaiting-secret". The node role would stop at
-#        its RPC gate anyway, so stopping here keeps cloud-init's status clean.
-#      - decdn.env present: run the whole playbook (install, keystore, service), then
-#        record "complete".
+#   2. Syntax-check site.yml. Check that the inventory puts localhost in decdn_nodes or
+#      sponsord_hosts, and in sponsord_hosts whenever it is in sponsord_onramp_hosts.
+#      Without that membership the plays match no host and exit 0, and the firewall
+#      holes in playbooks/group_vars/ never load.
+#   3. Pick the phase. Each of the host's groups needs its secrets on the host (SECRETS
+#      below):
+#      - any missing: run `baseline` only (SSH, firewall, patching, the admin account),
+#        list the missing paths in $STATE_DIR/awaiting and record "awaiting-secret".
+#        The roles would stop at their secret gates anyway, so stopping here keeps
+#        cloud-init's status clean.
+#      - all present: run the whole playbook (install, keys, services), then record
+#        "complete".
 #
 # `sudo decdn-bootstrap` (stage 1, then this) is how the operator continues after
-# writing decdn.env, and how a host picks up a new pinned ref.
+# writing the secrets, and how a host picks up a new pinned ref.
 set -euo pipefail
 
 readonly CONF_DIR=/etc/decdn-bootstrap
@@ -27,9 +32,23 @@ readonly INVENTORY=$CONF_DIR/inventory.yml
 readonly VENV=/opt/decdn-bootstrap/venv
 readonly STATE_DIR=/var/lib/decdn-bootstrap
 readonly STATE_FILE=$STATE_DIR/state
-# The decdn_node role's default decdn_env_file (roles/decdn_node/defaults/main.yml).
-readonly ENV_FILE=/etc/decdn/decdn.env
-# Test hook for the molecule `cloud-init` scenario only: baseline's hardening means
+# The missing secrets' paths, one per line, for the login hint. Paths only, never content.
+readonly AWAITING_FILE=$STATE_DIR/awaiting
+# The secrets each group's role reads on the host, at the role defaults that
+# `make lint-cloud-init` forbids a user-data to move:
+#   decdn_nodes: decdn_env_file (roles/decdn_node/defaults/main.yml).
+#   sponsord_hosts: sponsord_secret_env_file, sponsord_treasury_keystore_file,
+#     sponsord_treasury_password_file (roles/sponsord/defaults/main.yml). Not the API
+#     token: the role generates it.
+#   sponsord_onramp_hosts: sponsord_onramp_turnstile_secret_file
+#     (roles/sponsord_onramp/defaults/main.yml).
+readonly HOST_GROUPS=(decdn_nodes sponsord_hosts sponsord_onramp_hosts)
+declare -rA SECRETS=(
+  [decdn_nodes]=/etc/decdn/decdn.env
+  [sponsord_hosts]="/etc/sponsord/secret.env /etc/sponsord/treasury-keystore.json /etc/sponsord/treasury-password"
+  [sponsord_onramp_hosts]=/etc/sponsord/turnstile-secret
+)
+# Test hook for the molecule `cloud-init` scenarios only: baseline's hardening means
 # nothing in a container. bootstrap.env carries no Ansible arguments, so there is no
 # route for extra-vars; this marker is the only way to skip baseline, and
 # `make lint-cloud-init` rejects a user-data that mentions it.
@@ -45,6 +64,18 @@ set_state() {
   printf '%s\n' "$1" >"$STATE_FILE.tmp"
   chmod 0644 "$STATE_FILE.tmp"
   mv -f "$STATE_FILE.tmp" "$STATE_FILE"
+}
+
+# The same, for the list of missing secrets. No arguments removes the file.
+set_awaiting() {
+  if (($# == 0)); then
+    rm -f "$AWAITING_FILE"
+    return
+  fi
+  install -d -m 0755 "$STATE_DIR"
+  printf '%s\n' "$@" >"$AWAITING_FILE.tmp"
+  chmod 0644 "$AWAITING_FILE.tmp"
+  mv -f "$AWAITING_FILE.tmp" "$AWAITING_FILE"
 }
 
 die() { echo "decdn-bootstrap: $*" >&2; exit 1; }
@@ -94,9 +125,27 @@ ansible-galaxy collection install --force -p collections -r "$repo/cloud-init/co
 
 # --- 2. Checks before touching the host ----------------------------------------
 ansible-playbook -i "$INVENTORY" playbooks/site.yml --syntax-check
-members=$(ansible -i "$INVENTORY" decdn_nodes --list-hosts)
-grep -qE '^\s+localhost$' <<<"$members" \
-  || die "$INVENTORY does not put localhost in the decdn_nodes group (site.yml would match nothing)"
+
+declare -A member=()
+groups_in=()
+for g in "${HOST_GROUPS[@]}"; do
+  # A group the inventory does not define lists no hosts and exits 0 (with a warning).
+  # Any other failure must stop the run: read as "not a member", it would skip that
+  # group's secrets.
+  members=$(ansible -i "$INVENTORY" "$g" --list-hosts) \
+    || die "could not list group $g in $INVENTORY (see the ansible error above)"
+  if grep -qE '^\s+localhost$' <<<"$members"; then
+    member[$g]=1
+    groups_in+=("$g")
+  fi
+done
+[[ -n ${member[decdn_nodes]:-} || -n ${member[sponsord_hosts]:-} ]] \
+  || die "$INVENTORY puts localhost in neither decdn_nodes nor sponsord_hosts (site.yml would match nothing)"
+# playbooks/sponsord.yml asserts the same, in a play that `--tags baseline` skips.
+[[ -z ${member[sponsord_onramp_hosts]:-} || -n ${member[sponsord_hosts]:-} ]] \
+  || die "$INVENTORY puts localhost in sponsord_onramp_hosts but not in sponsord_hosts (the onramp runs beside the daemon)"
+echo "decdn-bootstrap: localhost is in ${groups_in[*]}"
+
 # Phase 1 below relies on site.yml tagging the baseline role `baseline`. If that tag
 # were renamed, --tags baseline would select nothing and exit 0, and the host would be
 # reported hardened without being so.
@@ -105,24 +154,68 @@ grep -qE '^\s+baseline : ' <<<"$tasks" \
   || die "--tags baseline selects no baseline task in playbooks/site.yml (was the role's tag renamed?)"
 
 # --- 3. Converge ----------------------------------------------------------------
-if [[ -e $ENV_FILE ]]; then
+missing=()
+missing_groups=()
+for g in "${groups_in[@]}"; do
+  read -ra files <<<"${SECRETS[$g]}"
+  before=${#missing[@]}
+  for f in "${files[@]}"; do
+    [[ -e $f ]] || missing+=("$f")
+  done
+  ((${#missing[@]} == before)) || missing_groups+=("$g")
+done
+
+if ((${#missing[@]} == 0)); then
   ansible-playbook -i "$INVENTORY" playbooks/site.yml "${extra_args[@]}"
+  set_awaiting
   set_state complete
 else
   ansible-playbook -i "$INVENTORY" playbooks/site.yml --tags baseline "${extra_args[@]}"
+  set_awaiting "${missing[@]}"
   set_state awaiting-secret
 fi
 
 state=$(<"$STATE_FILE")
 echo "decdn-bootstrap: $state"
-if [[ $state == awaiting-secret ]]; then
-  cat <<EOF
-Next: SSH in as your admin account and write the RPC endpoint (the URL may embed an API key,
-so it never goes in user-data):
+[[ $state == awaiting-secret ]] || exit 0
+
+echo "Missing on this host: ${missing[*]}"
+echo "Next: SSH in as your admin account and write them (never in user-data):"
+for g in "${missing_groups[@]}"; do
+  case $g in
+    decdn_nodes)
+      cat <<'EOF'
+
+The node's RPC endpoint (the URL may embed an API key):
   umask 077
   sudo mkdir -p /etc/decdn
-  echo 'DECDN_RPC_URL=https://…' | sudo tee $ENV_FILE >/dev/null
-  sudo chmod 600 $ENV_FILE
-  sudo decdn-bootstrap
+  echo 'DECDN_RPC_URL=https://…' | sudo tee /etc/decdn/decdn.env >/dev/null
+  sudo chmod 600 /etc/decdn/decdn.env
 EOF
-fi
+      ;;
+    sponsord_hosts)
+      cat <<'EOF'
+
+sponsord's treasury wallet (the one that owns sponsord_pool_id) and its RPC endpoint.
+secret.env holds SPONSORD_RPC_URL and nothing else:
+  umask 077
+  sudo mkdir -p /etc/sponsord
+  sudo install -m 0600 treasury-keystore.json /etc/sponsord/treasury-keystore.json
+  sudo install -m 0600 treasury-password      /etc/sponsord/treasury-password
+  echo 'SPONSORD_RPC_URL=https://…' | sudo tee /etc/sponsord/secret.env >/dev/null
+  sudo chmod 600 /etc/sponsord/secret.env
+EOF
+      ;;
+    sponsord_onramp_hosts)
+      cat <<'EOF'
+
+The onramp's Cloudflare Turnstile secret:
+  umask 077
+  printf '%s' '<secret>' | sudo tee /etc/sponsord/turnstile-secret >/dev/null
+  sudo chmod 600 /etc/sponsord/turnstile-secret
+EOF
+      ;;
+  esac
+done
+echo
+echo "Then run: sudo decdn-bootstrap"

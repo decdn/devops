@@ -188,5 +188,7 @@ collector; its access logs are not shipped.
 - `tests/firewall-holes` (`make test-scripts`) pins the tcp/80 and tcp/443 holes.
 - `tests/alloy-config` (`make lint-alloy`) runs the onramp's log lines through the
   real Alloy.
-- Release mode is not exercised here. Its tasks mirror the `sponsord` role's, which
-  `molecule/sponsord` tests against a signed mirror.
+- `molecule/cloud-init-sponsord` boots `cloud-init/user-data-sponsord.yaml`, which
+  installs both services in release mode from a locally signed mirror, and checks the
+  https chain through Caddy. It is the only test of this role's release mode, whose
+  tasks mirror the `sponsord` role's (`molecule/sponsord` tests those in more depth).

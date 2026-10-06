@@ -44,6 +44,11 @@
         - /var/lib/decdn/node.secret
         - /etc/decdn/keystore.password
 
+    - name: Stat the list of missing secrets (removed on "complete")
+      ansible.builtin.stat:
+        path: /var/lib/decdn-bootstrap/awaiting
+      register: awaiting
+
     - name: Gather service facts
       ansible.builtin.service_facts:
 
@@ -57,6 +62,7 @@
       ansible.builtin.assert:
         that:
           - bootstrap_state.content | b64decode | trim == 'complete'
+          - not awaiting.stat.exists
           - checkout_head.content | b64decode | trim == tag_sha.content | b64decode | trim
           - stamp.content | b64decode | trim == '0.0.0-molecule-stub'
           - wallet.results | rejectattr('stat.exists') | list | length == 0
@@ -64,7 +70,7 @@
           - ansible_facts.services['decdn-node.service'].state == 'running'
           - login_hint.stdout == ''
         fail_msg: >-
-          state={{ bootstrap_state.content | b64decode | trim }}
+          state={{ bootstrap_state.content | b64decode | trim }} awaiting={{ awaiting.stat.exists }}
           head={{ checkout_head.content | b64decode | trim }} (tag {{ tag_sha.content | b64decode | trim }})
           stamp={{ stamp.content | b64decode | trim }}
           wallet={{ wallet.results | map(attribute='stat') | list }}
