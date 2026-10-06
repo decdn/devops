@@ -177,8 +177,9 @@ addresses) the repo carries, and they carry their upstream commit.
   own groups, and its token gate and `/healthz` fail without a daemon.
   - **Install / unit / gate:** the sponsord role's patterns, copied: manual or
     GPG-verified `sponsord-onramp-v*` release (the KEYS are the sponsord role's file,
-    via `role_path`), `DynamicUser` with the token and the operator-provisioned
-    Turnstile secret as `LoadCredential=`, `PartOf=sponsord.service`, a restart-inputs
+    via `role_path`), `DynamicUser` with the token and the Turnstile secret (inventory
+    or operator, with `secret.env`'s provenance record and guards) as
+    `LoadCredential=`, `PartOf=sponsord.service`, a restart-inputs
     record, and a fatal `/healthz` gate on a loopback listener.
   - **Public inputs:** `sponsord_onramp_rpc_url` is served to every user, so preflight
     refuses userinfo, a query and the characters upstream's installers cannot quote.
