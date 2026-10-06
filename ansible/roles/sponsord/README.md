@@ -31,7 +31,7 @@ gate, installers, behind a TLS reverse proxy), is the
   | File | Who provides it |
   |------|-----------------|
   | `api-token` | The role generates it on the host when absent and never replaces it, because the onramp (or your own gate) uses it. |
-  | `treasury-keystore.json`, `treasury-password` | **You** do. The role never creates the treasury wallet. |
+  | `treasury-keystore.json`, `treasury-password` | **You** do, or, with `sponsord_generate_treasury_wallet: true`, the role creates them on the host when the keystore is absent (and never replaces an existing one). |
   | `secret.env` (`SPONSORD_RPC_URL`) | `sponsord_rpc_url` from inventory, or a file you write on the host. The two-way rules match `decdn_rpc_url`: an empty `sponsord_rpc_url` with a file the role wrote earlier fails the deploy, because that means `secret.yml` went missing. A host-written file may hold `SPONSORD_RPC_URL` **only**: as an `EnvironmentFile` it would override every other setting, so the role refuses any other key in it. |
 
 - **Writes non-secret settings** to `/etc/sponsord/sponsord.env` (0644): bind
@@ -58,6 +58,26 @@ gate, installers, behind a TLS reverse proxy), is the
   - an earlier run changed a file and then failed before its restart handler ran.
 
 ## Before the first deploy
+
+There are two ways to get the treasury wallet onto the host. Either the role
+generates it there (below), or you create it elsewhere and copy it in (steps 1-2).
+
+**Generated on the host.** Set `sponsord_generate_treasury_wallet: true` and
+`sponsord_decdn_cli_bin_src` (a decdn CLI built for the host), leave
+`sponsord_pool_id` empty, and do steps 3-4 below. The first deploy then:
+
+- installs that CLI at `/usr/local/lib/sponsord/decdn`, apart from any node's
+  `decdn`;
+- runs `decdn key-gen` on the host, writes a random password beside the keystore,
+  and records the address in `/etc/sponsord/treasury-address`;
+- installs the binary, the API token and `secret.env`, then **stops** with the
+  wallet's address and the `decdn pool open` command to run on the host.
+
+Fund the address with USDC and gas, run that command, put the pool id it prints in
+`sponsord_pool_id`, and deploy again. The key never leaves the host, so back up
+`/etc/sponsord/treasury-keystore.json` and `treasury-password` yourself.
+
+**Created elsewhere.**
 
 1. **Create the treasury wallet** with the decdn CLI (`decdn key-gen`). **Open its
    pool** from it (`decdn pool open`), which prints the pool id. Fund the wallet with
@@ -92,7 +112,9 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | `sponsord_version` | `""` | Required in `release` mode, e.g. `0.1.0` → tag `sponsord-v0.1.0`. |
 | `sponsord_network` | `""` | Network profile: `arbitrum-sepolia` supplies chain id and PaymentPool. |
 | `sponsord_chain_id`, `sponsord_payment_pool_address` | from profile | Explicit values win over the profile. |
-| `sponsord_pool_id` | `""` | **Required.** 0x + 64 hex. |
+| `sponsord_pool_id` | `""` | **Required.** 0x + 64 hex. `""` only on the wallet-creation run. |
+| `sponsord_generate_treasury_wallet` | `false` | `true`: create the treasury wallet on the host when its keystore is absent. |
+| `sponsord_decdn_cli_bin_src` | `""` | Control-machine path to a decdn CLI for the host. Required with wallet generation. |
 | `sponsord_rpc_url` | `""` | **Sensitive.** Leave empty to provision `secret.env` on the host. |
 | `sponsord_bind_address` / `sponsord_port` | `127.0.0.1` / `8090` | IPv4 loopback only (asserted). |
 | `sponsord_max_spending_cap_micro_usdc`, `_max_ttl_secs`, `_pool_low_water_micro_usdc`, `_pool_refill_micro_usdc`, `_pool_watch_interval_secs` | `""` | `""` uses the daemon's default. These are economic choices, not repo facts. |
@@ -127,7 +149,7 @@ yourself.
   sudo rm /etc/systemd/system/sponsord.service
   sudo systemctl daemon-reload
   sudo rm -f /usr/local/bin/sponsord
-  sudo rm -rf /usr/local/lib/sponsord     # the release version stamp
+  sudo rm -rf /usr/local/lib/sponsord     # the release version stamp and decdn CLI
   ```
 
   Then delete `/etc/sponsord` (secrets, env files and the role's two `.sha256`
@@ -144,7 +166,9 @@ yourself.
   - release mode against a locally signed mirror: the version stamp, a re-run
     with the mirror down, and rejection of a bad checksum, a bad signature and
     a binary that is not the pinned version;
-  - the Alloy toggles.
+  - the Alloy toggles;
+  - treasury wallet generation through a `key-gen` stub: the files and modes, the
+    stop on an empty pool id, an existing wallet kept, and the daemon starting on it.
 - `molecule/grafana-cloud` co-locates sponsord with a node.
 - `molecule/cloud-init-sponsord` deploys it from `cloud-init/user-data-sponsord.yaml`
   (no control machine), in release mode, beside the onramp.

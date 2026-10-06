@@ -8,6 +8,13 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- `sponsord`: opt-in treasury wallet generation (`sponsord_generate_treasury_wallet`,
+  `sponsord_decdn_cli_bin_src`). With the keystore absent, the role runs `decdn
+  key-gen` on the host, writes a random password beside the keystore and records
+  the address in `/etc/sponsord/treasury-address`; an existing keystore is never
+  replaced. An empty `sponsord_pool_id` is accepted on that run, which stops before
+  the daemon with the address and the `decdn pool open` command to run on the host.
+
 - `sponsord_onramp` role: deploys `sponsord-onramp` (decdn/sponsord), the public
   side of the sponsor: the Cloudflare Turnstile gate, the `decdn.sh` / `decdn.ps1`
   installers and the API the `decdn-sponsored` CLI polls. It runs on the daemon's
