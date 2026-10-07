@@ -12,6 +12,7 @@ node's metric surface is documented in upstream `decdn/decdn`'s
 | `dashboard-chain.json` | Chain, payments and slash safety (`uid: decdn-chain`): watcher liveness, chain RPC, registries, payments. |
 | `dashboard-node.json` | Single-node drilldown (`uid: decdn-node`): host, process, iroh transport, DHT and probe, logs, traces. |
 | `prometheus-alerts.yml` | Rule groups `decdn-slash-safety`, `decdn-liveness`, `decdn-delivery`. A rule with a matching runbook section carries a `runbook_url` into upstream's `docs/runbook.md`. |
+| `sponsord/` | The onboarding sponsor's dashboard and alert rules ([below](#sponsord)). Not rendered by the chart. |
 
 **Editing.** Every `decdn_*` series a panel or rule names must be one `decdn-node`
 exports; nothing in CI checks this. See
@@ -40,3 +41,27 @@ metrics and logs carry `job="integrations/node_exporter"`. So:
 - **Alerts:** load `prometheus-alerts.yml` as a rule group, e.g. with
   `mimirtool rules load prometheus-alerts.yml` against your Grafana Cloud Prometheus
   endpoint, or through *Alerting → Alert rules → Import*.
+
+## sponsord
+
+`sponsord/` holds the same pair for the deCDN onboarding sponsor (`decdn/sponsord`),
+which runs on the Ansible and Compose paths only. The chart never renders it: its
+`PrometheusRule` reads only `prometheus-alerts.yml`, and its dashboard ConfigMaps glob
+`*.json` in this directory, not below it.
+
+| File | What it is |
+|------|------------|
+| `sponsord/dashboard-sponsord.json` | `uid: decdn-sponsord`: pool balance, the top-up hold, keeper reads and top-ups, capabilities issued, errors by code, the daemon's and the onramp's logs. |
+| `sponsord/prometheus-alerts.yml` | Rule group `sponsord`: down, keeper failing, stale pool read, a held top-up (and one held over 2 h), an empty pool, sponsord's own request errors. `runbook_url` points at upstream's `docs/operator.md`, "Monitor". |
+
+They select `job="sponsord"`, which the `grafana_alloy` role stamps on sponsord's
+`/metrics` (`grafana_alloy_sponsord_job`); log panels select `unit="sponsord.service"`
+and `unit="sponsord-onramp.service"` with the `level` label the role parses. Import
+them as above, e.g. `mimirtool rules load sponsord/prometheus-alerts.yml`. Every
+`sponsord_*` series they name must be one upstream's `crates/sponsord/src/metrics.rs`
+exports; `make lint-helm` runs `promtool check rules` on the rules and the unit tests
+in `../../tests/sponsord-alerts_test.yml`, and checks the dashboard's uid.
+
+The treasury wallet's own USDC and gas balance, which pays every top-up, is not
+covered: sponsord does not export it. Watch that address with a balance exporter of
+your own; `SponsordKeeperFailing` is the symptom when it runs dry.

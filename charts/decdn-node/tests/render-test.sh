@@ -11,6 +11,10 @@
 #   PROMTOOL      command to run promtool, reading the rules on stdin (default:
 #                 `promtool`; the Makefile passes a digest-pinned container). Set
 #                 to "" to skip, loudly.
+#   PROMTOOL_IMAGE  promtool's container image, for `promtool test rules`, which
+#                 reads files rather than stdin: the test directory is mounted into
+#                 it (the Makefile passes the same pinned image). Unset: the local
+#                 `promtool`. Skipped with PROMTOOL.
 #   DECDN_CLI     path to a real `decdn` binary: also run `decdn config validate`
 #                 on every positive render (catches value/type errors the key check
 #                 can't). Skipped, loudly, when unset.
@@ -142,9 +146,48 @@ if [ -n "$promtool" ]; then
   $promtool check rules < "$chart/files/monitoring/prometheus-alerts.yml" > "$work/promtool.out" 2>&1 \
     || { cat "$work/promtool.out" >&2; fail "promtool check rules (files/monitoring/prometheus-alerts.yml)"; }
   pass "promtool check rules: $(grep -o '[0-9]* rules found' "$work/promtool.out")"
+  $promtool check rules < "$chart/files/monitoring/sponsord/prometheus-alerts.yml" > "$work/promtool.out" 2>&1 \
+    || { cat "$work/promtool.out" >&2; fail "promtool check rules (files/monitoring/sponsord/prometheus-alerts.yml)"; }
+  pass "promtool check rules (sponsord): $(grep -o '[0-9]* rules found' "$work/promtool.out")"
+
+  # The sponsord rules do time arithmetic on unix-time gauges, which only a unit
+  # test catches. promtool compares annotations exactly and they are prose, so the
+  # test runs against a copy with them stripped (tests/sponsord-alerts_test.yml).
+  mkdir "$work/rules-test"
+  yq 'del(.groups[].rules[].annotations)' "$chart/files/monitoring/sponsord/prometheus-alerts.yml" \
+    > "$work/rules-test/sponsord-alerts.yml"
+  cp "$here/sponsord-alerts_test.yml" "$work/rules-test/"
+  chmod -R a+rX "$work/rules-test"
+  if [ -n "${PROMTOOL_IMAGE:-}" ]; then
+    docker run --rm -v "$work/rules-test:/w:ro" -w /w --entrypoint promtool "$PROMTOOL_IMAGE" \
+      test rules sponsord-alerts_test.yml > "$work/promtool.out" 2>&1
+  else
+    (cd "$work/rules-test" && promtool test rules sponsord-alerts_test.yml) > "$work/promtool.out" 2>&1
+  fi || { cat "$work/promtool.out" >&2; fail "promtool test rules (tests/sponsord-alerts_test.yml)"; }
+  pass "promtool test rules: sponsord alerts"
 else
-  skipped+=("promtool (PROMTOOL is empty): alert rule syntax is NOT checked")
+  skipped+=("promtool (PROMTOOL is empty): alert rule syntax and the sponsord rule tests are NOT checked")
 fi
+
+# The sponsord dashboard sits in a subdirectory, so the chart's files/monitoring/*.json
+# glob never renders it (the ConfigMap check below pins that). It must still parse
+# and carry a uid no node dashboard uses: Grafana imports by uid.
+python3 - "$chart/files/monitoring" <<'PY' || fail "sponsord dashboard"
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+uids = [json.load(open(p)).get("uid") for p in sorted(root.glob("*.json"))]
+dash = sorted((root / "sponsord").glob("*.json"))
+if not dash:
+    sys.exit("no dashboard in files/monitoring/sponsord/")
+for p in dash:
+    uid = json.load(open(p)).get("uid")
+    if not (isinstance(uid, str) and 0 < len(uid) <= 40):
+        sys.exit(f"{p.name}: uid {uid!r} is not a 1-40 character string")
+    uids.append(uid)
+if len(uids) != len(set(uids)):
+    sys.exit(f"duplicate dashboard uids: {sorted(uids)}")
+PY
+pass "sponsord dashboard parses with its own uid"
 
 # The monitoring files the ci-values render must carry in full.
 yq -o=json '.' "$chart/files/monitoring/prometheus-alerts.yml" > "$work/alerts.json"
@@ -241,6 +284,8 @@ if name == "ci-values.yaml":
     if pr:
         rules = [r for g in pr["spec"]["groups"] for r in g["rules"]]
         check(len(rules) == len(shipped) > 0, f"PrometheusRule has {len(rules)} rules, files/monitoring has {len(shipped)}")
+        # sponsord has no Kubernetes path: its rules must never reach the node's.
+        check(not [r for r in rules if r["alert"].startswith("Sponsord")], "sponsord rules in the PrometheusRule")
         check(all(r["labels"].get("team") == "node-ops" for r in rules), "ruleLabels not merged into every rule")
         # ci-values sets ruleLabels.severity: a rule's own severity must win, and
         # only a rule without one may take the extra.

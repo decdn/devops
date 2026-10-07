@@ -40,6 +40,15 @@ their only home.
   `decdn-delivery`. Every rule carries a `component` label. Only rules with a matching
   section in upstream's `docs/runbook.md` (20 of 51) also carry a `runbook_url`.
 
+- `sponsord/` — the onboarding sponsor's own pair: `dashboard-sponsord.json` (uid
+  `decdn-sponsord`) and `prometheus-alerts.yml` (group `sponsord`, `job="sponsord"`).
+  The chart does not render this subdirectory (sponsord has no Kubernetes path). Its
+  `sponsord_*` names come from upstream `decdn/sponsord` `crates/sponsord/src/metrics.rs`;
+  run the name check below with `sponsord_` and that file. Its logs are plain text,
+  not JSON: select `{unit="sponsord.service"}` and filter on the `level` label the
+  `grafana_alloy` role parses. The rules have promtool unit tests in
+  `charts/decdn-node/tests/sponsord-alerts_test.yml`: keep them in step.
+
 Add a row to an existing dashboard before starting a fifth one. The Helm chart renders
 these files as-is (`templates/prometheusrule.yaml`, `templates/dashboards-configmap.yaml`),
 so a new `*.json` becomes a new ConfigMap and `charts/decdn-node/tests/render-test.sh`

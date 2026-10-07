@@ -148,6 +148,7 @@ test-scripts:        ## test the Makefile and molecule-driver guards, release ga
 lint-helm:           ## helm lint + render tests + kubeconform + promtool + shared schema-key check (needs helm, yq, python3>=3.11, docker)
 	KUBECONFORM="docker run --rm -i $(KUBECONFORM_IMAGE)" \
 	PROMTOOL="docker run --rm -i --entrypoint promtool $(PROMTOOL_IMAGE)" \
+	PROMTOOL_IMAGE="$(PROMTOOL_IMAGE)" \
 	$(CHART)/tests/render-test.sh
 
 # The molecule grafana-cloud scenario runs the role against a stub that exits 0

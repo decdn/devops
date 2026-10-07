@@ -1,0 +1,105 @@
+# promtool unit tests for files/monitoring/sponsord/prometheus-alerts.yml, run by
+# render-test.sh (`make lint-helm`). The rules do time arithmetic on unix-time
+# gauges, which promtool check cannot catch. The test clock starts at 0.
+#
+# render-test.sh runs this against a copy of the rules with the annotations
+# stripped (promtool compares annotations exactly, and they are prose), placed
+# beside this file as sponsord-alerts.yml.
+rule_files:
+  - sponsord-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # Down for 2m fires; a healthy target does not.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="sponsord", instance="a"}'
+        values: '0x10'
+      - series: 'up{job="sponsord", instance="b"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SponsordDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: SponsordDown
+        exp_alerts:
+          - exp_labels: {job: sponsord, instance: a, component: sponsor, severity: critical}
+
+  # A hold warns after 15m and escalates once it is 2h old; 0 is no hold.
+  # The gauge holds the unix time the hold began (here t=60s).
+  - interval: 1m
+    input_series:
+      - series: 'sponsord_pool_topup_unconfirmed_since_unix{job="sponsord", instance="a"}'
+        values: '0 60x200'
+      - series: 'sponsord_pool_topup_unconfirmed_since_unix{job="sponsord", instance="b"}'
+        values: '0x200'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SponsordTopupHeld
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: SponsordTopupHeld
+        exp_alerts:
+          - exp_labels: {job: sponsord, instance: a, component: sponsor, severity: warning}
+      - eval_time: 2h
+        alertname: SponsordTopupHeldLong
+        exp_alerts: []
+      - eval_time: 2h5m
+        alertname: SponsordTopupHeldLong
+        exp_alerts:
+          - exp_labels: {job: sponsord, instance: a, component: sponsor, severity: critical}
+
+  # Last check at t=60s and never again: stale once 3h have passed, plus for: 15m.
+  # A keeper that checks every hour never fires.
+  - interval: 5m
+    input_series:
+      - series: 'sponsord_pool_last_check_unix{job="sponsord", instance="a"}'
+        values: '60x60'
+      - series: 'sponsord_pool_last_check_unix{job="sponsord", instance="b"}'
+        values: '0+300x60'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: SponsordPoolCheckStale
+        exp_alerts: []
+      - eval_time: 3h30m
+        alertname: SponsordPoolCheckStale
+        exp_alerts:
+          - exp_labels: {job: sponsord, instance: a, component: sponsor, severity: warning}
+
+  # An empty pool fires only once the keeper has read it.
+  - interval: 1m
+    input_series:
+      - series: 'sponsord_pool_remaining_micro_usdc{job="sponsord", instance="a"}'
+        values: '0x20'
+      - series: 'sponsord_pool_last_check_unix{job="sponsord", instance="a"}'
+        values: '60x20'
+      - series: 'sponsord_pool_remaining_micro_usdc{job="sponsord", instance="b"}'
+        values: '0x20'
+      - series: 'sponsord_pool_last_check_unix{job="sponsord", instance="b"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: SponsordPoolEmpty
+        exp_alerts:
+          - exp_labels: {job: sponsord, instance: a, component: sponsor, severity: critical}
+
+  # A keeper failure fires at once; the request-error rule ignores caller faults.
+  - interval: 1m
+    input_series:
+      - series: 'sponsord_pool_keeper_failures_total{job="sponsord", instance="a"}'
+        values: '0 0 1 1 1'
+      - series: 'sponsord_request_errors_total{job="sponsord", instance="a", code="chain_unavailable"}'
+        values: '0 0 2 2 2'
+      - series: 'sponsord_request_errors_total{job="sponsord", instance="a", code="bad_request"}'
+        values: '0 0 9 9 9'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: SponsordKeeperFailing
+        exp_alerts:
+          - exp_labels: {job: sponsord, instance: a, component: sponsor, severity: warning}
+      - eval_time: 3m
+        alertname: SponsordRequestFailures
+        exp_alerts:
+          - exp_labels: {job: sponsord, instance: a, code: chain_unavailable, component: sponsor, severity: warning}
