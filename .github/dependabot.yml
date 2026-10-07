@@ -18,7 +18,7 @@
 # Ansible Galaxy (ansible/requirements.yml) is not a Dependabot ecosystem.
 #
 # NOT covered, bump manually (CONTRIBUTING.md § Supply-chain / pinning rules):
-#   - the KICS and kubeconform image digests in the Makefile
+#   - the KICS, kubeconform and promtool image digests in the Makefile
 #   - the molecule image digests in ansible/molecule/*/molecule.yml
 #   - the four setup-helm `version:` inputs (two in ci.yml, two in release.yml)
 #   - the Galaxy collections in ansible/requirements.yml, and their exact pins in

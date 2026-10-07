@@ -439,9 +439,7 @@ fi
 # --- upstream-mirror generators (optional: needs a decdn/decdn checkout) --------------
 if [[ -n "${UPSTREAM:-}" ]]; then
   expect 0 "network profiles current"  "$repo/scripts/sync-network-profiles.py" "$UPSTREAM" --check
-  expect 0 "monitoring assets current" "$repo/scripts/sync-monitoring.sh" "$UPSTREAM" --check
   expect 2 "network profiles: bad ref is an error, not drift"  "$repo/scripts/sync-network-profiles.py" "$UPSTREAM" --ref no/such/ref --check
-  expect 2 "monitoring assets: bad ref is an error, not drift" "$repo/scripts/sync-monitoring.sh" "$UPSTREAM" no/such/ref --check
 else
   skipped+=("upstream-mirror generators (set UPSTREAM=<decdn checkout>)")
 fi

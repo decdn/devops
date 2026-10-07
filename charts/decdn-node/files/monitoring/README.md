@@ -1,16 +1,24 @@
-# Vendored monitoring assets
+# Monitoring assets
 
-Copies of upstream [`decdn/decdn`](https://github.com/decdn/decdn)'s
-`monitoring/` directory: four Grafana dashboards and the reference Prometheus alert
-rules (companion to upstream's `adr/appendix-observability.md`). `SOURCE` records the
-upstream commit and a sha256 per file. Upstream licenses them MIT OR Apache-2.0.
+The deCDN Grafana dashboards and reference Prometheus alert rules, maintained here. The
+node's metric surface is documented in upstream `decdn/decdn`'s
+`adr/appendix-observability.md`. Imported from `decdn/decdn` (MIT OR Apache-2.0) at
+`20db95ef`; distributed here under this repo's MIT license.
 
-**Do not edit these files here.** Change them upstream, then re-vendor:
+| File | What it is |
+|------|------------|
+| `grafana-dashboard.json` | Fleet overview (`uid: decdn-poc-overview`): status, delivery funnel, slash safety, logs and traces. |
+| `dashboard-delivery.json` | Delivery and cache (`uid: decdn-delivery`): serve leg, paying pull leg, cache, origin, warming. |
+| `dashboard-chain.json` | Chain, payments and slash safety (`uid: decdn-chain`): watcher liveness, chain RPC, registries, payments. |
+| `dashboard-node.json` | Single-node drilldown (`uid: decdn-node`): host, process, iroh transport, DHT and probe, logs, traces. |
+| `prometheus-alerts.yml` | Rule groups `decdn-slash-safety`, `decdn-liveness`, `decdn-delivery`. A rule with a matching runbook section carries a `runbook_url` into upstream's `docs/runbook.md`. |
 
-```bash
-scripts/sync-monitoring.sh <path-to-decdn-checkout>            # default ref origin/main
-scripts/sync-monitoring.sh <path-to-decdn-checkout> --check    # what CI's weekly drift job runs
-```
+**Editing.** Every `decdn_*` series a panel or rule names must be one `decdn-node`
+exports; nothing in CI checks this. See
+[`.claude/skills/grafana-dashboards/SKILL.md`](../../../../.claude/skills/grafana-dashboards/SKILL.md)
+for the name check, the query traps and the publishing steps. Run `make lint-helm`
+after any edit: it runs `promtool check rules` on `prometheus-alerts.yml` (PromQL syntax,
+duplicate keys) and checks that every dashboard parses and has its own uid.
 
 ## On Kubernetes
 

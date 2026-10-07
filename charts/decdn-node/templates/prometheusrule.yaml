@@ -1,6 +1,6 @@
 {{- /*
-Upstream's reference alert rules (files/monitoring/prometheus-alerts.yml, vendored
-by scripts/sync-monitoring.sh) as a PrometheusRule. The file is read raw and parsed
+The reference alert rules (files/monitoring/prometheus-alerts.yml) as a
+PrometheusRule. The file is read raw and parsed
 as YAML: never pass it through `tpl`, its annotations carry Prometheus templates
 ({{ $labels.instance }}) that are Prometheus's to expand, not Helm's.
 The rules match on metric names across every scraped node, so enable this on ONE
@@ -12,7 +12,7 @@ release per Prometheus, or each alert fires once per release.
 {{- fail (printf "files/monitoring/prometheus-alerts.yml does not parse: %s" $rules.Error) }}
 {{- end }}
 {{- if not $rules.groups }}
-{{- fail "files/monitoring/prometheus-alerts.yml has no rule groups; re-run scripts/sync-monitoring.sh" }}
+{{- fail "files/monitoring/prometheus-alerts.yml has no rule groups" }}
 {{- end }}
 {{- $extra := .Values.metrics.prometheusRule.ruleLabels }}
 {{- if $extra }}
