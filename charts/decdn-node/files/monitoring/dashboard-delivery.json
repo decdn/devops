@@ -2510,7 +2510,7 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 8,
+        "w": 7,
         "x": 0,
         "y": 73
       },
@@ -2610,8 +2610,8 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 8,
-        "x": 8,
+        "w": 7,
+        "x": 7,
         "y": 73
       },
       "id": 19
@@ -2623,7 +2623,7 @@
       },
       "title": "Cache integrity \u2014 non-zero needs a human",
       "type": "timeseries",
-      "description": "A quarantined hash means disk rot or tampering. A tag-drop failure leaves bytes GC-protected and is not retried. A poisoned mutex is process-local and does not clear on its own — see the runbook before restarting. A recency seed failure at cache open leaves pre-restart blobs out of eviction until accessed; restart once the store is healthy. A partial-size observe failure ticks once per partial-size TTL while a store entry stays broken.",
+      "description": "A quarantined hash means disk rot or tampering. A tag-drop failure leaves bytes GC-protected and is not retried. A poisoned mutex is process-local and does not clear on its own — see the runbook before restarting. A partial-size observe failure ticks once per partial-size TTL while a store entry stays broken.",
       "targets": [
         {
           "datasource": {
@@ -2669,15 +2669,6 @@
           "expr": "sum(rate(decdn_probe_post_eviction_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "E",
           "legendFormat": "post-eviction failures"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_cache_recency_seed_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
-          "refId": "F",
-          "legendFormat": "recency seed failures"
         },
         {
           "datasource": {
@@ -2758,11 +2749,77 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 8,
-        "x": 16,
+        "w": 7,
+        "x": 14,
         "y": 73
       },
       "id": 20
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "Recency seed failed",
+      "type": "stat",
+      "description": "A recency seed failure at cache open leaves pre-restart blobs out of eviction until accessed; restart once the store is healthy. Set once at cache open, before the first scrape, and cleared only by a restart, so this reads the raw counter rather than a rate. It matches the DecdnCacheRecencySeedFailed alert.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(decdn_cache_recency_seed_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"})",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short",
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "percentChangeColorMode": "standard",
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 3,
+        "x": 21,
+        "y": 73
+      },
+      "id": 28
     },
     {
       "collapsed": false,
