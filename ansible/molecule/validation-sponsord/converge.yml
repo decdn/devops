@@ -216,6 +216,32 @@
             decdn_rejected: "{{ decdn_rejected + ['sponsord-bool'] }}"
           when: ansible_failed_task.name == "Validate the role's boolean knobs"
 
+    - name: "Case sponsord-bool — a quoted hold override"
+      block:
+        - name: Run sponsord with a quoted hold override
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_restart_ignore_topup_hold: "true"
+      rescue:
+        - name: Record sponsord-bool rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-bool'] }}"
+          when: ansible_failed_task.name == "Validate the role's boolean knobs"
+
+    - name: "Case sponsord-log-level — a log level with a space"
+      block:
+        - name: Run sponsord with a log level holding a space
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_log_level: "info sponsord=debug"
+      rescue:
+        - name: Record sponsord-log-level rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-log-level'] }}"
+          when: ansible_failed_task.name == "Validate sponsord_log_level"
+
     - name: "Case sponsord-rpc-newline — an RPC URL that injects a second variable"
       block:
         - name: Run sponsord with an RPC URL that injects a second variable
@@ -1146,7 +1172,8 @@
           ["sponsord-release-version", "sponsord-manual-src", "sponsord-network-unknown",
            "sponsord-network-chain", "sponsord-pool-id", "sponsord-pool-id-empty",
            "sponsord-wallet-bool", "sponsord-wallet-cli", "sponsord-zero-address", "sponsord-bind",
-           "sponsord-limit", "sponsord-limit", "sponsord-bool", "sponsord-rpc-newline",
+           "sponsord-limit", "sponsord-limit", "sponsord-bool", "sponsord-bool",
+           "sponsord-log-level", "sponsord-rpc-newline",
            "sponsord-rpc-gate", "sponsord-treasury", "sponsord-treasury", "sponsord-token",
            "sponsord-dir-missing", "sponsord-dir-format", "sponsord-dir-cross",
            "sponsord-bind", "sponsord-overwrite-untracked", "sponsord-token",

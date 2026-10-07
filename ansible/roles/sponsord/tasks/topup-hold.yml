@@ -1,0 +1,71 @@
+---
+# Refuse to restart or stop a sponsord that holds an unconfirmed pool top-up.
+#
+# The keeper broadcast a topUp it could not read a receipt for, and sends no
+# further top-up until that transaction mines or provably never can. The hold
+# lives only in the process: a restart forgets it, and if the transaction is still
+# pending somewhere the pool can be refilled twice (upstream docs/operator.md,
+# "Monitor"). Included before the role flushes a pending restart (main.yml), and
+# by the decommission entry points before they stop the daemon.
+#
+# A daemon that is not running holds nothing. A running one whose /metrics does
+# not answer is refused: the hold state is unknown. A binary that predates the
+# hold (no such gauge) passes, as there is nothing it could forget.
+- name: Read whether sponsord is running before touching it
+  ansible.builtin.systemd_service:
+    name: sponsord
+  register: _sponsord_hold_unit
+
+- name: Check sponsord for a held pool top-up
+  when:
+    - not ansible_check_mode
+    - _sponsord_hold_unit.status.ActiveState | default('') == 'active'
+  block:
+    # KICS flags plain HTTP here; the target is the loopback listener the role asserts.
+    - name: Read sponsord /metrics
+      ansible.builtin.uri:
+        url: "http://{{ sponsord_bind_address }}:{{ sponsord_port }}/metrics"
+        return_content: true
+        timeout: 5
+      register: _sponsord_hold_metrics
+      changed_when: false
+      failed_when: false
+
+    - name: Parse the top-up hold gauge
+      ansible.builtin.set_fact:
+        _sponsord_hold_since: >-
+          {{ (_sponsord_hold_metrics.content | default('')
+              | regex_search('(?m)^sponsord_pool_topup_unconfirmed_since_unix\s+([0-9.eE+]+)\s*$', '\1')
+              | default([], true) | first | default('0')) | float | int }}
+
+    - name: Refuse to proceed while the hold state cannot be read
+      ansible.builtin.assert:
+        that:
+          - _sponsord_hold_metrics.status | default(-1) == 200
+        fail_msg: >-
+          sponsord is running but http://{{ sponsord_bind_address }}:{{ sponsord_port }}/metrics
+          did not answer 200 (status {{ _sponsord_hold_metrics.status | default('none') }}),
+          so whether it holds an unconfirmed pool top-up is unknown, and a restart or
+          stop could forget one. Find out why /metrics does not answer, or set
+          sponsord_restart_ignore_topup_hold=true once you have confirmed that no
+          top-up is pending (the treasury has no pending transaction).
+      when: not (sponsord_restart_ignore_topup_hold | bool)
+
+    - name: Refuse to restart or stop sponsord while a pool top-up is held
+      ansible.builtin.fail:
+        msg: |-
+          sponsord holds an unconfirmed pool top-up (since {{ _since }}).
+          A restart or stop now forgets the hold, and if that transaction is still
+          pending the pool can be refilled twice. Nothing was restarted or stopped,
+          and a deploy's changed files wait on disk for the next run.
+          The hold clears by itself once the transaction mines. If it was dropped,
+          send 0-value transactions from the treasury to itself until the hold
+          clears; the daemon's error log names the transaction and how many it takes:
+            sudo journalctl -u sponsord -e | grep -i top
+          Then re-run. Only if you have confirmed the transaction can never mine,
+          re-run with sponsord_restart_ignore_topup_hold=true.
+      vars:
+        _since: "{{ '%Y-%m-%dT%H:%M:%SZ' | strftime(_sponsord_hold_since | int, utc=true) }}"
+      when:
+        - _sponsord_hold_since | int > 0
+        - not (sponsord_restart_ignore_topup_hold | bool)

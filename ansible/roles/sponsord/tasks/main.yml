@@ -313,9 +313,22 @@
     that:
       - sponsord_generate_api_token is boolean
       - sponsord_secret_env_overwrite_host_file is boolean
+      - sponsord_restart_ignore_topup_hold is boolean
     fail_msg: >-
-      sponsord_generate_api_token and sponsord_secret_env_overwrite_host_file must be
-      booleans (true/false), not quoted strings.
+      sponsord_generate_api_token, sponsord_secret_env_overwrite_host_file and
+      sponsord_restart_ignore_topup_hold must be booleans (true/false), not quoted
+      strings.
+
+# RUST_LOG is a level or comma-separated tracing directives. It lands unquoted in an
+# EnvironmentFile, so whitespace, quotes and control characters are refused.
+- name: Validate sponsord_log_level
+  ansible.builtin.assert:
+    that:
+      - sponsord_log_level | string is match('^[A-Za-z0-9_=,.:-]*\Z')
+    fail_msg: >-
+      sponsord_log_level must be "" (errors only), a level such as info, or tracing
+      directives such as sponsord=debug,hyper=warn (letters, digits and _=,.:-
+      only), got "{{ sponsord_log_level }}".
 
 # --- RPC URL: inventory or host-provisioned secret.env ------------------------------
 # The same two authoring paths, provenance record and guards as decdn_node's
@@ -774,6 +787,15 @@
          | map(attribute='checksum', default='') | join(' ') }}
     sponsord_inputs_recorded_sums: "{{ sponsord_inputs_recorded.content | default('') | b64decode | trim }}"
 
+# Every notify source above (env files, unit, binary, secret.env) is also a hashed
+# input, so this one test covers all of them; the hold guard below reads it too.
+- name: Decide whether a sponsord restart is pending
+  ansible.builtin.set_fact:
+    _sponsord_restart_pending: >-
+      {{ (sponsord_inputs_recorded_sums | length > 0 and sponsord_inputs_sums != sponsord_inputs_recorded_sums)
+         or (sponsord_inputs_recorded_sums | length == 0
+             and sponsord_is_active.status.ActiveState | default('') == 'active') }}
+
 - name: Note restart inputs that changed since the daemon last started healthy
   ansible.builtin.debug:
     msg: >-
@@ -784,10 +806,13 @@
       — restarting sponsord.
   changed_when: true
   notify: Restart sponsord
-  when: >-
-    (sponsord_inputs_recorded_sums | length > 0 and sponsord_inputs_sums != sponsord_inputs_recorded_sums)
-    or (sponsord_inputs_recorded_sums | length == 0
-        and sponsord_is_active.status.ActiveState | default('') == 'active')
+  when: _sponsord_restart_pending | bool
+
+# Fails, before the handler runs and before the inputs record is written, while the
+# daemon holds an unconfirmed pool top-up: the restart is retried on the next run.
+- name: Refuse a restart that would forget a held pool top-up
+  ansible.builtin.include_tasks: topup-hold.yml
+  when: _sponsord_restart_pending | bool
 
 - name: Apply pending sponsord changes
   ansible.builtin.meta: flush_handlers
