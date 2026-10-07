@@ -201,15 +201,6 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(decdn_cache_bytes_returned_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "served to callers"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
           "expr": "sum(rate(decdn_cache_pull_through_bytes_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "B",
           "legendFormat": "pulled from origin"
@@ -305,7 +296,7 @@
         "y": 1
       },
       "id": 3,
-      "description": "served on the wire and received from peers count cdn/client/v1 payload bytes; served to callers and pulled from origin are the cache engine's own view."
+      "description": "served on the wire and received from peers count cdn/client/v1 payload bytes; pulled from origin is the cache engine's own view."
     },
     {
       "datasource": {
@@ -406,7 +397,7 @@
       },
       "title": "Serve refusals by reason",
       "type": "timeseries",
-      "description": "All of these collapse to one NotFound wire code on the client side. insufficient deposit is fed by three separate guards (the pre-spend miss floor, the window tier's ceiling and the direct-serve ceiling) and cannot attribute a spike to one \u2014 the node's throttled warn! line does. Sustained insufficient deposit means either clients running dry, or this node's chain watcher lagging an on-chain top-up and turning funded clients away.",
+      "description": "Most signed refusals here collapse to one NotFound wire code on the client side; insufficient deposit, evicted since probe, internal error and the three takedown refusals (hash denied, chain hash denied, origin denied) keep their own codes. stream cap full and bad binding are resets with no signed response (RATE_LIMITED and MALFORMED_MESSAGE). insufficient deposit is fed by three separate guards (the pre-spend miss floor, the window tier's ceiling and the direct-serve ceiling) and cannot attribute a spike to one — the node's throttled warn! line does. Sustained insufficient deposit means either clients running dry, or this node's chain watcher lagging an on-chain top-up and turning funded clients away.",
       "targets": [
         {
           "datasource": {
@@ -494,6 +485,15 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
+          "expr": "sum(rate(decdn_serve_stream_rejected_blob_too_large_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "T",
+          "legendFormat": "blob too large"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
           "expr": "sum(rate(decdn_serve_stream_rejected_hash_denied_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "J",
           "legendFormat": "hash denied"
@@ -569,6 +569,24 @@
           "expr": "sum(rate(decdn_serve_stream_rejected_bad_binding_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "R",
           "legendFormat": "bad binding"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_stream_rejected_stream_cap_full_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "S",
+          "legendFormat": "stream cap full"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_stream_rejected_pull_loop_guard_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "U",
+          "legendFormat": "pull-loop guard (node asked for a blob mid-open)"
         }
       ],
       "fieldConfig": {
@@ -653,7 +671,7 @@
       },
       "title": "Stream outcomes by direction",
       "type": "timeseries",
-      "description": "Every ended paid stream counts once as completed or failed. inbound is this node serving; outbound is a stream this node opened to an upstream candidate, or one assembled range on the streaming miss path. failed includes routine outcomes \u2014 a cache-miss refusal, a client that closes early, and the free header handshake a downstream node opens and closes \u2014 so read the refusal and pull-outcome panels for health. Mid-stream stops name the cause: the pool or the signer cap can no longer fund the stream, or the payer sent its whole per-chunk proof budget for one chunk and none of the proofs settled it.",
+      "description": "Every ended paid stream counts once as completed or failed. inbound is this node serving; outbound is a stream this node opened to an upstream candidate, or one assembled range on the streaming miss path. failed includes routine outcomes, so read the reason series: client declined before paying is a requester that read the quote and left, which includes the header handshake a downstream miss pull opens and does not adopt; client left mid-stream is a paying requester that gave up. request unreadable is a first request the node could not read: a timeout, a peer reset, or a frame that does not decode. Refusals are on the Serve refusals by reason panel, and the Unattributed stream failures panel shows the inbound failures no reason claims. Mid-stream stops name the cause: the pool or the signer cap can no longer fund the stream, the node rejected a voucher, or the payer sent its whole per-chunk proof budget for one chunk and none of the proofs settled it.",
       "targets": [
         {
           "datasource": {
@@ -699,6 +717,42 @@
           "expr": "sum(rate(decdn_serve_stream_proof_budget_exhausted_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "E",
           "legendFormat": "stopped mid-stream: proof budget exhausted"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_stream_voucher_rejected_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "F",
+          "legendFormat": "stopped mid-stream: voucher rejected"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_stream_client_abandoned_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "G",
+          "legendFormat": "client left mid-stream"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_stream_client_declined_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "H",
+          "legendFormat": "client declined before paying"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_stream_request_unreadable_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "I",
+          "legendFormat": "request unreadable"
         }
       ],
       "fieldConfig": {
@@ -1193,6 +1247,7 @@
       },
       "title": "Attempts vs success",
       "type": "timeseries",
+      "description": "Node-to-node cache-miss pulls, where this node is the paying client. Both lines step only when a pull starts or ends, so they read zero while one long pull is in flight; its time to first byte and window pauses show its progress.",
       "targets": [
         {
           "datasource": {
@@ -1401,15 +1456,6 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(decdn_node_pull_abandon_drain_timeout_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
-          "refId": "L",
-          "legendFormat": "abandon drain timeout"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
           "expr": "sum(rate(decdn_node_pull_pool_open_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "M",
           "legendFormat": "pool open failure"
@@ -1542,6 +1588,24 @@
           "expr": "sum(rate(decdn_node_pull_through_upstream_verify_failed_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "E",
           "legendFormat": "upstream verify failed"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_node_pull_through_min_draw_waits_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "F",
+          "legendFormat": "min-draw waits"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_cache_fill_not_coalesced_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "G",
+          "legendFormat": "fill not coalesced (duplicate pull)"
         }
       ],
       "fieldConfig": {
@@ -1617,7 +1681,8 @@
         "x": 0,
         "y": 50
       },
-      "id": 11
+      "id": 11,
+      "description": "Window paused and min-draw waits are benign pacing: the first is the credit window binding, the second batches a small window into fewer, larger upstream draws. Fill not coalesced is a serve-miss fill that started ahead of a live same-hash fill's paid frontier and opened its own pull; the overlap not yet stored is fetched twice. A sustained rate means clients habitually resume ahead of what payers have cleared."
     },
     {
       "datasource": {
@@ -1800,6 +1865,33 @@
           "expr": "sum(rate(decdn_node_region_latency_penalty_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "E",
           "legendFormat": "region latency penalty"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_node_pull_backpressure_backoffs_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "F",
+          "legendFormat": "backpressure backoffs"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_node_pull_backpressure_exhausted_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "G",
+          "legendFormat": "backpressure exhausted"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_node_pull_leg_no_progress_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "H",
+          "legendFormat": "leg no progress"
         }
       ],
       "fieldConfig": {
@@ -1875,14 +1967,15 @@
         "x": 16,
         "y": 50
       },
-      "id": 13
+      "id": 13,
+      "description": "A backpressure backoff is one wait on the sole holder of a missing range after it refused for backpressure; a sustained rate means an upstream's per-signer cap is too small for this node's concurrency. Backpressure exhausted (the holder kept refusing through the whole wait budget, truncating every attached serve stream) and leg no progress (a leg finished cleanly but moved neither the paid nor the delivered frontier) are zero on a healthy node."
     },
     {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "title": "Pull time to first byte",
+      "title": "Pull time to first byte and pause length",
       "type": "timeseries",
       "description": "Fleet p50, p95 and p99 time to first byte of one paid node-to-node pull leg, from the start of its open to the first bao bytes read. The window includes a dial when the node holds no warm connection to the peer. An adopted header-handshake pull is timed from the start of the handshake open. A rising p95 with a flat serve-hit p95 points at the upstream peers or the path to them, not at the serving nodes\u2019 own stores.",
       "targets": [
@@ -1912,6 +2005,15 @@
           "expr": "histogram_quantile(0.99, sum by (le) (rate(decdn_node_pull_first_byte_seconds_bucket{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval])))",
           "refId": "C",
           "legendFormat": "pull leg p99"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(decdn_node_pull_through_wait_seconds_bucket{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval])))",
+          "refId": "D",
+          "legendFormat": "pull pause p95"
         }
       ],
       "fieldConfig": {
@@ -2521,7 +2623,7 @@
       },
       "title": "Cache integrity \u2014 non-zero needs a human",
       "type": "timeseries",
-      "description": "A quarantined hash means disk rot or tampering. A tag-drop failure leaves bytes GC-protected and is not retried. A poisoned mutex is process-local and does not clear on its own \u2014 see the runbook before restarting.",
+      "description": "A quarantined hash means disk rot or tampering. A tag-drop failure leaves bytes GC-protected and is not retried. A poisoned mutex is process-local and does not clear on its own — see the runbook before restarting. A recency seed failure at cache open leaves pre-restart blobs out of eviction until accessed; restart once the store is healthy. A partial-size observe failure ticks once per partial-size TTL while a store entry stays broken.",
       "targets": [
         {
           "datasource": {
@@ -2567,6 +2669,24 @@
           "expr": "sum(rate(decdn_probe_post_eviction_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "E",
           "legendFormat": "post-eviction failures"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_cache_recency_seed_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "F",
+          "legendFormat": "recency seed failures"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_cache_partial_size_observe_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "G",
+          "legendFormat": "partial-size observe failures"
         }
       ],
       "fieldConfig": {
@@ -2709,6 +2829,15 @@
           "expr": "sum(rate(decdn_cache_origin_enumerate_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "E",
           "legendFormat": "enumerate failures"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_cache_origin_range_timeouts_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "F",
+          "legendFormat": "range-read timeouts"
         }
       ],
       "fieldConfig": {
@@ -2784,7 +2913,8 @@
         "x": 0,
         "y": 81
       },
-      "id": 22
+      "id": 22,
+      "description": "A range-read timeout is an origin read on the range-pull path that ran past its budget (stall window plus the read size at the throughput floor). Each one is also an origin transport fault. A nonzero rate means an origin that stalls or runs below the floor."
     },
     {
       "datasource": {
@@ -2932,6 +3062,15 @@
           "expr": "sum(rate(decdn_warming_credits_dropped_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "C",
           "legendFormat": "warming credits dropped"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_cache_range_pull_permit_waits_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "D",
+          "legendFormat": "range-pull permit waits"
         }
       ],
       "fieldConfig": {
@@ -3169,14 +3308,14 @@
       },
       "title": "Unattributed stream failures",
       "type": "timeseries",
-      "description": "Seller-leg stream failures that no reason counter claims: rate(decdn_streams_failed_total{direction=\"inbound\"}) minus the 23 siblings that each end exactly one inbound stream \u2014 every serve_stream_rejected_* reason, the two midstream exhaustion stops, the node fault, the spent proof budget and the takedown termination. decdn_serve_economics_refused_total is deliberately NOT subtracted: it is a buyer-leg gate that declines to buy from a candidate upstream, and ends no inbound stream. A standing positive floor is expected and healthy \u2014 a client that closes early, a peer-attributable stream error, and the free header handshake a downstream node's miss pull opens and closes after the response all count as failures by design and have no reason counter. Read the SHAPE, not the level: a step change means a failure mode arrived that no counter names, and the refusal breakdown will not show it. Goes negative only if a reason counter fires without ending a stream.",
+      "description": "Seller-leg stream failures that no reason counter claims: rate(decdn_streams_failed_total{direction=\"inbound\"}) minus the 29 siblings that each end exactly one inbound stream — every serve_stream_rejected_* reason (the stream-cap reset included), the unreadable request, the two midstream exhaustion stops, the takedown termination, the rejected voucher, the spent proof budget, the declined quote (a requester that leaves before any voucher credits a byte, which includes the header handshake a downstream miss pull does not adopt), the mid-stream client abandon, and the node fault. decdn_serve_economics_refused_total is deliberately NOT subtracted: it is a buyer-leg gate that declines to buy from a candidate upstream, and ends no inbound stream. Expected 0. Any positive rate is a failure no reason claims, which is a bug: file it. The node crate's INBOUND_FAILURE_REASONS list and a test hold this expression to the code.",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(decdn_streams_failed_total{direction=\"inbound\",deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_bad_binding_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_cache_miss_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_chain_hash_denied_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_chain_stale_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_evicted_since_probe_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_foreign_declined_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_hash_denied_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_insufficient_deposit_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_internal_error_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_load_shed_hit_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_load_shed_miss_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_origin_denied_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_owner_mismatch_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_pool_unconfirmed_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_range_not_satisfiable_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_signer_cap_exhausted_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_signer_floor_at_cap_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_unknown_lane_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_midstream_pool_exhausted_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_midstream_signer_cap_exhausted_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_node_fault_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_proof_budget_exhausted_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_terminated_takedown_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "expr": "sum(rate(decdn_streams_failed_total{direction=\"inbound\",deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_bad_binding_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_blob_too_large_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_cache_miss_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_chain_hash_denied_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_chain_stale_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_evicted_since_probe_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_foreign_declined_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_hash_denied_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_insufficient_deposit_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_internal_error_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_load_shed_hit_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_load_shed_miss_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_origin_denied_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_owner_mismatch_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_pool_unconfirmed_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_pull_loop_guard_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_range_not_satisfiable_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_signer_cap_exhausted_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_signer_floor_at_cap_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_stream_cap_full_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_rejected_unknown_lane_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_request_unreadable_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_midstream_pool_exhausted_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_midstream_signer_cap_exhausted_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_terminated_takedown_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_voucher_rejected_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_proof_budget_exhausted_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_client_declined_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_client_abandoned_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))\n  - sum(rate(decdn_serve_stream_node_fault_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "A",
           "legendFormat": "no reason counter"
         }
@@ -3679,6 +3818,246 @@
         "y": 111
       },
       "id": 9008
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "Serve time to first byte by phase",
+      "type": "timeseries",
+      "description": "Fleet p95 of each phase of a paid serve's time to first byte. Admission runs from the decoded request to the load-shed admit and includes the getPool and getAuthorization chain reads on a cache miss of the pool view. Response runs from the admit to the signed StreamResponse written; on a miss it includes the origin probes or the upstream discovery, pool open and handshake. First frame runs from the response to the first ChunkData frame written, which is the read, fill and encode of the whole first frame. Only streams that write a first frame record, so the phases share one population with the Serve time to first byte panel.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(decdn_serve_admission_seconds_bucket{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval])))",
+          "refId": "A",
+          "legendFormat": "admission p95"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(decdn_serve_response_hit_seconds_bucket{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval])))",
+          "refId": "B",
+          "legendFormat": "response hit p95"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(decdn_serve_response_miss_seconds_bucket{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval])))",
+          "refId": "C",
+          "legendFormat": "response miss p95"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(decdn_serve_first_frame_hit_seconds_bucket{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval])))",
+          "refId": "D",
+          "legendFormat": "first frame hit p95"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(decdn_serve_first_frame_miss_seconds_bucket{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval])))",
+          "refId": "E",
+          "legendFormat": "first frame miss p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 118
+      },
+      "id": 9011
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "Admission signer checks by cache outcome",
+      "type": "timeseries",
+      "description": "Rate of admission signer checks, stacked by what the signer-auth cache held. Cached checks make no getAuthorization read. First-read checks are for a (pool, signer) pair the node holds no read of: a new signer, or one the bounded cache evicted. Re-read checks are for an Unregistered signer whose read is older than one minute or who has redeemed since the read. First-read and re-read checks wait on a chain read, so they make up the admission phase tail in the Serve time to first byte by phase panel. Concurrent checks for one pair share one read.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_signer_auth_cached_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "cached"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_signer_auth_first_read_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "B",
+          "legendFormat": "first read"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_signer_auth_reread_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "C",
+          "legendFormat": "unregistered re-read"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "reqps",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 126
+      },
+      "id": 9012
     }
   ],
   "preload": false,
