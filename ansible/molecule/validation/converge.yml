@@ -1700,6 +1700,46 @@
             decdn_rejected: "{{ decdn_rejected + ['sponsord-pool-id'] }}"
           when: ansible_failed_task.name == "Require chain, PaymentPool and pool id"
 
+    - name: "Case sponsord-pool-id-empty — no pool id without wallet generation"
+      block:
+        - name: Run sponsord with no pool id and wallet generation off
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_pool_id: ""
+      rescue:
+        - name: Record sponsord-pool-id-empty rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-pool-id-empty'] }}"
+          when: ansible_failed_task.name == "Require chain, PaymentPool and pool id"
+
+    - name: "Case sponsord-wallet-bool — a quoted wallet-generation flag"
+      block:
+        - name: Run sponsord with a quoted wallet-generation flag
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_generate_treasury_wallet: "yes"
+      rescue:
+        - name: Record sponsord-wallet-bool rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-wallet-bool'] }}"
+          when: ansible_failed_task.name == "Validate sponsord_generate_treasury_wallet is a real boolean"
+
+    - name: "Case sponsord-wallet-cli — wallet generation with no decdn CLI"
+      block:
+        - name: Run sponsord with wallet generation and no decdn CLI source
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_generate_treasury_wallet: true
+            sponsord_decdn_cli_bin_src: ""
+      rescue:
+        - name: Record sponsord-wallet-cli rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-wallet-cli'] }}"
+          when: ansible_failed_task.name == "Require a decdn CLI source for wallet generation"
+
     - name: "Case sponsord-zero-address — the zero PaymentPool address"
       block:
         - name: Run sponsord with the zero PaymentPool address
@@ -2647,7 +2687,8 @@
            "provenance-record", "provenance-record",
            "managed-paths", "managed-paths", "managed-paths", "managed-paths", "managed-paths",
            "sponsord-release-version", "sponsord-manual-src", "sponsord-network-unknown",
-           "sponsord-network-chain", "sponsord-pool-id", "sponsord-zero-address", "sponsord-bind",
+           "sponsord-network-chain", "sponsord-pool-id", "sponsord-pool-id-empty",
+           "sponsord-wallet-bool", "sponsord-wallet-cli", "sponsord-zero-address", "sponsord-bind",
            "sponsord-limit", "sponsord-limit", "sponsord-bool", "sponsord-rpc-newline",
            "sponsord-rpc-gate", "sponsord-treasury", "sponsord-treasury", "sponsord-token",
            "sponsord-dir-missing", "sponsord-dir-format", "sponsord-dir-cross",

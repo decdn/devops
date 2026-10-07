@@ -230,6 +230,7 @@ if command -v cloud-init >/dev/null; then
   ci_variant "onramp pin in another group" 'set sponsord_onramp_install_method only in sponsord_onramp_hosts.vars' "s#$spnet#&\\n\\1sponsord_onramp_install_method: release#" "$sponsorud"
   ci_variant "another sponsord signing key" 'sponsord_release_keyring may not be overridden' "s#$spnet#&\\n\\1sponsord_release_keyring: /tmp/KEYS.asc#" "$sponsorud"
   ci_variant "another treasury keystore path" 'sponsord_treasury_keystore_file may not be overridden' "s#$spnet#&\\n\\1sponsord_treasury_keystore_file: /tmp/k.json#" "$sponsorud"
+  ci_variant "treasury wallet generation" 'sponsord_generate_treasury_wallet may not be overridden' "s#$spnet#&\\n\\1sponsord_generate_treasury_wallet: true#" "$sponsorud"
   ci_variant "onramp without sponsord_hosts" 'sponsord_onramp_hosts needs sponsord_hosts too' 's/^(\s*)sponsord_hosts:$/\1decdn_nodes:/' "$sponsorud"
   ci_variant "another host in the onramp group" 'sponsord_onramp_hosts must hold exactly localhost' '/^\s*sponsord_onramp_hosts:$/,/^\s*vars:$/ s/^(\s*)localhost:$/&\n\1other.example:/' "$sponsorud"
   # A node and a sponsor on one host: the node template plus the sponsord groups.

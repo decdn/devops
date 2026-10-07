@@ -262,8 +262,9 @@ keeps the pool topped up. It needs no node. Put its host in the `sponsord_hosts`
 a dedicated host or a node host listed in both groups. Then run
 `make deploy-sponsord`; `make deploy` covers it too.
 
-- **You provision** the treasury keystore and password on the host. The role never
-  creates that wallet.
+- **The treasury wallet** is yours to provision on the host, or, with
+  `sponsord_generate_treasury_wallet: true`, the role creates it there and stops until
+  you have funded it and opened its pool.
 - **The API token** is generated on the host.
 - **The RPC URL** is dual-homed like `decdn_rpc_url`.
 - **Observability:** with Grafana Cloud on, Alloy scrapes sponsord on hosts in

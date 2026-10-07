@@ -1,0 +1,114 @@
+---
+# Opt-in treasury wallet generation (sponsord_generate_treasury_wallet). Mints a
+# wallet on the host with `decdn key-gen` ONLY when the keystore is absent, so an
+# existing (possibly funded) wallet is never touched. The key and its password are
+# created on the host and never leave it; the public address is recorded beside them.
+# The wallet starts unfunded and owns no pool: main.yml stops the run after secret.env
+# is final while sponsord_pool_id is "", and prints the `decdn pool open` command.
+
+- name: Require a decdn CLI source for wallet generation
+  ansible.builtin.assert:
+    that:
+      - sponsord_decdn_cli_bin_src | length > 0
+    fail_msg: >-
+      sponsord_generate_treasury_wallet needs sponsord_decdn_cli_bin_src: a
+      control-machine path to a decdn CLI built for this host (`cargo build --release
+      -p decdn-cli` in a decdn/decdn checkout). The role runs its `key-gen` on the host.
+
+- name: Stat the decdn CLI source on the control machine
+  ansible.builtin.stat:
+    path: "{{ sponsord_decdn_cli_bin_src }}"
+  register: _sponsord_cli_src_stat
+  delegate_to: localhost
+  become: false
+
+- name: Require the decdn CLI source to be a file
+  ansible.builtin.assert:
+    that:
+      - _sponsord_cli_src_stat.stat.isreg | default(false)
+    fail_msg: "sponsord_decdn_cli_bin_src ({{ sponsord_decdn_cli_bin_src }}) is not a file on the control machine."
+
+- name: Create the sponsord config and library directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ sponsord_etc }}"
+    - "{{ sponsord_decdn_cli_bin | dirname }}"
+
+- name: Install the decdn CLI for the treasury wallet
+  ansible.builtin.copy:
+    src: "{{ sponsord_decdn_cli_bin_src }}"
+    dest: "{{ sponsord_decdn_cli_bin }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Check for an existing treasury keystore and password
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+    get_checksum: false
+  register: _sponsord_treasury_pregen
+  loop:
+    - "{{ sponsord_treasury_keystore_file }}"
+    - "{{ sponsord_treasury_password_file }}"
+
+# Wallet generation runs a binary on the host, which --check cannot simulate; the
+# keystore assert in main.yml then reports the missing wallet, as without this knob.
+# A password already present beside a missing keystore is the operator's: keep it and
+# let key-gen encrypt the new keystore with it. A password minted beside an EXISTING
+# keystore would orphan that wallet, so generation runs only when the keystore is absent.
+- name: Generate the treasury wallet (keystore absent only)
+  when:
+    - not _sponsord_treasury_pregen.results[0].stat.exists
+    - not ansible_check_mode
+  block:
+    # 32 random bytes as hex, no trailing newline: upstream's Secret::resolve and
+    # decdn's password reader then see the same bytes.
+    - name: Generate the treasury keystore password
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          umask 077
+          od -An -N32 -tx1 /dev/urandom | tr -d ' \n' > {{ sponsord_treasury_password_file | quote }}
+        creates: "{{ sponsord_treasury_password_file }}"
+      no_log: true
+
+    # key-gen writes keystore.json and a node.secret sponsord has no use for into a
+    # private scratch dir; only the keystore is kept. The address file is written
+    # before the keystore, which is the `creates:` sentinel, so a run interrupted
+    # between the two re-generates rather than leaving a wallet with no address.
+    - name: Run decdn key-gen for the treasury
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          umask 077
+          work=$(mktemp -d {{ (sponsord_etc ~ '/.keygen.XXXXXX') | quote }})
+          trap 'rm -rf "$work"' EXIT
+          mkdir -m 0700 "$work/out"
+          {{ sponsord_decdn_cli_bin | quote }} key-gen --output-dir "$work/out" \
+            --keystore-password-file {{ sponsord_treasury_password_file | quote }} > "$work/log"
+          addr=$(sed -n 's/^eth address: \(0x[0-9a-fA-F]\{40\}\)$/\1/p' "$work/log")
+          if [ -z "$addr" ]; then
+            echo "decdn key-gen printed no 'eth address:' line" >&2
+            exit 1
+          fi
+          printf '%s\n' "$addr" > "$work/address"
+          install -m 0644 -o root -g root "$work/address" {{ sponsord_treasury_address_file | quote }}
+          install -m 0600 -o root -g root "$work/out/keystore.json" {{ sponsord_treasury_keystore_file | quote }}
+          printf '%s\n' "$addr"
+        creates: "{{ sponsord_treasury_keystore_file }}"
+      register: _sponsord_keygen
+
+    - name: Show the new treasury address
+      ansible.builtin.debug:
+        msg: >-
+          Created the treasury wallet {{ _sponsord_keygen.stdout | trim }} on this host
+          ({{ sponsord_treasury_keystore_file }}). Fund it with USDC and gas, then open
+          its pool; the run stops with the exact command while sponsord_pool_id is "".

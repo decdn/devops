@@ -145,7 +145,8 @@ addresses) the repo carries, and they carry their upstream commit.
   - **Install:** manual binary by default, or a GPG-verified `sponsord-v*` release
     (none cut yet).
   - **Unit:** `DynamicUser`; the API token (generated on the host, never replaced),
-    treasury keystore and password (operator-provisioned) are `LoadCredential=`
+    treasury keystore and password (operator-provisioned, or generated on the host
+    with `sponsord_generate_treasury_wallet`) are `LoadCredential=`
     credentials, never env. The keystore is re-copied at 0600 into the unit's
     `RuntimeDirectory` by `ExecStartPre`, because newer systemd (255) writes credentials 0440
     and upstream rejects a group-readable keystore. Debian 12's systemd 252 hides

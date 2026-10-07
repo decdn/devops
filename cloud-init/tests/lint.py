@@ -71,12 +71,16 @@ PINNED_VARS = {
 }
 # Knobs a user-data may not set at all: a different signing key would make "verified"
 # meaningless, and bootstrap.sh's secret gate looks for the secrets at the roles'
-# default paths. sponsord's API token is always generated on the host.
+# default paths. sponsord's API token is always generated on the host. A cloud-init
+# sponsor host runs on an operator-provisioned treasury wallet: the gate waits for
+# the keystore before the role runs, so the role's own wallet generation (and the
+# decdn CLI it ships for that) would never get the chance.
 FORBIDDEN_VARS = {
     "decdn_release_keyring", "decdn_env_file",
     "sponsord_release_keyring", "sponsord_onramp_release_keyring",
     "sponsord_etc", "sponsord_secret_env_file", "sponsord_treasury_keystore_file",
     "sponsord_treasury_password_file", "sponsord_api_token_file", "sponsord_generate_api_token",
+    "sponsord_generate_treasury_wallet", "sponsord_decdn_cli_bin_src",
     "sponsord_onramp_etc", "sponsord_onramp_api_token_file", "sponsord_onramp_turnstile_secret_file",
 }
 

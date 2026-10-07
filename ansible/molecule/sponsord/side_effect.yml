@@ -14,8 +14,12 @@
 #      install writes the version stamp; a re-run needs no download; a bad
 #      checksum, a bad signature and a binary that is not the pinned version all
 #      fail at their own task and leave no stamp; manual mode clears the stamp.
-# The host is left healthy, back on the inventory-authored secret.env and the
-# manual install, for verify.yml.
+#   5. sponsord_generate_treasury_wallet: with no keystore, the role mints one on
+#      the host through the decdn CLI (the default scenario's key-gen stub), records
+#      the address and stops at its pool-id step; a re-run keeps that wallet; with a
+#      pool id the daemon starts on it.
+# The host is left healthy, back on the inventory-authored secret.env, the manual
+# install and the prepared treasury files, for verify.yml.
 - name: Side effect — credential rotation and the fatal readiness gate
   hosts: all
   become: true
@@ -491,3 +495,152 @@
       ansible.builtin.assert:
         that:
           - not _sp_stamp_manual.stat.exists
+
+- name: Side effect — treasury wallet generation
+  hosts: all
+  become: true
+  vars:
+    # The default scenario's node stub implements `key-gen` (dummy keystore.json, a
+    # zero eth address on stdout).
+    _sp_cli_stub: "{{ playbook_dir }}/../default/files/decdn-node-stub"
+  tasks:
+    - name: Set the prepared treasury files aside
+      ansible.builtin.command:
+        argv: [mv, "/etc/sponsord/{{ item }}", "/root/molecule-{{ item }}"]
+        creates: "/root/molecule-{{ item }}"
+      loop: [treasury-keystore.json, treasury-password]
+
+    - name: Converge with no wallet and no pool id
+      block:
+        - name: Run the role in wallet-creation mode
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_generate_treasury_wallet: true
+            sponsord_decdn_cli_bin_src: "{{ _sp_cli_stub }}"
+            sponsord_pool_id: ""
+
+        - name: Fail — the wallet-creation run did not stop
+          ansible.builtin.fail:
+            msg: The role finished with an empty sponsord_pool_id.
+      rescue:
+        - name: Require the stop to come from the pool-id step
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Stop until the treasury has opened its pool'
+              - "'0x0000000000000000000000000000000000000000' in ansible_failed_result.msg"
+            fail_msg: "Expected the pool-id stop, got \"{{ ansible_failed_task.name }}\"."
+
+    - name: Stat the generated wallet, its address and the CLI
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+        checksum_algorithm: sha256
+      register: _sp_wallet
+      loop:
+        - /etc/sponsord/treasury-keystore.json
+        - /etc/sponsord/treasury-password
+        - /etc/sponsord/treasury-address
+        - /usr/local/lib/sponsord/decdn
+
+    - name: Read the generated password and address
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: _sp_wallet_content
+      loop:
+        - /etc/sponsord/treasury-password
+        - /etc/sponsord/treasury-address
+
+    - name: Find key-gen scratch directories left behind
+      ansible.builtin.find:
+        paths: /etc/sponsord
+        patterns: ".keygen.*"
+        file_type: directory
+        hidden: true
+      register: _sp_keygen_left
+
+    - name: Require the wallet files, modes and contents
+      ansible.builtin.assert:
+        that:
+          - _sp_wallet.results[0].stat.isreg and _sp_wallet.results[0].stat.mode == '0600'
+          - _sp_wallet.results[1].stat.isreg and _sp_wallet.results[1].stat.mode == '0600'
+          - _sp_wallet.results[2].stat.isreg and _sp_wallet.results[2].stat.mode == '0644'
+          - _sp_wallet.results[3].stat.isreg and _sp_wallet.results[3].stat.mode == '0755'
+          - _sp_wallet_content.results[0].content | b64decode is match('^[0-9a-f]{64}\Z')
+          - (_sp_wallet_content.results[1].content | b64decode) == '0x0000000000000000000000000000000000000000\n'
+          - _sp_keygen_left.matched == 0
+        fail_msg: >-
+          The generated wallet is not as expected:
+          {{ _sp_wallet.results | map(attribute='stat') | map(attribute='mode', default='absent') | list }},
+          {{ _sp_keygen_left.matched }} scratch dir(s) left behind.
+
+    - name: Converge in wallet-creation mode again
+      block:
+        - name: Run the role with the wallet already present
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_generate_treasury_wallet: true
+            sponsord_decdn_cli_bin_src: "{{ _sp_cli_stub }}"
+            sponsord_pool_id: ""
+
+        - name: Fail — the second wallet-creation run did not stop
+          ansible.builtin.fail:
+            msg: The role finished with an empty sponsord_pool_id.
+      rescue:
+        - name: Require the second stop to come from the pool-id step
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Stop until the treasury has opened its pool'
+            fail_msg: "Expected the pool-id stop, got \"{{ ansible_failed_task.name }}\"."
+
+    - name: Re-stat the keystore after the second run
+      ansible.builtin.stat:
+        path: /etc/sponsord/treasury-keystore.json
+        checksum_algorithm: sha256
+      register: _sp_wallet_again
+
+    - name: Require the existing wallet to be kept
+      ansible.builtin.assert:
+        that:
+          - _sp_wallet_again.stat.checksum == _sp_wallet.results[0].stat.checksum
+        fail_msg: A second wallet-creation run replaced an existing keystore.
+
+    # The scenario's pool id: the stub daemon accepts any JSON keystore.
+    - name: Converge with the pool id set
+      ansible.builtin.include_role:
+        name: sponsord
+      vars:
+        sponsord_generate_treasury_wallet: true
+        sponsord_decdn_cli_bin_src: "{{ _sp_cli_stub }}"
+
+    - name: Read the unit state on the generated wallet
+      ansible.builtin.systemd_service:
+        name: sponsord
+      register: _sp_wallet_unit
+
+    - name: Require sponsord running on the generated wallet
+      ansible.builtin.assert:
+        that:
+          - _sp_wallet_unit.status.ActiveState == 'active'
+        fail_msg: "sponsord is {{ _sp_wallet_unit.status.ActiveState }} on the generated wallet."
+
+    - name: Remove the generated wallet, its address and the CLI
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/sponsord/treasury-keystore.json
+        - /etc/sponsord/treasury-password
+        - /etc/sponsord/treasury-address
+        - /usr/local/lib/sponsord/decdn
+
+    - name: Put the prepared treasury files back
+      ansible.builtin.command:
+        argv: [mv, "/root/molecule-{{ item }}", "/etc/sponsord/{{ item }}"]
+        creates: "/etc/sponsord/{{ item }}"
+      loop: [treasury-keystore.json, treasury-password]
+
+    - name: Converge back onto the prepared wallet
+      ansible.builtin.include_role:
+        name: sponsord

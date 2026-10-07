@@ -50,6 +50,8 @@ sponsord_payment_pool_address: "{{ _sponsord_profile.get('payment_pool_address',
 # REQUIRED. The pool this treasury owns: 0x + 64 hex, printed by `decdn pool open`
 # run once from the treasury wallet (docs/operator.md upstream). The daemon checks
 # at boot that the treasury keystore's address owns it on-chain and exits if not.
+# "" is accepted only with sponsord_generate_treasury_wallet, for the run that
+# creates the wallet: the role then stops before installing the daemon.
 sponsord_pool_id: ""
 
 # The RPC endpoint (SPONSORD_RPC_URL). It may embed a provider API key, so it has
@@ -100,6 +102,24 @@ sponsord_secret_env_overwrite_host_file: false
 # as of the last converge that saw the daemon healthy. A rotated credential, an
 # out-of-band edit, or a restart lost to a failed run is caught on the next converge.
 sponsord_inputs_checksum_file: /etc/sponsord/.inputs.sha256
+
+# Opt-in turnkey treasury wallet. When true and sponsord_treasury_keystore_file is
+# absent, the role mints a fresh wallet ON THE HOST with `decdn key-gen` (the key
+# never touches the control machine), writes its random password beside it, and
+# records the public address in sponsord_treasury_address_file. An existing keystore
+# is never replaced. The new wallet is unfunded and owns no pool, so while
+# sponsord_pool_id is "" the role stops after this step and prints the `decdn pool
+# open` command to run on the host once the wallet holds USDC and gas.
+sponsord_generate_treasury_wallet: false
+# Control-machine path to a decdn CLI built for the host (`cargo build --release -p
+# decdn-cli` in a decdn/decdn checkout, cross-compiled when the host differs). Needed
+# only with sponsord_generate_treasury_wallet. The role installs it at
+# sponsord_decdn_cli_bin, outside /usr/local/bin, so it never shadows or replaces a
+# co-located node's decdn.
+sponsord_decdn_cli_bin_src: ""
+sponsord_decdn_cli_bin: /usr/local/lib/sponsord/decdn
+# The treasury's eth address (public), recorded when the role generates the wallet.
+sponsord_treasury_address_file: /etc/sponsord/treasury-address
 
 # Generate the API token on the host when sponsord_api_token_file is absent (32
 # random bytes, hex). An existing token is never replaced: the onramp holds a copy.

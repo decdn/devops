@@ -184,6 +184,17 @@
     - sponsord_network | length > 0
     - (sponsord_payment_pool_address | lower) != (_sponsord_profile.payment_pool_address | lower)
 
+# Checked here, ahead of the other booleans, because the pool-id rule below reads it.
+- name: Validate sponsord_generate_treasury_wallet is a real boolean
+  ansible.builtin.assert:
+    that:
+      - sponsord_generate_treasury_wallet is boolean
+    fail_msg: >-
+      sponsord_generate_treasury_wallet must be a boolean (true/false), not a quoted
+      string.
+
+# An empty pool id is the wallet-creation run: the treasury.yml step below stops the
+# role before anything that needs the pool.
 - name: Require chain, PaymentPool and pool id
   ansible.builtin.assert:
     that:
@@ -191,15 +202,17 @@
       - sponsord_chain_id | int > 0
       - sponsord_payment_pool_address is match('^0x[0-9a-fA-F]{40}$')
       - sponsord_payment_pool_address != '0x' ~ '0' * 40
-      - sponsord_pool_id is match('^0x[0-9a-fA-F]{64}$')
-      - sponsord_pool_id != '0x' ~ '0' * 64
+      - >-
+        (sponsord_pool_id is match('^0x[0-9a-fA-F]{64}$') and sponsord_pool_id != '0x' ~ '0' * 64)
+        or (sponsord_pool_id == '' and sponsord_generate_treasury_wallet)
     fail_msg: >-
       A positive sponsord_chain_id, sponsord_payment_pool_address (0x + 40 hex, not
       zero) and sponsord_pool_id (0x + 64 hex, not zero) are required. Set
       sponsord_network (e.g. "arbitrum-sepolia") to take chain_id and the PaymentPool
       address from the role's mirror of upstream's deployment manifest — never
       hand-copy them — and sponsord_pool_id to the id `decdn pool open` printed when
-      the treasury wallet opened its pool.
+      the treasury wallet opened its pool. To have the role create that wallet first,
+      set sponsord_generate_treasury_wallet: true and leave sponsord_pool_id "".
 
 # --- Listener + limits --------------------------------------------------------------
 # AGENTS.md hard rule 2. The API is bearer-authenticated but /metrics is not, and
@@ -358,7 +371,13 @@
       sponsord_secret_env_record_source != 'inventory'
       or sponsord_secret_env_recorded_sum != (sponsord_secret_env_pre_stat.stat.checksum | default(''))
 
-# --- Treasury wallet (operator-provisioned) ------------------------------------------
+# --- Treasury wallet (operator-provisioned, or generated on the host) ---------------
+# With sponsord_generate_treasury_wallet, treasury.yml mints the wallet when it is
+# absent, and ends the run here while sponsord_pool_id is still "".
+- name: Generate the treasury wallet on the host
+  ansible.builtin.import_tasks: treasury.yml
+  when: sponsord_generate_treasury_wallet
+
 # follow: false — a symlink is refused, because the lock-down below would otherwise
 # chmod its target as root. (The daemon itself reads a 0600 copy the unit makes at
 # start, never this path.)
@@ -379,9 +398,11 @@
     fail_msg: |-
       {{ item.item }} is {{ 'missing' if not item.stat.exists else 'not a regular file (symlink/directory?)' }}.
       sponsord signs with the TREASURY wallet — the one that owns sponsord_pool_id
-      on-chain — and the role never creates it. Create it once with the decdn CLI
-      (`decdn key-gen`), open and fund the pool from it (`decdn pool open`), then
-      copy the keystore JSON and its password onto this host, as root:
+      on-chain. Either set sponsord_generate_treasury_wallet: true (with
+      sponsord_decdn_cli_bin_src) and the role creates it on this host, or create it
+      once with the decdn CLI (`decdn key-gen`), open and fund the pool from it
+      (`decdn pool open`), then copy the keystore JSON and its password onto this
+      host, as root:
         umask 077
         sudo mkdir -p {{ sponsord_etc }}
         sudo install -m 0600 treasury-keystore.json {{ sponsord_treasury_keystore_file }}
@@ -597,6 +618,42 @@
       {{ sponsord_secret_env_post_stat.stat.checksum }}
   # In check mode the inventory write is only simulated, so there may be nothing to hash.
   when: (sponsord_secret_env_post_stat.stat.checksum | default('')) | length > 0
+
+# --- Wallet-creation run: stop before the daemon --------------------------------------
+# With sponsord_generate_treasury_wallet and no pool id yet, the wallet, binary, API
+# token and secret.env are in place, but the daemon would refuse to start without a
+# pool its treasury owns. Stop here, before the unit, with the next steps. The
+# command reads the RPC URL from secret.env through systemd, so the URL never sits
+# on a command line or in shell history.
+- name: Read the generated treasury address
+  ansible.builtin.slurp:
+    src: "{{ sponsord_treasury_address_file }}"
+  register: _sponsord_treasury_address
+  failed_when: false
+  when: sponsord_pool_id | length == 0
+
+- name: Stop until the treasury has opened its pool
+  ansible.builtin.fail:
+    msg: |-
+      The treasury wallet is ready{{ ' at ' ~ (_sponsord_treasury_address.content | b64decode | trim)
+        if _sponsord_treasury_address.content is defined else '' }}, but sponsord_pool_id is
+      "", so sponsord is not started yet. This stop is expected on the wallet-creation run.
+        1. Send that address Sepolia ETH (gas) and enough USDC for the pool's first
+           deposit plus a few top-ups.
+        2. Open the pool on THIS host, as root (deposit in micro-USDC; 100000000 = $100):
+             sudo systemd-run --pty --wait --collect \
+               -p EnvironmentFile={{ sponsord_secret_env_file }} \
+               /bin/sh -c 'exec {{ sponsord_decdn_cli_bin }} pool open \
+                 --deposit-micro-usdc <MICRO_USDC> \
+                 --rpc-url "$SPONSORD_RPC_URL" \
+                 --chain-id {{ sponsord_chain_id }} \
+                 --payment-pool-address {{ sponsord_payment_pool_address }} \
+                 --keystore {{ sponsord_treasury_keystore_file }} \
+                 --keystore-password-file {{ sponsord_treasury_password_file }} \
+                 --data-dir /root/.decdn'
+        3. Set sponsord_pool_id to the pool id it prints, in this host's inventory, and
+           run the deploy again.
+  when: sponsord_pool_id | length == 0
 
 # --- Config + unit ------------------------------------------------------------------
 - name: Template the non-secret sponsord.env
