@@ -1,7 +1,8 @@
 # Node lifecycle: backup, restore, migration, decommission
 
-Day-2 procedures for a running deCDN node. The Ansible targets run from `ansible/`;
-the manual commands work for any deploy path.
+Day-2 procedures for a running deCDN node, and for sponsord in
+[its own section](#sponsord-the-onboarding-sponsor). The Ansible targets run from
+`ansible/`; the manual commands work for any deploy path.
 
 ## What makes a node *that* node
 
@@ -211,12 +212,57 @@ sudo systemd-run --pty --wait --collect -p User=decdn \
   --keystore-password-file /etc/decdn/keystore.password
 ```
 
+## sponsord (the onboarding sponsor)
+
+sponsord keeps no state. What makes it *that* sponsor are its credentials under
+`/etc/sponsord/`:
+
+| File | What it is | Lose it and… |
+|------|-----------|--------------|
+| `treasury-keystore.json` | the treasury wallet, encrypted: it owns the pool, signs every capability and pays the top-ups | the pool and the USDC in it are out of reach |
+| `treasury-password` | its password | same as losing the keystore |
+| `api-token` | the bearer token the onramp presents | regenerate it (the onramp reads the new one) |
+| `turnstile-secret` | the onramp's Turnstile secret | re-copy it from the Cloudflare dashboard |
+
+**Backup.** `make backup` also covers hosts in `sponsord_hosts`: it archives those
+files (and `secret.env` with `-e sponsord_backup_include_env=true`) hot, encrypted on
+the host to `sponsord_backup_age_recipients` (by default `decdn_backup_age_recipients`,
+so one list covers a co-located host), into `/var/backups/sponsord/`, and fetches the
+archive to `ansible/backups/<host>/`. Whoever decrypts it controls the pool's funds.
+
+**The top-up hold.** When sponsord's keeper broadcasts a pool top-up and cannot read
+its receipt, it holds every further top-up until that transaction mines or provably
+never can (`sponsord_pool_topup_unconfirmed_since_unix` > 0 on `/metrics`). The hold
+lives only in the process: a restart or a stop forgets it, and the pool can then be
+refilled twice. So the role reads `/metrics` before any restart a deploy would cause,
+and `make decommission` before it stops sponsord, and both **fail** while a hold is
+on. Wait for it to clear (send 0-value transactions from the treasury to itself if
+the transaction was dropped; the daemon's error log line says how many), then re-run.
+`-e sponsord_restart_ignore_topup_hold=true` overrides the deploy's check, only for a
+hold you have confirmed can never mine.
+
+**Migration.** Never run two sponsord daemons on one treasury: both would top up the
+pool. Decommission the old host first (`make decommission LIMIT=old-host`), stream
+the archive into the new host as for a node (step 3 above, without the `chown`: the
+files stay `root` `0600`), then deploy it.
+
+**Decommission.** On a host in `sponsord_onramp_hosts`, `make decommission` stops and
+removes the onramp's unit and stops and disables the role's Caddy (only when
+`/etc/caddy/Caddyfile` carries the role's marker). On a host in `sponsord_hosts`, it
+then stops and removes sponsord's unit. A co-located host is asked to confirm once.
+It keeps `/etc/sponsord` (the treasury owns the pool), the binaries and the caddy
+package, and does not touch the chain: the pool and its USDC stay with the treasury
+wallet until you withdraw them with the `decdn` CLI. tcp/80 and tcp/443 stay open
+until the host leaves `sponsord_onramp_hosts` and baseline runs again.
+
 ## Compose and Kubernetes
 
 - **Compose** ([`compose/`](../compose/README.md)) uses the same host paths
   (`/var/lib/decdn`, `/etc/decdn`), so the manual backup command and the restore steps
   above apply unchanged; stop the node with
   `sudo docker compose -f compose/compose.yaml stop decdn-node`.
+  sponsord's Compose layout uses `/etc/sponsord` too; its README shows the manual
+  backup and the top-up-hold check before a restart.
 - **Helm**: the identity lives in the operator-provisioned `existingSecret`, which you
   created off-cluster and should already hold elsewhere. The daemon's state is on the
   PVC; snapshot it with your storage's `VolumeSnapshot` support after scaling the

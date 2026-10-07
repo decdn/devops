@@ -1,0 +1,93 @@
+---
+# sponsord's lifecycle entry points, split from ../sponsord-onramp so the two run
+# side by side: the same host shape, inventory and converge (that scenario's
+# prepare and converge, by path), then side_effect.yml here:
+#   playbooks/backup.yml       the treasury keystore + password, the API token and
+#                              the Turnstile secret, encrypted on the host to a
+#                              throwaway age key and fetched;
+#   decommission refusals      a held pool top-up (the stub's hold marker), a
+#                              missing confirmation, a wrong one: nothing touched;
+#   playbooks/decommission.yml for real: the onramp, its Caddy and sponsord stopped
+#                              and removed, Alloy torn down, every credential kept.
+# verify.yml here decrypts the archive and checks what decommission removed and kept.
+# No idempotence step: every backup writes a new archive and decommission is one-shot.
+#
+# The inventory below must stay identical to ../sponsord-onramp/molecule.yml's
+# (`make test-scripts` checks); the stubs are that scenario's files.
+driver:
+  name: docker
+platforms:
+  - name: onramp-lifecycle-molecule
+    # Same digest-pinned images as ../sponsord (repo convention).
+    image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    groups:
+      - sponsord_hosts
+      - sponsord_onramp_hosts
+provisioner:
+  name: ansible
+  options:
+    skip-tags: baseline
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # Same pipelining note as ../default/molecule.yml.
+    ANSIBLE_PIPELINING: "true"
+  playbooks:
+    prepare: ../sponsord-onramp/prepare.yml
+    converge: ../sponsord-onramp/converge.yml
+  inventory:
+    group_vars:
+      sponsord_hosts:
+        sponsord_install_method: manual
+        sponsord_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/sponsord/files/sponsord-stub"
+        sponsord_version: "0.0.0-molecule-stub"
+        sponsord_network: arbitrum-sepolia
+        sponsord_pool_id: "0x00000000000000000000000000000000000000000000000000000000000000aa"
+        sponsord_rpc_url: "https://rpc.example.invalid/v2/molecule"
+        sponsord_readiness_retries: 10
+        sponsord_readiness_delay: 1
+        decdn_grafana_cloud_enabled: true
+        grafana_alloy_install_method: manual
+        grafana_alloy_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/grafana-cloud/files/alloy-stub"
+        grafana_alloy_region: US
+        grafana_alloy_loki_url: https://logs-prod-xx.molecule.invalid/loki/api/v1/push
+      sponsord_onramp_hosts:
+        sponsord_onramp_install_method: manual
+        sponsord_onramp_manual_bin_src: >-
+          ${MOLECULE_PROJECT_DIRECTORY}/molecule/sponsord-onramp/files/sponsord-onramp-stub
+        sponsord_onramp_version: "0.0.0-molecule-stub"
+        # sponsord_onramp_network follows sponsord_network (arbitrum-sepolia).
+        sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc
+        sponsord_onramp_domain: onramp.molecule.test
+        sponsord_onramp_caddy_tls: internal
+        # Renders (and so validates) the Caddyfile's global email option.
+        sponsord_onramp_acme_email: ops@molecule.test
+        sponsord_onramp_turnstile_sitekey: 1x00000000000000000000AA
+        # Must equal EXPECTED_BRAND in ../sponsord-onramp/files/sponsord-onramp-stub:
+        # quotes and a dollar sign prove the env file's quoting ($$ is molecule's escape).
+        sponsord_onramp_brand_name: 'deCDN "molecule" $$HOME'
+        sponsord_onramp_decdn_release: v0.1.0
+        sponsord_onramp_decdn_sums_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+        sponsord_onramp_cli_release: decdn-sponsored-v0.1.0
+        sponsord_onramp_cli_sums_sha256: "2222222222222222222222222222222222222222222222222222222222222222"
+        sponsord_onramp_fund_rate_per_min: 0
+        sponsord_onramp_readiness_retries: 10
+        sponsord_onramp_readiness_delay: 1
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    # Leading destroy: see ../default/molecule.yml.
+    - destroy
+    - create
+    - prepare
+    - converge
+    - side_effect
+    - verify
+    - destroy

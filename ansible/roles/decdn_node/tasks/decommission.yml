@@ -52,7 +52,9 @@
     seconds: "{{ decdn_decommission_prompt_seconds | int }}"
   register: _decdn_decommission_typed
   run_once: true
-  when: decdn_decommission_confirm is not defined
+  when:
+    - decdn_decommission_confirm is not defined
+    - not (_decdn_decommission_confirmed | default(false) | bool)
 
 - name: Require the typed confirmation to match the targeted hosts
   ansible.builtin.assert:
@@ -62,6 +64,13 @@
     fail_msg: >-
       Confirmation did not match "{{ ansible_play_hosts_all | sort | join(',') }}".
       Nothing was changed.
+  when: not (_decdn_decommission_confirmed | default(false) | bool)
+
+# The sponsord and sponsord_onramp decommissions read this, so a co-located host is
+# asked once per run.
+- name: Remember the confirmation for the rest of this run
+  ansible.builtin.set_fact:
+    _decdn_decommission_confirmed: true
 
 - name: Check for the decdn-node unit
   ansible.builtin.stat:

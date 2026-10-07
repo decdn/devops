@@ -167,7 +167,7 @@ want="$(cd "$repo/ansible/molecule" && for d in */molecule.yml; do echo "${d%/mo
 # Split scenarios share one converge, so their inventories must not drift apart.
 if command -v yq >/dev/null; then
   for pair in sponsord:sponsord-install sponsord-onramp:sponsord-onramp-caddy \
-      sponsord-onramp:sponsord-onramp-source; do
+      sponsord-onramp:sponsord-onramp-source sponsord-onramp:sponsord-onramp-lifecycle; do
     a="$repo/ansible/molecule/${pair%%:*}/molecule.yml" b="$repo/ansible/molecule/${pair##*:}/molecule.yml"
     [[ "$(yq -o=json '.provisioner.inventory' "$a")" == "$(yq -o=json '.provisioner.inventory' "$b")" ]] \
       || fail "molecule ${pair%%:*} and ${pair##*:} inventories differ (they share one converge)"
@@ -271,6 +271,8 @@ variant "onramp short grace"       "sponsord-onramp: stop_grace_period"         
 variant "onramp by tag"            "sponsord-onramp: image is pinned"             "${onr} s#^(\s*)image: .*#\1image: ghcr.io/decdn/sponsord-onramp:latest#"
 variant "onramp holds keystore"    "sponsord-onramp: mounts are exactly"          "${onr} s#^(\s*)volumes:\$#\1volumes:\n\1  - /etc/sponsord/treasury-keystore.json:/run/secrets/k:ro#"
 variant "writable turnstile mount" "sponsord-onramp: mounts are exactly"          "${onr} {/target: \/run\/secrets\/turnstile-secret$/{n;s/read_only: true/read_only: false/}}"
+variant "writable gate-page mount"  "sponsord-onramp: mounts are exactly"          "${onr} {/target: \/etc\/sponsord\/onramp-gate$/{n;s/read_only: true/read_only: false/}}"
+variant "gate page from a secret"  "sponsord-onramp: mounts are exactly"          "${onr} s#source: /etc/sponsord/onramp-gate\$#source: /etc/sponsord/treasury-keystore.json#"
 variant "inline Turnstile secret"  "sponsord-onramp: no inline ONRAMP_TURNSTILE_SECRET" "${onr} s/^(\s*)ONRAMP_BIND: (.*)$/&\n\1ONRAMP_TURNSTILE_SECRET: x/"
 variant "onramp on sponsord hosts" "sponsord-onramp: profiles are [onramp]"       "${onr} s/^(\s*)profiles: \[onramp\]$/\1profiles: [onramp, sponsord]/"
 variant "resolvable domain default" "sponsord-onramp: unset domain"               "${onr} s#ONRAMP_PUBLIC_URL: .*#ONRAMP_PUBLIC_URL: https://\\\${SPONSORD_ONRAMP_DOMAIN:-unset-SPONSORD_ONRAMP_DOMAIN.invalid}#"
@@ -387,22 +389,23 @@ else
   skipped+=("lint-cloud-init negatives (needs cloud-init on PATH; CI installs it)")
 fi
 
-# --- the source install method's shared pieces stay identical across roles --------
+# --- the shared pieces stay identical across roles ---------------------------------
 # decdn_build_user/home and the rustup pins are defined in all three roles' defaults
-# (one build user and toolchain per host), and the root-side installer is copied
+# (one build user and toolchain per host), as are the decommission cap and prompt
+# timeout (one typed confirmation per host), and the root-side installer is copied
 # into decdn_node and sponsord (sponsord_onramp uses sponsord's).
 shared_keys() { # <defaults file>
-  grep -E '^(decdn_build_user|decdn_build_home|decdn_rustup_version|decdn_rustup_sha256):|^  (x86_64|aarch64)-unknown-linux-gnu:' "$1"
+  grep -E '^(decdn_build_user|decdn_build_home|decdn_rustup_version|decdn_rustup_sha256|decdn_decommission_max_hosts|decdn_decommission_prompt_seconds):|^  (x86_64|aarch64)-unknown-linux-gnu:' "$1"
 }
 want=$(shared_keys "$repo/ansible/roles/decdn_node/defaults/main.yml")
 for r in sponsord sponsord_onramp; do
   [ "$(shared_keys "$repo/ansible/roles/$r/defaults/main.yml")" = "$want" ] \
-    || fail "$r/defaults/main.yml: decdn_build_* / decdn_rustup_* differ from decdn_node's"
+    || fail "$r/defaults/main.yml: decdn_build_* / decdn_rustup_* / decdn_decommission_* differ from decdn_node's"
 done
 cmp -s "$repo/ansible/roles/decdn_node/files/install-build-output.py" \
        "$repo/ansible/roles/sponsord/files/install-build-output.py" \
   || fail "decdn_node and sponsord files/install-build-output.py differ"
-pass "source-build defaults and installer identical across roles"
+pass "source-build and decommission defaults, and the installer, identical across roles"
 
 # --- baseline firewall holes per host shape, and playbook guards ---------------------
 if command -v ansible >/dev/null; then

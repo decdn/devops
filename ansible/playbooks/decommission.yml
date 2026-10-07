@@ -1,9 +1,25 @@
 ---
-# Take a node out of service: stop decdn-node, remove its unit, tear down the
-# opt-in Grafana Alloy agent. Keeps the identity (needed to withdraw the bond) and
-# does NOT touch the chain; the last task prints the deregister/unbond steps.
+# Take a host out of service: stop and remove every service this repo deployed on
+# it (decdn-node, sponsord-onramp and its Caddy, sponsord), then tear down the
+# opt-in Grafana Alloy agent. Keeps the identities and keys (the node's keystore
+# withdraws the bond; sponsord's treasury keystore owns the pool) and does NOT touch
+# the chain; each role's last task prints what is left to do on-chain.
 #   make decommission LIMIT=<host>          # LIMIT is required; asks for typed confirmation
 # Take a backup first (make backup). See docs/lifecycle.md.
+
+# Before anything stops: sponsord must not be stopped while it holds an unconfirmed
+# pool top-up (a stop forgets the hold, and the pool could be refilled twice). The
+# sponsord play below checks again right before its stop.
+- name: Check sponsord hosts for a held pool top-up
+  hosts: sponsord_hosts
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Refuse while sponsord holds a pool top-up
+      ansible.builtin.include_role:
+        name: sponsord
+        tasks_from: topup-hold
+
 - name: Decommission deCDN nodes
   hosts: decdn_nodes
   become: true
@@ -13,9 +29,34 @@
         name: decdn_node
         tasks_from: decommission
 
-    # grafana_alloy's disabled path removes only an installation this role wrote
-    # (it checks the managed-by marker in the unit), so this is a no-op on a host
-    # that never enabled Grafana Cloud or runs a foreign Alloy.
+# The onramp needs the daemon, so it goes first.
+- name: Decommission sponsord onramps
+  hosts: sponsord_onramp_hosts
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stop and remove the onramp service
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+        tasks_from: decommission
+
+- name: Decommission sponsord
+  hosts: sponsord_hosts
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stop and remove the sponsord service
+      ansible.builtin.include_role:
+        name: sponsord
+        tasks_from: decommission
+
+# grafana_alloy's disabled path removes only an installation this role wrote (it
+# checks the managed-by marker in the unit), so this is a no-op on a host that never
+# enabled Grafana Cloud or runs a foreign Alloy.
+- name: Tear down the Grafana Alloy agent
+  hosts: decdn_nodes:sponsord_hosts
+  become: true
+  tasks:
     - name: Tear down the Grafana Alloy agent this repo installed
       ansible.builtin.include_role:
         name: grafana_alloy

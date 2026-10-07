@@ -1,0 +1,100 @@
+---
+- name: Verify the sponsord lifecycle
+  hosts: all
+  become: true
+  vars:
+    _local_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/backups/{{ inventory_hostname }}"
+  tasks:
+    # --- Backup ---------------------------------------------------------------------
+    - name: Find the archives on the host
+      ansible.builtin.find:
+        paths: /var/backups/sponsord
+        patterns: ["*.tar.age", "*.partial"]
+      register: _archives
+
+    - name: Require one root-only archive and no partials
+      ansible.builtin.assert:
+        that:
+          - _archives.files | length == 1
+          - _archives.files[0].path is search('-sponsord-[0-9]{8}T[0-9]{6}Z\.tar\.age$')
+          - _archives.files[0].mode == '0600'
+        fail_msg: "Unexpected archives: {{ _archives.files | map(attribute='path') | list }}"
+
+    - name: List the archive's members (decrypting with the throwaway key)
+      ansible.builtin.shell:
+        cmd: set -o pipefail; age -d -i /root/molecule-age.key {{ _archives.files[0].path | quote }} | tar -tzf -
+        executable: /bin/bash
+      register: _members
+      changed_when: false
+
+    # The Turnstile secret is the onramp's, beside the daemon's files; secret.env
+    # (the RPC URL) only with sponsord_backup_include_env.
+    - name: Require the credentials and nothing else
+      ansible.builtin.assert:
+        that:
+          - _members.stdout_lines | sort == ['etc/sponsord/api-token', 'etc/sponsord/treasury-keystore.json',
+                                             'etc/sponsord/treasury-password', 'etc/sponsord/turnstile-secret']
+        fail_msg: "The archive holds {{ _members.stdout_lines }}"
+
+    - name: Checksum the archive on the host
+      ansible.builtin.stat:
+        path: "{{ _archives.files[0].path }}"
+        checksum_algorithm: sha256
+      register: _remote
+
+    - name: Checksum the copy on the control machine
+      ansible.builtin.stat:
+        path: "{{ _local_dir }}/{{ _archives.files[0].path | basename }}"
+        checksum_algorithm: sha256
+      register: _local
+      delegate_to: localhost
+      become: false
+
+    - name: Require the archive fetched intact
+      ansible.builtin.assert:
+        that:
+          - _local.stat.exists
+          - _local.stat.checksum == _remote.stat.checksum
+        fail_msg: The fetched copy is missing or differs from the archive on the host.
+
+    # --- Decommission -----------------------------------------------------------------
+    - name: Stat the units, the Alloy unit and the credentials
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/systemd/system/sponsord.service
+        - /etc/systemd/system/sponsord-onramp.service
+        - /etc/systemd/system/alloy.service
+        - /etc/sponsord/treasury-keystore.json
+        - /etc/sponsord/treasury-password
+        - /etc/sponsord/api-token
+        - /etc/sponsord/turnstile-secret
+        - /etc/caddy/Caddyfile
+      register: _after
+
+    - name: Require the units gone and every credential kept
+      ansible.builtin.assert:
+        that:
+          - _after.results[0:3] | map(attribute='stat.exists') | unique == [false]
+          - _after.results[3:] | map(attribute='stat.exists') | unique == [true]
+        fail_msg: >-
+          Decommission must remove the sponsord, onramp and Alloy units and keep the
+          treasury files, the API token, the Turnstile secret and the Caddyfile:
+          {{ _after.results | map(attribute='item') | zip(_after.results | map(attribute='stat.exists')) | list }}
+
+    - name: Read the services' state
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+      register: _units
+      loop: [sponsord, sponsord-onramp, caddy]
+
+    - name: Require sponsord, the onramp and the role's Caddy stopped, Caddy disabled
+      ansible.builtin.assert:
+        that:
+          - _units.results | map(attribute='status.ActiveState') | select('equalto', 'active') | list | length == 0
+          - _units.results[2].status.UnitFileState == 'disabled'
+        fail_msg: >-
+          Still active or enabled after decommission:
+          {{ _units.results | map(attribute='item')
+             | zip(_units.results | map(attribute='status.ActiveState', default='none'),
+                   _units.results | map(attribute='status.UnitFileState', default='none')) | list }}

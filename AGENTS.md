@@ -58,7 +58,7 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
 
 ```
 ansible/                # the deployment project (DevSec-hardened, lean roles)
-  playbooks/            # site.yml (decdn node + sponsord), sponsord.yml (+ onramp), backup.yml, decommission.yml
+  playbooks/            # site.yml (decdn node + sponsord), sponsord.yml (+ onramp), backup.yml, decommission.yml (node + sponsord)
   roles/                # baseline, decdn_node, grafana_alloy, sponsord, sponsord_onramp
   inventory/ galaxy/ molecule/    # see ansible/README.md
 cloud-init/             # user-data{,-sponsord}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
@@ -88,7 +88,10 @@ holds the deCDN Grafana dashboards and Prometheus alert rules; upstream ships no
 `decdn_*` series a panel or rule names must be one `decdn-node` exports — check the
 node's `/metrics` and upstream's `adr/appendix-observability.md` registry (a `planned`
 row emits nothing). Nothing in CI checks the names, so a typo renders `(no data)` or a
-rule that never fires. See `.claude/skills/grafana-dashboards/SKILL.md`.
+rule that never fires. See `.claude/skills/grafana-dashboards/SKILL.md`. sponsord's pair
+lives in its `sponsord/` subdirectory, which the chart does not render; its `sponsord_*`
+names must be ones upstream `decdn/sponsord` `crates/sponsord/src/metrics.rs` exports,
+and its rules have promtool unit tests (`charts/decdn-node/tests/sponsord-alerts_test.yml`).
 
 ## Current services
 
@@ -125,7 +128,10 @@ rule that never fires. See `.claude/skills/grafana-dashboards/SKILL.md`.
   `playbooks/backup.yml` / `decommission.yml` (`make backup` / `make decommission`) are
   role entry points (`tasks_from: backup|decommission`): backups are encrypted on the host
   to operator public keys; decommission needs `LIMIT` + typed confirmation, keeps the
-  identity and never touches the chain.
+  identity and never touches the chain. Both also cover `sponsord_hosts` (and the onramp),
+  with one confirmation per host (`_decdn_decommission_confirmed`; the
+  `decdn_decommission_*` cap and timeout are copied into all three roles' defaults,
+  `make test-scripts` checks).
   Leaving `decdn_rpc_url` empty means the operator wrote `0600 /etc/decdn/decdn.env`
   on the host and the role only gates on it, so no secret transits the control machine. See `ansible/README.md`. (On-chain node
   stake/registration, ADR 019 Phase 2, is a manual operator step, driven by `decdn setup`.)
@@ -186,6 +192,14 @@ rule that never fires. See `.claude/skills/grafana-dashboards/SKILL.md`.
   - **Config gate:** sponsord has no `config validate` and only env/flag config, so
     `/healthz` after start is the gate, and it is **fatal**. The daemon binds only
     after the keystore decrypts and the on-chain pool-owner check passes.
+  - **Top-up hold guard:** a restart or stop forgets a held, unconfirmed pool top-up
+    (`sponsord_pool_topup_unconfirmed_since_unix` > 0), and the pool can be refilled
+    twice. `tasks/topup-hold.yml` reads `/metrics` before the role flushes a pending
+    restart and before decommission stops the daemon, and fails while a hold is on
+    (or `/metrics` does not answer). Every restart must go through it: a new notify
+    source must also be a hashed restart input, which is what "pending" reads.
+    `sponsord_restart_ignore_topup_hold` overrides it. Compose cannot guard itself;
+    its README has the manual check.
   - **Alloy toggles:** `playbooks/group_vars/all.yml` derives
     `grafana_alloy_node_enabled` / `grafana_alloy_sponsord_enabled` from group
     membership. They are host-scoped so a co-located host's two plays render one

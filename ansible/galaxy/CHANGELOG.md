@@ -184,6 +184,26 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   and on Debian Ansible needs ACL support to hand the temp module file to that user.
   Without it both fail without an `rc`, which the role can only report after the fact
   ("becoming the unprivileged decdn user needs the `acl` package on this host").
+- `sponsord`: a top-up hold guard. When the keeper broadcasts a pool top-up and
+  cannot read its receipt, it holds further top-ups until that transaction mines
+  (upstream sponsord #41); a restart forgets the hold and the pool can be refilled
+  twice. Before the role restarts sponsord (any changed restart input) it reads
+  `/metrics`, and fails while `sponsord_pool_topup_unconfirmed_since_unix` is
+  non-zero or `/metrics` does not answer, leaving the restart for the next run.
+  `sponsord_restart_ignore_topup_hold` overrides it.
+- `sponsord`: `sponsord_log_level`, rendered as `RUST_LOG` (a level or tracing
+  directives; `""` keeps the daemon's errors-only default). There is no onramp
+  equivalent: the onramp release ignores `RUST_LOG`.
+- `sponsord`: `tasks_from: backup` (`sponsord_backup_*`): the treasury keystore and
+  password, the API token and the onramp's Turnstile secret (`secret.env` opt-in),
+  taken hot and encrypted on the host to `sponsord_backup_age_recipients` (default
+  `decdn_backup_age_recipients`), then fetched.
+- `sponsord`, `sponsord_onramp`: `tasks_from: decommission`. The onramp's stops it,
+  removes its unit, and stops and disables the role's Caddy (marker-gated).
+  sponsord's refuses while a top-up is held, then stops sponsord and removes its
+  unit. Both keep `/etc/sponsord` and never touch the chain. They share
+  `decdn_decommission_max_hosts` / `_prompt_seconds` / `_confirm` with `decdn_node`,
+  and a host that confirmed in an earlier play is not asked again.
 
 ### Removed
 
@@ -197,6 +217,12 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   is nothing left for either knob to tune.
 
 ### Changed
+
+- `playbooks/backup.yml` and `playbooks/decommission.yml` also cover
+  `sponsord_hosts` (and `sponsord_onramp_hosts`): a backup of sponsord's
+  credentials; a decommission that first checks every sponsord host for a held
+  top-up, then removes the node, the onramp and sponsord, and tears down Alloy on
+  either kind of host.
 
 - **Breaking:** `decdn_node_install_method`, `sponsord_install_method` and
   `sponsord_onramp_install_method` now default to `release` (was `manual`). An

@@ -133,7 +133,12 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | `sponsord_max_spending_cap_micro_usdc`, `_max_ttl_secs`, `_pool_low_water_micro_usdc`, `_pool_refill_micro_usdc`, `_pool_watch_interval_secs` | `""` | `""` uses the daemon's default. These are economic choices, not repo facts. |
 | `sponsord_generate_api_token` | `true` | `false`: provision `/etc/sponsord/api-token` yourself (≥ 32 bytes). |
 | `sponsord_secret_env_overwrite_host_file` | `false` | Confirm that `sponsord_rpc_url` may replace a `secret.env` the role did not write. |
+| `sponsord_log_level` | `""` | `RUST_LOG`: a level (`info`) or tracing directives. `""` logs errors only. |
 | `sponsord_stop_timeout_sec` | `120` | Cap on the graceful stop. The daemon waits for a top-up it already sent. |
+| `sponsord_restart_ignore_topup_hold` | `false` | `true` restarts despite a held top-up (see Day 2). Only for a hold that can never mine. |
+| `sponsord_backup_age_recipients` | `decdn_backup_age_recipients` | `tasks_from: backup`: public keys the archive is encrypted to. |
+| `sponsord_backup_include_env` / `_dir` / `_fetch` / `_local_dir` | `false` / `/var/backups/sponsord` / `true` / `ansible/backups` | `tasks_from: backup`. |
+| `decdn_decommission_max_hosts` / `_prompt_seconds` | `1` / `300` | `tasks_from: decommission`, shared with the other roles. |
 | `sponsord_readiness_retries` / `_delay` | `30` / `2` | `/healthz` window (about 60 s). |
 
 ## Observability
@@ -146,8 +151,25 @@ that is not in `decdn_nodes` (`playbooks/group_vars/all.yml`). From your own
 playbook, set `grafana_alloy_sponsord_enabled` / `grafana_alloy_node_enabled`
 yourself.
 
+A sponsord dashboard and alert rules on those series (keeper failures, a stale pool
+read, a held top-up, an empty pool, sponsord's own request errors) are in
+[`charts/decdn-node/files/monitoring/sponsord/`](../../../charts/decdn-node/files/monitoring/README.md#sponsord).
+The treasury wallet's own USDC and gas balance is not among them: sponsord does not
+export it, so watch the address yourself.
+
 ## Day 2
 
+- **A held top-up blocks restarts.** When the keeper broadcasts a pool top-up and
+  cannot read its receipt, it holds every further top-up until that transaction
+  mines or provably never can (`sponsord_pool_topup_unconfirmed_since_unix` > 0). A
+  restart forgets the hold, and the pool can be refilled twice. So before the role
+  restarts sponsord (any changed input: a knob, a credential, the binary) it reads
+  `/metrics`, and fails at "Refuse to restart or stop sponsord while a pool top-up is
+  held" instead. Nothing is restarted and the restart record is not written, so the
+  next run retries. Wait for the hold to clear (upstream `docs/operator.md`,
+  "Monitor": if the transaction was dropped, send 0-value transactions from the
+  treasury to itself), then re-run. A running daemon whose `/metrics` does not answer
+  is refused too, since its hold state is unknown.
 - **Rotate the API token:** write the new token to `/etc/sponsord/api-token`, then
   re-run the role, which restarts sponsord. The onramp reads the same file and
   restarts with the daemon (`PartOf=`).
@@ -155,12 +177,16 @@ yourself.
   The new wallet must own `sponsord_pool_id`, or sponsord refuses to start and the
   deploy fails at `/healthz`.
 - **Logs:** `journalctl -u sponsord`. Plain text, with colour off. In Loki its `level` label comes from the line itself, not journald's priority, which is info for every line.
-- **Removal** (no decommission playbook yet; the daemon itself keeps no state):
+- **Backup:** `make backup LIMIT=<host>` (`tasks_from: backup`) archives the
+  treasury keystore and password, the API token and, on an onramp host, the
+  Turnstile secret, encrypted on the host to `sponsord_backup_age_recipients`. Hot:
+  sponsord keeps no state. See [`docs/lifecycle.md`](../../../docs/lifecycle.md#sponsord-the-onboarding-sponsor).
+- **Removal:** `make decommission LIMIT=<host>` (`tasks_from: decommission`, after
+  the onramp's) refuses while a top-up is held, asks for the typed host list, then
+  stops sponsord and removes its unit. It keeps `/etc/sponsord`, the binary and the
+  build user. To remove the rest by hand afterwards:
 
   ```bash
-  sudo systemctl disable --now sponsord
-  sudo rm /etc/systemd/system/sponsord.service
-  sudo systemctl daemon-reload
   sudo rm -f /usr/local/bin/sponsord
   sudo rm -rf /usr/local/lib/sponsord     # the version or source stamp and decdn CLI
   ```
@@ -168,7 +194,7 @@ yourself.
   After a `source` install, the build user and its home stay behind (shared with
   the other roles on the host): `sudo userdel decdn-build && sudo rm -rf
   /var/lib/decdn-build` once nothing on the host builds from source. Then delete `/etc/sponsord` (secrets, env files and the role's two `.sha256`
-  records) once the treasury files are safe elsewhere.
+  records) once the treasury files are safe elsewhere and the pool is drained.
 
 ## Testing
 
@@ -178,6 +204,9 @@ yourself.
   - a restart after a credential rotation;
   - that the `/healthz` gate fails the deploy when the daemon will not start;
   - each `secret.env` hand-off between inventory and host, with its guards;
+  - the top-up hold guard: a held top-up (the stub's marker) fails the converge
+    before the restart and keeps the restart record, the override restarts, and the
+    next run after the hold clears restarts;
   - the Alloy toggles.
 - `molecule/sponsord-install` runs beside it on the same converge. It checks:
   - release mode against a locally signed mirror: the version stamp, a re-run
@@ -185,6 +214,10 @@ yourself.
     a binary that is not the pinned version;
   - treasury wallet generation through a `key-gen` stub: the files and modes, the
     stop on an empty pool id, an existing wallet kept, and the daemon starting on it.
+- `molecule/sponsord-onramp-lifecycle` runs `playbooks/backup.yml` and
+  `playbooks/decommission.yml` on the `sponsord-onramp` converge: the archive's
+  members, decommission refused for a held top-up and a missing or wrong
+  confirmation, then the units removed and every credential kept.
 - `molecule/grafana-cloud` co-locates sponsord with a node.
 - `molecule/cloud-init-sponsord` deploys it from `cloud-init/user-data-sponsord.yaml`
   (no control machine), in release mode, beside the onramp.

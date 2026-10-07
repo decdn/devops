@@ -6,8 +6,8 @@ hardened host baseline. The roles also ship as the `decdn.node` Galaxy collectio
 | Playbook | Purpose | Make target |
 |----------|---------|-------------|
 | **`site.yml`** | Harden the host and deploy the public **deCDN node** (`decdn-node`). | `make check` / `make deploy` |
-| `backup.yml` | Encrypted backup of a node's identity or full state. | `make backup` |
-| `decommission.yml` | Stop a node and remove its service (keeps the identity; no on-chain steps). | `make decommission` |
+| `backup.yml` | Encrypted backup of a node's identity or full state, and of sponsord's credentials. | `make backup` |
+| `decommission.yml` | Stop a node, the onramp and sponsord and remove their services (keeps the keys; no on-chain steps). | `make decommission` |
 | `sponsord.yml` | Harden the host and deploy **sponsord**, the onboarding sponsor, on hosts in `sponsord_hosts`, with or without a node; then its public **sponsord-onramp** (behind Caddy) on hosts in `sponsord_onramp_hosts`. Also run by `site.yml`. | `make check-sponsord` / `make deploy-sponsord` |
 
 ```
@@ -301,8 +301,11 @@ make backup LIMIT=<host> ANSIBLE_ARGS='-e decdn_backup_scope=full'  # full state
 make decommission LIMIT=<host>                                     # typed confirmation; keeps the identity
 ```
 
-Backups need `decdn_backup_age_recipients` (public keys). Restore, host migration and
-the on-chain exit: [`docs/lifecycle.md`](../docs/lifecycle.md).
+Backups need `decdn_backup_age_recipients` (public keys); on `sponsord_hosts` they
+archive the treasury keystore and password, the API token and the Turnstile secret.
+On a sponsord host, decommission refuses while sponsord holds an unconfirmed pool
+top-up. Restore, host migration and the on-chain exit:
+[`docs/lifecycle.md`](../docs/lifecycle.md).
 
 ---
 
@@ -333,7 +336,7 @@ git-ignored inventory instead: role-authored env file + provenance record),
 itself is Debian 12), `lifecycle` (a `decdn_network` profile with an override, both
 backup scopes decrypted and checked, a rejected and a real decommission),
 `sponsord` (`playbooks/sponsord.yml` on a host with no node: generated token, credential
-rotation restart, the fatal `/healthz` gate, Alloy scraping sponsord and not the node;
+rotation restart, the fatal `/healthz` gate, the top-up hold guard, Alloy scraping sponsord and not the node;
 `grafana-cloud` covers sponsord co-located with a node), `sponsord-install` (the same
 converge, then release mode against a signed loopback mirror and treasury wallet
 generation), `sponsord-onramp` (the onramp beside its daemon, behind the real distro
@@ -341,7 +344,9 @@ Caddy with `tls internal`: the https chain, the client address Caddy passes on, 
 Turnstile rotation restart, the fatal gates), `sponsord-onramp-caddy` (the same
 converge, then ACME and `none` modes and a refused foreign Caddyfile),
 `sponsord-onramp-source` (the same converge, then both sponsord roles built from a
-fixture repo with `install_method: source`), `source-build` (the node built from source
+fixture repo with `install_method: source`), `sponsord-onramp-lifecycle` (the same converge, then
+sponsord's backup decrypted and checked, decommission refused for a held top-up and a
+bad confirmation, then a real one), `source-build` (the node built from source
 on the host: the build sandbox, stamps, rollback, an untrusted earlier build home), and
 `cloud-init` and `cloud-init-sponsord` (the `cloud-init/` templates booted for real).
 A slow scenario is split along its side effects rather than allowed to set the wall

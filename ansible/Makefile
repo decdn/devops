@@ -164,7 +164,7 @@ decommission:
 SCENARIOS ?= all
 JOBS ?=
 SLOW_FIRST ?= cloud-init-sponsord cloud-init sponsord-onramp validation \
-	validation-sponsord sponsord-onramp-caddy sponsord-install sponsord \
+	validation-sponsord sponsord-onramp-caddy sponsord-onramp-lifecycle sponsord-install sponsord \
 	validation-alloy os-matrix grafana-cloud
 MOLECULE_LOCK_PREFIX ?= /tmp/decdn-devops-molecule
 molecule_env = SCENARIOS='$(SCENARIOS)' JOBS='$(JOBS)' SLOW_FIRST='$(SLOW_FIRST)' \
