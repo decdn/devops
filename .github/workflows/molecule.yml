@@ -45,7 +45,10 @@ jobs:
   # One runner per scenario. They were one job at JOBS=3 on one 4-vCPU runner: ~31m
   # for 14 scenarios, CPU-bound (per-task overhead roughly doubled under contention),
   # with the slowest scenarios queued last. Now the wall clock is the slowest single
-  # scenario plus setup. Re-measure against the timeout when a scenario grows.
+  # scenario plus setup: ~10m for 18 scenarios (first run, PR #96), set by
+  # cloud-init-sponsord (~9m45s), then cloud-init (~8m) and sponsord-onramp (~7m30s);
+  # most others take 2-5m. Re-measure against the timeout when a scenario grows, and
+  # split one that approaches it along its side effects (see CONTRIBUTING.md).
   scenario:
     name: molecule (${{ matrix.scenario }})
     needs: discover
