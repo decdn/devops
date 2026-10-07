@@ -8,22 +8,24 @@
 # Caddyfile this role does not own.
 
 # One dpkg query for the two packages, not package_facts (which loads the whole
-# package database on every run, seconds each). It runs in check mode too: it
-# decides whether the install below runs at all, and under --check whether there is
-# a unit to start. dpkg-query exits 1 when a package was never installed, and omits
-# it, so only two "installed" lines mean both are present.
+# package database on every run, seconds each). It runs in check mode too. Both
+# packages present skips the install below; Caddy present alone decides, under
+# --check, whether there is a unit to start or restart (curl has no bearing on
+# that). dpkg-query exits 1 when a package was never installed, and omits it.
 - name: Read whether Caddy and curl are installed
   ansible.builtin.command:
-    argv: [dpkg-query, -W, "-f=${db:Status-Status}\n", caddy, curl]
+    argv: [dpkg-query, -W, "-f=${Package} ${db:Status-Status}\n", caddy, curl]
   register: sponsord_onramp_caddy_packages
   changed_when: false
   failed_when: false
   check_mode: false
 
-- name: Note whether Caddy and curl are installed
+- name: Note whether Caddy, and Caddy with curl, are installed
   ansible.builtin.set_fact:
-    sponsord_onramp_caddy_installed: >-
-      {{ sponsord_onramp_caddy_packages.stdout_lines | select('equalto', 'installed') | list | length == 2 }}
+    sponsord_onramp_caddy_installed: "{{ 'caddy installed' in _lines }}"
+    sponsord_onramp_caddy_and_curl_installed: "{{ 'caddy installed' in _lines and 'curl installed' in _lines }}"
+  vars:
+    _lines: "{{ sponsord_onramp_caddy_packages.stdout_lines }}"
 
 # curl: the probe at the end of this file. policy_rc_d 101 stops the package's
 # maintainer scripts from starting Caddy on its stock config: the firewall already
@@ -38,7 +40,7 @@
     update_cache: true
     cache_valid_time: 3600
     policy_rc_d: 101
-  when: not sponsord_onramp_caddy_installed
+  when: not sponsord_onramp_caddy_and_curl_installed
 
 # `caddy validate` loads the config the way `caddy run` does (it also provisions
 # the TLS automation), so a Caddyfile that does not parse or provision never lands.

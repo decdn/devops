@@ -105,6 +105,46 @@ said "deps skip" "not reinstalling"
 no_deps "the deps skip"
 kill "$holder"; wait "$holder" 2>/dev/null || true
 
+# Whole runs against stand-ins for molecule and ansible-galaxy: every selected
+# scenario stays reserved until the run ends (a queued one included, so a second run
+# wanting it refuses up front), the locks go with the run, and a failing scenario
+# fails the run by name. The stand-in molecule waits while $FAKE_HOLD exists and
+# fails the scenario named in $FAKE_FAIL.
+mkdir -p "$work/bin"
+cat >"$work/bin/molecule" <<'EOF'
+#!/usr/bin/env bash
+echo "fake molecule $*"
+while [[ -e "${FAKE_HOLD:-/nonexistent}" ]]; do sleep 0.1; done
+[[ " $* " != *" -s ${FAKE_FAIL:-none} "* ]]
+EOF
+cat >"$work/bin/ansible-galaxy" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p collections && echo "fake ansible-galaxy $*"
+EOF
+chmod +x "$work/bin/molecule" "$work/bin/ansible-galaxy"
+fake_path="PATH=$work/bin:$PATH"
+
+touch "$work/hold"
+mol "$fake_path" FAKE_HOLD="$work/hold" 'SCENARIOS=a b' serial >"$work/run.out" 2>&1 & runner=$!
+until grep -q 'fake molecule test -s a' "$work/run.out" 2>/dev/null; do sleep 0.1; done
+! flock -n "$prefix.b.lock" true || fail "scenario b, queued behind a, is not reserved by the run"
+pass "a run reserves every selected scenario, the queued ones included"
+expect 75 "a second run wanting a reserved scenario refuses up front" mol "$fake_path" SCENARIOS=b serial
+said "the reserved-scenario refusal" "another molecule run holds scenario b"
+rm "$work/hold"
+rc=0; wait "$runner" || rc=$?
+[[ $rc == 0 ]] || { cat "$work/run.out" >&2; fail "the reserving run exited $rc"; }
+if ! { grep -q 'fake molecule test -s b' "$work/run.out" && grep -q 'fake ansible-galaxy' "$work/run.out"; }; then
+  cat "$work/run.out" >&2; fail "the run did not install deps and run both scenarios"
+fi
+pass "the run installs deps, then runs both scenarios"
+for lock in a b collections; do
+  flock -n -x "$prefix.$lock.lock" true || fail "the $lock lock outlived the run that took it"
+done
+pass "the run's locks end with it"
+expect 123 "a failing scenario fails a parallel run (xargs 123)" mol "$fake_path" FAKE_FAIL=b 'SCENARIOS=a b' parallel
+said "the failing scenario" "[b] SCENARIO FAILED"
+
 # The real Makefile wiring: the lock refusal reaches make (which reports it as 2).
 mkdir "$prefix.default.lock"
 ( exec 9<"$prefix.default.lock"; flock 9; exec sleep 60 ) & holder=$!

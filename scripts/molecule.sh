@@ -29,9 +29,11 @@
 # each run starts by destroying them, and molecule's ephemeral dir is keyed on the
 # scenario, not the run. DIFFERENT scenarios share nothing they write, so each
 # scenario has its own lock and agents can run disjoint sets side by side:
-#   - <prefix>.<scenario>.lock — held (flock -n) for the scenario's whole run. A
-#     preflight checks every selected one before anything starts, so a busy scenario
-#     refuses the run with exit 75 and installs nothing.
+#   - <prefix>.<scenario>.lock — EVERY selected scenario's lock is taken (flock -n)
+#     before anything starts and held until the whole run ends, not just while that
+#     scenario runs: a scenario still queued in this run is reserved, so another run
+#     wanting it refuses up front instead of this one failing late. A busy scenario
+#     refuses the run with exit 75 before deps installs anything.
 #   - <prefix>.collections.lock — every run holds it SHARED, since every scenario reads
 #     ansible/collections/. `deps` takes it EXCLUSIVE to rewrite the tree. When a run
 #     holds it, deps proceeds only if the tree was installed from this exact
@@ -150,7 +152,8 @@ jobs_width() {
   echo "$((10#$jobs))"
 }
 
-# Refuse before deps, so a busy scenario costs nothing and touches nothing.
+# Refuse before deps, so a busy scenario costs nothing and touches nothing. This
+# probe names the busy scenario; the reservation in reserve_and_run is the guard.
 preflight() {
   local s lock
   for s in "${selected[@]}"; do
@@ -163,13 +166,22 @@ preflight() {
   done
 }
 
-# --- one scenario (xargs and the serial loop call this) ---------------------------
+# Take every selected scenario's lock, then run deps and the scenarios under all of
+# them. Each `flock -o` holds one lock in its own process and runs the next, so the
+# locks last exactly as long as the run, and nothing molecule starts inherits them.
+reserve_and_run() {
+  local chain=() s rc=0
+  for s in "${selected[@]}"; do chain+=(flock -n -o -E 75 "$prefix.$s.lock"); done
+  "${chain[@]}" "$0" _locked "$mode" "$jobs" "${selected[@]}" || rc=$?
+  [[ $rc -ne 75 ]] || echo "another molecule run took one of [${selected[*]}] between the preflight and the start; nothing ran" >&2
+  exit "$rc"
+}
+
+# --- one scenario (xargs and the serial loop call this, under the run's locks) ----
 run_one() {
-  local s="$1" lock="$prefix.$1.lock" rc=0
-  flock -n -o -E 75 "$lock" molecule test -s "$s" --no-command-borders 2>&1 \
-    | sed -u "s/^/[$s] /" || rc=$?
+  local s="$1" rc=0
+  molecule test -s "$s" --no-command-borders 2>&1 | sed -u "s/^/[$s] /" || rc=$?
   [[ $rc -eq 0 ]] && return 0
-  [[ $rc -eq 75 ]] && echo "[$s] another molecule run took scenario $s ($lock) after the preflight"
   echo "[$s] SCENARIO FAILED"
   exit 1
 }
@@ -196,18 +208,22 @@ case "$mode" in
     need_flock; discover; select_scenarios
     jobs="$(jobs_width)"
     preflight
+    reserve_and_run
+    ;;
+  # Internal entry points, re-entered under locks that flock itself holds.
+  _locked)
+    shift; mode="$1" jobs="$2"; shift 2; selected=("$@")
     deps
     lock_dir "$prefix.collections.lock"
-    echo "molecule ($mode${jobs:+, JOBS=$jobs}): ${selected[*]}"
+    echo "molecule ($mode, JOBS=$jobs): ${selected[*]}"
     # Shared for the whole run; waits out a concurrent deps install rather than failing.
-    flock -s -o -w 600 -E 75 "$prefix.collections.lock" \
+    flock -s -o -w 600 -E 74 "$prefix.collections.lock" \
       "$0" _run "$mode" "$jobs" "${selected[@]}" || {
       rc=$?
-      [[ $rc -ne 75 ]] || echo "timed out waiting for $prefix.collections.lock (a deps install held it for 10 minutes)" >&2
+      [[ $rc -ne 74 ]] || echo "timed out waiting for $prefix.collections.lock (a deps install held it for 10 minutes)" >&2
       exit "$rc"
     }
     ;;
-  # Internal entry points, re-entered under a lock that flock itself holds.
   _install) install_collections ;;
   _run) shift; how="$1" jobs="$2"; shift 2; selected=("$@"); run_selected "$how" "$jobs" ;;
   _one) run_one "$2" ;;

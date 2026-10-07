@@ -333,8 +333,8 @@ repository variable is `true` (RELEASING.md). Log changes under `[Unreleased]` i
 
 **CI.** `ci.yml` is the blocking gate: `pre-commit`, `scripts` and `actionlint` on every PR, the
 Ansible, chart, compose and cloud-init jobs path-filtered, KICS on the first three (KICS has
-no cloud-init platform); `molecule.yml` runs the molecule suite on `ansible/**` and
-`cloud-init/**`, one runner per scenario (matrix from `make molecule-list`), with the
+no cloud-init platform); `molecule.yml` runs the molecule suite on `ansible/**`,
+`cloud-init/**` and `scripts/molecule.sh`, one runner per scenario (matrix from `make molecule-list`), with the
 `molecule` job as the single aggregate check. `ansible-lint` is **not** a per-commit hook (it needs
 collections vendored): run `make lint-ansible`.
 

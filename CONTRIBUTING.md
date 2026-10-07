@@ -71,7 +71,7 @@ reports the two differently.
     `cloud-init` (`make lint-cloud-init`);
   - on the Ansible, chart or compose paths: `kics` (`make security`). KICS has no
     cloud-init platform.
-- **`molecule.yml`**: on `ansible/**` or `cloud-init/**` changes, one runner per
+- **`molecule.yml`**: on `ansible/**`, `cloud-init/**` or `scripts/molecule.sh` changes, one runner per
   scenario (`make molecule SCENARIOS=<one>`), the matrix read from `make molecule-list`.
   The `molecule` job aggregates them: it is the one check name to require, since the
   per-scenario names follow the scenario list. The `cloud-init` and

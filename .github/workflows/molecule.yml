@@ -8,13 +8,14 @@ name: Molecule
 # This file is in `paths` alongside ansible/ so a change to the jobs themselves (their
 # cache wiring, the matrix, the timeouts) is exercised by the PR that makes it.
 # cloud-init/ is in `paths` because the `cloud-init` scenarios boot
-# cloud-init/user-data*.yaml and run cloud-init/bootstrap.sh.
+# cloud-init/user-data*.yaml and run cloud-init/bootstrap.sh, and scripts/molecule.sh
+# because every scenario runs through it (`make molecule`).
 on:
   pull_request:
-    paths: ['ansible/**', 'cloud-init/**', '.github/workflows/molecule.yml']
+    paths: ['ansible/**', 'cloud-init/**', 'scripts/molecule.sh', '.github/workflows/molecule.yml']
   push:
     branches: [main]
-    paths: ['ansible/**', 'cloud-init/**', '.github/workflows/molecule.yml']
+    paths: ['ansible/**', 'cloud-init/**', 'scripts/molecule.sh', '.github/workflows/molecule.yml']
 
 permissions:
   contents: read
