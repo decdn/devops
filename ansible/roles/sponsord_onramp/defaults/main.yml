@@ -92,9 +92,16 @@ sponsord_onramp_client_ip_header: "{{ 'X-Forwarded-For' if sponsord_onramp_proxy
 
 # --- Gate -----------------------------------------------------------------------
 # Cloudflare Turnstile: create a widget for sponsord_onramp_domain in the
-# Cloudflare dashboard. The sitekey is public; the secret is provisioned on the
-# host (0600 root) and reaches the onramp as a systemd credential.
+# Cloudflare dashboard. The sitekey is public; the secret lives on the host (0600
+# root) and reaches the onramp as a systemd credential.
 sponsord_onramp_turnstile_sitekey: ""     # REQUIRED
+# The widget's secret has TWO homes, like sponsord's sponsord_rpc_url: leave it ""
+# and write sponsord_onramp_turnstile_secret_file on the host yourself, or set it in
+# the git-ignored host_vars/<host>/secret.yml and the role writes that file.
+sponsord_onramp_turnstile_secret: ""      # SENSITIVE
+# Confirm that sponsord_onramp_turnstile_secret may replace a secret file the role
+# did not write (its record is missing, says `host`, or no longer matches).
+sponsord_onramp_turnstile_secret_overwrite_host_file: false
 sponsord_onramp_brand_name: ""            # [deCDN] name on the gate page
 # A control-machine HTML file served as the gate page instead of the built-in one
 # (placeholders: upstream docs/operator.md). "" = the built-in page.
@@ -123,7 +130,10 @@ sponsord_onramp_poll_rate_per_min: ""         # [120] GET /v1/capability per add
 # fallbacks match roles/sponsord/defaults/main.yml).
 sponsord_onramp_etc: "{{ sponsord_etc | default('/etc/sponsord') }}"
 sponsord_onramp_api_token_file: "{{ sponsord_api_token_file | default(sponsord_onramp_etc ~ '/api-token') }}"
-sponsord_onramp_turnstile_secret_file: "{{ sponsord_onramp_etc }}/turnstile-secret"   # operator-provisioned (0600)
+sponsord_onramp_turnstile_secret_file: "{{ sponsord_onramp_etc }}/turnstile-secret"   # inventory or operator (0600)
+# "<source> <sha256>" record of who last wrote the Turnstile secret file (the role
+# from inventory, or the operator on the host), as sponsord's secret.env record.
+sponsord_onramp_turnstile_secret_checksum_file: "{{ sponsord_onramp_etc }}/.turnstile-secret.sha256"
 sponsord_onramp_env_file: "{{ sponsord_onramp_etc }}/sponsord-onramp.env"             # non-secret (0644, role-owned)
 sponsord_onramp_gate_template_file: "{{ sponsord_onramp_etc }}/onramp-gate.html"      # when _src is set (0644)
 # sha256 record of every restart input (token, Turnstile secret, env file, gate

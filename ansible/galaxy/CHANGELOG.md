@@ -14,6 +14,13 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   the address in `/etc/sponsord/treasury-address`; an existing keystore is never
   replaced. An empty `sponsord_pool_id` is accepted on that run, which stops before
   the daemon with the address and the `decdn pool open` command to run on the host.
+- `sponsord_onramp`: the Turnstile secret can come from inventory
+  (`sponsord_onramp_turnstile_secret`, git-ignored `secret.yml`); the role then
+  writes `/etc/sponsord/turnstile-secret` (root 0600). The same provenance record
+  and guards as `sponsord`'s `secret.env`: a host-written file is replaced only
+  with `sponsord_onramp_turnstile_secret_overwrite_host_file: true`, and an emptied
+  value never adopts the role's own file. A host-provisioned file keeps working
+  unchanged.
 
 - `sponsord_onramp` role: deploys `sponsord-onramp` (decdn/sponsord), the public
   side of the sponsor: the Cloudflare Turnstile gate, the `decdn.sh` / `decdn.ps1`

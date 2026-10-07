@@ -26,13 +26,13 @@ is unreachable.
   - `release` downloads `sponsord-onramp-v<version>` and verifies it against the
     GPG-signed `SHA256SUMS`, with the KEYS file vendored in the `sponsord` role.
   - Upstream has cut no release yet, so `manual` is the only working method today.
-- **Reads two secrets, writes none.** Both stay root `0600` under `/etc/sponsord`
-  and reach the onramp as `LoadCredential=` credentials, never as environment:
+- **Uses two secrets.** Both stay root `0600` under `/etc/sponsord` and reach the
+  onramp as `LoadCredential=` credentials, never as environment:
 
   | File | Who provides it |
   |------|-----------------|
   | `api-token` | The `sponsord` role (generated on the host). The onramp uses the daemon's own file. |
-  | `turnstile-secret` | **You** do. The role only checks it is a non-empty regular file and locks it to `0600`. |
+  | `turnstile-secret` | `sponsord_onramp_turnstile_secret` from the git-ignored `host_vars/<host>/secret.yml`, or a file you write on the host. The two-way rules match `sponsord_rpc_url`: the role replaces a file it did not write only with `sponsord_onramp_turnstile_secret_overwrite_host_file: true`, and an empty value over a file the role wrote fails the deploy, because that means `secret.yml` went missing. Either way the role checks it is a non-empty regular file at `0600`. |
 
 - **Writes non-secret settings** to `/etc/sponsord/sponsord-onramp.env` (0644): the
   public URL, the public RPC URL, CapacityBond and SlashJudge, the sitekey, the
@@ -78,13 +78,16 @@ is unreachable.
    same `make deploy-sponsord` run can do both.
 2. **Create a Turnstile widget** for your domain in the Cloudflare dashboard. Note
    its sitekey (public) and secret.
-3. **Copy the secret onto the host**, as root:
+3. **Provide the secret**, either way:
+   - `sponsord_onramp_turnstile_secret` in the git-ignored
+     `host_vars/<host>/secret.yml`, and the role writes the file;
+   - or the file itself on the host, as root:
 
-   ```bash
-   umask 077
-   printf '%s' '<secret>' | sudo tee /etc/sponsord/turnstile-secret >/dev/null
-   sudo chmod 600 /etc/sponsord/turnstile-secret
-   ```
+     ```bash
+     umask 077
+     printf '%s' '<secret>' | sudo tee /etc/sponsord/turnstile-secret >/dev/null
+     sudo chmod 600 /etc/sponsord/turnstile-secret
+     ```
 
 4. **Point DNS** for the domain (A/AAAA) at the host, so Caddy can get a
    certificate.
@@ -118,6 +121,8 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | `sponsord_onramp_caddy_overwrite_config` | `false` | Let the role take over a Caddyfile it did not write. |
 | `sponsord_onramp_client_ip_header` | `X-Forwarded-For` with Caddy, else `""` | With your own proxy, set it only if that proxy is the only way in. |
 | `sponsord_onramp_turnstile_sitekey` | `""` | **Required.** |
+| `sponsord_onramp_turnstile_secret` | `""` | **Sensitive.** Leave empty to provision `turnstile-secret` on the host. |
+| `sponsord_onramp_turnstile_secret_overwrite_host_file` | `false` | Confirm that the inventory secret may replace a file the role did not write. |
 | `sponsord_onramp_decdn_release`, `_decdn_sums_sha256` | `""` | **Required.** `vX.Y.Z` and 64 lowercase hex. |
 | `sponsord_onramp_cli_release`, `_cli_sums_sha256` | `""` | **Required.** `decdn-sponsored-vX.Y.Z` and 64 lowercase hex. |
 | `sponsord_onramp_min_cli_version` | `""` | Older `decdn-sponsored` CLIs are told to re-run the installer. |
@@ -149,8 +154,9 @@ collector; its access logs are not shipped.
 
 ## Day 2
 
-- **Rotate the Turnstile secret:** write the new one to
-  `/etc/sponsord/turnstile-secret` and re-run the role. It restarts the onramp.
+- **Rotate the Turnstile secret:** change `sponsord_onramp_turnstile_secret` (or,
+  for a host-provisioned secret, write the new one to
+  `/etc/sponsord/turnstile-secret`) and re-run the role. It restarts the onramp.
 - **Ship a new CLI:** point `sponsord_onramp_cli_release` / `_cli_sums_sha256` (and
   the `decdn` pair) at the new release and re-run. New installs get it; set
   `sponsord_onramp_min_cli_version` to make existing users re-run the installer.

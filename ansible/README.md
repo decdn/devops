@@ -277,8 +277,9 @@ Its public side, `sponsord-onramp` (the Turnstile gate, the installers, the CLI 
 is the fifth role, `sponsord_onramp`. List the sponsord host in `sponsord_onramp_hosts`
 as well; `make deploy-sponsord` runs it after the daemon.
 
-- **You provision** the Turnstile secret on the host. The onramp reads the daemon's own
-  API token.
+- **The Turnstile secret** comes from `sponsord_onramp_turnstile_secret` in the
+  git-ignored `host_vars/<host>/secret.yml`, or from a file you write on the host. The
+  onramp reads the daemon's own API token.
 - **Caddy** (the default) terminates TLS for `sponsord_onramp_domain` and opens tcp/80
   and tcp/443. Set `sponsord_onramp_proxy: none` to bring your own proxy.
 - **The RPC URL it gets is public**: it is handed to every user, so it must hold no key.

@@ -2623,6 +2623,19 @@
             path: /etc/sponsord
             state: absent
 
+    - name: "Case onramp-turnstile-inventory — an inventory secret that is not one token"
+      block:
+        - name: Run sponsord_onramp with a Turnstile secret holding a newline
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_turnstile_secret: "1x00000000\nEXTRA"
+      rescue:
+        - name: Record onramp-turnstile-inventory rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-turnstile-inventory'] }}"
+          when: ansible_failed_task.name == "Validate the Turnstile secret knobs"
+
     # Caddy run from a static binary leaves no dpkg trace: the file alone decides.
     - name: "Case onramp-caddyfile — a foreign Caddyfile with no caddy package"
       block:
@@ -2701,5 +2714,6 @@
            "onramp-rpc", "onramp-rpc", "onramp-rpc", "onramp-public-url", "onramp-sitekey", "onramp-pin",
            "onramp-pin", "onramp-limit", "onramp-ip-header", "onramp-token",
            "onramp-turnstile", "onramp-turnstile", "onramp-turnstile-empty",
+           "onramp-turnstile-inventory",
            "onramp-network-chain", "onramp-proxy", "onramp-proxy", "onramp-domain",
            "onramp-rpc", "onramp-limit", "onramp-caddyfile"]

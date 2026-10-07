@@ -352,6 +352,123 @@
       such as X-Forwarded-For or CF-Connecting-IP (got
       "{{ sponsord_onramp_client_ip_header }}").
 
+# --- Turnstile secret: inventory or host-provisioned ---------------------------------
+# The same two homes, provenance record and guards as sponsord's secret.env:
+#   sponsord_onramp_turnstile_secret set   -> the role writes the file
+#   sponsord_onramp_turnstile_secret empty -> the operator wrote it on the host
+# The record "<source> <sha256>" tells a file the role wrote from one the operator
+# owns, and a changed hash means an out-of-band edit. A rotated secret restarts the
+# onramp through the restart-inputs record below.
+- name: Validate the Turnstile secret knobs
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_turnstile_secret_overwrite_host_file is boolean
+      - >-
+        sponsord_onramp_turnstile_secret | length == 0
+        or (sponsord_onramp_turnstile_secret | string is match('^[^\x00-\x20\x7f]+\Z'))
+    fail_msg: >-
+      sponsord_onramp_turnstile_secret_overwrite_host_file must be a boolean, and
+      sponsord_onramp_turnstile_secret "" or the widget's secret key: one token with
+      no spaces or control characters.
+  no_log: true
+
+- name: Stat the Turnstile secret file for its provenance
+  ansible.builtin.stat:
+    path: "{{ sponsord_onramp_turnstile_secret_file }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: sponsord_onramp_turnstile_pre_stat
+
+- name: Read the Turnstile secret checksum this role last recorded
+  ansible.builtin.slurp:
+    src: "{{ sponsord_onramp_turnstile_secret_checksum_file }}"
+  register: sponsord_onramp_turnstile_recorded
+  # A missing record is normal (first converge); any other read error is not, and
+  # treating it as "no record" would silently disable the provenance guards.
+  failed_when: >-
+    sponsord_onramp_turnstile_recorded.failed
+    and 'not found' not in (sponsord_onramp_turnstile_recorded.msg | default(''))
+  changed_when: false
+
+- name: Resolve the Turnstile secret's provenance
+  ansible.builtin.set_fact:
+    sponsord_onramp_turnstile_by_role: >-
+      {{ _rec.split() | length == 2 and _rec.split()[0] == 'inventory'
+         and _rec.split()[1] == (sponsord_onramp_turnstile_pre_stat.stat.checksum | default('')) }}
+  vars:
+    _rec: "{{ sponsord_onramp_turnstile_recorded.content | default('') | b64decode | trim }}"
+
+# An empty value also happens when secret.yml is simply missing (a fresh clone).
+# Adopting the role's own stale file as operator-provisioned would deploy green on
+# a secret nobody rotates any more.
+- name: Refuse to adopt a role-written Turnstile secret as host-provisioned
+  ansible.builtin.assert:
+    that:
+      - not sponsord_onramp_turnstile_by_role
+    fail_msg: >-
+      sponsord_onramp_turnstile_secret is empty, but
+      {{ sponsord_onramp_turnstile_secret_file }} is byte-for-byte the file THIS ROLE
+      last wrote from inventory: the value has gone missing from the control machine
+      (an absent secret.yml) rather than being handed to the host. Restore
+      sponsord_onramp_turnstile_secret, or hand the file over explicitly by
+      discarding the role's record: sudo rm {{ sponsord_onramp_turnstile_secret_checksum_file }}
+  when: sponsord_onramp_turnstile_secret | length == 0
+
+- name: Require confirmation to overwrite a Turnstile secret this role did not write
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_turnstile_secret_overwrite_host_file
+    fail_msg: >-
+      sponsord_onramp_turnstile_secret is set, but
+      {{ sponsord_onramp_turnstile_secret_file }} on this host is not a file this role
+      wrote (no matching `inventory` record). Writing it from inventory would discard
+      the host's copy. Clear sponsord_onramp_turnstile_secret to keep the host's
+      copy, or set sponsord_onramp_turnstile_secret_overwrite_host_file: true.
+  when:
+    - sponsord_onramp_turnstile_secret | length > 0
+    - sponsord_onramp_turnstile_pre_stat.stat.exists
+    - not sponsord_onramp_turnstile_by_role
+
+# No trailing newline: exactly the key, as the dashboard shows it. Never through a
+# symlink or onto a directory: the regular-file check below reports that path.
+- name: Write the Turnstile secret (inventory-supplied)
+  ansible.builtin.copy:
+    dest: "{{ sponsord_onramp_turnstile_secret_file }}"
+    content: "{{ sponsord_onramp_turnstile_secret }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when:
+    - sponsord_onramp_turnstile_secret | length > 0
+    - not sponsord_onramp_turnstile_pre_stat.stat.exists or sponsord_onramp_turnstile_pre_stat.stat.isreg
+
+# Provenance only, written as soon as the file is final: a run that wrote the file
+# and then failed must still be recorded as its writer.
+- name: Re-stat the Turnstile secret now that it is final
+  ansible.builtin.stat:
+    path: "{{ sponsord_onramp_turnstile_secret_file }}"
+    follow: false
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: sponsord_onramp_turnstile_post_stat
+
+- name: Record who wrote the Turnstile secret, and its checksum
+  ansible.builtin.copy:
+    dest: "{{ sponsord_onramp_turnstile_secret_checksum_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: >
+      {{ (sponsord_onramp_turnstile_secret | length > 0) | ternary('inventory', 'host') }}
+      {{ sponsord_onramp_turnstile_post_stat.stat.checksum }}
+  # Only for a regular file: the checks below reject anything else. In check mode
+  # the inventory write is only simulated, so there may be nothing to hash.
+  when:
+    - sponsord_onramp_turnstile_post_stat.stat.isreg | default(false)
+    - (sponsord_onramp_turnstile_post_stat.stat.checksum | default('')) | length > 0
+
 # --- Host secrets (the daemon's token, the Turnstile secret) ------------------------
 - name: Check the daemon API token and the Turnstile secret
   ansible.builtin.stat:
@@ -377,15 +494,18 @@
       sponsord_hosts too; `make deploy-sponsord` runs both).
   when: not (ansible_check_mode and not sponsord_onramp_secret_stat.results[0].stat.exists)
 
+# Under --check an inventory-supplied secret is only simulated, so a fresh host has
+# no file yet; the checks below then have nothing to look at.
 - name: Require the Turnstile secret as a regular file
   ansible.builtin.assert:
     that:
       - sponsord_onramp_secret_stat.results[1].stat.isreg | default(false)
     fail_msg: |-
       {{ sponsord_onramp_turnstile_secret_file }} is {{ _what }}.
-      The role never handles the Turnstile secret: copy it from the Cloudflare
-      dashboard (the widget for {{ sponsord_onramp_domain | default('your domain', true) }})
-      onto this host, as root:
+      Copy the secret from the Cloudflare dashboard (the widget for
+      {{ sponsord_onramp_domain | default('your domain', true) }}) into
+      sponsord_onramp_turnstile_secret in the git-ignored host_vars/<host>/secret.yml,
+      or onto this host, as root:
         umask 077
         printf '%s' '<secret>' | sudo tee {{ sponsord_onramp_turnstile_secret_file }} >/dev/null
         sudo chmod 600 {{ sponsord_onramp_turnstile_secret_file }}
@@ -393,8 +513,10 @@
     _what: >-
       {{ 'missing' if not sponsord_onramp_secret_stat.results[1].stat.exists
          else 'not a regular file (symlink/directory?)' }}
+  when: not (ansible_check_mode and sponsord_onramp_turnstile_secret | length > 0
+             and not sponsord_onramp_secret_stat.results[1].stat.exists)
 
-# Ownership + mode only; the content is the operator's.
+# Ownership + mode only; the content is the operator's or inventory's.
 - name: Lock down the Turnstile secret
   ansible.builtin.file:
     path: "{{ sponsord_onramp_turnstile_secret_file }}"
@@ -402,6 +524,7 @@
     group: root
     mode: "0600"
     follow: false
+  when: sponsord_onramp_secret_stat.results[1].stat.exists
 
 # grep -q: the secret never reaches stdout. Upstream strips one trailing newline;
 # an empty value would only fail at the first person through the gate.
@@ -413,6 +536,7 @@
   check_mode: false
   # 1 = no non-blank character (reported below); 2 = grep could not read the file.
   failed_when: sponsord_onramp_turnstile_grep.rc not in [0, 1]
+  when: sponsord_onramp_secret_stat.results[1].stat.exists
 
 - name: Report an empty Turnstile secret
   ansible.builtin.fail:
@@ -420,7 +544,7 @@
       {{ sponsord_onramp_turnstile_secret_file }} is empty. Write the widget's secret
       key into it, as root: umask 077; printf '%s' '<secret>' | sudo tee
       {{ sponsord_onramp_turnstile_secret_file }} >/dev/null
-  when: sponsord_onramp_turnstile_grep.rc == 1
+  when: sponsord_onramp_turnstile_grep.rc | default(0) == 1
 
 - name: Read whether Caddy is already installed
   ansible.builtin.package_facts:
