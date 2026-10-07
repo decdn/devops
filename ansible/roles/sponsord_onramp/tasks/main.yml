@@ -546,10 +546,6 @@
       {{ sponsord_onramp_turnstile_secret_file }} >/dev/null
   when: sponsord_onramp_turnstile_grep.rc | default(0) == 1
 
-- name: Read whether Caddy is already installed
-  ansible.builtin.package_facts:
-  when: sponsord_onramp_proxy == 'caddy'
-
 # Before any mutation: a Caddyfile someone else wrote is never replaced silently.
 # It is judged by the file, not by whether the package is installed: a Caddy run
 # from a static binary leaves no dpkg trace, and apt keeps an existing conffile.

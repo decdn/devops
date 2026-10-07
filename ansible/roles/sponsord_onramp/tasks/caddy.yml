@@ -7,11 +7,30 @@
 # capability, PrivateTmp, ProtectSystem=full); main.yml has already refused a
 # Caddyfile this role does not own.
 
+# One dpkg query for the two packages, not package_facts (which loads the whole
+# package database on every run, seconds each). It runs in check mode too: it
+# decides whether the install below runs at all, and under --check whether there is
+# a unit to start. dpkg-query exits 1 when a package was never installed, and omits
+# it, so only two "installed" lines mean both are present.
+- name: Read whether Caddy and curl are installed
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, "-f=${db:Status-Status}\n", caddy, curl]
+  register: sponsord_onramp_caddy_packages
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Note whether Caddy and curl are installed
+  ansible.builtin.set_fact:
+    sponsord_onramp_caddy_installed: >-
+      {{ sponsord_onramp_caddy_packages.stdout_lines | select('equalto', 'installed') | list | length == 2 }}
+
 # curl: the probe at the end of this file. policy_rc_d 101 stops the package's
 # maintainer scripts from starting Caddy on its stock config: the firewall already
 # has 80/443 open, so a run that failed after the install would leave that default
 # server public. Caddy first starts from the Restart caddy handler, once the
-# managed Caddyfile below has validated.
+# managed Caddyfile below has validated. Skipped when both are installed, which also
+# skips the apt cache refresh on every converge after the first.
 - name: Install Caddy from the distribution
   ansible.builtin.apt:
     name: [caddy, curl]
@@ -19,6 +38,7 @@
     update_cache: true
     cache_valid_time: 3600
     policy_rc_d: 101
+  when: not sponsord_onramp_caddy_installed
 
 # `caddy validate` loads the config the way `caddy run` does (it also provisions
 # the TLS automation), so a Caddyfile that does not parse or provision never lands.
@@ -42,7 +62,7 @@
     name: caddy
     enabled: true
     state: started
-  when: not ansible_check_mode or 'caddy' in ansible_facts.packages
+  when: not ansible_check_mode or sponsord_onramp_caddy_installed
 
 # Caddy serves the site at all: plain http answers with its https redirect. No
 # certificate is involved, so this holds from the first run, ACME or not.
