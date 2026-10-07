@@ -156,7 +156,7 @@ yourself.
 
 A sponsord dashboard and alert rules on those series (keeper failures, a stale pool
 read, a held top-up, an empty pool, sponsord's own request errors) are in
-[`charts/decdn-node/files/monitoring/sponsord/`](../../../charts/decdn-node/files/monitoring/README.md#sponsord).
+[`monitoring/sponsord/`](../../../monitoring/README.md#sponsord).
 The treasury wallet's own USDC and gas balance is not among them: sponsord does not
 export it, so watch the address yourself.
 

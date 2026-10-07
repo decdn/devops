@@ -1,30 +1,37 @@
 # Monitoring assets
 
-The deCDN Grafana dashboards and reference Prometheus alert rules, maintained here. The
-node's metric surface is documented in upstream `decdn/decdn`'s
-`adr/appendix-observability.md`. Imported from `decdn/decdn` (MIT OR Apache-2.0) at
-`20db95ef`; distributed here under this repo's MIT license.
+The deCDN Grafana dashboards and reference Prometheus alert rules, maintained here:
+`decdn-node/` for the node, on every deploy path, and `sponsord/` for the onboarding
+sponsor, on the Ansible and Compose paths. The node's metric surface is documented in
+upstream `decdn/decdn`'s `adr/appendix-observability.md`. The node's assets were
+imported from `decdn/decdn` (MIT OR Apache-2.0) at `20db95ef`; distributed here under
+this repo's MIT license. sponsord's were written here.
 
 | File | What it is |
 |------|------------|
-| `grafana-dashboard.json` | Fleet overview (`uid: decdn-poc-overview`): status, delivery funnel, slash safety, logs and traces. |
-| `dashboard-delivery.json` | Delivery and cache (`uid: decdn-delivery`): serve leg, paying pull leg, cache, origin, warming. |
-| `dashboard-chain.json` | Chain, payments and slash safety (`uid: decdn-chain`): watcher liveness, chain RPC, registries, payments. |
-| `dashboard-node.json` | Single-node drilldown (`uid: decdn-node`): host, process, iroh transport, DHT and probe, logs, traces. |
-| `prometheus-alerts.yml` | Rule groups `decdn-slash-safety`, `decdn-liveness`, `decdn-delivery`. A rule with a matching runbook section carries a `runbook_url` into upstream's `docs/runbook.md`. |
+| `decdn-node/grafana-dashboard.json` | Fleet overview (`uid: decdn-poc-overview`): status, delivery funnel, slash safety, logs and traces. |
+| `decdn-node/dashboard-delivery.json` | Delivery and cache (`uid: decdn-delivery`): serve leg, paying pull leg, cache, origin, warming. |
+| `decdn-node/dashboard-chain.json` | Chain, payments and slash safety (`uid: decdn-chain`): watcher liveness, chain RPC, registries, payments. |
+| `decdn-node/dashboard-node.json` | Single-node drilldown (`uid: decdn-node`): host, process, iroh transport, DHT and probe, logs, traces. |
+| `decdn-node/prometheus-alerts.yml` | Rule groups `decdn-slash-safety`, `decdn-liveness`, `decdn-delivery`. A rule with a matching runbook section carries a `runbook_url` into upstream's `docs/runbook.md`. |
 | `sponsord/` | The onboarding sponsor's dashboard and alert rules ([below](#sponsord)). Not rendered by the chart. |
 
 **Editing.** Every `decdn_*` series a panel or rule names must be one `decdn-node`
 exports; nothing in CI checks this. See
-[`.claude/skills/grafana-dashboards/SKILL.md`](../../../../.claude/skills/grafana-dashboards/SKILL.md)
+[`.claude/skills/grafana-dashboards/SKILL.md`](../.claude/skills/grafana-dashboards/SKILL.md)
 for the name check, the query traps and the publishing steps. Run `make lint-helm`
-after any edit: it runs `promtool check rules` on `prometheus-alerts.yml` (PromQL syntax,
-duplicate keys) and checks that every dashboard parses and has its own uid.
+after any edit: it runs `promtool check rules` on both `prometheus-alerts.yml` files
+(PromQL syntax, duplicate keys) and checks that every dashboard parses and has its own uid.
+The chart packages `decdn-node/` whole and `make lint-helm` allows only `*.json` and
+`prometheus-alerts.yml` there, so anything else (a README, a rule test) belongs
+elsewhere or in the chart's `.helmignore`.
 
 ## On Kubernetes
 
-The chart renders them when asked (see the chart README, "Monitoring"):
-`metrics.prometheusRule.enabled` creates a `PrometheusRule`, and
+The chart renders `decdn-node/` when asked (see the
+[chart README](../charts/decdn-node/README.md#monitoring)); it reads the files through
+`charts/decdn-node/files/monitoring`, a symlink to `decdn-node/` that `helm package`
+turns into regular files. `metrics.prometheusRule.enabled` creates a `PrometheusRule`, and
 `metrics.grafanaDashboards.enabled` creates one sidecar-labelled ConfigMap per
 dashboard. `metrics.serviceMonitor` adds the target labels they select on (`job`,
 `region`, `deployment_environment`, `instance`).
@@ -35,19 +42,20 @@ The `grafana_alloy` role already stamps the labels these assets expect: the node
 metrics carry `job="decdn-node"`, `region` and `deployment_environment`; machine
 metrics and logs carry `job="integrations/node_exporter"`. So:
 
-- **Dashboards:** in Grafana, *Dashboards → New → Import*, upload each `*.json`, and
+- **Dashboards:** in Grafana, *Dashboards → New → Import*, upload each
+  `decdn-node/*.json`, and
   pick your Prometheus, Loki and Tempo datasources for the `DS_*` variables. Loki and
   Tempo panels stay empty unless logs and traces are shipped.
-- **Alerts:** load `prometheus-alerts.yml` as a rule group, e.g. with
-  `mimirtool rules load prometheus-alerts.yml` against your Grafana Cloud Prometheus
+- **Alerts:** load `decdn-node/prometheus-alerts.yml` as a rule group, e.g. with
+  `mimirtool rules load decdn-node/prometheus-alerts.yml` against your Grafana Cloud Prometheus
   endpoint, or through *Alerting → Alert rules → Import*.
 
 ## sponsord
 
 `sponsord/` holds the same pair for the deCDN onboarding sponsor (`decdn/sponsord`),
 which runs on the Ansible and Compose paths only. The chart never renders it: its
-`PrometheusRule` reads only `prometheus-alerts.yml`, and its dashboard ConfigMaps glob
-`*.json` in this directory, not below it.
+`files/monitoring` symlink reaches `decdn-node/` alone, and `make lint-helm` checks that
+the packaged chart carries nothing else.
 
 | File | What it is |
 |------|------------|
@@ -60,7 +68,7 @@ and `unit="sponsord-onramp.service"` with the `level` label the role parses. Imp
 them as above, e.g. `mimirtool rules load sponsord/prometheus-alerts.yml`. Every
 `sponsord_*` series they name must be one upstream's `crates/sponsord/src/metrics.rs`
 exports; `make lint-helm` runs `promtool check rules` on the rules and the unit tests
-in `../../tests/sponsord-alerts_test.yml`, and checks the dashboard's uid.
+in `sponsord/prometheus-alerts_test.yml`, and checks the dashboard's uid.
 
 The treasury wallet's own USDC and gas balance, which pays every top-up, is not
 covered: sponsord does not export it. Watch that address with a balance exporter of

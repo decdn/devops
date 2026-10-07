@@ -6,7 +6,7 @@
 # defaults, not normative.
 #
 # Validate locally:
-#   promtool check rules monitoring/prometheus-alerts.yml
+#   promtool check rules monitoring/decdn-node/prometheus-alerts.yml
 #
 # Wire into Prometheus via:
 #   rule_files:

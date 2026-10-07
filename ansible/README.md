@@ -259,7 +259,7 @@ in the git-ignored `secret.yml` as `grafana_alloy_api_token`. The endpoints and 
 IDs are ordinary inventory variables. Setup, token handling, upgrade notes, cost
 guardrails and rollback: [`roles/grafana_alloy/README.md`](roles/grafana_alloy/README.md).
 To import the deCDN dashboards and alert rules into that stack, see
-[`charts/decdn-node/files/monitoring/`](../charts/decdn-node/files/monitoring/README.md).
+[`monitoring/`](../monitoring/README.md).
 
 ### sponsord (optional)
 

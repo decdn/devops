@@ -15,13 +15,14 @@ both (see [RELEASING.md](../../RELEASING.md)).
   `metrics.serviceMonitor.jobLabel`, `.deploymentEnvironment` and `.relabelings`.
 - Optional `PrometheusRule` with the deCDN reference alert rules
   (`metrics.prometheusRule`), and the deCDN Grafana dashboards as sidecar-labelled
-  ConfigMaps (`metrics.grafanaDashboards`). Both live in `files/monitoring/`, which
-  this repo maintains; `decdn/decdn` no longer ships them.
-- `files/monitoring/sponsord/`: a Grafana dashboard (`uid: decdn-sponsord`) and
-  alert rules for the onboarding sponsor (down, keeper failing, stale pool read, a
-  held top-up, an empty pool, request errors), with promtool unit tests. sponsord
-  has no Kubernetes path, so the chart does not render them; they ship for import
-  on the Ansible and Compose paths.
+  ConfigMaps (`metrics.grafanaDashboards`). Both are packaged in `files/monitoring/`;
+  in the repo that is a symlink to the top-level `monitoring/decdn-node/`, which this
+  repo maintains for every deploy path; `decdn/decdn` no longer ships them.
+- The repo's `monitoring/sponsord/` (not part of the chart): a Grafana dashboard
+  (`uid: decdn-sponsord`) and alert rules for the onboarding sponsor (down, keeper
+  failing, stale pool read, a held top-up, an empty pool, request errors), with
+  promtool unit tests. sponsord has no Kubernetes path, so the chart neither renders
+  nor packages them; they are for import on the Ansible and Compose paths.
 
 ### Fixed
 

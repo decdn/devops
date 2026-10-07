@@ -24,6 +24,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 chart="$(dirname "$here")"
 repo="$(cd "$chart/../.." && pwd)"
+monitoring="$repo/monitoring"
 schema_files="$repo/ansible/molecule/schema/files"
 checker="$schema_files/check-schema-keys.py"
 kubeconform="${KUBECONFORM-kubeconform}"
@@ -55,6 +56,80 @@ done < "$fixtures/bad.expected"
 : > "$work/empty.toml"
 if python3 "$checker" "$work/empty.toml" >/dev/null 2>&1; then fail "checker accepts an empty file"; fi
 pass "schema-key checker: good/bad/empty fixtures"
+
+# --- the monitoring symlink -----------------------------------------------------
+# The node's dashboards and rules live in the repo's monitoring/decdn-node/, which
+# operators on every deploy path import from; the chart reaches them through
+# files/monitoring, a relative symlink, because .Files cannot read outside the chart.
+# helm package must turn it into regular files, and nothing of sponsord's may ship.
+link_target="../../../monitoring/decdn-node"
+# Prints what is wrong and returns non-zero, so the negatives below can call it too.
+check_monitoring_link() { # <chart dir> <monitoring dir> <empty scratch dir>
+  local chart_dir="$1" mon="$2" scratch="$3" target
+  [ -L "$chart_dir/files/monitoring" ] || { echo "files/monitoring is not a symlink"; return 1; }
+  target="$(readlink "$chart_dir/files/monitoring")"
+  [ "$target" = "$link_target" ] || { echo "files/monitoring -> $target, not $link_target"; return 1; }
+  helm package "$chart_dir" --destination "$scratch" > "$scratch/helm.log" 2>&1 \
+    || { cat "$scratch/helm.log"; echo "helm package failed"; return 1; }
+  python3 - "$scratch" "$mon/decdn-node" <<'PY' 2>&1
+import pathlib, sys, tarfile
+scratch, src = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+tgz = sorted(scratch.glob("*.tgz"))
+if len(tgz) != 1:
+    sys.exit(f"helm package wrote {len(tgz)} archives")
+prefix = "decdn-node/files/monitoring/"
+with tarfile.open(tgz[0]) as t:
+    members = t.getmembers()
+mon = [m for m in members if m.name.startswith(prefix)]
+bad = [m.name for m in mon if not m.isfile()]
+if bad:
+    sys.exit(f"not regular files in the package: {bad}")
+want = sorted(p.name for p in src.iterdir() if p.suffix == ".json" or p.name == "prometheus-alerts.yml")
+if not want:
+    sys.exit(f"no dashboards or rules in {src}")
+got = sorted(m.name[len(prefix):] for m in mon)
+if got != want:
+    sys.exit(f"packaged files/monitoring {got}\n  != dashboards and rules in monitoring/decdn-node {want}")
+leak = [m.name for m in members if "sponsord" in m.name.lower()]
+if leak:
+    sys.exit(f"sponsord files in the chart package: {leak}")
+PY
+}
+out="$(check_monitoring_link "$chart" "$monitoring" "$(mktemp -d "$work/pkg.XXXX")")" || fail "$out"
+pass "files/monitoring links to monitoring/decdn-node and packages as regular files"
+
+# Its negatives, on a repo-shaped copy (cp -R keeps the relative link a link).
+neg="$work/neg"
+mkdir -p "$neg/charts"
+cp -R "$chart" "$neg/charts/"
+cp -R "$monitoring" "$neg/"
+negchart="$neg/charts/decdn-node"
+out="$(check_monitoring_link "$negchart" "$neg/monitoring" "$(mktemp -d "$work/pkg.XXXX")")" \
+  || fail "the unchanged copy fails the monitoring check: $out"
+expect_link_fail() { # <description> <message ERE>
+  local out
+  if out="$(check_monitoring_link "$negchart" "$neg/monitoring" "$(mktemp -d "$work/pkg.XXXX")")"; then
+    fail "monitoring check should have failed: $1"
+  fi
+  grep -qE -- "$2" <<<"$out" || { echo "$out" >&2; fail "wrong failure ($2) for: $1"; }
+  pass "rejects: $1"
+}
+rm "$negchart/files/monitoring"
+cp -R "$neg/monitoring/decdn-node" "$negchart/files/monitoring"
+expect_link_fail "files/monitoring a copy, not a symlink" "is not a symlink"
+rm -r "$negchart/files/monitoring"
+ln -s "$neg/monitoring/decdn-node" "$negchart/files/monitoring"
+expect_link_fail "files/monitoring an absolute symlink" "not \.\./\.\./\.\./monitoring/decdn-node"
+rm "$negchart/files/monitoring"
+ln -s "$link_target" "$negchart/files/monitoring"
+mv "$neg/monitoring/decdn-node" "$neg/monitoring/renamed"
+expect_link_fail "monitoring/decdn-node renamed, link dangling" "helm package failed"
+mv "$neg/monitoring/renamed" "$neg/monitoring/decdn-node"
+touch "$neg/monitoring/decdn-node/README.md"
+expect_link_fail "a stray file in monitoring/decdn-node" "!= dashboards and rules"
+rm "$neg/monitoring/decdn-node/README.md"
+cp "$neg/monitoring/sponsord/dashboard-sponsord.json" "$neg/monitoring/decdn-node/"
+expect_link_fail "the sponsord dashboard copied into monitoring/decdn-node" "sponsord files in the chart package"
 
 # --- positive renders -----------------------------------------------------------
 for values in "$chart"/ci/*.yaml; do
@@ -147,39 +222,43 @@ if [ -n "$promtool" ]; then
   $promtool check rules < "$chart/files/monitoring/prometheus-alerts.yml" > "$work/promtool.out" 2>&1 \
     || { cat "$work/promtool.out" >&2; fail "promtool check rules (files/monitoring/prometheus-alerts.yml)"; }
   pass "promtool check rules: $(grep -o '[0-9]* rules found' "$work/promtool.out")"
-  $promtool check rules < "$chart/files/monitoring/sponsord/prometheus-alerts.yml" > "$work/promtool.out" 2>&1 \
-    || { cat "$work/promtool.out" >&2; fail "promtool check rules (files/monitoring/sponsord/prometheus-alerts.yml)"; }
+  $promtool check rules < "$monitoring/sponsord/prometheus-alerts.yml" > "$work/promtool.out" 2>&1 \
+    || { cat "$work/promtool.out" >&2; fail "promtool check rules (monitoring/sponsord/prometheus-alerts.yml)"; }
   pass "promtool check rules (sponsord): $(grep -o '[0-9]* rules found' "$work/promtool.out")"
 
   # The sponsord rules do time arithmetic on unix-time gauges, which only a unit
   # test catches. promtool compares annotations exactly and they are prose, so the
-  # test runs against a copy with them stripped (tests/sponsord-alerts_test.yml).
+  # test runs against a copy with them stripped
+  # (monitoring/sponsord/prometheus-alerts_test.yml).
   mkdir "$work/rules-test"
-  yq 'del(.groups[].rules[].annotations)' "$chart/files/monitoring/sponsord/prometheus-alerts.yml" \
+  yq 'del(.groups[].rules[].annotations)' "$monitoring/sponsord/prometheus-alerts.yml" \
     > "$work/rules-test/sponsord-alerts.yml"
-  cp "$here/sponsord-alerts_test.yml" "$work/rules-test/"
+  cp "$monitoring/sponsord/prometheus-alerts_test.yml" "$work/rules-test/sponsord-alerts_test.yml"
   chmod -R a+rX "$work/rules-test"
   if [ -n "${PROMTOOL_IMAGE:-}" ]; then
     docker run --rm -v "$work/rules-test:/w:ro" -w /w --entrypoint promtool "$PROMTOOL_IMAGE" \
       test rules sponsord-alerts_test.yml > "$work/promtool.out" 2>&1
   else
     (cd "$work/rules-test" && $promtool test rules sponsord-alerts_test.yml) > "$work/promtool.out" 2>&1
-  fi || { cat "$work/promtool.out" >&2; fail "promtool test rules (tests/sponsord-alerts_test.yml)"; }
+  fi || { cat "$work/promtool.out" >&2; fail "promtool test rules (monitoring/sponsord/prometheus-alerts_test.yml)"; }
   pass "promtool test rules: sponsord alerts"
 else
   skipped+=("promtool (PROMTOOL is empty): alert rule syntax and the sponsord rule tests are NOT checked")
 fi
 
-# The sponsord dashboard sits in a subdirectory, so the chart's files/monitoring/*.json
-# glob never renders it (the ConfigMap check below pins that). It must still parse
-# and carry a uid no node dashboard uses: Grafana imports by uid.
-python3 - "$chart/files/monitoring" <<'PY' || fail "sponsord dashboard"
+# The sponsord dashboard lives outside the chart (monitoring/sponsord/), so the
+# chart never renders it (the monitoring-link check above keeps it out of the
+# package). It must still parse and carry a uid no node dashboard uses: Grafana
+# imports by uid.
+python3 - "$monitoring" <<'PY' || fail "sponsord dashboard"
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
-uids = [json.load(open(p)).get("uid") for p in sorted(root.glob("*.json"))]
+uids = [json.load(open(p)).get("uid") for p in sorted((root / "decdn-node").glob("*.json"))]
+if not uids:
+    sys.exit("no dashboard in monitoring/decdn-node/")
 dash = sorted((root / "sponsord").glob("*.json"))
 if not dash:
-    sys.exit("no dashboard in files/monitoring/sponsord/")
+    sys.exit("no dashboard in monitoring/sponsord/")
 for p in dash:
     uid = json.load(open(p)).get("uid")
     if not (isinstance(uid, str) and 0 < len(uid) <= 40):
@@ -409,7 +488,12 @@ pass "unique object names with a 63-character fullname"
 
 # Dashboards enabled with none in files/monitoring/ must fail the render, not render nothing.
 nodash="$work/nodash"
-cp -r "$chart" "$nodash"
+# -L: files/monitoring is a relative symlink; copied as a link it would dangle in
+# $work, the rm would remove nothing and the render would fail for the wrong reason.
+cp -RL "$chart" "$nodash"
+if [ -L "$nodash/files/monitoring" ] || [ ! -d "$nodash/files/monitoring" ]; then
+  fail "the scratch chart copy kept files/monitoring as a symlink"
+fi
 rm -f "$nodash"/files/monitoring/*.json
 if out="$(helm template t "$nodash" -f "$chart/ci/ci-values.yaml" 2>&1)"; then
   fail "render should fail: dashboards enabled, none shipped"

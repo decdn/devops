@@ -3,7 +3,7 @@
 # exercises: the ansible/ Makefile's scoping guards, the molecule driver's guards
 # and locks (scripts/molecule.sh), the release gate, the
 # lint-compose and lint-cloud-init invariants (negative cases), the firewall holes
-# playbooks/group_vars/ derives per host, and — with
+# playbooks/group_vars/ derives per host, ci.yml's helm path filter, and — with
 # UPSTREAM=<decdn checkout> — the upstream-mirror generators' exit codes.
 # `make test-scripts` runs it; CI's `scripts` job does too. Needs make, docker
 # (compose v2), jq, flock; the cloud-init cases also need cloud-init, shellcheck and yq,
@@ -423,6 +423,20 @@ elif [[ -n ${CI:-} ]]; then
   fail "yq is not on PATH in CI; the decommission play-order check would be skipped"
 else
   skipped+=("decommission play-order check (needs yq)")
+fi
+
+# The chart renders monitoring/ through a symlink, and lint-helm is what checks the
+# dashboards and rules there (promtool, the sponsord unit tests, uids). A PR that
+# touches only monitoring/ runs it only if ci.yml's helm path filter lists it.
+if command -v yq >/dev/null; then
+  yq '.jobs.changes.steps[] | select(.id == "filter") | .with.filters' "$repo/.github/workflows/ci.yml" \
+    | yq -e '.helm | (contains(["charts/**"]) and contains(["monitoring/**"]))' >/dev/null \
+    || fail "ci.yml: the helm path filter must list charts/** and monitoring/**"
+  pass "ci.yml runs lint-helm on charts/** and monitoring/**"
+elif [[ -n ${CI:-} ]]; then
+  fail "yq is not on PATH in CI; the helm path-filter check would be skipped"
+else
+  skipped+=("helm path-filter check (needs yq)")
 fi
 
 # --- baseline firewall holes per host shape, and playbook guards ---------------------

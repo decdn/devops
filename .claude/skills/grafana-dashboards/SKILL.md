@@ -26,7 +26,7 @@ targets. `decdn-node` exports ~200 of its own `decdn_*` series, and this repo ma
 four-dashboard suite and alert rules that go with them. `decdn/decdn` ships none; this is
 their only home.
 
-**The files** (all in `charts/decdn-node/files/monitoring/`):
+**The files** (the node's in `monitoring/decdn-node/`, sponsord's in `monitoring/sponsord/`):
 
 - `grafana-dashboard.json` — "deCDN — fleet overview", uid `decdn-poc-overview`.
   Fleet status, delivery funnel, slash safety, logs and traces.
@@ -40,19 +40,20 @@ their only home.
   `decdn-delivery`. Every rule carries a `component` label. Only rules with a matching
   section in upstream's `docs/runbook.md` (20 of 51) also carry a `runbook_url`.
 
-- `sponsord/` — the onboarding sponsor's own pair: `dashboard-sponsord.json` (uid
+- `monitoring/sponsord/` — the onboarding sponsor's own pair: `dashboard-sponsord.json` (uid
   `decdn-sponsord`) and `prometheus-alerts.yml` (group `sponsord`, `job="sponsord"`).
-  The chart does not render this subdirectory (sponsord has no Kubernetes path). Its
+  The chart does not render this directory (sponsord has no Kubernetes path). Its
   `sponsord_*` names come from upstream `decdn/sponsord` `crates/sponsord/src/metrics.rs`
   (check them with the recipe after the node one below). Its logs are plain text,
   not JSON: select `{unit="sponsord.service"}` and filter on the `level` label the
   `grafana_alloy` role parses. The rules have promtool unit tests in
-  `charts/decdn-node/tests/sponsord-alerts_test.yml`: keep them in step.
+  `monitoring/sponsord/prometheus-alerts_test.yml`: keep them in step.
 
 Add a row to an existing dashboard before starting a fifth node one. The Helm chart renders
-these files as-is (`templates/prometheusrule.yaml`, `templates/dashboards-configmap.yaml`),
-so a new `*.json` becomes a new ConfigMap and `charts/decdn-node/tests/render-test.sh`
-checks the rule and dashboard counts against the directory. Never pass them through
+the node's files as-is (`templates/prometheusrule.yaml`, `templates/dashboards-configmap.yaml`)
+through `charts/decdn-node/files/monitoring`, a symlink to `monitoring/decdn-node/`, so a
+new `*.json` becomes a new ConfigMap and `charts/decdn-node/tests/render-test.sh` checks
+the rule and dashboard counts against the directory. Never pass them through
 `tpl`: the alert annotations carry Prometheus templates.
 
 **All three signals are live.** Metrics reach Grafana Cloud Prometheus as `job="decdn-node"`;
@@ -68,7 +69,7 @@ exports, so a typo renders `(no data)` and a rule on a missing series never fire
 hand after any edit, against a running node (or `curl` a testnet node's `/metrics`):
 
 ```bash
-cd charts/decdn-node/files/monitoring
+cd monitoring/decdn-node
 # Names the files use (drop whole-line YAML comments; ignore regex stems ending in `_`).
 grep -hv '^\s*#' *.json *.yml | grep -oE 'decdn_[a-z0-9_]+' | grep -v '_$' | sort -u > /tmp/used
 # Names the node exports, from sample lines (not `# TYPE`: counters lose `_total` there).
@@ -78,11 +79,12 @@ curl -s http://127.0.0.1:9090/metrics | grep -v '^#' | grep -oE '^decdn_[a-z0-9_
 comm -23 /tmp/used /tmp/exported   # must print nothing
 ```
 
-For sponsord, from the same directory (`sponsord_log_level` in a panel description is an
+For sponsord, from `monitoring/` (`sponsord_log_level` in a panel description is an
 Ansible variable, not a series):
 
 ```bash
-grep -hv '^\s*#' sponsord/*.json sponsord/*.yml | grep -oE 'sponsord_[a-z0-9_]+' | sort -u > /tmp/used-sd
+cd ..
+grep -hv '^\s*#' sponsord/*.json sponsord/prometheus-alerts.yml | grep -oE 'sponsord_[a-z0-9_]+' | sort -u > /tmp/used-sd
 curl -s http://127.0.0.1:8090/metrics | grep -v '^#' | grep -oE '^sponsord_[a-z0-9_]+' | sort -u > /tmp/exported-sd
 comm -23 /tmp/used-sd /tmp/exported-sd   # prints only sponsord_log_level
 ```
@@ -165,7 +167,7 @@ The Grafana Cloud **ruler proxy rejects writes made with a service-account token
 (`400 bad request data`) even for a valid group, so with that token alerts are provisioned
 as Grafana-managed rules through `/api/v1/provisioning/alert-rules` instead. (Operators
 with a Cloud Access Policy token can load the file as-is with `mimirtool rules load`
-against the stack's Prometheus endpoint, as `files/monitoring/README.md` describes.) Each rule's PromQL already holds its own
+against the stack's Prometheus endpoint, as `monitoring/README.md` describes.) Each rule's PromQL already holds its own
 comparison, so the surviving values are not a threshold (`up == 0` fires at value 0): the
 Grafana-managed condition counts datapoints, with `noDataState: OK` as the not-firing case.
 
@@ -255,7 +257,7 @@ Grafana-managed condition counts datapoints, with `noDataState: OK` as the not-f
 }
 ```
 
-**Reference:** in this repo, see `charts/decdn-node/files/monitoring/grafana-dashboard.json`
+**Reference:** in this repo, see `monitoring/decdn-node/grafana-dashboard.json`
 and the three dashboards beside it.
 
 ## Panel Types
@@ -460,7 +462,7 @@ providers:
 - Node status
 
 **Reference:** in this repo, host panels live in
-`charts/decdn-node/files/monitoring/dashboard-node.json`, which
+`monitoring/decdn-node/dashboard-node.json`, which
 reads `node_exporter` series under the same `instance` and `region` labels the `decdn_*`
 series carry — one node selector drives both.
 
@@ -531,7 +533,7 @@ resource "grafana_folder" "monitoring" {
 
 ## Related references
 
-- `charts/decdn-node/files/monitoring/README.md` — importing on Kubernetes and Grafana Cloud.
+- `monitoring/README.md` — importing on Kubernetes and Grafana Cloud.
 - Upstream `decdn/decdn` `adr/appendix-observability.md` — metric registry (name, type,
   tier, Status).
 - Upstream `decdn/decdn` `crates/node/src/metrics.rs` — the exporter.

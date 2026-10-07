@@ -248,7 +248,8 @@ their own token volume, so they should work with the chart's
 ## Monitoring
 
 The chart ships the deCDN Grafana dashboards and Prometheus alert rules in
-[`files/monitoring/`](files/monitoring/README.md). With the Prometheus
+`files/monitoring/`, which in this repo links to
+[`monitoring/decdn-node/`](../../monitoring/README.md). With the Prometheus
 Operator and a Grafana sidecar (kube-prometheus-stack), turn them on next to the
 ServiceMonitor:
 

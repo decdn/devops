@@ -145,7 +145,7 @@ the root-only env files whenever it creates a container.
 - **Health:** there is no container healthcheck. The image has no HTTP client, and the
   metrics listener serves only `/metrics`. Probe `http://127.0.0.1:9090/metrics` from
   the host, or ship metrics with Grafana Alloy / Prometheus. Dashboards and alert rules
-  are in [`charts/decdn-node/files/monitoring/`](../charts/decdn-node/files/monitoring/README.md).
+  are in [`monitoring/`](../monitoring/README.md).
 
 ## sponsord and its onramp
 
@@ -336,7 +336,7 @@ yours. The `SponsordTopupHeld` alert (below) flags it.
   field filter makes it log nothing).
 - **Dashboard and alerts:** a sponsord dashboard and alert rules (pool balance, keeper
   failures, a held top-up) are in
-  [`charts/decdn-node/files/monitoring/sponsord/`](../charts/decdn-node/files/monitoring/README.md#sponsord).
+  [`monitoring/sponsord/`](../monitoring/README.md#sponsord).
 - **Backup:** the treasury keystore and password are the only copy of the key that
   owns the pool and its funds. Copy them off the host encrypted, with the same
   files the Ansible path's `make backup` takes

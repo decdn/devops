@@ -42,9 +42,12 @@ jobs:
             ansible:
               - 'ansible/**'
               - '.github/workflows/ci.yml'
-            # The chart shares the schema-key inventory and checker with molecule.
+            # The chart shares the schema-key inventory and checker with molecule,
+            # and renders monitoring/decdn-node/ through a symlink; lint-helm also
+            # checks monitoring/sponsord/.
             helm:
               - 'charts/**'
+              - 'monitoring/**'
               - 'ansible/molecule/schema/files/**'
               - 'Makefile'
               - '.github/workflows/ci.yml'
