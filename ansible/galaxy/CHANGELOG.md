@@ -8,6 +8,39 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- `decdn_node`, `sponsord`, `sponsord_onramp`: a `source` install method that
+  clones `*_source_repo` (the upstream GitHub repo by default) at `*_source_ref`
+  (any tag, branch or SHA) on the target and builds it there with `cargo build
+  --release --locked`. The build runs as an unprivileged `decdn-build` system user
+  (`decdn_build_user`, `decdn_build_home`) with a sha256-pinned rustup-init
+  (`decdn_rustup_version`, `decdn_rustup_sha256`) and the toolchain the commit's
+  `rust-toolchain.toml` pins (root installs both). Every new commit builds in a fresh
+  environment so no build can poison a later one: root owns the build home, the
+  toolchain and the git clone, the commit is exported into a per-build work
+  directory (own `CARGO_HOME`, `TMPDIR`, `HOME`) deleted after install, cargo runs
+  in a sandboxed transient systemd unit (read-only filesystem but the work
+  directory, private tmp, `/dev/shm` and IPC, its cgroup killed when it ends),
+  cron and at are denied to the build user, and its processes, crontab and at
+  jobs are removed (and a build home root does not own deleted) before the layout
+  is touched. Root never
+  acts by name inside the build user's tree: the outputs are installed by
+  `files/install-build-output.py`, which refuses symlinks and files the build user
+  does not own. The build runs async (`*_source_build_timeout`),
+  `*_source_build_jobs` sets `CARGO_BUILD_JOBS`, and a `<repo>@<commit>` stamp
+  skips rebuilding an unchanged commit. The repo URL may not carry a secret
+  (password, user on http(s), query), and is checked before anything prints it; an
+  ssh deploy-key URL (root's key) is fine. Every method now clears the other
+  methods' stamps.
+- `decdn_node`: the daemon binary's sha256 is recorded after the start
+  (`decdn_bin_checksum_file`), and a mismatch restarts the daemon, so a binary
+  installed by a run that failed before its restart handler ran is not left
+  unused behind a green deploy. A host with no record yet has it initialised from
+  the binary in place before anything is installed, so the first run on this
+  version is covered without restarting an unchanged daemon.
+- Source mode never runs a source-built binary as root: the `--version` backstop
+  of all three roles runs it in a throwaway sandboxed unit (`DynamicUser`, no
+  network, read-only filesystem).
+
 - `sponsord`: opt-in treasury wallet generation (`sponsord_generate_treasury_wallet`,
   `sponsord_decdn_cli_bin_src`). With the keystore absent, the role runs `decdn
   key-gen` on the host, writes a random password beside the keystore and records
@@ -164,6 +197,19 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   is nothing left for either knob to tune.
 
 ### Changed
+
+- **Breaking:** `decdn_node_install_method`, `sponsord_install_method` and
+  `sponsord_onramp_install_method` now default to `release` (was `manual`). An
+  inventory that relied on the old default must set `manual` explicitly. Upstream
+  has cut no release yet, so `release` needs a pinned version and a mirror until
+  it does; the version assert now names the alternatives.
+- `decdn_node`, `sponsord`, `sponsord_onramp`: every install method clears both
+  install stamps (release and source) before it replaces the first binary, and
+  writes its own only after the `--version` backstop passes (`decdn_node` used to
+  write the release stamp before the backstop), so an install interrupted half way
+  (a method switch included) is redone, a release that installs a broken binary is
+  downloaded again next run, and pinning back to the previous version reinstalls
+  it.
 
 - The role now tracks the config schema of decdn/decdn @ 3ebf5f17 (was
   d3bc7da7).

@@ -1,0 +1,5 @@
+# The same channel decdn/sponsord's rust-toolchain.toml pins (see
+# ../../../source-build/files/fixture/rust-toolchain.toml).
+[toolchain]
+channel = "1.95.0"
+profile = "minimal"

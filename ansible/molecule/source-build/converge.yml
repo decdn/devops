@@ -1,0 +1,8 @@
+---
+# The decdn_node role in "source" mode against the fixture repo (prepare.yml);
+# its inputs are inventory group_vars in molecule.yml.
+- name: Converge
+  hosts: all
+  become: true
+  roles:
+    - role: decdn_node

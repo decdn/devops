@@ -30,7 +30,21 @@
       retries: 10
       delay: 1
 
-    # 1. A verified install records the stamp.
+    # 1. A verified install records the stamp, and clears a source build's stamp
+    # (left behind it would make a later source deploy of the same commit skip
+    # the build over this release binary).
+    - name: Create the stamp directory
+      ansible.builtin.file:
+        path: /usr/local/lib/sponsord
+        state: directory
+        mode: "0755"
+
+    - name: Seed a source build stamp
+      ansible.builtin.copy:
+        dest: /usr/local/lib/sponsord/installed-source
+        content: "https://github.com/decdn/sponsord.git@0000000000000000000000000000000000000000\n"
+        mode: "0644"
+
     - name: Install the pinned release
       ansible.builtin.include_role:
         name: sponsord
@@ -45,10 +59,16 @@
         src: "{{ _sp_stamp }}"
       register: _sp_stamp_1
 
-    - name: Require the stamp to name the installed release
+    - name: Stat the seeded source stamp
+      ansible.builtin.stat:
+        path: /usr/local/lib/sponsord/installed-source
+      register: _sp_source_stamp
+
+    - name: Require the stamp to name the installed release, and no source stamp
       ansible.builtin.assert:
         that:
           - (_sp_stamp_1.content | b64decode | trim) == _sp_ver
+          - not _sp_source_stamp.stat.exists
 
     # 2. The stamp is what makes a re-run need no download.
     - name: Stop the mirror

@@ -871,6 +871,40 @@
             path: /etc/decdn/stub-bad-config
             state: absent
 
+    # --- Install method + build-from-source inputs ---------------------------------
+    # These asserts run before any other input is read, so the cases need no
+    # baseline beyond the play's. The fake credentials are refused before use.
+    - name: "Cases install-method / source-* — install method and source inputs"
+      vars:
+        _im_cases:
+          - {tag: install-method, method: binary, task: Require a valid install method}
+          - {tag: source-ref, method: source, ref: "", task: Require a git ref to build}
+          - {tag: source-ref, method: source, ref: "  ", task: Require a git ref to build}
+          - tag: source-repo
+            method: source
+            # kics-scan ignore-line
+            repo: "https://user:token@github.com/decdn/decdn.git"
+            task: Refuse credentials in the source repo URL
+          - tag: source-repo
+            method: source
+            # kics-scan ignore-line
+            repo: "user:token@github.com:decdn/decdn.git"
+            task: Refuse credentials in the source repo URL
+          # Accepted: an ssh deploy-key URL passes the credential check and fails
+          # at the next assert (the bad jobs value) instead.
+          - tag: source-repo-ssh-ok
+            method: source
+            repo: "ssh://git@github.com/decdn/decdn.git"
+            jobs: "x"
+            task: Validate decdn_node_source_build_jobs
+          - {tag: source-jobs, method: source, jobs: "two", task: Validate decdn_node_source_build_jobs}
+          - {tag: source-timeout, method: source, timeout: "0", task: Validate decdn_node_source_build_jobs}
+      ansible.builtin.include_tasks: includes/install-method-case.yml
+      loop: "{{ _im_cases }}"
+      loop_control:
+        loop_var: _im_case
+        label: "{{ _im_case.tag }}"
+
     - name: Confirm every bad value was rejected by the role's own validation
       ansible.builtin.assert:
         that:
@@ -891,4 +925,6 @@
            "enum", "dict", "float", "list", "string", "string-newline", "otlp-https",
            "otlp-noport", "otlp-path", "otlp-userinfo", "otlp-colon", "otlp-port",
            "otlp-newline", "env-control-rpc", "env-control-extra", "env-gate",
-           "env-extra", "env-content", "config-gate"]
+           "env-extra", "env-content", "config-gate",
+           "install-method", "source-ref", "source-ref", "source-repo", "source-repo",
+           "source-repo-ssh-ok", "source-jobs", "source-timeout"]

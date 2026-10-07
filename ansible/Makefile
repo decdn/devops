@@ -127,7 +127,9 @@ decommission:
 # with no node, through playbooks/sponsord.yml, on Debian 12 and Ubuntu 24.04; the
 # install-method and wallet side effects run in sponsord-install), sponsord-onramp
 # and sponsord-onramp-caddy (the onramp beside its daemon, behind the real distro
-# Caddy; the proxy side effects run in sponsord-onramp-caddy), and cloud-init and
+# Caddy; the proxy side effects run in sponsord-onramp-caddy), sponsord-onramp-source
+# (that converge, then both sponsord roles built from source), source-build (the
+# node built from source on the host: sandbox, stamps, rollback), and cloud-init and
 # cloud-init-sponsord (the cloud-init/ templates, booted for real). The glob in
 # scripts/molecule.sh is the authority; this list is a guide.
 #

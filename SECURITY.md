@@ -37,6 +37,9 @@ Check a new copy of the vendored key against it before trusting that copy, with
 Setting `decdn_verify_release_signature: false` (meant for an air-gapped mirror that
 strips signatures) drops that guarantee, and the role prints a warning when it's off.
 `manual` mode verifies nothing: it installs whatever binaries you point it at.
+`source` mode checks no signature either: it builds whatever the configured git ref
+resolves to, trusting the transport to the git host and the checksums in the
+checkout's `Cargo.lock`. It does run the build as an unprivileged user, never root.
 
 Published Helm charts (`oci://ghcr.io/decdn/charts/decdn-node`) are signed with a
 keyless cosign signature from this repo's release workflow; see

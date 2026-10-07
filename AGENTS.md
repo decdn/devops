@@ -87,9 +87,30 @@ addresses) the repo carries, and they carry their upstream commit.
 ## Current services
 
 - **`ansible/`** — the declarative deployment project. **The public deCDN node**
-  (`playbooks/site.yml` → baseline + `decdn-node`), installed from a pinned GitHub release
-  tarball — verified against the release's GPG-signed `SHA256SUMS` — or, while upstream
-  has no release tag cut (the current default), from locally-built binaries; under a hardened
+  (`playbooks/site.yml` → baseline + `decdn-node`), installed by `decdn_node_install_method`:
+  `release` (the default) — a pinned GitHub release tarball verified against the
+  release's GPG-signed `SHA256SUMS` (upstream has cut no tag yet, so this needs a mirror
+  for now); `source` — a git ref (any tag/branch/SHA) cloned and `cargo build`-ed **on the
+  node** as the unprivileged `decdn-build` user, sha256-pinned rustup, a `<repo>@<commit>`
+  stamp (`tasks/source.yml`, copied into both sponsord roles, which share the user,
+  home and toolchain). **No build can poison a later one:** root owns the home, the
+  toolchain (it installs what the commit's `rust-toolchain.toml` pins) and the git
+  clone; each new commit is `git archive`d into a fresh work directory (own
+  `CARGO_HOME`/`TMPDIR`/`HOME`) that is deleted after install; cargo runs in a
+  sandboxed `systemd-run` unit (read-only FS but the work dir, private
+  tmp/dev/shm/IPC, cgroup killed at the end); cron/at are denied, and the build
+  user's processes, crontab and at jobs are removed and a home root does not own is
+  deleted before the layout is touched. Root never acts by name inside the build user's
+  tree: outputs go through `files/install-build-output.py` (openat/O_NOFOLLOW walk,
+  regular file owned by the build user), copied in decdn_node and sponsord and kept
+  identical by `make test-scripts` with the shared `decdn_build_*`/`decdn_rustup_*`
+  defaults. Validation checks the repo URL for secrets before any task prints it.
+  Coverage is end to end on dependency-free fixture repos: `molecule/source-build`
+  (decdn_node) and `molecule/sponsord-onramp-source` (both sponsord
+  roles); or `manual` — binaries built on the control machine. Each method clears
+  the others' stamps; a stamp is cleared before installing and written only after
+  the `--version` backstop passes; the node records the running binary's sha256
+  after the start and restarts on a mismatch. Under a hardened
   systemd unit; public QUIC udp/4433, loopback metrics/admin, operator-provisioned eth
   keystore, operator-provisionable secret env file, over a shared DevSec-hardened
   `baseline`. The release target triple is derived from the host's architecture
@@ -142,8 +163,8 @@ addresses) the repo carries, and they carry their upstream commit.
   independent of the node, so `playbooks/sponsord.yml` (`make deploy-sponsord`, also
   imported by `site.yml`) targets its own `sponsord_hosts` group, standalone or
   co-located with a node.
-  - **Install:** manual binary by default, or a GPG-verified `sponsord-v*` release
-    (none cut yet).
+  - **Install:** a GPG-verified `sponsord-v*` release by default (none cut yet), a
+    host-side `source` build, or a manual binary.
   - **Unit:** `DynamicUser`; the API token (generated on the host, never replaced),
     treasury keystore and password (operator-provisioned, or generated on the host
     with `sponsord_generate_treasury_wallet`) are `LoadCredential=`
@@ -175,9 +196,9 @@ addresses) the repo carries, and they carry their upstream commit.
   loopback). The playbook's first play enforces that membership (tested by
   `make test-scripts`); the role checks no group name, so collection users keep their
   own groups, and its token gate and `/healthz` fail without a daemon.
-  - **Install / unit / gate:** the sponsord role's patterns, copied: manual or
-    GPG-verified `sponsord-onramp-v*` release (the KEYS are the sponsord role's file,
-    via `role_path`), `DynamicUser` with the token and the Turnstile secret (inventory
+  - **Install / unit / gate:** the sponsord role's patterns, copied: a
+    GPG-verified `sponsord-onramp-v*` release (default), `source` or manual (the
+    KEYS and the source installer are the sponsord role's files, via `role_path`), `DynamicUser` with the token and the Turnstile secret (inventory
     or operator, with `secret.env`'s provenance record and guards) as
     `LoadCredential=`, `PartOf=sponsord.service`, a restart-inputs
     record, and a fatal `/healthz` gate on a loopback listener.

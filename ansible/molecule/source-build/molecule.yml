@@ -1,0 +1,66 @@
+---
+# decdn_node_install_method "source" end to end: the role installs rustup (pinned
+# rustup-init, real download), clones a fixture repo shaped like decdn/decdn at a
+# branch, `cargo build`s it as the unprivileged build user (the fixture's
+# rust-toolchain.toml pulls the real pinned toolchain) and installs the two
+# binaries. They exec the default scenario's Python stub, so the rest of the role
+# (config validate, unit, start, readiness) runs as in `default`.
+#
+# Needs network access to static.rust-lang.org. The fixture has no dependencies,
+# so it compiles in seconds; a real decdn/decdn build is minutes and is not run in
+# CI. The sponsord and sponsord_onramp roles' tasks/source.yml are exercised by
+# ../sponsord-onramp-source; the input asserts are in ../validation and
+# ../validation-sponsord.
+driver:
+  name: docker
+platforms:
+  - name: decdn-source-build-molecule
+    # Same digest as default/molecule.yml (see there).
+    image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    ANSIBLE_PIPELINING: "true"
+  inventory:
+    group_vars:
+      # Inventory, not converge vars, so side_effect.yml re-runs the role with the
+      # same inputs.
+      all:
+        decdn_node_install_method: source
+        decdn_node_source_repo: file:///srv/decdn-fixture.git
+        decdn_node_source_ref: main
+        # An integer, so the CARGO_BUILD_JOBS branch and the jobs assert both see
+        # the non-string form inventory usually gives.
+        decdn_node_source_build_jobs: 2
+        # Matches the stub's --version line, so the version backstop compares
+        # rather than degrading to a liveness check.
+        decdn_node_version: "0.0.0-molecule-stub"
+        decdn_rpc_url: "https://rpc.example.invalid/"
+        decdn_chain_id: 421614
+        decdn_region: "US"
+        decdn_payment_pool_address: "0x1111111111111111111111111111111111111111"
+        decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
+        decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
+        decdn_content_blacklist_address: "0x4444444444444444444444444444444444444444"
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    # Leading destroy: see ../default/molecule.yml. idempotence is the check that
+    # an unchanged commit is not rebuilt; side_effect then moves the branch.
+    - destroy
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - verify
+    - side_effect
+    - destroy

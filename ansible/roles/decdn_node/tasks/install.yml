@@ -1,13 +1,43 @@
 ---
-# Install the decdn-node daemon + decdn CLI. Two methods, selected by
+# Install the decdn-node daemon + decdn CLI. Three methods, selected by
 # decdn_node_install_method:
-#   "release": download the pinned GitHub Release tarballs, verify them against the
-#     GPG-signed SHA256SUMS manifest upstream publishes, then extract. Idempotent
-#     and upgrade-aware via a version stamp; re-extracts only on change. NOTE: as
-#     of decdn/decdn @ d306cc5c no release tag exists yet — see tasks/main.yml.
-#   "manual" (default today): copy locally-built binaries from the Ansible control
-#     machine. copy's checksum idempotency replaces the stamp.
-# A --version backstop runs in both modes.
+#   "release" (default): download the pinned GitHub Release tarballs, verify them
+#     against the GPG-signed SHA256SUMS manifest upstream publishes, then extract.
+#     Idempotent and upgrade-aware via a version stamp; re-extracts only on change.
+#     NOTE: upstream has cut no release tag yet — see tasks/main.yml.
+#   "source": clone decdn_node_source_repo at decdn_node_source_ref on the node and
+#     cargo-build it there as an unprivileged user (tasks/source.yml). Idempotent
+#     via a <repo>@<commit> stamp.
+#   "manual": copy locally-built binaries from the Ansible control machine. copy's
+#     checksum idempotency replaces the stamp.
+# Every method clears BOTH stamps before it replaces the first binary, so an
+# install interrupted half way (a switch included) leaves no stamp vouching for the
+# mixed pair, and the next run reinstalls. A --version backstop runs in every mode,
+# and the stamp of the method in use is written only after it passes.
+
+# The restart record (decdn_bin_checksum_file, compared further down) is
+# initialised from the binary on disk BEFORE anything is installed, on a host that
+# has none yet (a first run on this role version). Initialising it after the
+# install instead would record a binary the daemon was never restarted onto if this
+# run then failed before its handler: the retry would see a match and never
+# restart. With nothing installed yet there is nothing running to record.
+- name: Hash the decdn-node binary before installing
+  ansible.builtin.stat:
+    path: "{{ decdn_bin }}"
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: decdn_bin_pre_stat
+
+- name: Initialise the restart record from the binary in place
+  ansible.builtin.copy:
+    dest: "{{ decdn_bin_checksum_file }}"
+    content: "{{ decdn_bin_pre_stat.stat.checksum }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+  when: decdn_bin_pre_stat.stat.checksum is defined
+
 
 - name: Install from pinned GitHub Release tarballs
   when: decdn_node_install_method == "release"
@@ -216,6 +246,17 @@
           changed_when: false
           failed_when: decdn_sum_check.rc != 0
 
+        # Dropped before anything is extracted, so a release that then fails the
+        # backstop leaves no stamp, and the next run (even one pinned back to the
+        # previous version) downloads and reinstalls instead of trusting it.
+        - name: Clear both install stamps before installing
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /usr/local/lib/decdn/installed-version
+            - /usr/local/lib/decdn/installed-source
+
         - name: Extract binaries into /usr/local/bin
           ansible.builtin.unarchive:
             src: "{{ decdn_stage.path }}/{{ item }}-{{ decdn_node_version }}-{{ decdn_node_target }}.tar.gz"
@@ -227,21 +268,6 @@
           loop: "{{ decdn_release_tarballs }}"
           notify: Restart decdn-node
 
-        - name: Ensure the stamp directory exists
-          ansible.builtin.file:
-            path: /usr/local/lib/decdn
-            state: directory
-            owner: root
-            group: root
-            mode: "0755"
-
-        - name: Record the installed version
-          ansible.builtin.copy:
-            dest: /usr/local/lib/decdn/installed-version
-            content: "{{ decdn_node_version }}\n"
-            owner: root
-            group: root
-            mode: "0644"
       always:
         # Kept on failure: the tarballs, manifest, signature and gpg status file
         # are the only evidence for "why did verification fail", and deleting them
@@ -264,9 +290,23 @@
             - decdn_stage.path is defined
             - not (decdn_sig_check.failed | default(false) or decdn_sum_check.failed | default(false))
 
+- name: Build and install from source on the node
+  ansible.builtin.import_tasks: source.yml
+  when: decdn_node_install_method == "source"
+
 - name: Install locally-built binaries from the control machine
   when: decdn_node_install_method == "manual"
   block:
+    # Before the copy, so an interrupted manual install leaves neither the release
+    # nor the source stamp vouching for what is now a mixed pair.
+    - name: Clear both install stamps before copying
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/local/lib/decdn/installed-version
+        - /usr/local/lib/decdn/installed-source
+
     - name: Copy the decdn-node daemon + decdn CLI from the control machine
       ansible.builtin.copy:
         src: "{{ item.src }}"
@@ -281,24 +321,30 @@
         label: "{{ item.dest }}"
       notify: Restart decdn-node
 
-    # Manual mode never reads the release version stamp, but a leftover stamp from
-    # a prior release deploy would make a later release re-deploy of the SAME
-    # version skip the download (decdn_need_install stays false). Clear it so a
-    # release <-> manual round-trip always re-fetches the official tarball.
-    - name: Clear the release version stamp in manual mode
-      ansible.builtin.file:
-        path: /usr/local/lib/decdn/installed-version
-        state: absent
-
 # Integrity backstop: runs EVERY converge (not just on install), so a host whose
 # binary drifted from the pin is caught loudly rather than trusted via the stamp.
 # rc != 0 is included because a custom failed_when suppresses the module's default
 # non-zero-exit check — else a broken manual binary (rc != 0) would pass silently.
 # In "release" mode decdn_node_version is always set (asserted), so the version
-# match is enforced; in "manual" mode with no version it degrades to a liveness
+# match is enforced; in "source"/"manual" mode with no version it degrades to a liveness
 # check (rc == 0).
+# A source-built binary is the output of code (dependency build scripts) this host
+# does not trust, so in source mode the backstop runs it in a throwaway sandboxed
+# unit: an ephemeral DynamicUser, no network, a read-only filesystem, never root.
+# Release (signature-verified) and manual (operator-supplied) binaries run as before.
+- name: Choose how the version backstop runs the binaries
+  ansible.builtin.set_fact:
+    decdn_version_check_argv: >-
+      {{ ['systemd-run', '--wait', '--pipe', '--collect', '--quiet',
+          '--property=DynamicUser=yes', '--property=ProtectSystem=strict',
+          '--property=ProtectHome=yes', '--property=PrivateTmp=yes',
+          '--property=PrivateDevices=yes', '--property=PrivateNetwork=yes',
+          '--property=NoNewPrivileges=yes', '--property=RuntimeMaxSec=60', '--']
+         if decdn_node_install_method == 'source' else [] }}
+
 - name: Verify the installed decdn-node runs (version backstop)
-  ansible.builtin.command: "{{ decdn_bin }} --version"
+  ansible.builtin.command:
+    argv: "{{ decdn_version_check_argv + [decdn_bin, '--version'] }}"
   register: decdn_installed_version
   changed_when: false
   failed_when: >-
@@ -310,10 +356,70 @@
 # so a half-installed pair (daemon present, CLI missing) must fail here rather than
 # at the config gate further down.
 - name: Verify the installed decdn CLI runs (version backstop)
-  ansible.builtin.command: "{{ decdn_cli_bin }} --version"
+  ansible.builtin.command:
+    argv: "{{ decdn_version_check_argv + [decdn_cli_bin, '--version'] }}"
   register: decdn_installed_cli_version
   changed_when: false
   failed_when: >-
     decdn_installed_cli_version.rc != 0
     or (decdn_node_version | length > 0
         and decdn_node_version not in decdn_installed_cli_version.stdout)
+
+# Restart onto a daemon binary the running process may not be on. Every install
+# path above notifies on a changed binary, but a handler queued by a run that then
+# failed (config validate, a gate, a dropped connection) never ran, and the next
+# run finds the binary already in place and notifies nothing, so the daemon would
+# keep the old code behind a green deploy. tasks/main.yml records the checksum
+# after the start; a mismatch here means that never happened for this binary.
+# The record is initialised from the pre-install binary at the top of this file, so
+# it is absent here only on a host that had no binary (nothing was running), and an
+# upgrade to this role version does not bounce an unchanged daemon.
+- name: Hash the installed decdn-node binary
+  ansible.builtin.stat:
+    path: "{{ decdn_bin }}"
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: decdn_bin_stat
+
+- name: Read the binary checksum the daemon was last started on
+  ansible.builtin.slurp:
+    src: "{{ decdn_bin_checksum_file }}"
+  register: decdn_bin_recorded
+  failed_when: false
+  changed_when: false
+
+- name: Note a binary the daemon has not been restarted onto
+  ansible.builtin.debug:
+    msg: >-
+      {{ decdn_bin }} differs from the binary decdn-node was last started on (an
+      earlier run installed it and failed before restarting) — restarting decdn-node.
+  changed_when: true
+  notify: Restart decdn-node
+  when:
+    - decdn_bin_recorded.content is defined
+    - (decdn_bin_recorded.content | b64decode | trim) != (decdn_bin_stat.stat.checksum | default(''))
+
+# Stamps are written only now, after both backstops passed: a stamp recorded
+# before the check would make the next run skip reinstalling a broken binary.
+- name: Record what was installed
+  when:
+    - decdn_node_install_method in ["release", "source"]
+    - not ansible_check_mode
+  block:
+    - name: Ensure the stamp directory exists
+      ansible.builtin.file:
+        path: /usr/local/lib/decdn
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Record the installed version or source commit
+      ansible.builtin.copy:
+        dest: >-
+          /usr/local/lib/decdn/{{ 'installed-version' if decdn_node_install_method == 'release'
+          else 'installed-source' }}
+        content: "{{ decdn_node_version if decdn_node_install_method == 'release' else decdn_source_id }}\n"
+        owner: root
+        group: root
+        mode: "0644"

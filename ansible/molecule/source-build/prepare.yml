@@ -1,0 +1,73 @@
+---
+# Stage what the role does not create: the operator keystore/password/identity
+# (as in ../default/prepare.yml), the Python stub the fixture binaries exec, and the
+# fixture as a local bare git repo the role clones over file://.
+- name: Prepare
+  hosts: all
+  become: true
+  vars:
+    fixture_src: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/files/fixture/"
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/default/files/decdn-node-stub"
+  tasks:
+    - name: Ensure data + config directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - /var/lib/decdn
+        - /etc/decdn
+        - /usr/local/lib/decdn
+        - /usr/local/lib/decdn-molecule
+
+    - name: Stage the placeholder keystore, password and node identity
+      ansible.builtin.copy:
+        dest: "{{ item.dest }}"
+        content: "{{ item.content }}"
+        mode: "0600"
+      loop:
+        - {dest: /var/lib/decdn/keystore.json, content: "{}\n"}
+        - {dest: /etc/decdn/keystore.password, content: "molecule-placeholder\n"}
+        - {dest: /var/lib/decdn/node.secret, content: "molecule-placeholder-node-secret\n"}
+      loop_control:
+        label: "{{ item.dest }}"
+
+    # A release stamp for the SAME version this scenario pins, the worst case: if
+    # source mode stopped clearing it, a later release deploy would skip the
+    # download and keep source-built binaries. verify.yml asserts it is gone.
+    - name: Seed a release version stamp
+      ansible.builtin.copy:
+        dest: /usr/local/lib/decdn/installed-version
+        content: "0.0.0-molecule-stub\n"
+        mode: "0644"
+
+    - name: Install the stub the fixture binaries exec
+      ansible.builtin.copy:
+        src: "{{ stub_bin }}"
+        dest: /usr/local/lib/decdn-molecule/decdn-node-stub
+        mode: "0755"
+
+    - name: Install git
+      ansible.builtin.apt:
+        name: git
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Copy the fixture workspace
+      ansible.builtin.copy:
+        src: "{{ fixture_src }}"
+        dest: /srv/decdn-fixture-work/
+        mode: preserve
+
+    - name: Commit the fixture and publish it as a bare repo
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          cd /srv/decdn-fixture-work
+          git init -q -b main
+          git add -A
+          git -c user.name=molecule -c user.email=molecule@example.invalid commit -q -m fixture
+          git clone -q --bare /srv/decdn-fixture-work /srv/decdn-fixture.git
+        creates: /srv/decdn-fixture.git
+        executable: /bin/bash

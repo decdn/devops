@@ -14,20 +14,23 @@
 - name: Require a valid install method
   ansible.builtin.assert:
     that:
-      - sponsord_onramp_install_method in ["release", "manual"]
+      - sponsord_onramp_install_method in ["release", "source", "manual"]
     fail_msg: >-
-      sponsord_onramp_install_method must be "release" (pinned GitHub Release
-      tarball) or "manual" (copy a locally-built binary from the control machine).
+      sponsord_onramp_install_method must be "release" (pinned GitHub Release tarball),
+      "source" (build sponsord_onramp_source_ref on the host) or "manual" (copy a
+      locally-built binary from the control machine).
 
 - name: Require a pinned release version
   ansible.builtin.assert:
     that:
       - sponsord_onramp_version | length > 0
     fail_msg: >-
-      sponsord_onramp_install_method "release" requires sponsord_onramp_version (e.g.
-      "0.1.0") and a matching sponsord-onramp-v<version> GitHub Release. Until upstream
-      cuts one, build the binary from a decdn/sponsord checkout and use
-      sponsord_onramp_install_method "manual".
+      sponsord_onramp_install_method "release" (the default) requires sponsord_onramp_version (e.g.
+      "0.1.0") and a matching sponsord-onramp-v<version> release. Upstream decdn/sponsord has
+      cut none yet, so until it does either serve one from a mirror
+      (sponsord_onramp_release_base), set sponsord_onramp_install_method "source" with a
+      sponsord_onramp_source_ref to build on the host, or use "manual" to copy a binary
+      built on the control machine.
   when: sponsord_onramp_install_method == "release"
 
 - name: Validate sponsord_onramp_verify_release_signature is a real boolean
@@ -39,9 +42,60 @@
       true unless you install from a mirror that strips SHA256SUMS.asc.
   when: sponsord_onramp_install_method == "release"
 
+# Build-from-source inputs; see roles/decdn_node/tasks/main.yml for why the repo
+# URL may not carry credentials.
+- name: Validate the build-from-source inputs
+  when: sponsord_onramp_install_method == "source"
+  block:
+    # First, because a later message or task name may print the repo URL.
+    # A secret in the URL is a password (https://user:token@, or user:token@host:
+    # in scp form), any userinfo on an http(s) URL (a bare token as the username),
+    # or a query/fragment (?access_token=). An ssh username is not a secret:
+    # ssh://git@host/path and git@host:path both pass, for a deploy key.
+    - name: Refuse credentials in the source repo URL
+      ansible.builtin.assert:
+        that:
+          - sponsord_onramp_source_repo is string
+          - sponsord_onramp_source_repo | length > 0
+          - "'?' not in sponsord_onramp_source_repo and '#' not in sponsord_onramp_source_repo"
+          - >-
+            ((sponsord_onramp_source_repo | urlsplit('password') or '') | length == 0)
+            if sponsord_onramp_source_repo is match('^[A-Za-z][A-Za-z0-9+.-]*://')
+            else sponsord_onramp_source_repo is not match('^[^/@]*:[^/@]*@')
+          - >-
+            not (sponsord_onramp_source_repo | urlsplit('scheme') in ['http', 'https']
+                 and (sponsord_onramp_source_repo | urlsplit('username') or '') | length > 0)
+        fail_msg: >-
+          sponsord_onramp_source_repo must not carry a secret (so it is not echoed here):
+          no password, no user on an http(s) URL, no query or fragment.
+          Inventory is not a place for secrets. Root fetches the source, so for a
+          private repo give root on the host an ssh deploy key (and the git
+          host's key in root's ~/.ssh/known_hosts) and use ssh://git@host/path or
+          git@host:path, or a credential helper in root's git config.
+
+    - name: Require a git ref to build
+      ansible.builtin.assert:
+        that:
+          - sponsord_onramp_source_ref is string
+          - sponsord_onramp_source_ref | trim | length > 0
+        fail_msg: >-
+          sponsord_onramp_install_method "source" requires sponsord_onramp_source_ref: the tag, branch or
+          commit SHA to build (e.g. "main").
+
+    - name: Validate sponsord_onramp_source_build_jobs
+      ansible.builtin.assert:
+        that:
+          - (sponsord_onramp_source_build_jobs | string) == ""
+            or (sponsord_onramp_source_build_jobs | string) is match("^[1-9][0-9]*$")
+          - (sponsord_onramp_source_build_timeout | string) is match("^[1-9][0-9]*$")
+        fail_msg: >-
+          sponsord_onramp_source_build_jobs must be "" (one job per CPU) or a positive integer,
+          and sponsord_onramp_source_build_timeout a positive number of seconds (got
+          "{{ sponsord_onramp_source_build_jobs }}" and "{{ sponsord_onramp_source_build_timeout }}").
+
 - name: Resolve the sponsord-onramp target triple
   when: >-
-    sponsord_onramp_install_method == "release"
+    sponsord_onramp_install_method in ["release", "source"]
     or (sponsord_onramp_release_target_dir | length > 0 and sponsord_onramp_manual_bin_src | length == 0)
   block:
     - name: Require a supported target triple

@@ -1,9 +1,13 @@
 ---
-# Install the sponsord binary. Two methods, selected by sponsord_install_method:
-#   "release": download the pinned sponsord-v<version> GitHub Release tarball,
-#     verify it against the GPG-signed SHA256SUMS manifest, then extract.
+# Install the sponsord binary. Three methods, selected by sponsord_install_method:
+#   "release" (default): download the pinned sponsord-v<version> GitHub Release
+#     tarball, verify it against the GPG-signed SHA256SUMS manifest, then extract.
 #     Idempotent and upgrade-aware via a version stamp.
-#   "manual" (default today): copy a locally-built binary from the control machine.
+#   "source": clone sponsord_source_repo at sponsord_source_ref on the host and
+#     cargo-build it as an unprivileged user (tasks/source.yml).
+#   "manual": copy a locally-built binary from the control machine.
+# Every method clears BOTH stamps before it replaces the binary, so an interrupted
+# install (a switch included) leaves no stamp vouching for it.
 # The verification steps mirror roles/decdn_node/tasks/install.yml, which carries
 # the full rationale for each (status-parsed gpg, exact manifest entry, private
 # staging dir kept on failure).
@@ -154,6 +158,17 @@
           changed_when: false
           failed_when: sponsord_sum_check.rc != 0
 
+        # Dropped before extracting, so a release that then fails the version
+        # check leaves no stamp and the next run (even one pinned back to the
+        # previous version) downloads again.
+        - name: Clear both install stamps before installing
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /usr/local/lib/sponsord/installed-version
+            - /usr/local/lib/sponsord/installed-source
+
         - name: Extract the binary into /usr/local/bin
           ansible.builtin.unarchive:
             src: "{{ sponsord_stage.path }}/{{ sponsord_release_archive }}"
@@ -183,9 +198,23 @@
             - sponsord_stage.path is defined
             - not (sponsord_sig_check.failed | default(false) or sponsord_sum_check.failed | default(false))
 
+- name: Build and install from source on the host
+  ansible.builtin.import_tasks: source.yml
+  when: sponsord_install_method == "source"
+
 - name: Install a locally-built binary from the control machine
   when: sponsord_install_method == "manual"
   block:
+    # Before the copy, so an interrupted manual install leaves neither stamp
+    # vouching for it.
+    - name: Clear both install stamps before copying
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/local/lib/sponsord/installed-version
+        - /usr/local/lib/sponsord/installed-source
+
     - name: Copy the sponsord binary from the control machine
       ansible.builtin.copy:
         src: "{{ _sponsord_bin_src }}"
@@ -195,19 +224,23 @@
         mode: "0755"
       notify: Restart sponsord
 
-    # A leftover stamp would make a later release deploy of the SAME version skip
-    # the download, keeping this manual binary.
-    - name: Clear the release version stamp in manual mode
-      ansible.builtin.file:
-        path: /usr/local/lib/sponsord/installed-version
-        state: absent
-
 # Runs every converge, so a binary that drifted from the pin is caught. With
-# sponsord_version empty (the usual manual case) it degrades to a liveness check.
+# sponsord_version empty (the usual source/manual case) it degrades to a liveness check.
 # An exact match on clap's `sponsord <version>` line, so a 0.1.0 pin does not
 # accept 10.1.0 or 0.1.0-rc.1.
+# In source mode the binary is the output of untrusted build scripts, so it runs in
+# a throwaway sandboxed unit (ephemeral DynamicUser, no network, read-only
+# filesystem), never as root; see roles/decdn_node/tasks/install.yml.
 - name: Run the installed sponsord --version (version backstop)
-  ansible.builtin.command: "{{ sponsord_bin }} --version"
+  ansible.builtin.command:
+    argv: >-
+      {{ (['systemd-run', '--wait', '--pipe', '--collect', '--quiet',
+            '--property=DynamicUser=yes', '--property=ProtectSystem=strict',
+            '--property=ProtectHome=yes', '--property=PrivateTmp=yes',
+            '--property=PrivateDevices=yes', '--property=PrivateNetwork=yes',
+            '--property=NoNewPrivileges=yes', '--property=RuntimeMaxSec=60', '--']
+           if sponsord_install_method == 'source' else [])
+          + [sponsord_bin, '--version'] }}
   register: sponsord_installed_version
   changed_when: false
   failed_when: false
@@ -229,13 +262,22 @@
       remove /usr/local/lib/sponsord/installed-version to force a fresh download.
   when: not ansible_check_mode
 
-# Written only once the version check passed, so a tarball that installed a wrong
-# or broken binary is fetched again next run instead of being trusted via the stamp.
-- name: Record the installed release version
+# Written only once the version check passed, so a tarball (or build) that
+# installed a wrong or broken binary is fetched (or built) again next run instead of
+# being trusted via the stamp. Both install paths clear their stamp before
+# installing, so the release stamp is re-recorded whenever it installed.
+- name: Record what was installed
   when:
-    - sponsord_install_method == "release"
-    - sponsord_need_install | default(false)
+    - >-
+      (sponsord_install_method == "release"
+       and sponsord_need_install | default(false))
+      or sponsord_install_method == "source"
     - not ansible_check_mode
+  vars:
+    # [stamp name suffix, content] for the method in use.
+    sponsord_stamp_record: >-
+      {{ ['version', sponsord_version] if sponsord_install_method == 'release'
+         else ['source', sponsord_source_id | default('')] }}
   block:
     - name: Ensure the stamp directory exists
       ansible.builtin.file:
@@ -245,10 +287,10 @@
         group: root
         mode: "0755"
 
-    - name: Record the installed version
+    - name: Record the installed version or source commit
       ansible.builtin.copy:
-        dest: /usr/local/lib/sponsord/installed-version
-        content: "{{ sponsord_version }}\n"
+        dest: "/usr/local/lib/sponsord/installed-{{ sponsord_stamp_record[0] }}"
+        content: "{{ sponsord_stamp_record[1] }}\n"
         owner: root
         group: root
         mode: "0644"

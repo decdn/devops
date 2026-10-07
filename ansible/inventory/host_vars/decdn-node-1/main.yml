@@ -19,18 +19,24 @@
 # MUST-EDIT lines are yours to fill.
 
 # --- Which binaries to install ------------------------------------------------
-# Upstream has cut NO release tag yet (`git ls-remote --tags decdn/decdn` is empty
-# and release.yml only fires on a v[0-9]* tag push), so there is no tarball to
-# download and "release" mode cannot work. Build both binaries from a decdn/decdn
-# checkout and point the role at them:
-#     cargo build --release -p decdn-node -p decdn-cli
-# Once upstream cuts a release, switch to:
-#     decdn_node_install_method: release
-#     decdn_node_version: "0.1.1"
-# and the role verifies the tarballs against the GPG-signed SHA256SUMS manifest.
-decdn_node_install_method: manual
-decdn_node_manual_bin_src: ""   # MUST-EDIT — control-machine path to decdn-node
-decdn_cli_manual_bin_src: ""    # MUST-EDIT — control-machine path to decdn
+# "release" (the default): the v<version> GitHub Release tarballs, verified against
+# the GPG-signed SHA256SUMS manifest. Upstream has cut NO release tag yet
+# (`git ls-remote --tags decdn/decdn` is empty), so until it does either serve one
+# from a mirror (decdn_node_release_base) or pick one of the alternatives below.
+decdn_node_install_method: release
+decdn_node_version: ""          # MUST-EDIT — e.g. "0.1.1"
+#
+# Alternative: build on the node from a git ref (any tag, branch or SHA), as an
+# unprivileged build user with a pinned toolchain. Clear decdn_node_version (the
+# --version check enforces it in every mode; upstream's crates report 0.0.0):
+#     decdn_node_install_method: source
+#     decdn_node_source_ref: main
+#     decdn_node_version: ""
+# Alternative: copy binaries built on this control machine
+# (`cargo build --release -p decdn-node -p decdn-cli` in a decdn/decdn checkout):
+#     decdn_node_install_method: manual
+#     decdn_node_manual_bin_src: /path/to/decdn/target/release/decdn-node
+#     decdn_cli_manual_bin_src: /path/to/decdn/target/release/decdn
 
 # --- Chain (Arbitrum Sepolia, chain 421614) -----------------------------------
 # The RPC endpoint is the one sensitive value — provision it as DECDN_RPC_URL in

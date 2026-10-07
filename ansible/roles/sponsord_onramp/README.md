@@ -20,12 +20,17 @@ is unreachable.
 ## What it does
 
 - **Installs the binary**, exactly as the `sponsord` role does:
-  - `manual` (the default) copies a binary built in a `decdn/sponsord` checkout.
+  - `release` (the default) downloads `sponsord-onramp-v<version>` and verifies it
+    against the GPG-signed `SHA256SUMS`, with the KEYS file vendored in the
+    `sponsord` role. Upstream has cut no release yet, so until it does this needs a
+    mirror (`sponsord_onramp_release_base`).
+  - `source` builds `sponsord_onramp_source_ref` of `sponsord_onramp_source_repo`
+    on the host (`cargo build -p sponsord-onramp`) as the `sponsord` role's `source`
+    mode does, from its own clone, so the two can pin different refs. Each builds
+    from scratch, so a co-located host compiles the sponsord workspace twice.
+  - `manual` copies a binary built in a `decdn/sponsord` checkout.
     `sponsord_onramp_release_target_dir` defaults to `sponsord_release_target_dir`,
     so one `cargo build --release` covers both.
-  - `release` downloads `sponsord-onramp-v<version>` and verifies it against the
-    GPG-signed `SHA256SUMS`, with the KEYS file vendored in the `sponsord` role.
-  - Upstream has cut no release yet, so `manual` is the only working method today.
 - **Uses two secrets.** Both stay root `0600` under `/etc/sponsord` and reach the
   onramp as `LoadCredential=` credentials, never as environment:
 
@@ -107,7 +112,9 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `sponsord_onramp_install_method` | `manual` | `manual` or `release` |
+| `sponsord_onramp_install_method` | `release` | `release`, `source` or `manual` |
+| `sponsord_onramp_source_repo` / `_source_ref` | `decdn/sponsord` on GitHub / `""` | `source` only. The ref is required: a tag, branch or SHA. |
+| `sponsord_onramp_source_build_jobs` | `""` | `source` only: `CARGO_BUILD_JOBS` (`""` = one per CPU). |
 | `sponsord_onramp_manual_bin_src` / `_release_target_dir` | `""` / `sponsord_release_target_dir` | `manual` only. |
 | `sponsord_onramp_version` | `""` | Required in `release` mode, e.g. `0.1.0` → tag `sponsord-onramp-v0.1.0`. |
 | `sponsord_onramp_network` | `sponsord_network` | Supplies CapacityBond and SlashJudge. Must match the daemon's network. |
@@ -177,7 +184,10 @@ collector; its access logs are not shipped.
   ```
 
   Then take the host out of `sponsord_onramp_hosts`, so the next deploy closes
-  tcp/80 and tcp/443.
+  tcp/80 and tcp/443. After a `source` install, remove
+  `/var/lib/decdn-build/git/sponsord-onramp` (or the whole build user, `sudo userdel
+  decdn-build && sudo rm -rf /var/lib/decdn-build`, once nothing on the host builds
+  from source).
 
 ## Testing
 
