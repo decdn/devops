@@ -18,6 +18,13 @@ both (see [RELEASING.md](../../RELEASING.md)).
   ConfigMaps (`metrics.grafanaDashboards`). Both live in `files/monitoring/`, which
   this repo maintains; `decdn/decdn` no longer ships them.
 
+### Fixed
+
+- Delivery dashboard: recency seed failures get their own stat panel, which reads the
+  raw `decdn_cache_recency_seed_failures_total` like the `DecdnCacheRecencySeedFailed`
+  alert. The counter is set once at cache open, before the first scrape, so the
+  `rate()` it was plotted with read 0 even after a failure (#99).
+
 ## [0.1.0] — unreleased
 
 Initial chart. Not yet published (pre-1.0; the values shape may still change).
