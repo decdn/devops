@@ -151,6 +151,14 @@ sponsord_onramp_ttl_secs: ""                  # [the daemon's maximum] TTL per c
 sponsord_onramp_fund_rate_per_min: ""         # [10] POST /v1/fund per address; 0 = off
 sponsord_onramp_poll_rate_per_min: ""         # [120] GET /v1/capability per address; 0 = off
 
+# --- Logging ----------------------------------------------------------------------
+# RUST_LOG for the onramp: a level (debug) or target=level pairs
+# (sponsord_onramp=debug,info). "" omits it and the onramp logs at info. Its
+# release is built without tracing's env-filter, so span or field filters are not
+# understood: the onramp prints "Ignoring RUST_LOG" and then logs NOTHING. Letters,
+# digits and _=,.:- only.
+sponsord_onramp_log_level: ""
+
 # --- Files on the host ----------------------------------------------------------
 # Beside the daemon's files: the directory and the API token follow the sponsord
 # role's sponsord_etc / sponsord_api_token_file when inventory sets them (the

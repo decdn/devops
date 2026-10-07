@@ -13,8 +13,8 @@
 #      onramp; an unchanged re-run is a no-op; an emptied value never adopts the
 #      role's own file; with the record discarded the host's file is accepted.
 # The proxy side effects (proxy "none", ACME, a foreign Caddyfile) run in
-# ../sponsord-onramp-caddy, and the source install in ../sponsord-onramp-source,
-# beside this scenario.
+# ../sponsord-onramp-caddy, the source install in ../sponsord-onramp-source, and
+# backup and decommission in ../sponsord-onramp-lifecycle, beside this scenario.
 # The host is left healthy on the role's own Caddyfile, `tls internal`, for verify.
 - name: Side effect — rotation, the fatal gate and the restart-input record
   hosts: all

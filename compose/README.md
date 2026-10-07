@@ -248,11 +248,13 @@ the proxy.
    `ONRAMP_GATE_TEMPLATE` at it in `sponsord-onramp.env`:
 
    ```bash
-   sudo install -m 0644 -o root -g root gate.html /etc/sponsord/onramp-gate/gate.html
+   sudo install -D -m 0644 -o root -g root gate.html /etc/sponsord/onramp-gate/gate.html
    # in sponsord-onramp.env: ONRAMP_GATE_TEMPLATE=/etc/sponsord/onramp-gate/gate.html
    ```
 
-   A path the onramp cannot read stops it at start, with the path in its log.
+   The onramp serves whatever file `ONRAMP_GATE_TEMPLATE` names, to anyone, so it
+   must point inside `/etc/sponsord/onramp-gate/`, never at `/run/secrets/`. A path
+   it cannot read stops it at start, with the path in its log.
 
 6. **TLS in front of the onramp.** Either:
    - **Caddy** (`caddy` profile): point the domain's DNS at this host and open
@@ -296,10 +298,11 @@ that recreates it, a treasury rotation), check that it holds no unconfirmed pool
 top-up:
 
 ```bash
-curl -s 127.0.0.1:8090/metrics | grep '^sponsord_pool_topup_unconfirmed_since_unix'
+curl -fsS 127.0.0.1:8090/metrics | grep '^sponsord_pool_topup_unconfirmed_since_unix'
 ```
 
-Anything but `0` is a held top-up: the keeper broadcast one and could not read its
+`… 0` means no hold. An error or no output means the state is unknown: do not
+restart until you know. Anything else is a held top-up: the keeper broadcast one and could not read its
 receipt, so it sends no other until that transaction mines or provably never can. A
 restart forgets the hold, and the pool can then be refilled twice. Wait for it to
 clear; if the transaction was dropped, send 0-value transactions from the treasury to
@@ -327,16 +330,23 @@ yours. The `SponsordTopupHeld` alert (below) flags it.
   wallet must own `SPONSORD_POOL_ID`, or sponsord exits at start.
 - **Health:** no container healthchecks, as for the node. Probe the two `/healthz`
   endpoints above from the host. sponsord also serves `/metrics` on the same port, and
-  logs errors only unless `RUST_LOG=info` is set in `sponsord.env`. The onramp ignores
-  `RUST_LOG` and always logs at info.
+  logs errors only unless `RUST_LOG=info` is set in `sponsord.env`. The onramp logs
+  at info; its `RUST_LOG` takes a level or `target=level` pairs only (a span or
+  field filter makes it log nothing).
 - **Dashboard and alerts:** a sponsord dashboard and alert rules (pool balance, keeper
   failures, a held top-up) are in
   [`charts/decdn-node/files/monitoring/sponsord/`](../charts/decdn-node/files/monitoring/README.md#sponsord).
 - **Backup:** the treasury keystore and password are the only copy of the key that
-  owns the pool and its funds. Copy them off the host encrypted, e.g.
-  `sudo tar -C / -czf - etc/sponsord/treasury-keystore.json etc/sponsord/treasury-password etc/sponsord/api-token | age -r <recipient> > sponsord.tar.age`
-  (the Ansible path's `make backup` does the same, see
-  [`docs/lifecycle.md`](../docs/lifecycle.md)).
+  owns the pool and its funds. Copy them off the host encrypted, with the same
+  files the Ansible path's `make backup` takes
+  ([`docs/lifecycle.md`](../docs/lifecycle.md)):
+
+  ```bash
+  set -o pipefail
+  sudo tar -C / --numeric-owner -czf - etc/sponsord/treasury-keystore.json \
+      etc/sponsord/treasury-password etc/sponsord/api-token etc/sponsord/turnstile-secret \
+    | age -r age1… -o sponsord.tar.age
+  ```
 
 ## Before a release: a local image
 

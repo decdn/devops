@@ -91,7 +91,8 @@ identity on the network and on-chain. **Stop the old host first.**
    `make decommission LIMIT=old-host` (it removes the node's service and this repo's
    Alloy agent and keeps the data; ignore the on-chain exit steps it prints, since the
    identity is moving, not leaving) or run `sudo systemctl disable --now decdn-node`
-   on it.
+   on it. On a host that also runs sponsord, `make decommission` takes sponsord and
+   its onramp down too: to move only the node, use the `systemctl` command.
 
 2. **Prepare the new host** with a normal deploy. Do *not* set
    `decdn_node_generate_keystore: true` for it. The deploy creates the `decdn` user
@@ -139,7 +140,10 @@ make decommission LIMIT=<host>    # LIMIT is required; you type the host name to
 
 It stops `decdn-node` with `systemctl` (SIGTERM, which is the daemon's graceful drain
 path), disables it and removes the unit, and tears down the Grafana Alloy agent this
-repo installed, if any. `-e decdn_decommission_purge_cache=true` also deletes the
+repo installed, if any. On a host that also runs sponsord it removes sponsord and its
+onramp as well, after checking for a held top-up
+([sponsord](#sponsord-the-onboarding-sponsor)); the one confirmation prompt lists every
+service it covers. `-e decdn_decommission_purge_cache=true` also deletes the
 cache. It refuses to run on more than one host unless you raise
 `decdn_decommission_max_hosts`, and an unanswered confirmation prompt fails after
 `decdn_decommission_prompt_seconds` (300). Both entry points refuse a
@@ -238,18 +242,36 @@ refilled twice. So the role reads `/metrics` before any restart a deploy would c
 and `make decommission` before it stops sponsord, and both **fail** while a hold is
 on. Wait for it to clear (send 0-value transactions from the treasury to itself if
 the transaction was dropped; the daemon's error log line says how many), then re-run.
-`-e sponsord_restart_ignore_topup_hold=true` overrides the deploy's check, only for a
-hold you have confirmed can never mine.
+`ANSIBLE_ARGS='-e {"sponsord_restart_ignore_topup_hold":true}'` overrides both checks
+(and the refusal when `/metrics` does not answer), only for a hold you have confirmed
+can never mine. Use the JSON form: `-e name=true` passes the string `"true"`, which
+the role's boolean check refuses. Nothing guards a restart this repo does not cause
+(a crash, or a package upgrade restarting services); the `SponsordTopupHeld` alert
+is how you learn of a hold.
 
 **Migration.** Never run two sponsord daemons on one treasury: both would top up the
-pool. Decommission the old host first (`make decommission LIMIT=old-host`), stream
-the archive into the new host as for a node (step 3 above, without the `chown`: the
-files stay `root` `0600`), then deploy it.
+pool.
+
+1. Back up and decommission the old host: `make backup LIMIT=old-host`, then
+   `make decommission LIMIT=old-host` (on a host that also runs a node, that takes the
+   node down too). Take the old host out of `sponsord_hosts` and
+   `sponsord_onramp_hosts`: decommission keeps `/etc/sponsord`, so a later deploy
+   would start a second daemon on the same treasury.
+2. Restore the fetched archive onto the new host. The files stay `root` `0600`:
+
+   ```bash
+   age -d -i ~/.config/decdn/backup-age.key ansible/backups/old-host/<file>.tar.age \
+     | ssh new-host 'sudo tar -xzf - -C / --no-same-owner'
+   ```
+
+3. Deploy the new host.
 
 **Decommission.** On a host in `sponsord_onramp_hosts`, `make decommission` stops and
 removes the onramp's unit and stops and disables the role's Caddy (only when
 `/etc/caddy/Caddyfile` carries the role's marker). On a host in `sponsord_hosts`, it
-then stops and removes sponsord's unit. A co-located host is asked to confirm once.
+then checks for a held top-up once more and stops and removes sponsord's unit. One
+typed confirmation per run, in the first play that reaches the host, names every
+service it covers there.
 It keeps `/etc/sponsord` (the treasury owns the pool), the binaries and the caddy
 package, and does not touch the chain: the pool and its USDC stay with the treasury
 wallet until you withdraw them with the `decdn` CLI. tcp/80 and tcp/443 stay open

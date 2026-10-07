@@ -51,14 +51,18 @@ tests:
         exp_alerts:
           - exp_labels: {job: sponsord, instance: a, component: sponsor, severity: critical}
 
-  # Last check at t=60s and never again: stale once 3h have passed, plus for: 15m.
-  # A keeper that checks every hour never fires.
+  # a: last check at t=60s and never again, stale once 3h have passed, plus
+  # for: 15m. b: a last check that keeps up with the clock, never stale.
+  # c: no check has ever succeeded (0): not "stale" (time() - 0 would fire after
+  # just the for), but SponsordPoolNeverChecked after its 3h.
   - interval: 5m
     input_series:
       - series: 'sponsord_pool_last_check_unix{job="sponsord", instance="a"}'
         values: '60x60'
       - series: 'sponsord_pool_last_check_unix{job="sponsord", instance="b"}'
         values: '0+300x60'
+      - series: 'sponsord_pool_last_check_unix{job="sponsord", instance="c"}'
+        values: '0x60'
     alert_rule_test:
       - eval_time: 3h
         alertname: SponsordPoolCheckStale
@@ -67,6 +71,13 @@ tests:
         alertname: SponsordPoolCheckStale
         exp_alerts:
           - exp_labels: {job: sponsord, instance: a, component: sponsor, severity: warning}
+      - eval_time: 2h
+        alertname: SponsordPoolNeverChecked
+        exp_alerts: []
+      - eval_time: 3h30m
+        alertname: SponsordPoolNeverChecked
+        exp_alerts:
+          - exp_labels: {job: sponsord, instance: c, component: sponsor, severity: warning}
 
   # An empty pool fires only once the keeper has read it.
   - interval: 1m
@@ -85,15 +96,21 @@ tests:
         exp_alerts:
           - exp_labels: {job: sponsord, instance: a, component: sponsor, severity: critical}
 
-  # A keeper failure fires at once; the request-error rule ignores caller faults.
+  # A keeper failure fires at once (that counter is exported from start, at 0).
+  # The request-error series are written as sponsord exports them: absent until a
+  # code's first error, then already non-zero. Both of sponsord's own codes fire
+  # on that first appearance, a caller fault (bad_request) never does, and the
+  # alert resolves once a code stops rising for 15m.
   - interval: 1m
     input_series:
       - series: 'sponsord_pool_keeper_failures_total{job="sponsord", instance="a"}'
         values: '0 0 1 1 1'
       - series: 'sponsord_request_errors_total{job="sponsord", instance="a", code="chain_unavailable"}'
-        values: '0 0 2 2 2'
+        values: '_ _ 2x40'
+      - series: 'sponsord_request_errors_total{job="sponsord", instance="a", code="internal"}'
+        values: '_ _ _ 1x40'
       - series: 'sponsord_request_errors_total{job="sponsord", instance="a", code="bad_request"}'
-        values: '0 0 9 9 9'
+        values: '_ _ 9x40'
     alert_rule_test:
       - eval_time: 3m
         alertname: SponsordKeeperFailing
@@ -103,3 +120,7 @@ tests:
         alertname: SponsordRequestFailures
         exp_alerts:
           - exp_labels: {job: sponsord, instance: a, code: chain_unavailable, component: sponsor, severity: warning}
+          - exp_labels: {job: sponsord, instance: a, code: internal, component: sponsor, severity: warning}
+      - eval_time: 30m
+        alertname: SponsordRequestFailures
+        exp_alerts: []

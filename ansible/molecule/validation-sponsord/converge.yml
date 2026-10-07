@@ -242,6 +242,82 @@
             decdn_rejected: "{{ decdn_rejected + ['sponsord-log-level'] }}"
           when: ansible_failed_task.name == "Validate sponsord_log_level"
 
+    # A newline would add a line to the EnvironmentFile after SPONSORD_BIND, and
+    # the later assignment wins: this one would put the API on every interface.
+    - name: "Case sponsord-log-level — a log level carrying a second env line"
+      block:
+        - name: Run sponsord with a log level holding a newline
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_log_level: "info\nSPONSORD_BIND=0.0.0.0:8090"
+      rescue:
+        - name: Record sponsord-log-level rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-log-level'] }}"
+          when: ansible_failed_task.name == "Validate sponsord_log_level"
+
+    # --- sponsord tasks_from: backup (its settings are checked before any file) ---
+    - name: "Case sponsord-backup — a private key as a recipient"
+      block:
+        - name: Run the sponsord backup with a private key as its recipient
+          ansible.builtin.include_role:
+            name: sponsord
+            tasks_from: backup
+          vars:
+            # kics-scan ignore-line (a fake key under test, not a secret)
+            sponsord_backup_age_recipients: ["AGE-SECRET-KEY-1{{ 'Q' * 58 }}"]
+      rescue:
+        - name: Record sponsord-backup rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-backup'] }}"
+          when: ansible_failed_task.name == "Validate the backup settings"
+
+    - name: "Case sponsord-backup — no recipients"
+      block:
+        - name: Run the sponsord backup with no recipients
+          ansible.builtin.include_role:
+            name: sponsord
+            tasks_from: backup
+          vars:
+            sponsord_backup_age_recipients: []
+      rescue:
+        - name: Record sponsord-backup rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-backup'] }}"
+          when: ansible_failed_task.name == "Validate the backup settings"
+
+    # The role makes the backup dir root 0700: /etc would lock the host out.
+    - name: "Case sponsord-backup-dir — a system directory"
+      block:
+        - name: Run the sponsord backup into /etc
+          ansible.builtin.include_role:
+            name: sponsord
+            tasks_from: backup
+          vars:
+            sponsord_backup_age_recipients: ["age1{{ 'q' * 58 }}"]
+            sponsord_backup_dir: /etc
+      rescue:
+        - name: Record sponsord-backup-dir rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-backup-dir'] }}"
+          when: ansible_failed_task.name == "Require the backup dir to stay clear of sponsord and system directories"
+
+    - name: "Case sponsord-backup-dir — inside the credentials directory"
+      block:
+        - name: Run the sponsord backup into /etc/sponsord
+          ansible.builtin.include_role:
+            name: sponsord
+            tasks_from: backup
+          vars:
+            sponsord_backup_age_recipients: ["age1{{ 'q' * 58 }}"]
+            sponsord_backup_dir: /etc/sponsord/backups
+      rescue:
+        - name: Record sponsord-backup-dir rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-backup-dir'] }}"
+          when: ansible_failed_task.name == "Require the backup dir to stay clear of sponsord and system directories"
+
     - name: "Case sponsord-rpc-newline — an RPC URL that injects a second variable"
       block:
         - name: Run sponsord with an RPC URL that injects a second variable
@@ -878,6 +954,20 @@
             decdn_rejected: "{{ decdn_rejected + ['onramp-limit'] }}"
           when: ansible_failed_task.name == "Validate the onramp's limits"
 
+    # A span filter: the onramp's Targets parser rejects it and then logs nothing.
+    - name: "Case onramp-log-level — a span filter"
+      block:
+        - name: Run sponsord_onramp with a span-filter log level
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_log_level: "[fund]=debug"
+      rescue:
+        - name: Record onramp-log-level rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-log-level'] }}"
+          when: ansible_failed_task.name == "Validate sponsord_onramp_log_level"
+
     - name: "Case onramp-ip-header — a header name with a space"
       block:
         - name: Run sponsord_onramp with a header name with a space
@@ -1173,7 +1263,8 @@
            "sponsord-network-chain", "sponsord-pool-id", "sponsord-pool-id-empty",
            "sponsord-wallet-bool", "sponsord-wallet-cli", "sponsord-zero-address", "sponsord-bind",
            "sponsord-limit", "sponsord-limit", "sponsord-bool", "sponsord-bool",
-           "sponsord-log-level", "sponsord-rpc-newline",
+           "sponsord-log-level", "sponsord-log-level", "sponsord-backup", "sponsord-backup",
+           "sponsord-backup-dir", "sponsord-backup-dir", "onramp-log-level", "sponsord-rpc-newline",
            "sponsord-rpc-gate", "sponsord-treasury", "sponsord-treasury", "sponsord-token",
            "sponsord-dir-missing", "sponsord-dir-format", "sponsord-dir-cross",
            "sponsord-bind", "sponsord-overwrite-untracked", "sponsord-token",

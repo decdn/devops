@@ -129,7 +129,8 @@ and its rules have promtool unit tests (`charts/decdn-node/tests/sponsord-alerts
   role entry points (`tasks_from: backup|decommission`): backups are encrypted on the host
   to operator public keys; decommission needs `LIMIT` + typed confirmation, keeps the
   identity and never touches the chain. Both also cover `sponsord_hosts` (and the onramp),
-  with one confirmation per host (`_decdn_decommission_confirmed`; the
+  with one confirmation per run, in the first play that reaches a host, whose prompt
+  lists every service it covers (`_decdn_decommission_confirmed`; the
   `decdn_decommission_*` cap and timeout are copied into all three roles' defaults,
   `make test-scripts` checks).
   Leaving `decdn_rpc_url` empty means the operator wrote `0600 /etc/decdn/decdn.env`
@@ -194,12 +195,14 @@ and its rules have promtool unit tests (`charts/decdn-node/tests/sponsord-alerts
     after the keystore decrypts and the on-chain pool-owner check passes.
   - **Top-up hold guard:** a restart or stop forgets a held, unconfirmed pool top-up
     (`sponsord_pool_topup_unconfirmed_since_unix` > 0), and the pool can be refilled
-    twice. `tasks/topup-hold.yml` reads `/metrics` before the role flushes a pending
-    restart and before decommission stops the daemon, and fails while a hold is on
-    (or `/metrics` does not answer). Every restart must go through it: a new notify
-    source must also be a hashed restart input, which is what "pending" reads.
-    `sponsord_restart_ignore_topup_hold` overrides it. Compose cannot guard itself;
-    its README has the manual check.
+    twice. `tasks/topup-hold.yml` reads `/metrics` (at the address the running
+    process listens on) before the role queues a restart and before decommission
+    stops the daemon, and fails while a hold is on or `/metrics` does not answer.
+    **The restart-inputs comparison is the role's only restart trigger:** never add
+    `notify: Restart sponsord` to another task; make the file a hashed input
+    instead, or the restart skips the guard. `sponsord_restart_ignore_topup_hold`
+    overrides it (pass it as JSON). Compose cannot guard itself; its README has the
+    manual check.
   - **Alloy toggles:** `playbooks/group_vars/all.yml` derives
     `grafana_alloy_node_enabled` / `grafana_alloy_sponsord_enabled` from group
     membership. They are host-scoped so a co-located host's two plays render one

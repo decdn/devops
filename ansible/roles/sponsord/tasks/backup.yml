@@ -42,6 +42,11 @@
 # The archive is written into sponsord_backup_dir, which the role makes root 0700,
 # so its shape is enforced before anything is touched (as decdn_node's
 # validate-lifecycle-paths.yml).
+- name: Resolve the onramp's Turnstile secret path
+  ansible.builtin.set_fact:
+    _sponsord_backup_turnstile_file: >-
+      {{ sponsord_onramp_turnstile_secret_file | default(sponsord_etc ~ '/turnstile-secret') }}
+
 - name: Constrain the backup paths (absolute, no traversal, no empty segments)
   ansible.builtin.assert:
     that:
@@ -56,6 +61,7 @@
   loop:
     - {name: sponsord_etc, value: "{{ sponsord_etc }}"}
     - {name: sponsord_backup_dir, value: "{{ sponsord_backup_dir }}"}
+    - {name: sponsord_onramp_turnstile_secret_file, value: "{{ _sponsord_backup_turnstile_file }}"}
   loop_control:
     label: "{{ item.name }}"
 
@@ -73,17 +79,20 @@
       outside {{ sponsord_etc }}, and not a system directory: the role makes it
       root-only (0700) and writes archives into it. The default is /var/backups/sponsord.
 
-# The onramp keeps its Turnstile secret beside the daemon's files; archived when present.
+# The onramp's Turnstile secret, at the onramp role's path when inventory moves it.
+# Required on a host in sponsord_onramp_hosts (the "Require every path" check
+# below fails without it); archived when present anywhere else.
 - name: Check for the onramp's Turnstile secret
   ansible.builtin.stat:
-    path: "{{ sponsord_etc }}/turnstile-secret"
+    path: "{{ _sponsord_backup_turnstile_file }}"
   register: _sponsord_backup_turnstile
 
 - name: Build the list of paths to archive
   ansible.builtin.set_fact:
     _sponsord_backup_paths: >-
       {{ [sponsord_treasury_keystore_file, sponsord_treasury_password_file, sponsord_api_token_file]
-         + ([sponsord_etc ~ '/turnstile-secret'] if _sponsord_backup_turnstile.stat.exists else [])
+         + ([_sponsord_backup_turnstile_file]
+            if _sponsord_backup_turnstile.stat.exists or 'sponsord_onramp_hosts' in group_names else [])
          + ([sponsord_secret_env_file] if sponsord_backup_include_env | bool else []) }}
     _sponsord_backup_file: >-
       {{ sponsord_backup_dir }}/{{ inventory_hostname }}-sponsord-{{

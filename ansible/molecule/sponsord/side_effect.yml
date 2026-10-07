@@ -11,9 +11,11 @@
 #      recorded `host` and locked to 0600; a host edit restarts the daemon; an
 #      inventory URL must not overwrite the host's file until confirmed.
 #   4. The top-up hold guard: while /metrics reports a held pool top-up, a converge
-#      that would restart the daemon fails before the restart, keeps the old PID
-#      and the old restart-inputs record, and the next converge after the hold
-#      clears applies the change; sponsord_restart_ignore_topup_hold overrides it.
+#      that would restart the daemon fails before the restart, keeping the old PID
+#      and the old restart-inputs record; reverting the change during the hold
+#      restarts nothing (the revert writes the recorded content back, which must
+#      not slip a restart past the guard); the override restarts during the hold;
+#      an unreadable /metrics refuses too; a plain converge restarts once it clears.
 # Release mode and treasury wallet generation run in ../sponsord-install, beside
 # this scenario. The first play must run on a fresh converge (it asserts no restart
 # yet), and it records the API token verify.yml compares against.
@@ -353,6 +355,25 @@
           {{ _sp_hold_before.status.MainPID }} -> {{ _sp_hold_refused.status.MainPID }})
           or rewrote {{ _sp_inputs }}, so the next run would not retry the restart.
 
+    # The refused run left the 7200 env on disk. Reverting writes back exactly what
+    # the daemon is running on: nothing to restart, so no restart, and no refusal.
+    - name: Revert the change while the top-up is still held
+      ansible.builtin.include_role:
+        name: sponsord
+
+    - name: Read the unit state after the revert
+      ansible.builtin.systemd_service:
+        name: sponsord
+      register: _sp_hold_reverted
+
+    - name: Require the revert not to have restarted sponsord
+      ansible.builtin.assert:
+        that:
+          - _sp_hold_reverted.status.MainPID == _sp_hold_before.status.MainPID
+        fail_msg: >-
+          Reverting the refused change restarted sponsord during the hold (PID
+          {{ _sp_hold_before.status.MainPID }} -> {{ _sp_hold_reverted.status.MainPID }}).
+
     - name: Converge the same change with the override
       ansible.builtin.include_role:
         name: sponsord
@@ -376,6 +397,47 @@
         path: /etc/sponsord/stub-topup-hold
         state: absent
 
+    # The override run left 7200 recorded; the inventory's 3600 is a pending restart.
+    - name: Make the stub's /metrics unreadable
+      ansible.builtin.copy:
+        dest: /etc/sponsord/stub-metrics-down
+        content: ""
+        mode: "0644"
+
+    - name: Converge a change while the hold state cannot be read
+      block:
+        - name: Run the role against an unreadable /metrics
+          ansible.builtin.include_role:
+            name: sponsord
+
+        - name: Fail — the guard restarted with the hold state unknown
+          ansible.builtin.fail:
+            msg: The role finished although /metrics answered 503.
+      rescue:
+        - name: Require the failure to come from the unreadable-state refusal
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Refuse to proceed while the hold state cannot be read'
+            fail_msg: >-
+              Expected the role to refuse at the unreadable-state check, but it failed
+              at "{{ ansible_failed_task.name }}".
+      always:
+        - name: Make the stub's /metrics readable again
+          ansible.builtin.file:
+            path: /etc/sponsord/stub-metrics-down
+            state: absent
+
+    - name: Read the unit state after the unreadable-state refusal
+      ansible.builtin.systemd_service:
+        name: sponsord
+      register: _sp_hold_unknown
+
+    - name: Require no restart while the hold state was unknown
+      ansible.builtin.assert:
+        that:
+          - _sp_hold_unknown.status.MainPID == _sp_hold_override.status.MainPID
+        fail_msg: sponsord restarted although its /metrics answered 503.
+
     # Back on the inventory's TTL, which verify.yml checks.
     - name: Converge once the hold has cleared
       ansible.builtin.include_role:
@@ -389,5 +451,5 @@
     - name: Require the plain converge to restart once the hold cleared
       ansible.builtin.assert:
         that:
-          - _sp_hold_cleared.status.MainPID != _sp_hold_override.status.MainPID
+          - _sp_hold_cleared.status.MainPID != _sp_hold_unknown.status.MainPID
         fail_msg: The converge after the hold cleared did not restart sponsord.

@@ -1,9 +1,11 @@
 ---
-# Take a host out of service: stop and remove every service this repo deployed on
-# it (decdn-node, sponsord-onramp and its Caddy, sponsord), then tear down the
-# opt-in Grafana Alloy agent. Keeps the identities and keys (the node's keystore
-# withdraws the bond; sponsord's treasury keystore owns the pool) and does NOT touch
-# the chain; each role's last task prints what is left to do on-chain.
+# Take a host out of service: stop every service this repo deployed on it and
+# remove its unit (decdn-node, sponsord-onramp, sponsord; the onramp's Caddy is
+# stopped and disabled, not removed), then tear down the opt-in Grafana Alloy agent.
+# Keeps the identities and keys (the node's keystore withdraws the bond; sponsord's
+# treasury keystore owns the pool) and does NOT touch the chain; each role's last
+# task prints what is left to do. One typed confirmation, in the first play that
+# reaches a host, names every service it covers there.
 #   make decommission LIMIT=<host>          # LIMIT is required; asks for typed confirmation
 # Take a backup first (make backup). See docs/lifecycle.md.
 
@@ -19,6 +21,8 @@
       ansible.builtin.include_role:
         name: sponsord
         tasks_from: topup-hold
+      vars:
+        _sponsord_hold_action: stop
 
 - name: Decommission deCDN nodes
   hosts: decdn_nodes

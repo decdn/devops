@@ -197,7 +197,7 @@
         "uid": "${DS_PROMETHEUS}"
       },
       "title": "Top-up hold",
-      "description": "sponsord_pool_topup_unconfirmed_since_unix: non-zero while a top-up came back unconfirmed and further top-ups are held. DO NOT restart sponsord while HELD: a restart forgets the hold and the pool can be refilled twice (the deploy tooling refuses). See upstream docs/operator.md, Monitor.",
+      "description": "sponsord_pool_topup_unconfirmed_since_unix: non-zero while a top-up came back unconfirmed and further top-ups are held. DO NOT restart sponsord while HELD: a restart forgets the hold and the pool can be refilled twice (the Ansible role refuses; on Compose, check by hand). See upstream docs/operator.md, Monitor.",
       "type": "stat",
       "targets": [
         {
@@ -242,7 +242,7 @@
               "type": "range",
               "options": {
                 "from": 1,
-                "to": null,
+                "to": 1000000000000.0,
                 "result": {
                   "text": "HELD — do not restart"
                 }
@@ -281,7 +281,7 @@
         "uid": "${DS_PROMETHEUS}"
       },
       "title": "Since last balance read",
-      "description": "time() - sponsord_pool_last_check_unix. The keeper reads the pool at start and every SPONSORD_POOL_WATCH_INTERVAL_SECS (1h by default); SponsordPoolCheckStale fires past 3h.",
+      "description": "time() - sponsord_pool_last_check_unix. The keeper reads the pool at start and every SPONSORD_POOL_WATCH_INTERVAL_SECS (1h by default); SponsordPoolCheckStale fires past 3h. Empty while no read has succeeded since start (SponsordPoolNeverChecked).",
       "type": "stat",
       "targets": [
         {
@@ -289,7 +289,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "time() - sponsord_pool_last_check_unix{job=\"sponsord\", instance=~\"$instance\"}",
+          "expr": "time() - (sponsord_pool_last_check_unix{job=\"sponsord\", instance=~\"$instance\"} > 0)",
           "refId": "A",
           "legendFormat": "{{instance}}"
         }
@@ -725,7 +725,7 @@
         "uid": "${DS_LOKI}"
       },
       "title": "Onramp log",
-      "description": "sponsord-onramp's journal (unit sponsord-onramp.service), when the onramp runs on this host.",
+      "description": "sponsord-onramp's journal (unit sponsord-onramp.service), when the onramp runs on this host. Info by default (sponsord_onramp_log_level).",
       "type": "logs",
       "targets": [
         {

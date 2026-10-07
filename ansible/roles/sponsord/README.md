@@ -62,11 +62,14 @@ gate, installers, behind a TLS reverse proxy), is the
   keystore and confirmed on-chain that the treasury owns `sponsord_pool_id`. If
   `/healthz` does not answer 200 within the readiness window, the deploy fails.
   sponsord has no `config validate` command, so this is the config check.
-- **Restarts on out-of-band changes.** The role records a hash of everything the
-  daemon starts from (credentials, both env files, the unit, the binary), once the
-  daemon is healthy. If any of them differs on the next run, it restarts the daemon:
+- **Restarts exactly when an input changed.** The role records a hash of everything
+  the daemon starts from (credentials, both env files, the unit, the binary), once
+  the daemon is healthy. That comparison is the only thing that restarts it: a run
+  that changes an input, or finds one changed, restarts the daemon (through the
+  top-up hold guard, see Day 2):
+  - this run rendered a new setting, unit or binary;
   - you replaced a credential or edited a host-provisioned `secret.env`;
-  - an earlier run changed a file and then failed before its restart handler ran.
+  - an earlier run changed a file and then failed before restarting.
 
 ## Before the first deploy
 
@@ -135,7 +138,7 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | `sponsord_secret_env_overwrite_host_file` | `false` | Confirm that `sponsord_rpc_url` may replace a `secret.env` the role did not write. |
 | `sponsord_log_level` | `""` | `RUST_LOG`: a level (`info`) or tracing directives. `""` logs errors only. |
 | `sponsord_stop_timeout_sec` | `120` | Cap on the graceful stop. The daemon waits for a top-up it already sent. |
-| `sponsord_restart_ignore_topup_hold` | `false` | `true` restarts despite a held top-up (see Day 2). Only for a hold that can never mine. |
+| `sponsord_restart_ignore_topup_hold` | `false` | `true` restarts or stops despite a held top-up or an unreadable `/metrics` (see Day 2). Only for a hold that can never mine; pass it as JSON. |
 | `sponsord_backup_age_recipients` | `decdn_backup_age_recipients` | `tasks_from: backup`: public keys the archive is encrypted to. |
 | `sponsord_backup_include_env` / `_dir` / `_fetch` / `_local_dir` | `false` / `/var/backups/sponsord` / `true` / `ansible/backups` | `tasks_from: backup`. |
 | `decdn_decommission_max_hosts` / `_prompt_seconds` | `1` / `300` | `tasks_from: decommission`, shared with the other roles. |
@@ -169,7 +172,10 @@ export it, so watch the address yourself.
   next run retries. Wait for the hold to clear (upstream `docs/operator.md`,
   "Monitor": if the transaction was dropped, send 0-value transactions from the
   treasury to itself), then re-run. A running daemon whose `/metrics` does not answer
-  is refused too, since its hold state is unknown.
+  is refused too, since its hold state is unknown. The override is
+  `ANSIBLE_ARGS='-e {"sponsord_restart_ignore_topup_hold":true}'`. A restart the role
+  does not cause (a crash, a package upgrade restarting services) is not guarded:
+  the `SponsordTopupHeld` alert is how you learn of a hold.
 - **Rotate the API token:** write the new token to `/etc/sponsord/api-token`, then
   re-run the role, which restarts sponsord. The onramp reads the same file and
   restarts with the daemon (`PartOf=`).
@@ -193,8 +199,9 @@ export it, so watch the address yourself.
 
   After a `source` install, the build user and its home stay behind (shared with
   the other roles on the host): `sudo userdel decdn-build && sudo rm -rf
-  /var/lib/decdn-build` once nothing on the host builds from source. Then delete `/etc/sponsord` (secrets, env files and the role's two `.sha256`
-  records) once the treasury files are safe elsewhere and the pool is drained.
+  /var/lib/decdn-build` once nothing on the host builds from source. Then delete `/etc/sponsord` (secrets, env files and the
+  `.secret.env.sha256` record) once the treasury files are safe elsewhere and the
+  pool is drained.
 
 ## Testing
 

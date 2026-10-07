@@ -8,12 +8,13 @@
 #   decommission refusals      a held pool top-up (the stub's hold marker), a
 #                              missing confirmation, a wrong one: nothing touched;
 #   playbooks/decommission.yml for real: the onramp, its Caddy and sponsord stopped
-#                              and removed, Alloy torn down, every credential kept.
+#                              and removed, Alloy torn down, every credential kept;
+#                              then once more, which must be a safe no-op.
 # verify.yml here decrypts the archive and checks what decommission removed and kept.
 # No idempotence step: every backup writes a new archive and decommission is one-shot.
 #
 # The inventory below must stay identical to ../sponsord-onramp/molecule.yml's
-# (`make test-scripts` checks); the stubs are that scenario's files.
+# (`make test-scripts` checks); the stubs are those it names.
 driver:
   name: docker
 platforms:

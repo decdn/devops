@@ -41,6 +41,8 @@ UNHEALTHY_MARKER = "/etc/sponsord/stub-unhealthy"
 # it holds (the real daemon's sponsord_pool_topup_unconfirmed_since_unix), so the
 # role's restart guard can be exercised without a chain.
 HOLD_MARKER = "/etc/sponsord/stub-topup-hold"
+# While this file exists, /metrics answers 503: the hold state cannot be read.
+METRICS_DOWN_MARKER = "/etc/sponsord/stub-metrics-down"
 # Must match sponsord_rpc_url in the scenario's inventory, which carries shell
 # metacharacters and quotes on purpose.
 EXPECTED_RPC_URL = "https://rpc.example.invalid/?key=$HOME$(touch /tmp/sponsord-rpc-expanded)&q=o'brien \"x\""
@@ -108,6 +110,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/healthz":
             body, ctype = b'{"ok":true}', "application/json"
         elif self.path == "/metrics":
+            if os.path.exists(METRICS_DOWN_MARKER):
+                self.send_error(503)
+                return
             try:
                 with open(HOLD_MARKER, "rb") as f:
                     held = int(f.read().strip() or b"0")
@@ -115,6 +120,7 @@ class Handler(BaseHTTPRequestHandler):
                 held = 0
             body = (
                 b"sponsord_pool_topups_total 0\n"
+                b"sponsord_pool_keeper_failures_total 0\n"
                 b"# TYPE sponsord_pool_topup_unconfirmed_since_unix gauge\n"
                 + f"sponsord_pool_topup_unconfirmed_since_unix {held}\n".encode()
             )

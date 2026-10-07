@@ -13,9 +13,9 @@
 # sponsord runs on the Ansible and Compose paths only. The decdn-node chart does
 # NOT render this file (its PrometheusRule reads ../prometheus-alerts.yml).
 #
-# Validate locally:
-#   promtool check rules sponsord/prometheus-alerts.yml
-#   promtool test rules ../../tests/sponsord-alerts_test.yml
+# Validate locally with `make lint-helm`: it runs promtool check rules on this
+# file, and promtool test rules on ../../../tests/sponsord-alerts_test.yml against
+# a copy with the annotations stripped (see that file).
 #
 # Load into Grafana Cloud with mimirtool, or into Prometheus via rule_files (see
 # ../README.md).
@@ -61,10 +61,13 @@ groups:
 
       # The keeper reads the pool at start, then every
       # SPONSORD_POOL_WATCH_INTERVAL_SECS (3600 by default). Three missed
-      # periods; raise it if you lengthened the interval. A gauge of 0 (never
-      # read since start) also fires, after the same wait.
+      # periods; raise it if you lengthened the interval. A gauge of 0 (no read
+      # has succeeded since start) is SponsordPoolNeverChecked below: time() - 0
+      # would fire this one after just its `for`.
       - alert: SponsordPoolCheckStale
-        expr: time() - sponsord_pool_last_check_unix > 3 * 3600
+        expr: >-
+          sponsord_pool_last_check_unix > 0
+          and time() - sponsord_pool_last_check_unix > 3 * 3600
         for: 15m
         labels:
           component: sponsor
@@ -77,6 +80,22 @@ groups:
             keeper periods, so the pool balance on the dashboard is stale
             and no top-up is being decided. Check the RPC endpoint and the
             keeper's errors: journalctl -u sponsord -e.
+
+      - alert: SponsordPoolNeverChecked
+        expr: sponsord_pool_last_check_unix == 0
+        for: 3h
+        labels:
+          component: sponsor
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/decdn/sponsord/blob/main/docs/operator.md#5-monitor"
+          summary: "sponsord has not read its pool balance since it started on {{ $labels.instance }}"
+          description: |
+            sponsord_pool_last_check_unix is still 0 three hours after
+            the series appeared: the keeper has not once read the pool
+            since sponsord started, so no top-up is being decided. Check
+            the RPC endpoint and the keeper's errors:
+            journalctl -u sponsord -e.
 
       - alert: SponsordTopupHeld
         expr: sponsord_pool_topup_unconfirmed_since_unix > 0
@@ -91,8 +110,9 @@ groups:
             The keeper broadcast a top-up and could not read its receipt,
             so it sends no further top-up until that transaction mines or
             provably never can. DO NOT restart sponsord: a restart forgets
-            the hold, and the pool can be refilled twice. The deploy
-            tooling refuses restarts while this holds. It clears by itself
+            the hold, and the pool can be refilled twice. The Ansible role
+            refuses restarts while this holds; on Compose, and against a
+            crash or package-upgrade restart, nothing does. It clears by itself
             once the transaction mines. If it was dropped, send 0-value
             transactions from the treasury to itself until it clears; the
             error log line names the transaction and how many it takes.
@@ -136,9 +156,16 @@ groups:
 
       # chain_unavailable (503): a signer's on-chain registration could not be
       # read; internal (500): a server-side failure. Both are sponsord's own
-      # faults, not a caller's.
+      # faults, not a caller's. sponsord exports a code's series only from its
+      # first error, already at 1 or more, which increase() cannot see: the
+      # second operand catches a series that appeared within the window.
       - alert: SponsordRequestFailures
-        expr: increase(sponsord_request_errors_total{code=~"chain_unavailable|internal"}[15m]) > 0
+        expr: >-
+          increase(sponsord_request_errors_total{code=~"chain_unavailable|internal"}[15m]) > 0
+          or (
+            sponsord_request_errors_total{code=~"chain_unavailable|internal"}
+            unless sponsord_request_errors_total{code=~"chain_unavailable|internal"} offset 15m
+          )
         for: 0m
         labels:
           component: sponsor

@@ -65,6 +65,8 @@
         - /etc/systemd/system/sponsord.service
         - /etc/systemd/system/sponsord-onramp.service
         - /etc/systemd/system/alloy.service
+        - /etc/sponsord/.inputs.sha256
+        - /etc/sponsord/.onramp-inputs.sha256
         - /etc/sponsord/treasury-keystore.json
         - /etc/sponsord/treasury-password
         - /etc/sponsord/api-token
@@ -75,11 +77,12 @@
     - name: Require the units gone and every credential kept
       ansible.builtin.assert:
         that:
-          - _after.results[0:3] | map(attribute='stat.exists') | unique == [false]
-          - _after.results[3:] | map(attribute='stat.exists') | unique == [true]
+          - _after.results[0:5] | map(attribute='stat.exists') | unique == [false]
+          - _after.results[5:] | map(attribute='stat.exists') | unique == [true]
         fail_msg: >-
-          Decommission must remove the sponsord, onramp and Alloy units and keep the
-          treasury files, the API token, the Turnstile secret and the Caddyfile:
+          Decommission must remove the sponsord, onramp and Alloy units and both
+          restart-input records, and keep the treasury files, the API token, the
+          Turnstile secret and the Caddyfile:
           {{ _after.results | map(attribute='item') | zip(_after.results | map(attribute='stat.exists')) | list }}
 
     - name: Read the services' state

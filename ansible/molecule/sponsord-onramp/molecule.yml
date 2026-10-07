@@ -19,8 +19,9 @@
 #                https chain through Caddy, the client address Caddy passes on.
 #
 # The proxy side effects (proxy "none", ACME, a Caddyfile the role did not write)
-# run in ../sponsord-onramp-caddy on the same converge, so the two run side by side.
-# Its inventory below must stay identical to this one (`make test-scripts` checks).
+# run in ../sponsord-onramp-caddy on the same converge, so the two run side by side;
+# so do ../sponsord-onramp-source and ../sponsord-onramp-lifecycle. Their
+# inventories must stay identical to this one (`make test-scripts` checks).
 #
 # `baseline` is skipped (real-host-only — see ../default/molecule.yml), so the
 # tcp/80 + tcp/443 holes are covered by tests/firewall-holes instead. Release

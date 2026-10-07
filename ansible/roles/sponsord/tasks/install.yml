@@ -177,7 +177,6 @@
             owner: root
             group: root
             mode: "0755"
-          notify: Restart sponsord
 
       always:
         - name: Report the retained staging directory after a failure
@@ -222,7 +221,6 @@
         owner: root
         group: root
         mode: "0755"
-      notify: Restart sponsord
 
 # Runs every converge, so a binary that drifted from the pin is caught. With
 # sponsord_version empty (the usual source/manual case) it degrades to a liveness check.

@@ -35,13 +35,25 @@
 - name: Ask for typed confirmation
   ansible.builtin.pause:
     prompt: >-
-      About to STOP sponsord-onramp (and the Caddy in front of it) and REMOVE its
-      systemd unit on: {{ ansible_play_hosts_all | sort | join(',') }}.
+      About to STOP {{ _decom_services | join(', ') }}, REMOVE their systemd units
+      and tear down this repo's Grafana Alloy on:
+      {{ ansible_play_hosts_all | sort | join(',') }}.
+      This one confirmation covers all of them. Nothing on-chain is done.
       Type the host list above exactly to continue
       (times out after {{ decdn_decommission_prompt_seconds }} s)
     seconds: "{{ decdn_decommission_prompt_seconds | int }}"
   register: _sponsord_onramp_decommission_typed
   run_once: true
+  vars:
+    # Every service this repo's playbooks/decommission.yml stops on these hosts, by
+    # their groups, so the one confirmation names all it covers (a later play does
+    # not ask again). This role's own service is always listed.
+    _decom_groups: "{{ ansible_play_hosts_all | map('extract', hostvars, 'group_names') | flatten | unique }}"
+    _decom_services: >-
+      {{ ((['decdn-node'] if 'decdn_nodes' in _decom_groups else [])
+          + (['sponsord-onramp and its Caddy'] if 'sponsord_onramp_hosts' in _decom_groups else [])
+          + (['sponsord'] if 'sponsord_hosts' in _decom_groups else [])
+          + ['sponsord-onramp and its Caddy']) | unique }}
   when:
     - decdn_decommission_confirm is not defined
     - not (_decdn_decommission_confirmed | default(false) | bool)

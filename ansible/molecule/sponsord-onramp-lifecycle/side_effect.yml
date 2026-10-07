@@ -1,6 +1,6 @@
 ---
 # Backup, then decommission: refused while sponsord holds a pool top-up, without a
-# confirmation and with a wrong one, then for real through the playbook. The
+# confirmation and with a wrong one, then for real through the playbook, twice. The
 # header of molecule.yml lists what each step proves; verify.yml checks the result.
 - name: Prepare the backup recipient
   hosts: all
@@ -46,7 +46,7 @@
     # Confirmed, so only the hold can stop it.
     - name: Decommission while a top-up is held
       block:
-        - name: Run the decommission playbook's hold check
+        - name: Run sponsord's decommission (confirmed) during a hold
           ansible.builtin.include_role:
             name: sponsord
             tasks_from: decommission
@@ -119,9 +119,22 @@
           A rejected decommission stopped something:
           {{ _molecule_units.results | map(attribute='status.ActiveState') | list }}.
 
+    # A refusal must not leave the run-wide confirmation behind, or a later play
+    # of a real run would skip its prompt.
+    - name: Require no rejected run to have recorded a confirmation
+      ansible.builtin.assert:
+        that:
+          - _decdn_decommission_confirmed is not defined
+        fail_msg: A rejected decommission left _decdn_decommission_confirmed set.
+
     - name: Confirm the real decommission non-interactively
       ansible.builtin.set_fact:
         decdn_decommission_confirm: "{{ ansible_play_hosts_all | sort | join(',') }}"
 
 - name: Decommission
+  ansible.builtin.import_playbook: ../../playbooks/decommission.yml
+
+# Re-running must be safe: the units are gone, sponsord is not running (so the hold
+# check passes), and every removal is already done.
+- name: Decommission again
   ansible.builtin.import_playbook: ../../playbooks/decommission.yml

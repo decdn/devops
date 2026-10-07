@@ -106,7 +106,7 @@ sponsord_pool_watch_interval_secs: ""      # [3600] how often the keeper checks 
 # --- Logging ----------------------------------------------------------------------
 # RUST_LOG for the daemon: a level (info) or tracing directives (sponsord=debug,
 # hyper=warn). "" omits it, and the daemon then logs errors only; info adds the
-# listener and each top-up. No spaces or quotes.
+# listener and each top-up. Letters, digits and _=,.:- only (no span filters).
 sponsord_log_level: ""
 
 # --- Secrets on the host --------------------------------------------------------
@@ -171,9 +171,11 @@ sponsord_stop_timeout_sec: 120
 # (sponsord_pool_topup_unconfirmed_since_unix > 0 on /metrics). A restart forgets the
 # hold, and if the transaction is still pending the pool can be refilled twice
 # (upstream docs/operator.md, "Monitor"). So the role reads /metrics before any
-# restart or stop it is about to cause, and fails instead while a hold is on; the
-# next converge retries once it clears. true restarts anyway: only for a hold you
-# have confirmed can never mine.
+# restart it is about to cause (and decommission before it stops the daemon), and
+# fails instead while a hold is on or /metrics does not answer; the next run retries
+# once it clears. true skips both refusals: only for a hold you have confirmed can
+# never mine. Pass it as JSON (-e '{"sponsord_restart_ignore_topup_hold":true}'):
+# -e name=true is a string, which the boolean check refuses.
 sponsord_restart_ignore_topup_hold: false
 
 # --- Readiness --------------------------------------------------------------------

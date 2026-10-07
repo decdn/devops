@@ -356,6 +356,17 @@
       {{ sponsord_onramp_domain | default('your domain', true) }}. sponsord_onramp_brand_name
       may hold no control characters.
 
+# RUST_LOG lands unquoted in an EnvironmentFile: no whitespace, quotes or control
+# characters, and no span syntax the onramp's Targets filter would reject.
+- name: Validate sponsord_onramp_log_level
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_log_level | string is match('^[A-Za-z0-9_=,.:-]*\Z')
+    fail_msg: >-
+      sponsord_onramp_log_level must be "" (info), a level such as debug, or
+      target=level pairs such as sponsord_onramp=debug,info (letters, digits and
+      _=,.:- only), got "{{ sponsord_onramp_log_level }}".
+
 - name: Validate the release pins the installers use
   ansible.builtin.assert:
     that:

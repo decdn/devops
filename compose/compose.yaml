@@ -166,6 +166,8 @@ services:
       # the HTML in this directory and set ONRAMP_GATE_TEMPLATE to its path in
       # sponsord-onramp.env. A fixed directory rather than a configurable file, so
       # no setting can mount a credential into a server that publishes the page.
+      # ONRAMP_GATE_TEMPLATE itself is free-form, and the onramp serves whatever it
+      # names: it must point inside this directory, never at /run/secrets.
       # Created empty when absent: unused, the built-in page is served.
       - type: bind
         source: /etc/sponsord/onramp-gate

@@ -407,6 +407,21 @@ cmp -s "$repo/ansible/roles/decdn_node/files/install-build-output.py" \
   || fail "decdn_node and sponsord files/install-build-output.py differ"
 pass "source-build and decommission defaults, and the installer, identical across roles"
 
+# decommission.yml must check every sponsord host for a held top-up before any play
+# stops a service: a refusal after the node and onramp plays would leave the host
+# half decommissioned. The role checks again right before its own stop.
+if command -v yq >/dev/null; then
+  pb="$repo/ansible/playbooks/decommission.yml"
+  [[ "$(yq '.[0].hosts' "$pb")" == sponsord_hosts \
+     && "$(yq '.[0].tasks[0]["ansible.builtin.include_role"].tasks_from' "$pb")" == topup-hold ]] \
+    || fail "playbooks/decommission.yml: the first play must be sponsord's top-up hold check"
+  pass "decommission.yml checks for a held top-up before it stops anything"
+elif [[ -n ${CI:-} ]]; then
+  fail "yq is not on PATH in CI; the decommission play-order check would be skipped"
+else
+  skipped+=("decommission play-order check (needs yq)")
+fi
+
 # --- baseline firewall holes per host shape, and playbook guards ---------------------
 if command -v ansible >/dev/null; then
   expect 0 "firewall holes resolve per host shape, co-located included" \

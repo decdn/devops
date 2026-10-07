@@ -187,13 +187,16 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `sponsord`: a top-up hold guard. When the keeper broadcasts a pool top-up and
   cannot read its receipt, it holds further top-ups until that transaction mines
   (upstream sponsord #41); a restart forgets the hold and the pool can be refilled
-  twice. Before the role restarts sponsord (any changed restart input) it reads
-  `/metrics`, and fails while `sponsord_pool_topup_unconfirmed_since_unix` is
-  non-zero or `/metrics` does not answer, leaving the restart for the next run.
-  `sponsord_restart_ignore_topup_hold` overrides it.
-- `sponsord`: `sponsord_log_level`, rendered as `RUST_LOG` (a level or tracing
-  directives; `""` keeps the daemon's errors-only default). There is no onramp
-  equivalent: the onramp release ignores `RUST_LOG`.
+  twice. Before the role restarts sponsord it reads `/metrics` at the address the
+  running daemon listens on, and fails while
+  `sponsord_pool_topup_unconfirmed_since_unix` is non-zero or `/metrics` does not
+  answer, before anything is queued, leaving the restart for the next run. A daemon
+  that has not bound yet holds nothing and passes. `sponsord_restart_ignore_topup_hold`
+  (passed as JSON) overrides it.
+- `sponsord`, `sponsord_onramp`: `sponsord_log_level` / `sponsord_onramp_log_level`,
+  rendered as `RUST_LOG` (`""` keeps the daemon's errors-only and the onramp's info
+  default). The onramp is built without tracing's env-filter, so it takes a level or
+  `target=level` pairs only; the role refuses anything else.
 - `sponsord`: `tasks_from: backup` (`sponsord_backup_*`): the treasury keystore and
   password, the API token and the onramp's Turnstile secret (`secret.env` opt-in),
   taken hot and encrypted on the host to `sponsord_backup_age_recipients` (default
@@ -201,9 +204,11 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `sponsord`, `sponsord_onramp`: `tasks_from: decommission`. The onramp's stops it,
   removes its unit, and stops and disables the role's Caddy (marker-gated).
   sponsord's refuses while a top-up is held, then stops sponsord and removes its
-  unit. Both keep `/etc/sponsord` and never touch the chain. They share
-  `decdn_decommission_max_hosts` / `_prompt_seconds` / `_confirm` with `decdn_node`,
-  and a host that confirmed in an earlier play is not asked again.
+  unit, checking for a held top-up again right before the stop. Both keep
+  `/etc/sponsord` and never touch the chain. They share
+  `decdn_decommission_max_hosts` / `_prompt_seconds` / `_confirm` with `decdn_node`;
+  the first play to reach a host asks once, and its prompt lists every service the
+  run stops there.
 
 ### Removed
 
@@ -218,6 +223,11 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- `sponsord`: the restart-inputs comparison is now the only thing that restarts the
+  daemon. The tasks that write secret.env, sponsord.env, the unit or the binary no
+  longer notify the handler themselves (each is a hashed input already), so a write
+  that lands back on the recorded content restarts nothing, and no restart can skip
+  the hold guard. Under `--check`, no restart is reported.
 - `playbooks/backup.yml` and `playbooks/decommission.yml` also cover
   `sponsord_hosts` (and `sponsord_onramp_hosts`): a backup of sponsord's
   credentials; a decommission that first checks every sponsord host for a held
