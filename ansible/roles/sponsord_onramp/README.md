@@ -26,9 +26,8 @@ is unreachable.
     mirror (`sponsord_onramp_release_base`).
   - `source` builds `sponsord_onramp_source_ref` of `sponsord_onramp_source_repo`
     on the host (`cargo build -p sponsord-onramp`) as the `sponsord` role's `source`
-    mode does, in its own checkout, so the two can pin different refs. The price
-    of that is a second `target/`: a co-located host compiles the sponsord
-    workspace's dependencies twice.
+    mode does, from its own clone, so the two can pin different refs. Each builds
+    from scratch, so a co-located host compiles the sponsord workspace twice.
   - `manual` copies a binary built in a `decdn/sponsord` checkout.
     `sponsord_onramp_release_target_dir` defaults to `sponsord_release_target_dir`,
     so one `cargo build --release` covers both.
@@ -186,8 +185,9 @@ collector; its access logs are not shipped.
 
   Then take the host out of `sponsord_onramp_hosts`, so the next deploy closes
   tcp/80 and tcp/443. After a `source` install, remove
-  `/var/lib/decdn-build/src/sponsord-onramp` (or the whole build user, `sudo userdel
-  -r decdn-build`, once nothing on the host builds from source).
+  `/var/lib/decdn-build/git/sponsord-onramp` (or the whole build user, `sudo userdel
+  decdn-build && sudo rm -rf /var/lib/decdn-build`, once nothing on the host builds
+  from source).
 
 ## Testing
 

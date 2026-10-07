@@ -42,8 +42,9 @@ decdn_node_source_build_jobs: ""
 # SSH session; past this the task fails.
 decdn_node_source_build_timeout: 7200
 # The build runs as this unprivileged system user (dependency build scripts are
-# arbitrary code — never root). Its home holds the rustup toolchain (shared by
-# every role building on the host) and one checkout per role under src/.
+# arbitrary code — never root). The home is root's: the toolchain and one git clone
+# per role (both root-owned, shared by every role building on the host), and a
+# per-build work directory the build user owns only while it builds.
 decdn_build_user: decdn-build
 decdn_build_home: /var/lib/decdn-build
 # rustup-init, pinned by version and per-triple sha256 (from

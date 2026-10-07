@@ -1,18 +1,17 @@
 ---
 # sponsord_install_method "source": build sponsord on the host from sponsord_source_repo at
-# sponsord_source_ref, then install it as root. The steps mirror
-# roles/decdn_node/tasks/source.yml, which carries the rationale for each: the
-# build runs as the unprivileged decdn_build_user (dependency build scripts are
-# arbitrary code), root never acts by name on a path inside that user's tree, the
-# toolchain comes from a sha256-pinned rustup-init plus the checkout's
-# rust-toolchain.toml, and a <repo>@<commit> stamp, cleared before installing and
-# written only after the --version check passes, skips rebuilding an unchanged
-# commit.
+# sponsord_source_ref, then install it as root. A copy of
+# roles/decdn_node/tasks/source.yml for one binary; that file carries the
+# rationale: root owns the build home, toolchain and git clone, each new commit
+# builds as the unprivileged decdn_build_user in a fresh work directory that is
+# deleted afterwards, and the output is installed without following symlinks. A
+# <repo>@<commit> stamp, cleared before installing and written only after the
+# --version check passes, skips rebuilding an unchanged commit.
 
 - name: Report that the source build is not simulated in check mode
   ansible.builtin.debug:
     msg: >-
-      check mode: skipping the fetch + build of {{ sponsord_source_repo }} @
+      check mode: skipping the fetch + build of sponsord_source_ref
       {{ sponsord_source_ref }}. The binary on the target is NOT rebuilt or checked
       against the ref by this run.
   when: ansible_check_mode
@@ -20,22 +19,26 @@
 - name: Build sponsord from source
   when: not ansible_check_mode
   vars:
-    sponsord_build_env:
-      CARGO_HOME: "{{ decdn_build_home }}/.cargo"
-      RUSTUP_HOME: "{{ decdn_build_home }}/.rustup"
-      PATH: "{{ decdn_build_home }}/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+    sponsord_toolchain_env:
+      RUSTUP_HOME: "{{ decdn_build_home }}/toolchain/rustup"
+      CARGO_HOME: "{{ decdn_build_home }}/toolchain/cargo"
     decdn_rustup_archive: "https://static.rust-lang.org/rustup/archive/{{ decdn_rustup_version }}"
+    sponsord_source_clone: "{{ decdn_build_home }}/git/sponsord"
+    sponsord_work: "{{ decdn_build_home }}/work/sponsord"
   block:
     - name: Require a pinned rustup-init digest for this target
       ansible.builtin.assert:
         that:
           - sponsord_target in decdn_rustup_sha256
         fail_msg: >-
-          decdn_rustup_sha256 has no digest for {{ sponsord_target }}. Add the sha256 of
-          rustup {{ decdn_rustup_version }}'s rustup-init for it: the
+          decdn_rustup_sha256 has no digest for {{ sponsord_target }}. Add the
+          sha256 of rustup {{ decdn_rustup_version }}'s rustup-init for it: the
           rustup-init.sha256 published beside it under
           {{ decdn_rustup_archive }}.
 
+    # acl: becoming the unprivileged build user needs it on a non-root connection
+    # (baseline installs it too; this keeps the role self-contained). cmake is
+    # optional upstream but speeds up the aws-lc-sys build.
     - name: Install the build dependencies
       ansible.builtin.apt:
         name:
@@ -53,76 +56,96 @@
         name: "{{ decdn_build_user }}"
         system: true
 
+    # No home is created for it: the home below is root's, so the build user can
+    # leave nothing there (cargo would read a ~/.cargo/config.toml from it).
     - name: Create the build user
       ansible.builtin.user:
         name: "{{ decdn_build_user }}"
         group: "{{ decdn_build_user }}"
         system: true
         home: "{{ decdn_build_home }}"
-        create_home: true
+        create_home: false
         shell: /usr/sbin/nologin
       register: sponsord_build_account
 
-    - name: Create the build home
+    # Parents first; follow: false, and every parent is root-owned, so none of
+    # these can have been swapped for a symlink by the build user.
+    - name: Create the root-owned build layout
       ansible.builtin.file:
-        path: "{{ decdn_build_home }}"
+        path: "{{ item.path }}"
         state: directory
-        owner: "{{ decdn_build_user }}"
-        group: "{{ decdn_build_user }}"
-        mode: "0750"
+        owner: root
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
         follow: false
+      loop:
+        - {path: "{{ decdn_build_home }}", group: "{{ decdn_build_user }}", mode: "0750"}
+        - {path: "{{ decdn_build_home }}/toolchain", group: root, mode: "0755"}
+        - {path: "{{ decdn_build_home }}/git", group: root, mode: "0700"}
+        - {path: "{{ decdn_build_home }}/work", group: root, mode: "0755"}
+      loop_control:
+        label: "{{ item.path }}"
 
-    - name: Create the source directory as the build user
-      ansible.builtin.file:
-        path: "{{ decdn_build_home }}/src"
-        state: directory
-        mode: "0750"
-      become: true
-      become_user: "{{ decdn_build_user }}"
+    # A job scheduled by one build's script would otherwise run during a later
+    # build and edit its sources.
+    - name: Deny cron and at to the build user
+      ansible.builtin.lineinfile:
+        path: "{{ item }}"
+        line: "{{ decdn_build_user }}"
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - /etc/cron.deny
+        - /etc/at.deny
 
-    - name: Check for an installed rustup and cargo
+    - name: Check for an installed rustup
       ansible.builtin.stat:
-        path: "{{ decdn_build_home }}/.cargo/bin/cargo"
-      register: sponsord_cargo_stat
+        path: "{{ decdn_build_home }}/toolchain/cargo/bin/rustup"
+      register: sponsord_rustup_stat
 
-    - name: Install rustup for the build user
-      when: not sponsord_cargo_stat.stat.exists
-      become: true
-      become_user: "{{ decdn_build_user }}"
+    # As root, into the root-owned toolchain directory. --default-toolchain none:
+    # each build installs the toolchain its commit pins (below).
+    - name: Install rustup
+      when: not sponsord_rustup_stat.stat.exists
       block:
         - name: Download the pinned rustup-init
           ansible.builtin.get_url:
             url: "{{ decdn_rustup_archive }}/{{ sponsord_target }}/rustup-init"
-            dest: "{{ decdn_build_home }}/rustup-init"
+            dest: "{{ decdn_build_home }}/toolchain/rustup-init"
             checksum: "sha256:{{ decdn_rustup_sha256[sponsord_target] }}"
+            owner: root
+            group: root
             mode: "0700"
 
-        - name: Run rustup-init as the build user
+        - name: Run rustup-init
           ansible.builtin.command:
             argv:
-              - "{{ decdn_build_home }}/rustup-init"
+              - "{{ decdn_build_home }}/toolchain/rustup-init"
               - -y
               - --no-modify-path
               - --profile
               - minimal
               - --default-toolchain
               - none
-          environment: "{{ sponsord_build_env }}"
+          environment: "{{ sponsord_toolchain_env }}"
           changed_when: true
       always:
         - name: Remove rustup-init
           ansible.builtin.file:
-            path: "{{ decdn_build_home }}/rustup-init"
+            path: "{{ decdn_build_home }}/toolchain/rustup-init"
             state: absent
 
+    # As root, into a root-only clone: the build user never touches git metadata,
+    # so no hook or repo config it could plant runs on a later fetch. force:
+    # discard any local edit, so what is built is exactly the ref.
     - name: Fetch the source at {{ sponsord_source_ref }}
       ansible.builtin.git:
         repo: "{{ sponsord_source_repo }}"
-        dest: "{{ decdn_build_home }}/src/sponsord"
+        dest: "{{ sponsord_source_clone }}"
         version: "{{ sponsord_source_ref }}"
         force: true
-      become: true
-      become_user: "{{ decdn_build_user }}"
       register: sponsord_source_git
 
     - name: Read the installed-source stamp
@@ -149,48 +172,173 @@
     - name: Build and install @ {{ sponsord_source_git.after }}
       when: sponsord_need_build
       block:
+        # Dropped before anything is installed, so a run that fails from here on
+        # leaves no stamp, and the next run (even one rolled back to the previous
+        # commit) rebuilds and reinstalls instead of trusting it.
         - name: Clear the installed-source stamp before installing
           ansible.builtin.file:
             path: /usr/local/lib/sponsord/installed-source
             state: absent
 
-        - name: Remove the previous build's output
+        - name: Stop anything still running as the build user
+          ansible.builtin.command:
+            argv: [pkill, -KILL, -u, "{{ decdn_build_user }}"]
+          register: sponsord_build_pkill
+          changed_when: sponsord_build_pkill.rc == 0
+          failed_when: sponsord_build_pkill.rc not in [0, 1]
+
+        # Root reads the file in its own clone, without following a symlink the
+        # repo might carry there.
+        - name: Read the toolchain the commit pins
+          ansible.builtin.command:
+            argv:
+              - python3
+              - -I
+              - -c
+              - |
+                import json, os, sys, tomllib
+                fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW)
+                with os.fdopen(fd, "rb") as f:
+                    t = tomllib.load(f).get("toolchain", {})
+                print(json.dumps({"channel": t.get("channel", ""),
+                                  "profile": t.get("profile", "minimal"),
+                                  "components": t.get("components", [])}))
+              - "{{ sponsord_source_clone }}/rust-toolchain.toml"
+          register: sponsord_toolchain_read
+          changed_when: false
+          failed_when: false
+
+        - name: Require a pinned toolchain in the commit
+          ansible.builtin.assert:
+            that:
+              - sponsord_toolchain_read.rc == 0
+              - (sponsord_toolchain_read.stdout | from_json).channel | length > 0
+            fail_msg: >-
+              {{ sponsord_source_id }} has no readable rust-toolchain.toml with a
+              [toolchain] channel ({{ sponsord_toolchain_read.stderr | default('', true) | trim }}).
+              The role installs exactly the toolchain the commit pins; build a ref
+              that pins one.
+
+        - name: Install the commit's toolchain (as root)
+          ansible.builtin.command:
+            argv: >-
+              {{ [decdn_build_home ~ '/toolchain/cargo/bin/rustup', 'toolchain', 'install',
+                  sponsord_toolchain.channel, '--profile', sponsord_toolchain.profile, '--no-self-update']
+                 + (sponsord_toolchain.components | map('regex_replace', '^', '--component=') | list) }}
+          environment: "{{ sponsord_toolchain_env }}"
+          vars:
+            sponsord_toolchain: "{{ sponsord_toolchain_read.stdout | from_json }}"
+          register: sponsord_toolchain_install
+          changed_when: >-
+            'unchanged' not in (sponsord_toolchain_install.stdout ~ sponsord_toolchain_install.stderr)
+
+        # Into root's own work directory (the build user cannot write it), then
+        # handed over read-only.
+        - name: Export the commit
+          ansible.builtin.command:
+            argv:
+              - git
+              - -C
+              - "{{ sponsord_source_clone }}"
+              - archive
+              - --format=tar
+              - --output={{ decdn_build_home }}/work/sponsord.tar
+              - "{{ sponsord_source_git.after }}"
+          changed_when: true
+
+        - name: Let the build user read the export
           ansible.builtin.file:
-            path: "{{ decdn_build_home }}/src/sponsord/target/release/sponsord"
+            path: "{{ decdn_build_home }}/work/sponsord.tar"
+            owner: root
+            group: "{{ decdn_build_user }}"
+            mode: "0640"
+
+        # Its parent is root-owned, so removing and recreating it as root is safe.
+        - name: Remove the previous work directory
+          ansible.builtin.file:
+            path: "{{ sponsord_work }}"
             state: absent
+
+        - name: Create a fresh work directory for the build user
+          ansible.builtin.file:
+            path: "{{ sponsord_work }}"
+            state: directory
+            owner: "{{ decdn_build_user }}"
+            group: "{{ decdn_build_user }}"
+            mode: "0750"
+
+        - name: Unpack the commit as the build user
+          ansible.builtin.shell:
+            cmd: >-
+              mkdir src cargo-home tmp async &&
+              tar -xf {{ (decdn_build_home ~ '/work/sponsord.tar') | quote }} -C src
+            chdir: "{{ sponsord_work }}"
           become: true
           become_user: "{{ decdn_build_user }}"
+          changed_when: true
 
+        - name: Remove the export
+          ansible.builtin.file:
+            path: "{{ decdn_build_home }}/work/sponsord.tar"
+            state: absent
+
+        # async: a cold build of the workspace takes many minutes, longer than an
+        # SSH session should be trusted to stay up; the job keeps running on the
+        # host and is polled (its status files live in the work directory, as the
+        # build user's home is root's). --locked builds the committed Cargo.lock,
+        # never a re-resolved one.
         - name: Build sponsord @ {{ sponsord_source_git.after }}
           ansible.builtin.command:
             argv:
-              - "{{ decdn_build_home }}/.cargo/bin/cargo"
+              - cargo
               - build
               - --release
               - --locked
               - -p
               - sponsord
-            chdir: "{{ decdn_build_home }}/src/sponsord"
+            chdir: "{{ sponsord_work }}/src"
           become: true
           become_user: "{{ decdn_build_user }}"
           environment: >-
-            {{ sponsord_build_env
+            {{ {'RUSTUP_HOME': decdn_build_home ~ '/toolchain/rustup',
+                'RUSTUP_TOOLCHAIN': (sponsord_toolchain_read.stdout | from_json).channel,
+                'CARGO_HOME': sponsord_work ~ '/cargo-home',
+                'HOME': sponsord_work,
+                'TMPDIR': sponsord_work ~ '/tmp',
+                'PATH': decdn_build_home ~ '/toolchain/cargo/bin:/usr/local/bin:/usr/bin:/bin'}
                | combine({'CARGO_BUILD_JOBS': sponsord_source_build_jobs | string}
                          if (sponsord_source_build_jobs | string) | length > 0 else {}) }}
+          vars:
+            # The status files of the async job; the build user's home is root's.
+            ansible_async_dir: "{{ sponsord_work }}/async"
           async: "{{ sponsord_source_build_timeout | int }}"
           poll: 30
           changed_when: true
 
+        - name: Stop anything the build left running
+          ansible.builtin.command:
+            argv: [pkill, -KILL, -u, "{{ decdn_build_user }}"]
+          register: sponsord_build_pkill
+          changed_when: sponsord_build_pkill.rc == 0
+          failed_when: sponsord_build_pkill.rc not in [0, 1]
+
         - name: Install the built binary
           ansible.builtin.script:
             cmd: >-
-              install-build-output.py {{ decdn_build_home | quote }}
-              src/sponsord/target/release/sponsord {{ sponsord_bin | quote }}
-              {{ sponsord_build_account.uid }}
+              install-build-output.py
+              {{ sponsord_work | quote }} src/target/release/sponsord
+              {{ sponsord_bin | quote }} {{ sponsord_build_account.uid }}
             executable: /usr/bin/python3
           register: sponsord_source_install
           changed_when: sponsord_source_install.stdout | trim == 'changed'
           notify: Restart sponsord
+
+        # Several GB, and the next build starts from scratch anyway. Kept on
+        # failure, for inspection; the next build replaces it.
+        - name: Remove the work directory
+          ansible.builtin.file:
+            path: "{{ sponsord_work }}"
+            state: absent
       rescue:
         - name: Report the failed source build
           ansible.builtin.fail:
@@ -201,9 +349,13 @@
                  or ansible_failed_result.msg | default('(no output)') }}.
               A compiler killed by the kernel is usually memory: lower
               sponsord_source_build_jobs. "async task did not complete" means
-              sponsord_source_build_timeout ({{ sponsord_source_build_timeout }}s) is too
-              short. Check free disk under {{ decdn_build_home }} too.
+              sponsord_source_build_timeout ({{ sponsord_source_build_timeout }}s)
+              is too short. Check free disk under {{ decdn_build_home }} too; the
+              work directory {{ sponsord_work }} is left for inspection.
 
+# Outside the check-mode skip, so `make check` shows a release -> source switch
+# dropping it. A leftover release stamp would make a later release deploy of the
+# SAME version skip the download over these source-built binaries.
 - name: Clear the release version stamp in source mode
   ansible.builtin.file:
     path: /usr/local/lib/sponsord/installed-version

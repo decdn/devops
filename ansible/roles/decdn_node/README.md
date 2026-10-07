@@ -60,17 +60,30 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
      `decdn_node_source_repo` (default `https://github.com/decdn/decdn.git`) at
      `decdn_node_source_ref`, which is required and may be any tag, branch or SHA:
      - The build runs as the unprivileged system user `decdn_build_user`
-       (`decdn-build`, home `decdn_build_home` = `/var/lib/decdn-build`), never
-       root: cargo runs every dependency's build script. Root creates only the
-       home itself; everything under it is created as the build user, and the
-       finished `target/release/{decdn-node,decdn}` are installed by
-       `files/install-build-output.py`, which walks the path without following
-       symlinks and refuses anything but a regular file owned by the build user,
-       so a build script cannot point root at another file.
+       (`decdn-build`), never root: cargo runs every dependency's build script.
+     - **Every new commit builds in a fresh environment**, so nothing one build
+       leaves behind (a tampered toolchain, cargo config, crate cache, git hook
+       or `target/`) can reach a later build of a ref you trust:
+       - The home, `decdn_build_home` = `/var/lib/decdn-build`, is root's. Root
+         installs the toolchain there, fetches the source into a root-only git
+         clone, and exports the commit with `git archive` into a work directory
+         created for that build.
+       - The build user writes only that work directory, with its own
+         `CARGO_HOME`, `TMPDIR` and `HOME`. It is deleted after a successful
+         install (kept after a failure, for inspection).
+       - The build user may not use cron or at (`/etc/cron.deny`, `/etc/at.deny`),
+         and any process it leaves running is killed before and after the build.
+       - The binaries are installed by `files/install-build-output.py`. It walks the
+         path without following symlinks and refuses anything but a regular file
+         owned by the build user, so a build script cannot point root at another
+         file.
+       - The cost: each new commit is a full build that downloads its crates
+         again.
      - The toolchain comes from `rustup-init` pinned by `decdn_rustup_version` and a
-       per-target `decdn_rustup_sha256`, installed with no default toolchain; the
-       checkout's `rust-toolchain.toml` then picks the Rust version (and any
-       components it lists), so the build uses exactly what upstream pins.
+       per-target `decdn_rustup_sha256`, installed by root with no default
+       toolchain. Root then installs the toolchain the commit's
+       `rust-toolchain.toml` names (channel, profile, components), so the build
+       uses exactly what upstream pins. A commit without one is refused.
        `build-essential`, `cmake`, `git`, `acl` and `ca-certificates` are
        installed from apt.
      - The build is `cargo build --release --locked`, async (up to
@@ -87,14 +100,15 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
        crates report: upstream's workspace is `0.0.0`). The backstop enforces it
        in this mode too, so a release version left over fails the deploy.
      - The repo URL may not carry a secret: no password, no user on an http(s)
-       URL, no query. For a private repo give the build user an ssh deploy key
-       and the host's key in its `~/.ssh/known_hosts` (the clone does not accept
-       unknown host keys), and use `ssh://git@host/path` or `git@host:path`.
-     - The build costs the node a Rust toolchain, the checkout and its `target/`
-       under `/var/lib/decdn-build` (several GB), and far more RAM and CPU than
-       the daemon itself needs, during the build only. The `sponsord` roles share
-       the same user, home and toolchain on a co-located host, each with its own
-       checkout.
+       URL, no query. Root does the fetch, so for a private repo give root on the
+       node an ssh deploy key and the git host's key in root's
+       `~/.ssh/known_hosts` (the clone does not accept unknown host keys), and
+       use `ssh://git@host/path` or `git@host:path`.
+     - The build costs the node a Rust toolchain and the git clone under
+       `/var/lib/decdn-build`, plus, during a build, a work directory holding the
+       whole build tree (several GB), and far more RAM and CPU than the daemon
+       itself needs. The `sponsord` roles share the user, home and toolchain on a
+       co-located host, each with its own clone.
    - **`manual`** — the role copies the two binaries from the
      Ansible control machine. Point it at them **either** way:
      - **`decdn_release_target_dir`** (recommended) — the Cargo `target/release`
@@ -652,5 +666,6 @@ still restarted onto: the role records the daemon binary's sha256 after the star
 longer matches it.
 
 After switching away from `source` for good, `/var/lib/decdn-build` and the
-`decdn-build` user stay behind (shared with the `sponsord` roles); remove them once
-no role on the host builds from source: `userdel -r decdn-build`.
+`decdn-build` user stay behind (shared with the `sponsord` roles). Once no role on
+the host builds from source: `userdel decdn-build && rm -rf /var/lib/decdn-build`,
+and drop its line from `/etc/cron.deny` and `/etc/at.deny`.

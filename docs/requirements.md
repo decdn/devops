@@ -87,10 +87,10 @@ cache_size_mb                    the cache (role default 10 GiB)
 (`BlobTooLarge`), so size it to the largest single object you expect to serve (role
 default 1 GiB). Put `/var/lib/decdn` on the fast disk.
 
-The Ansible `source` install method adds, outside the data volume, a Rust toolchain,
-the git checkout and its `target/` build tree under `/var/lib/decdn-build` (one
-checkout per role building on the host). That is several GB, and it is kept so
-rebuilds are incremental.
+The Ansible `source` install method adds, outside the data volume, a Rust toolchain
+and a git clone per role under `/var/lib/decdn-build`, plus, while it builds, a work
+directory with the whole build tree (several GB, removed after a successful
+install). Every new commit is a full build from scratch, crates downloaded again.
 
 ## CPU and memory
 

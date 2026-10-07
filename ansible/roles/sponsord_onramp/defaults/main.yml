@@ -36,10 +36,11 @@ sponsord_onramp_source_ref: ""
 sponsord_onramp_source_build_jobs: ""
 # Ceiling for the (async) build, in seconds.
 sponsord_onramp_source_build_timeout: 7200
-# Shared with the decdn_node and sponsord roles, defined identically in each: the
-# unprivileged build user (never root), its home (the rustup toolchain plus one
-# checkout per role under src/) and the sha256-pinned rustup-init. Override them
-# in inventory, not per role, so a co-located host keeps one toolchain.
+# Shared with the decdn_node and sponsord roles, defined identically in each (make
+# test-scripts checks): the unprivileged build user (never root), its root-owned
+# home (the toolchain, one git clone per role, a per-build work directory) and the
+# sha256-pinned rustup-init. Override them in inventory, not per role, so a
+# co-located host keeps one toolchain.
 decdn_build_user: decdn-build
 decdn_build_home: /var/lib/decdn-build
 decdn_rustup_version: "1.29.1"

@@ -24,22 +24,30 @@
           installed-source is {{ _stamp.content | b64decode | trim }}, expected
           main @ {{ _fixture_head.stdout }}
 
-    - name: Stat the release stamp, the binaries, the build output and rustup
+    - name: Stat the release stamp, the binaries and the build layout
       ansible.builtin.stat:
         path: "{{ item }}"
       loop:
         - /usr/local/lib/decdn/installed-version
         - /usr/local/bin/decdn-node
         - /usr/local/bin/decdn
-        - /var/lib/decdn-build/src/decdn/target/release/decdn-node
-        - /var/lib/decdn-build/.cargo/bin/rustup
-        - /var/lib/decdn-build/rustup-init
         - /var/lib/decdn-build
+        - /var/lib/decdn-build/toolchain
+        - /var/lib/decdn-build/toolchain/cargo/bin/rustup
+        - /var/lib/decdn-build/toolchain/rustup-init
+        - /var/lib/decdn-build/git
+        - /var/lib/decdn-build/git/decdn
+        - /var/lib/decdn-build/work
+        - /var/lib/decdn-build/work/decdn
+        - /var/lib/decdn-build/work/decdn.tar
       register: _st
 
-    - name: Require root-owned binaries and a build owned by the build user
+    # Nothing the build user can write outlives a build: the home, toolchain and
+    # clone are root's, and the work directory is gone after a successful install.
+    - name: Require root-owned binaries, a root-owned build layout and no leftovers
       vars:
         _s: "{{ dict(_st.results | map(attribute='item') | zip(_st.results | map(attribute='stat'))) }}"
+        _b: /var/lib/decdn-build
       ansible.builtin.assert:
         that:
           - not _s['/usr/local/lib/decdn/installed-version'].exists
@@ -47,11 +55,41 @@
           - _s['/usr/local/bin/decdn-node'].mode == '0755'
           - _s['/usr/local/bin/decdn'].pw_name == 'root'
           - _s['/usr/local/bin/decdn'].mode == '0755'
-          - _s['/var/lib/decdn-build/src/decdn/target/release/decdn-node'].pw_name == 'decdn-build'
-          - _s['/var/lib/decdn-build/.cargo/bin/rustup'].pw_name == 'decdn-build'
-          - not _s['/var/lib/decdn-build/rustup-init'].exists
-          - _s['/var/lib/decdn-build'].mode == '0750'
+          - _s[_b].pw_name == 'root' and _s[_b].gr_name == 'decdn-build' and _s[_b].mode == '0750'
+          - _s[_b ~ '/toolchain'].pw_name == 'root' and _s[_b ~ '/toolchain'].mode == '0755'
+          - _s[_b ~ '/toolchain/cargo/bin/rustup'].pw_name == 'root'
+          - not _s[_b ~ '/toolchain/rustup-init'].exists
+          - _s[_b ~ '/git'].pw_name == 'root' and _s[_b ~ '/git'].mode == '0700'
+          - _s[_b ~ '/git/decdn'].pw_name == 'root'
+          - _s[_b ~ '/work'].pw_name == 'root' and _s[_b ~ '/work'].mode == '0755'
+          - not _s[_b ~ '/work/decdn'].exists
+          - not _s[_b ~ '/work/decdn.tar'].exists
         fail_msg: "{{ _s | to_nice_json }}"
+
+    - name: Find anything under the build home the build user owns
+      ansible.builtin.command:
+        argv: [find, /var/lib/decdn-build, -user, decdn-build]
+      register: _owned
+      changed_when: false
+
+    - name: Require that the build user owns nothing there between builds
+      ansible.builtin.assert:
+        that:
+          - _owned.stdout | length == 0
+        fail_msg: "Owned by decdn-build after the build: {{ _owned.stdout_lines }}"
+
+    - name: Read cron.deny and at.deny
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop: [/etc/cron.deny, /etc/at.deny]
+      register: _deny
+
+    - name: Require cron and at denied to the build user
+      ansible.builtin.assert:
+        that:
+          - >-
+            _deny.results | map(attribute='content') | map('b64decode') | map('split')
+            | select('contains', 'decdn-build') | list | length == 2
 
     - name: Read the installed binaries' fixture revision
       ansible.builtin.command: "{{ item }} --fixture-rev"

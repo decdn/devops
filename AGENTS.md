@@ -93,10 +93,15 @@ addresses) the repo carries, and they carry their upstream commit.
   for now); `source` — a git ref (any tag/branch/SHA) cloned and `cargo build`-ed **on the
   node** as the unprivileged `decdn-build` user, sha256-pinned rustup, a `<repo>@<commit>`
   stamp (`tasks/source.yml`, copied into both sponsord roles, which share the user,
-  home and toolchain). Root never acts by name inside the build user's tree: outputs
-  go through `files/install-build-output.py` (openat/O_NOFOLLOW walk, regular file
-  owned by the build user), copied in decdn_node and sponsord and kept identical by
-  `make test-scripts` with the shared `decdn_build_*`/`decdn_rustup_*` defaults.
+  home and toolchain). **No build can poison a later one:** root owns the home, the
+  toolchain (it installs what the commit's `rust-toolchain.toml` pins) and the git
+  clone; each new commit is `git archive`d into a fresh work directory (own
+  `CARGO_HOME`/`TMPDIR`/`HOME`) that is deleted after install; cron/at are denied
+  and leftover processes killed. Root never acts by name inside the build user's
+  tree: outputs go through `files/install-build-output.py` (openat/O_NOFOLLOW walk,
+  regular file owned by the build user), copied in decdn_node and sponsord and kept
+  identical by `make test-scripts` with the shared `decdn_build_*`/`decdn_rustup_*`
+  defaults. Validation checks the repo URL for secrets before any task prints it.
   Coverage is end to end on dependency-free fixture repos: `molecule/source-build`
   (decdn_node) and the last phase of `molecule/sponsord-onramp` (both sponsord
   roles); or `manual` — binaries built on the control machine. Each method clears

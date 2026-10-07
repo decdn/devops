@@ -44,15 +44,7 @@
 - name: Validate the build-from-source inputs
   when: sponsord_install_method == "source"
   block:
-    - name: Require a git ref to build
-      ansible.builtin.assert:
-        that:
-          - sponsord_source_ref is string
-          - sponsord_source_ref | trim | length > 0
-        fail_msg: >-
-          sponsord_install_method "source" requires sponsord_source_ref: the tag, branch or
-          commit SHA of {{ sponsord_source_repo }} to build (e.g. "main").
-
+    # First, because a later message or task name may print the repo URL.
     # A secret in the URL is a password (https://user:token@, or user:token@host:
     # in scp form), any userinfo on an http(s) URL (a bare token as the username),
     # or a query/fragment (?access_token=). An ssh username is not a secret:
@@ -73,10 +65,19 @@
         fail_msg: >-
           sponsord_source_repo must not carry a secret (so it is not echoed here):
           no password, no user on an http(s) URL, no query or fragment.
-          Inventory is not a place for secrets. For a private repo give the
-          {{ decdn_build_user }} user an ssh deploy key (and the host's key in
-          its ~/.ssh/known_hosts) and use ssh://git@host/path or git@host:path,
-          or a credential helper on the host.
+          Inventory is not a place for secrets. Root fetches the source, so for a
+          private repo give root on the host an ssh deploy key (and the git
+          host's key in root's ~/.ssh/known_hosts) and use ssh://git@host/path or
+          git@host:path, or a credential helper in root's git config.
+
+    - name: Require a git ref to build
+      ansible.builtin.assert:
+        that:
+          - sponsord_source_ref is string
+          - sponsord_source_ref | trim | length > 0
+        fail_msg: >-
+          sponsord_install_method "source" requires sponsord_source_ref: the tag, branch or
+          commit SHA to build (e.g. "main").
 
     - name: Validate sponsord_source_build_jobs
       ansible.builtin.assert:

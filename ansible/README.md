@@ -156,9 +156,10 @@ ignored on the first converge.
      use one of the other two methods.
    - **`source`** clones `decdn_node_source_repo` (default `decdn/decdn` on GitHub) at
      `decdn_node_source_ref` (any tag, branch or SHA) **on the node** and builds it there
-     as an unprivileged `decdn-build` user, with a sha256-pinned rustup and the
-     checkout's own `rust-toolchain.toml`. No control-machine toolchain needed; the
-     host pays the build in time, RAM and disk.
+     as an unprivileged `decdn-build` user, in a fresh environment per commit, with a
+     sha256-pinned rustup and the toolchain the commit's `rust-toolchain.toml`
+     pins. No control-machine toolchain needed; the host pays the build in time,
+     RAM and disk.
    - **`manual`** copies `decdn-node` and `decdn` built on the control machine
      (`decdn_release_target_dir`, or both `decdn_node_manual_bin_src` and
      `decdn_cli_manual_bin_src`). Cross-compile for aarch64 hosts; the role derives

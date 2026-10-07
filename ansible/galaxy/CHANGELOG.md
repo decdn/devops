@@ -13,14 +13,20 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   (any tag, branch or SHA) on the target and builds it there with `cargo build
   --release --locked`. The build runs as an unprivileged `decdn-build` system user
   (`decdn_build_user`, `decdn_build_home`) with a sha256-pinned rustup-init
-  (`decdn_rustup_version`, `decdn_rustup_sha256`); the checkout's
-  `rust-toolchain.toml` picks the Rust version. Root never acts by name inside the
-  build user's tree: the outputs are installed by `files/install-build-output.py`,
-  which refuses symlinks and files the build user does not own. It runs async
-  (`*_source_build_timeout`), `*_source_build_jobs` sets `CARGO_BUILD_JOBS`, and a
-  `<repo>@<commit>` stamp skips rebuilding an unchanged commit. The repo URL may
-  not carry a secret (password, user on http(s), query); an ssh deploy-key URL is
-  fine. Every method now clears the other methods' stamps.
+  (`decdn_rustup_version`, `decdn_rustup_sha256`) and the toolchain the commit's
+  `rust-toolchain.toml` pins (root installs both). Every new commit builds in a fresh
+  environment so no build can poison a later one: root owns the build home, the
+  toolchain and the git clone, the commit is exported into a per-build work
+  directory (own `CARGO_HOME`, `TMPDIR`, `HOME`) deleted after install, cron and at
+  are denied to the build user and its leftover processes are killed. Root never
+  acts by name inside the build user's tree: the outputs are installed by
+  `files/install-build-output.py`, which refuses symlinks and files the build user
+  does not own. The build runs async (`*_source_build_timeout`),
+  `*_source_build_jobs` sets `CARGO_BUILD_JOBS`, and a `<repo>@<commit>` stamp
+  skips rebuilding an unchanged commit. The repo URL may not carry a secret
+  (password, user on http(s), query), and is checked before anything prints it; an
+  ssh deploy-key URL (root's key) is fine. Every method now clears the other
+  methods' stamps.
 - `decdn_node`: the daemon binary's sha256 is recorded after the start
   (`decdn_bin_checksum_file`), and a mismatch restarts the daemon, so a binary
   installed by a run that failed before its restart handler ran is not left

@@ -629,8 +629,6 @@
           git add -A
           git -c user.name=molecule -c user.email=molecule@example.invalid commit -q -m fixture
           git clone -q --bare /srv/sponsord-fixture-work /srv/sponsord-fixture.git
-          # Root owns the repo; the roles clone it as decdn-build.
-          git config --system --add safe.directory /srv/sponsord-fixture.git
         creates: /srv/sponsord-fixture.git
         executable: /bin/bash
 
@@ -667,10 +665,10 @@
       register: _fx_revs
       changed_when: false
 
-    - name: Stat the two checkouts and the shared toolchain
+    - name: Stat the two root-owned clones and the shared toolchain
       ansible.builtin.stat:
         path: "/var/lib/decdn-build/{{ item }}"
-      loop: [src/sponsord, src/sponsord-onramp, .cargo/bin/cargo]
+      loop: [git/sponsord, git/sponsord-onramp, toolchain/cargo/bin/cargo]
       register: _fx_tree
 
     - name: Read both units
@@ -688,7 +686,7 @@
           - _fx_revs.results | map(attribute='stdout') | list == ['1', '1']
           - _fx_tree.results[0].stat.isdir | default(false)
           - _fx_tree.results[1].stat.isdir | default(false)
-          - _fx_tree.results[2].stat.exists
+          - _fx_tree.results | map(attribute='stat.pw_name', default='') | list == ['root'] * 3
           - _fx_units.results | map(attribute='status.ActiveState') | list == ['active', 'active']
         fail_msg: >-
           stamps {{ _fx_stamps.results | map(attribute='content') | map('b64decode') | list }},

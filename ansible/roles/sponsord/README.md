@@ -27,7 +27,8 @@ gate, installers, behind a TLS reverse proxy), is the
     `sponsord_source_ref` (any tag, branch or SHA) on the host and runs `cargo build
     --release --locked -p sponsord` as the unprivileged `decdn-build` user, exactly
     as the `decdn_node` role's `source` mode does (see its README): a sha256-pinned
-    rustup, the checkout's `rust-toolchain.toml`, a `<repo>@<commit>` stamp so an
+    rustup and the toolchain the commit pins, both installed by root, a fresh
+    build environment for every new commit, a `<repo>@<commit>` stamp so an
     unchanged commit is not rebuilt, and a root-side install that refuses
     symlinks. Leave `sponsord_version` empty: the version check enforces it
     exactly, and upstream's crates report `0.0.0`. The build user, its home and the toolchain are
@@ -165,8 +166,8 @@ yourself.
   ```
 
   After a `source` install, the build user and its home stay behind (shared with
-  the other roles on the host): `sudo userdel -r decdn-build` once nothing on the
-  host builds from source. Then delete `/etc/sponsord` (secrets, env files and the role's two `.sha256`
+  the other roles on the host): `sudo userdel decdn-build && sudo rm -rf
+  /var/lib/decdn-build` once nothing on the host builds from source. Then delete `/etc/sponsord` (secrets, env files and the role's two `.sha256`
   records) once the treasury files are safe elsewhere.
 
 ## Testing

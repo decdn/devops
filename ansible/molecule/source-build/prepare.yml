@@ -69,8 +69,5 @@
           git add -A
           git -c user.name=molecule -c user.email=molecule@example.invalid commit -q -m fixture
           git clone -q --bare /srv/decdn-fixture-work /srv/decdn-fixture.git
-          # The role clones as decdn-build; root owns this repo, which git
-          # refuses as "dubious ownership" without this (scoped to the one path).
-          git config --system --add safe.directory /srv/decdn-fixture.git
         creates: /srv/decdn-fixture.git
         executable: /bin/bash
