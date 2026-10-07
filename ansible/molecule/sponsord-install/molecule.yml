@@ -1,30 +1,20 @@
 ---
-# sponsord STANDALONE: a host in sponsord_hosts only, no decdn-node anywhere,
-# converged through the real playbooks/sponsord.yml (so playbooks/group_vars/all.yml
-# derives the Alloy toggles exactly as a deploy would) against a stub daemon
-# (files/sponsord-stub) and the grafana-cloud scenario's Alloy stub.
+# sponsord's install paths, split from ../sponsord so the two run side by side: the
+# same host shape, inventory and converge (../sponsord/converge.yml, by path), then
+#   prepare      ../sponsord's staging plus a signed release mirror on loopback;
+#   side_effect  release mode against that mirror (verified install, no re-download,
+#                bad checksum / signature / version each failing at its own task,
+#                manual clearing the stamp), then treasury wallet generation.
+# No idempotence step (../sponsord runs it on the identical converge) and no verify:
+# ../sponsord/verify.yml checks state its own side effect records, and each play
+# here asserts its own outcome and leaves the host as converged.
 #
-#   converge     the role end to end: host-generated API token, treasury files
-#                locked to 0600, inventory-authored secret.env (an RPC URL full of
-#                shell metacharacters the stub checks byte for byte), loopback
-#                listener, /healthz gate; Alloy scraping sponsord and NOT the node.
-#   idempotence  an unchanged host must not restart anything.
-#   side_effect  rotate the treasury password out of band -> the next converge
-#                must restart; make the daemon refuse to start -> the /healthz
-#                gate must FAIL the converge; then put it back; secret.env's
-#                provenance guards.
-#   verify       files, modes, unit hardening, credentials, listener, Alloy config.
-#
-# Release mode and treasury wallet generation run in ../sponsord-install on the same
-# converge, so the two run side by side. Its inventory below must stay identical to
-# this one (`make test-scripts` checks).
-#
-# `baseline` is skipped (real-host-only — see ../default/molecule.yml). The
-# broken-input matrix for this role lives in ../validation-sponsord.
+# The inventory below must stay identical to ../sponsord/molecule.yml's
+# (`make test-scripts` checks).
 driver:
   name: docker
 platforms:
-  - name: sponsord-molecule
+  - name: sponsord-install-molecule
     # Same digest-pinned image as the other scenarios (repo convention). Re-resolve
     # all of them together to bump.
     image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
@@ -39,7 +29,7 @@ platforms:
   # systemd 255: LoadCredential= files arrive 0440 there (0400 on Debian 12's 252),
   # which is what the unit's keystore copy into its RuntimeDirectory exists for. The
   # stub enforces upstream's keystore mode check, so a regression fails here.
-  - name: sponsord-molecule-u2404
+  - name: sponsord-install-molecule-u2404
     # Same digest-pinned image as ../os-matrix (repo convention).
     image: geerlingguy/docker-ubuntu2404-ansible@sha256:3394e335df58c961c00b78ae601ef30cdd7463b112f21b0c5f78674a70526302
     pre_build_image: true
@@ -59,6 +49,8 @@ provisioner:
     ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
     # Same pipelining note as ../default/molecule.yml.
     ANSIBLE_PIPELINING: "true"
+  playbooks:
+    converge: ../sponsord/converge.yml
   inventory:
     group_vars:
       # Inventory group_vars, not converge vars: the converge is an
@@ -90,7 +82,5 @@ scenario:
     - create
     - prepare
     - converge
-    - idempotence
     - side_effect
-    - verify
     - destroy

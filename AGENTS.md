@@ -72,7 +72,7 @@ charts/
     files/monitoring/   # GENERATED: upstream dashboards + alert rules (scripts/sync-monitoring.sh)
     tests/render-test.sh  # positive/negative render tests (`make lint-helm`)
 docs/                   # cross-path operator docs: requirements.md, lifecycle.md
-scripts/                # upstream-mirror generators + the release gate
+scripts/                # upstream-mirror generators, the release gate, the molecule driver (molecule.sh)
 ```
 
 **Generated mirrors of upstream — regenerate, never hand-edit:**
@@ -190,7 +190,8 @@ addresses) the repo carries, and they carry their upstream commit.
     `playbooks/group_vars/all.yml`, which reads `sponsord_onramp_proxy` from inventory.
   - **Molecule:** `molecule/sponsord-onramp` runs the real Caddy with `tls internal`
     and checks the https chain and that a forged `X-Forwarded-For` cannot pick the
-    client address.
+    client address; `molecule/sponsord-onramp-caddy` runs the proxy side effects
+    (ACME, `none`, a foreign Caddyfile) on the same converge.
 
 - **`cloud-init/`** — the Ansible path with no control machine. Two templates,
   `user-data.yaml` (a node) and `user-data-sponsord.yaml` (sponsord + onramp), share
@@ -292,12 +293,12 @@ drives deploys (its targets must run from `ansible/`). The full target list is i
 # Root — the gates (CI runs the same)
 make lint             # every pre-commit hook, every file (also the CI `pre-commit` job)
 make lint-ansible     # vendor collections + ansible-lint (production profile)
-make molecule         # every ansible/molecule/*/ scenario in parallel (Docker; JOBS=<n>)
+make molecule         # every ansible/molecule/*/ scenario in parallel (Docker; JOBS=<n>, SCENARIOS='a b')
 make lint-helm        # chart: lint + render tests + kubeconform + schema keys
 make lint-alloy       # grafana_alloy config against the real pinned Alloy binary
 make lint-compose     # compose/ invariants (three renders, compose/tests/*.jq)
 make lint-cloud-init  # cloud-init/user-data*.yaml: schema + invariants (no secrets, release mode, lock)
-make test-scripts     # Makefile guards, release gate, lint-compose/lint-cloud-init negatives
+make test-scripts     # Makefile/molecule-driver guards, release gate, lint-compose/lint-cloud-init negatives
 make security         # KICS over ansible/, the rendered chart and compose/
 
 # Ansible — run from ansible/
@@ -333,5 +334,16 @@ repository variable is `true` (RELEASING.md). Log changes under `[Unreleased]` i
 **CI.** `ci.yml` is the blocking gate: `pre-commit`, `scripts` and `actionlint` on every PR, the
 Ansible, chart, compose and cloud-init jobs path-filtered, KICS on the first three (KICS has
 no cloud-init platform); `molecule.yml` runs the molecule suite on `ansible/**` and
-`cloud-init/**`. `ansible-lint` is **not** a per-commit hook (it needs
+`cloud-init/**`, one runner per scenario (matrix from `make molecule-list`), with the
+`molecule` job as the single aggregate check. `ansible-lint` is **not** a per-commit hook (it needs
 collections vendored): run `make lint-ansible`.
+
+**Molecule runs share the host's Docker daemon.** Scenario container names are
+fixed, so `scripts/molecule.sh` (behind `make molecule`) takes a host-wide lock per
+scenario: another agent running a *different* scenario does not block you, the
+*same* one refuses to start (exit 75). Run what you changed with
+`make molecule SCENARIOS='…'` rather than bare `molecule test -s`, which skips the
+lock. A scenario that grows slow is split along its side effects into a sibling
+that reuses its prepare/converge/verify by path, with an identical inventory
+(`make test-scripts` checks the pairs); add the sibling to `SLOW_FIRST` in
+`ansible/Makefile` when it is among the slowest.

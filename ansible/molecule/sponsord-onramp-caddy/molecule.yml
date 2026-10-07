@@ -1,35 +1,20 @@
 ---
-# sponsord-onramp beside its daemon: a host in sponsord_hosts AND
-# sponsord_onramp_hosts, converged through the real playbooks/sponsord.yml (both
-# plays) against the stub daemon (../sponsord/files/sponsord-stub), a stub onramp
-# (files/sponsord-onramp-stub) and the REAL distro Caddy, with Caddy's internal CA
-# in place of ACME (no public DNS in a container).
+# The onramp's proxy handling, split from ../sponsord-onramp so the two run side by
+# side: the same host shape, inventory and converge (that scenario's prepare,
+# converge and verify, by path), then side_effect.yml here:
+#   proxy "none" (no client-IP header, the given public URL, the stale-Caddy
+#   warning), ACME mode (no `tls internal`, the redirect answers, an unissuable
+#   certificate only warns), a broken upstream behind Caddy failing the run, and a
+#   Caddyfile the role did not write (refused until confirmed; the package's
+#   untouched default replaced).
+# No idempotence step: ../sponsord-onramp runs it on the identical converge.
 #
-#   converge     the daemon (as ../sponsord, minus its RPC literal check), then the
-#                onramp: the host-provisioned Turnstile secret locked to 0600, the
-#                daemon's token as a credential, loopback listener, /healthz gate,
-#                Caddy terminating TLS for the domain with the role's Caddyfile;
-#                Alloy labelling the onramp's journal stream.
-#   idempotence  an unchanged host must not restart anything.
-#   side_effect  rotate the Turnstile secret out of band -> the next converge must
-#                restart the onramp (and only it); make the onramp refuse to start
-#                -> the /healthz gate must FAIL the converge; a custom gate page;
-#                the Turnstile secret from inventory.
-#   verify       files, modes, unit hardening, credentials, listeners, the whole
-#                https chain through Caddy, the client address Caddy passes on.
-#
-# The proxy side effects (proxy "none", ACME, a Caddyfile the role did not write)
-# run in ../sponsord-onramp-caddy on the same converge, so the two run side by side.
-# Its inventory below must stay identical to this one (`make test-scripts` checks).
-#
-# `baseline` is skipped (real-host-only — see ../default/molecule.yml), so the
-# tcp/80 + tcp/443 holes are covered by tests/firewall-holes instead. Release
-# mode is covered for the sponsord role (../sponsord-install), whose install tasks this
-# role mirrors. The broken-input matrix lives in ../validation-sponsord.
+# The inventory below must stay identical to ../sponsord-onramp/molecule.yml's
+# (`make test-scripts` checks); the stubs are that scenario's files.
 driver:
   name: docker
 platforms:
-  - name: onramp-molecule
+  - name: onramp-caddy-molecule
     # Same digest-pinned images as ../sponsord (repo convention).
     image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
     pre_build_image: true
@@ -42,7 +27,7 @@ platforms:
       - sponsord_hosts
       - sponsord_onramp_hosts
   # systemd 255 writes LoadCredential= files 0440 and Caddy comes from universe.
-  - name: onramp-molecule-u2404
+  - name: onramp-caddy-molecule-u2404
     image: geerlingguy/docker-ubuntu2404-ansible@sha256:3394e335df58c961c00b78ae601ef30cdd7463b112f21b0c5f78674a70526302
     pre_build_image: true
     command: /usr/lib/systemd/systemd
@@ -62,6 +47,10 @@ provisioner:
     ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
     # Same pipelining note as ../default/molecule.yml.
     ANSIBLE_PIPELINING: "true"
+  playbooks:
+    prepare: ../sponsord-onramp/prepare.yml
+    converge: ../sponsord-onramp/converge.yml
+    verify: ../sponsord-onramp/verify.yml
   inventory:
     group_vars:
       sponsord_hosts:
@@ -90,8 +79,8 @@ provisioner:
         # Renders (and so validates) the Caddyfile's global email option.
         sponsord_onramp_acme_email: ops@molecule.test
         sponsord_onramp_turnstile_sitekey: 1x00000000000000000000AA
-        # Must equal EXPECTED_BRAND in files/sponsord-onramp-stub: quotes and a
-        # dollar sign prove the env file's quoting ($$ is molecule's escape).
+        # Must equal EXPECTED_BRAND in ../sponsord-onramp/files/sponsord-onramp-stub:
+        # quotes and a dollar sign prove the env file's quoting ($$ is molecule's escape).
         sponsord_onramp_brand_name: 'deCDN "molecule" $$HOME'
         sponsord_onramp_decdn_release: v0.1.0
         sponsord_onramp_decdn_sums_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
@@ -109,7 +98,6 @@ scenario:
     - create
     - prepare
     - converge
-    - idempotence
     - side_effect
     - verify
     - destroy

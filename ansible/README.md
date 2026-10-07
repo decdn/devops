@@ -305,6 +305,7 @@ the on-chain exit: [`docs/lifecycle.md`](../docs/lifecycle.md).
 make lint           # yamllint + ansible-lint (production profile)
 for pb in playbooks/*.yml; do ansible-playbook "$pb" --syntax-check -i localhost,; done
 make molecule       # every molecule scenario, in parallel (needs Docker)
+make molecule SCENARIOS='sponsord schema'   # …only these
 make molecule JOBS=2   # …capped to two at a time on a small machine
 make molecule-serial   # …one at a time, when a failure needs readable output
 
@@ -313,8 +314,9 @@ make lint-alloy     # render grafana_alloy's templates, then `alloy validate` th
 ```
 
 `make molecule` runs every scenario under `molecule/`: **`default`** (described below),
-`schema` (config key-set drift against the upstream field list), `validation` (bad knobs,
-for every role, must be rejected by their own asserts), `generate-keystore` (opt-in
+`schema` (config key-set drift against the upstream field list), `validation`,
+`validation-alloy` and `validation-sponsord` (bad knobs, for every role, must be rejected
+by their own asserts; one scenario per role group), `generate-keystore` (opt-in
 host-side wallet), `host-env` (host-provisioned `/etc/decdn/decdn.env`),
 `slow-readiness` (advisory `/metrics` probe timeout), `grafana-cloud` (the opt-in
 observability wiring — see [Grafana Cloud observability](#grafana-cloud-observability-opt-in)),
@@ -325,13 +327,21 @@ itself is Debian 12), `lifecycle` (a `decdn_network` profile with an override, b
 backup scopes decrypted and checked, a rejected and a real decommission),
 `sponsord` (`playbooks/sponsord.yml` on a host with no node: generated token, credential
 rotation restart, the fatal `/healthz` gate, Alloy scraping sponsord and not the node;
-`grafana-cloud` covers sponsord co-located with a node) and `sponsord-onramp` (the
-onramp beside its daemon, behind the real distro Caddy with `tls internal`: the https
-chain, the client address Caddy passes on, ACME and `none` modes, a Turnstile rotation
-restart, the fatal gates, a refused foreign Caddyfile).
+`grafana-cloud` covers sponsord co-located with a node), `sponsord-install` (the same
+converge, then release mode against a signed loopback mirror and treasury wallet
+generation), `sponsord-onramp` (the onramp beside its daemon, behind the real distro
+Caddy with `tls internal`: the https chain, the client address Caddy passes on, a
+Turnstile rotation restart, the fatal gates), `sponsord-onramp-caddy` (the same
+converge, then ACME and `none` modes and a refused foreign Caddyfile), and
+`cloud-init` and `cloud-init-sponsord` (the `cloud-init/` templates booted for real).
+A slow scenario is split along its side effects rather than allowed to set the wall
+clock on its own.
 They are independent, so they run concurrently, and each line of output is prefixed with its scenario name
 because the runs interleave. `make molecule-serial` is the escape hatch when that
-interleaving gets in the way of reading a failure.
+interleaving gets in the way of reading a failure. Each scenario takes its own host-wide
+lock, so two checkouts or agents can run different scenarios at once, but never the same
+one (its container names are fixed); `make deps` refuses to rewrite `collections/` under
+a running scenario. CI runs each scenario on its own runner.
 
 `grafana-cloud` runs against a *stub* Alloy that exits 0 for every subcommand, so it
 proves the role's plumbing but cannot prove the rendered `config.alloy` is loadable.
