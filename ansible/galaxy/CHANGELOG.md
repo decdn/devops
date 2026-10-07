@@ -17,8 +17,12 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `rust-toolchain.toml` pins (root installs both). Every new commit builds in a fresh
   environment so no build can poison a later one: root owns the build home, the
   toolchain and the git clone, the commit is exported into a per-build work
-  directory (own `CARGO_HOME`, `TMPDIR`, `HOME`) deleted after install, cron and at
-  are denied to the build user and its leftover processes are killed. Root never
+  directory (own `CARGO_HOME`, `TMPDIR`, `HOME`) deleted after install, cargo runs
+  in a sandboxed transient systemd unit (read-only filesystem but the work
+  directory, private tmp, `/dev/shm` and IPC, its cgroup killed when it ends),
+  cron and at are denied to the build user, and its processes, crontab and at
+  jobs are removed (and a build home root does not own deleted) before the layout
+  is touched. Root never
   acts by name inside the build user's tree: the outputs are installed by
   `files/install-build-output.py`, which refuses symlinks and files the build user
   does not own. The build runs async (`*_source_build_timeout`),

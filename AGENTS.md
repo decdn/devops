@@ -96,8 +96,11 @@ addresses) the repo carries, and they carry their upstream commit.
   home and toolchain). **No build can poison a later one:** root owns the home, the
   toolchain (it installs what the commit's `rust-toolchain.toml` pins) and the git
   clone; each new commit is `git archive`d into a fresh work directory (own
-  `CARGO_HOME`/`TMPDIR`/`HOME`) that is deleted after install; cron/at are denied
-  and leftover processes killed. Root never acts by name inside the build user's
+  `CARGO_HOME`/`TMPDIR`/`HOME`) that is deleted after install; cargo runs in a
+  sandboxed `systemd-run` unit (read-only FS but the work dir, private
+  tmp/dev/shm/IPC, cgroup killed at the end); cron/at are denied, and the build
+  user's processes, crontab and at jobs are removed and a home root does not own is
+  deleted before the layout is touched. Root never acts by name inside the build user's
   tree: outputs go through `files/install-build-output.py` (openat/O_NOFOLLOW walk,
   regular file owned by the build user), copied in decdn_node and sponsord and kept
   identical by `make test-scripts` with the shared `decdn_build_*`/`decdn_rustup_*`

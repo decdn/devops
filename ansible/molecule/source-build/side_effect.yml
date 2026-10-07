@@ -8,6 +8,9 @@
 #   4. A commit whose binary fails the --version backstop leaves NO stamp, and
 #      rolling the ref back to the previous commit (a SHA ref) reinstalls it.
 #   5. "manual" clears the source stamp, and switching back to source rebuilds.
+#   6. A build home the build user owns (an earlier layout), with symlinks planted
+#      where the root-owned layout goes, a crontab and a running process, is
+#      deleted and rebuilt without root following any of the symlinks.
 - name: Side effect — branch move, missing binary, lost restart
   hosts: all
   become: true
@@ -243,3 +246,83 @@
       ansible.builtin.assert:
         that:
           - _rev.stdout == '2'
+
+- name: Side effect — an untrusted earlier build home is replaced, not reused
+  hosts: all
+  become: true
+  tasks:
+    - name: Create the decoy directory the planted symlinks point at
+      ansible.builtin.file:
+        path: /srv/decoy
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Hand the build home to the build user and plant symlinks in it
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          chown -R decdn-build:decdn-build /var/lib/decdn-build
+          for d in toolchain git work; do
+            rm -rf "/var/lib/decdn-build/$d"
+            ln -s /srv/decoy "/var/lib/decdn-build/$d"
+          done
+          mkdir -p /var/spool/cron/crontabs
+          echo '* * * * * true' > /var/spool/cron/crontabs/decdn-build
+          setsid runuser -u decdn-build -- sleep 600 </dev/null >/dev/null 2>&1 &
+        executable: /bin/bash
+      changed_when: true
+
+    # The stamp still matches, so the commit is not rebuilt; the layout, rustup
+    # and the clone are, and that is the path the planted symlinks would hijack.
+    - name: Re-run the role over the planted home
+      ansible.builtin.include_role:
+        name: decdn_node
+      vars:
+        # main now points at the broken rev 3; stay on the installed rev 2.
+        decdn_node_source_ref: "{{ hostvars[inventory_hostname]._rev2.stdout_lines | last }}"
+
+    - name: Stat the decoy, the layout and the crontab
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - /srv/decoy
+        - /var/lib/decdn-build
+        - /var/lib/decdn-build/toolchain
+        - /var/lib/decdn-build/git
+        - /var/lib/decdn-build/work
+        - /var/spool/cron/crontabs/decdn-build
+      register: _legacy
+
+    - name: List the decoy directory
+      ansible.builtin.find:
+        paths: /srv/decoy
+        hidden: true
+        file_type: any
+      register: _decoy_files
+
+    - name: Look for a process of the build user
+      ansible.builtin.command:
+        argv: [pgrep, -u, decdn-build]
+      register: _legacy_procs
+      changed_when: false
+      failed_when: _legacy_procs.rc not in [0, 1]
+
+    - name: Require a fresh root-owned layout, an untouched decoy and no leftovers
+      vars:
+        _s: "{{ dict(_legacy.results | map(attribute='item') | zip(_legacy.results | map(attribute='stat'))) }}"
+      ansible.builtin.assert:
+        that:
+          - _decoy_files.matched == 0
+          - _s['/srv/decoy'].pw_name == 'root' and _s['/srv/decoy'].mode == '0700'
+          - _s['/var/lib/decdn-build'].pw_name == 'root'
+          - _s['/var/lib/decdn-build/toolchain'].isdir and not _s['/var/lib/decdn-build/toolchain'].islnk
+          - _s['/var/lib/decdn-build/git'].isdir and not _s['/var/lib/decdn-build/git'].islnk
+          - _s['/var/lib/decdn-build/work'].isdir and not _s['/var/lib/decdn-build/work'].islnk
+          - not _s['/var/spool/cron/crontabs/decdn-build'].exists
+          - _legacy_procs.rc == 1
+        fail_msg: >-
+          {{ _s | to_nice_json }} decoy files {{ _decoy_files.files | map(attribute='path') | list }},
+          build-user processes {{ _legacy_procs.stdout_lines }}

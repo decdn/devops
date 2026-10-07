@@ -12,9 +12,14 @@
 #   - the commit is exported with `git archive` into a work directory recreated
 #     for every build, with its own CARGO_HOME, TMPDIR and HOME, and deleted after
 #     a successful install. The build user has no git metadata, cargo config or
-#     cache that outlives the build, cannot write any directory above it (cargo
-#     reads config from every ancestor), may not use cron or at, and any process
-#     it left running is killed before and after the build.
+#     cache that outlives the build, and cannot write any directory above it
+#     (cargo reads config from every ancestor).
+#   - cargo runs in a transient systemd unit: the whole filesystem read-only but
+#     that work directory, private /tmp, /dev and IPC, no new privileges, and its
+#     cgroup killed when it ends, so no process of the build outlives it.
+#   - the build user may not use cron or at; any process, crontab or at job it
+#     has is removed before the layout is touched, and a build home that is not
+#     root's (an earlier layout, so untrusted) is deleted rather than reused.
 #   - the outputs are installed by files/install-build-output.py, which refuses
 #     symlinks and files the build user does not own without a check-then-use race.
 #
@@ -41,6 +46,7 @@
     decdn_rustup_archive: "https://static.rust-lang.org/rustup/archive/{{ decdn_rustup_version }}"
     decdn_source_clone: "{{ decdn_build_home }}/git/decdn"
     decdn_work: "{{ decdn_build_home }}/work/decdn"
+    decdn_build_unit: decdn-build-decdn-node
   block:
     - name: Require a pinned rustup-init digest for this target
       ansible.builtin.assert:
@@ -84,6 +90,58 @@
         shell: /usr/sbin/nologin
       register: decdn_build_account
 
+    # Before any path under the build home is touched, so nothing running as the
+    # build user can race the checks below. pkill alone can lose to a process that
+    # keeps forking, hence the loop and the final check.
+    - name: Stop every process, crontab and at job of the build user
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          u={{ decdn_build_user | quote }}
+          killed=
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            pgrep -u "$u" >/dev/null || break
+            pkill -KILL -u "$u" || true
+            killed=1
+            sleep 0.2
+          done
+          if pgrep -u "$u" >/dev/null; then
+            echo "processes of $u survive pkill" >&2
+            exit 1
+          fi
+          if [ -e "/var/spool/cron/crontabs/$u" ]; then
+            rm -f "/var/spool/cron/crontabs/$u"
+            killed=1
+          fi
+          if command -v atq >/dev/null; then
+            jobs=$(atq | awk -v u="$u" '$NF == u {print $1}')
+            if [ -n "$jobs" ]; then
+              echo "$jobs" | xargs atrm
+              killed=1
+            fi
+          fi
+          echo "${killed:+removed}"
+        executable: /bin/bash
+      register: decdn_build_reap
+      changed_when: decdn_build_reap.stdout | trim == 'removed'
+
+    # A home the build user owns (this role's first layout, or someone else's)
+    # may hold anything it planted, symlinks included. Delete it rather than
+    # reuse it: its parent is root-owned and the removal does not follow links.
+    - name: Stat the build home
+      ansible.builtin.stat:
+        path: "{{ decdn_build_home }}"
+        follow: false
+      register: decdn_build_home_stat
+
+    - name: Remove a build home root does not own
+      ansible.builtin.file:
+        path: "{{ decdn_build_home }}"
+        state: absent
+      when:
+        - decdn_build_home_stat.stat.exists
+        - not decdn_build_home_stat.stat.isdir or decdn_build_home_stat.stat.pw_name != 'root'
+
     # Parents first; follow: false, and every parent is root-owned, so none of
     # these can have been swapped for a symlink by the build user.
     - name: Create the root-owned build layout
@@ -101,6 +159,28 @@
         - {path: "{{ decdn_build_home }}/work", group: root, mode: "0755"}
       loop_control:
         label: "{{ item.path }}"
+
+    - name: Stat the build layout
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - "{{ decdn_build_home }}/toolchain"
+        - "{{ decdn_build_home }}/git"
+        - "{{ decdn_build_home }}/work"
+      register: decdn_build_layout
+
+    - name: Require every layout directory to be a real root-owned directory
+      ansible.builtin.assert:
+        that:
+          - item.stat.isdir | default(false)
+          - not (item.stat.islnk | default(true))
+          - item.stat.pw_name | default('') == 'root'
+        fail_msg: "{{ item.item }} is not a root-owned directory; refusing to build."
+        quiet: true
+      loop: "{{ decdn_build_layout.results }}"
+      loop_control:
+        label: "{{ item.item }}"
 
     # A job scheduled by one build's script would otherwise run during a later
     # build and edit its sources.
@@ -199,13 +279,6 @@
             path: /usr/local/lib/decdn/installed-source
             state: absent
 
-        - name: Stop anything still running as the build user
-          ansible.builtin.command:
-            argv: [pkill, -KILL, -u, "{{ decdn_build_user }}"]
-          register: decdn_build_pkill
-          changed_when: decdn_build_pkill.rc == 0
-          failed_when: decdn_build_pkill.rc not in [0, 1]
-
         # Root reads the file in its own clone, without following a symlink the
         # repo might carry there.
         - name: Read the toolchain the commit pins
@@ -289,7 +362,7 @@
         - name: Unpack the commit as the build user
           ansible.builtin.shell:
             cmd: >-
-              mkdir src cargo-home tmp async &&
+              mkdir src cargo-home tmp &&
               tar -xf {{ (decdn_build_home ~ '/work/decdn.tar') | quote }} -C src
             chdir: "{{ decdn_work }}"
           become: true
@@ -301,47 +374,66 @@
             path: "{{ decdn_build_home }}/work/decdn.tar"
             state: absent
 
-        # async: a cold build of the workspace takes many minutes, longer than an
-        # SSH session should be trusted to stay up; the job keeps running on the
-        # host and is polled (its status files live in the work directory, as the
-        # build user's home is root's). --locked builds the committed Cargo.lock,
-        # never a re-resolved one.
+        # A unit of that name left over from an interrupted run would make
+        # systemd-run refuse to start; stopping it also kills its cgroup.
+        - name: Stop a build unit left over from an interrupted run
+          ansible.builtin.systemd_service:
+            name: "{{ decdn_build_unit }}.service"
+            state: stopped
+          failed_when: false
+
+        # As root, so systemd-run can start the sandboxed transient unit that runs
+        # cargo as the build user. async: a cold build takes many minutes, longer
+        # than an SSH session should be trusted to stay up; RuntimeMaxSec makes
+        # systemd stop it at the same limit even if Ansible goes away. --locked
+        # builds the committed Cargo.lock, never a re-resolved one.
         - name: Build decdn-node + decdn CLI @ {{ decdn_source_git.after }}
           ansible.builtin.command:
-            argv:
-              - cargo
-              - build
-              - --release
-              - --locked
-              - -p
-              - decdn-node
-              - -p
-              - decdn-cli
-            chdir: "{{ decdn_work }}/src"
-          become: true
-          become_user: "{{ decdn_build_user }}"
-          environment: >-
-            {{ {'RUSTUP_HOME': decdn_build_home ~ '/toolchain/rustup',
-                'RUSTUP_TOOLCHAIN': (decdn_toolchain_read.stdout | from_json).channel,
-                'CARGO_HOME': decdn_work ~ '/cargo-home',
-                'HOME': decdn_work,
-                'TMPDIR': decdn_work ~ '/tmp',
-                'PATH': decdn_build_home ~ '/toolchain/cargo/bin:/usr/local/bin:/usr/bin:/bin'}
-               | combine({'CARGO_BUILD_JOBS': decdn_node_source_build_jobs | string}
-                         if (decdn_node_source_build_jobs | string) | length > 0 else {}) }}
+            argv: >-
+              {{ ['systemd-run', '--wait', '--pipe', '--collect', '--quiet',
+                  '--unit=' ~ decdn_build_unit,
+                  '--uid=' ~ decdn_build_user, '--gid=' ~ decdn_build_user,
+                  '--working-directory=' ~ decdn_work ~ '/src']
+                 + (decdn_build_sandbox | map('regex_replace', '^', '--property=') | list)
+                 + (decdn_build_env | dict2items
+                    | map(attribute='key') | zip(decdn_build_env | dict2items | map(attribute='value'))
+                    | map('join', '=') | map('regex_replace', '^', '--setenv=') | list)
+                 + ['--', decdn_build_home ~ '/toolchain/cargo/bin/cargo', 'build', '--release',
+                    '--locked', '-p', 'decdn-node', '-p', 'decdn-cli'] }}
           vars:
-            # The status files of the async job; the build user's home is root's.
-            ansible_async_dir: "{{ decdn_work }}/async"
-          async: "{{ decdn_node_source_build_timeout | int }}"
+            decdn_build_sandbox:
+              - ProtectSystem=strict
+              - ReadWritePaths={{ decdn_work }}
+              - ProtectHome=yes
+              - PrivateTmp=yes
+              - PrivateDevices=yes
+              # PrivateDevices keeps the host's /dev/shm; give the build its own.
+              - TemporaryFileSystem=/dev/shm
+              - PrivateIPC=yes
+              - NoNewPrivileges=yes
+              - RestrictSUIDSGID=yes
+              - ProtectKernelTunables=yes
+              - ProtectKernelModules=yes
+              - ProtectKernelLogs=yes
+              - ProtectControlGroups=yes
+              - ProtectClock=yes
+              - ProtectHostname=yes
+              - LockPersonality=yes
+              - RestrictRealtime=yes
+              - UMask=0022
+              - RuntimeMaxSec={{ decdn_node_source_build_timeout | int }}
+            decdn_build_env: >-
+              {{ {'RUSTUP_HOME': decdn_build_home ~ '/toolchain/rustup',
+                  'RUSTUP_TOOLCHAIN': (decdn_toolchain_read.stdout | from_json).channel,
+                  'CARGO_HOME': decdn_work ~ '/cargo-home',
+                  'HOME': decdn_work,
+                  'TMPDIR': decdn_work ~ '/tmp',
+                  'PATH': decdn_build_home ~ '/toolchain/cargo/bin:/usr/local/bin:/usr/bin:/bin'}
+                 | combine({'CARGO_BUILD_JOBS': decdn_node_source_build_jobs | string}
+                           if (decdn_node_source_build_jobs | string) | length > 0 else {}) }}
+          async: "{{ decdn_node_source_build_timeout | int + 60 }}"
           poll: 30
           changed_when: true
-
-        - name: Stop anything the build left running
-          ansible.builtin.command:
-            argv: [pkill, -KILL, -u, "{{ decdn_build_user }}"]
-          register: decdn_build_pkill
-          changed_when: decdn_build_pkill.rc == 0
-          failed_when: decdn_build_pkill.rc not in [0, 1]
 
         - name: Install the built binaries
           ansible.builtin.script:
@@ -374,10 +466,11 @@
               {{ (ansible_failed_result.stderr | default('', true) | trim)[-2000:]
                  or ansible_failed_result.msg | default('(no output)') }}.
               A compiler killed by the kernel is usually memory: lower
-              decdn_node_source_build_jobs. "async task did not complete" means
+              decdn_node_source_build_jobs. A unit stopped for its runtime limit,
+              or "async task did not complete", means
               decdn_node_source_build_timeout ({{ decdn_node_source_build_timeout }}s)
-              is too short. Check free disk under {{ decdn_build_home }} too; the
-              work directory {{ decdn_work }} is left for inspection.
+              is too short. Check free disk under {{ decdn_build_home }} too;
+              the work directory {{ decdn_work }} is left for inspection.
 
 # Outside the check-mode skip, so `make check` shows a release -> source switch
 # dropping it. A leftover release stamp would make a later release deploy of the

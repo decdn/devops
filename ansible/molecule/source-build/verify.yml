@@ -78,6 +78,35 @@
           - _owned.stdout | length == 0
         fail_msg: "Owned by decdn-build after the build: {{ _owned.stdout_lines }}"
 
+    # files/fixture/crates/node/build.rs tries to leave these behind, and a
+    # process: the sandboxed unit's private /tmp, /var/tmp and /dev/shm, its
+    # read-only filesystem and its cgroup must have stopped all of it.
+    - name: Stat what the hostile build script tried to leave on the host
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /tmp/decdn-build-escape
+        - /var/tmp/decdn-build-escape
+        - /dev/shm/decdn-build-escape
+        - /var/lib/decdn-build/escape
+      register: _escape
+
+    - name: Look for a process of the build user
+      ansible.builtin.command:
+        argv: [pgrep, -u, decdn-build]
+      register: _left_running
+      changed_when: false
+      failed_when: _left_running.rc not in [0, 1]
+
+    - name: Require that nothing escaped the build sandbox
+      ansible.builtin.assert:
+        that:
+          - _escape.results | selectattr('stat.exists') | list | length == 0
+          - _left_running.rc == 1
+        fail_msg: >-
+          escaped files {{ _escape.results | selectattr('stat.exists') | map(attribute='item') | list }},
+          build-user processes {{ _left_running.stdout_lines }}
+
     - name: Read cron.deny and at.deny
       ansible.builtin.slurp:
         src: "{{ item }}"

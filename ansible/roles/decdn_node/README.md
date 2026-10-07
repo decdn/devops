@@ -71,8 +71,15 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
        - The build user writes only that work directory, with its own
          `CARGO_HOME`, `TMPDIR` and `HOME`. It is deleted after a successful
          install (kept after a failure, for inspection).
-       - The build user may not use cron or at (`/etc/cron.deny`, `/etc/at.deny`),
-         and any process it leaves running is killed before and after the build.
+       - cargo runs in a transient systemd unit (`systemd-run`) as the build user:
+         the whole filesystem read-only except the work directory, private
+         `/tmp`, `/var/tmp`, `/dev/shm` and IPC, no new privileges. When the unit
+         ends systemd kills its whole cgroup, so no process of the build outlives
+         it.
+       - The build user may not use cron or at (`/etc/cron.deny`, `/etc/at.deny`).
+         Before the layout is touched, any process, crontab or at job of the
+         build user is removed. A build home root does not own (an earlier
+         layout) is deleted rather than reused.
        - The binaries are installed by `files/install-build-output.py`. It walks the
          path without following symlinks and refuses anything but a regular file
          owned by the build user, so a build script cannot point root at another
