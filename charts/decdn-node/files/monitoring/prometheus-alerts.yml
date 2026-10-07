@@ -84,6 +84,23 @@ groups:
             `multiplexed poller tick error` log lines name the cause), then
             restart the daemon. See adr/011-content-takedown.md.
 
+      # The deny-set re-enumeration reports success upward on a failed read (an
+      # error would stall event pickup), so this counter is the only thing that
+      # moves when the backstop fails. The window spans several attempts.
+      - alert: DecdnBlacklistReenumerationFailing
+        expr: increase(decdn_blacklist_reenumeration_failures_total[1h]) > 0
+        for: 15m
+        labels:
+          component: blacklist
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#contentblacklist-compliance"
+          summary: "Blacklist deny-set re-enumeration failing on {{ $labels.instance }}"
+          description: |
+            The periodic backstop for a lost takedown event or an unannounced
+            region/ripening transition is failing, so a gap it would repair
+            stays unenforced. Check the RPC provider's eth_call path.
+
       - alert: DecdnBlacklistEnforcementFailing
         expr: rate(decdn_blacklist_enforcement_failures_total[10m]) > 0
         for: 2m
@@ -174,7 +191,15 @@ groups:
             and events reach the node late. Check the RPC provider: the
             `multiplexed poller tick error` log lines name the cause, and a
             rising decdn_chain_get_logs_range_rejections_total means the
-            provider caps eth_getLogs.
+            provider caps eth_getLogs. The poller retries a transient
+            eth_getLogs window failure inside the tick
+            (decdn_chain_get_logs_retries_total). A window that fails every
+            retry ends the tick early, and the next tick resumes there
+            (decdn_chain_get_logs_deferred_total). Such failures fail the tick
+            only when no tick reaches head for 2 minutes. A tick can also
+            fail on the head read, on a checkpoint load, on a rate limit or a
+            permanent RPC error (neither is retried), or on a watcher's own
+            apply or reconcile error.
 
       # A latent-bug report, not a degradation (#1517). The engine recovers the
       # guard and clears the poison, so coalescing never stops and no restart is
@@ -209,6 +234,23 @@ groups:
       # has seen a slash; after a restart it re-counts only the slashes whose
       # appeal window is still open, so the alert clears once the last window
       # closes and the node restarts.
+      # The slash resync reports success upward on a failed read, so this
+      # counter is the only thing that moves when the repair fails. Attempts
+      # are 15m apart; the 1h window spans several.
+      - alert: DecdnSlashResyncFailing
+        expr: increase(decdn_slash_resync_failures_total[1h]) > 0
+        for: 15m
+        labels:
+          component: slashing
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#slashing-risk"
+          summary: "Slash-watcher resync failing on {{ $labels.instance }}"
+          description: |
+            The repair for a slash whose tail event was lost is failing, so
+            such a slash stays off the admin surface while its appeal window
+            runs. Check the RPC provider's eth_call path.
+
       - alert: DecdnSlashDetected
         expr: decdn_slashes_detected_total > 0
         for: 0m
@@ -423,10 +465,14 @@ groups:
 
       # getShares() is the safety-net re-read behind the SharesUpdated event
       # tail. Its failure keeps the current share and the tick still succeeds,
-      # so the stall alert above cannot see it. The re-read runs on a slow
-      # cadence (hours), hence the long window.
+      # so the stall alert above cannot see it. The re-read runs once per
+      # fee_shares_poll_interval_sec (default 1 h) and retries a failed one
+      # on the next interval, so the next re-read heals one transient RPC
+      # error. The alert fires when two re-reads fail inside 3 h: at the
+      # default cadence, two of the last three. An interval of 3 h or more
+      # fits fewer than two re-reads in the window, so the alert cannot fire.
       - alert: DecdnFeeSharesPollFailing
-        expr: increase(decdn_fee_shares_watcher_poll_failures_total[6h]) > 0
+        expr: increase(decdn_fee_shares_watcher_poll_failures_total[3h]) >= 2
         for: 0m
         labels:
           component: watcher
@@ -434,9 +480,28 @@ groups:
         annotations:
           summary: "Fee-shares getShares() re-read failing on {{ $labels.instance }}"
           description: |
-            The authoritative FeeRouter.getShares() re-read failed. The node
-            keeps the last share it read and relies on the event tail alone
-            until a re-read lands. Check the RPC provider.
+            The authoritative FeeRouter.getShares() re-read failed at least
+            twice in the last 3 hours. The node keeps the last share it read
+            and relies on the event tail alone until a re-read lands. Check
+            the RPC provider.
+
+      # The startup PaymentPool.feeRouter() read failed, so the fee-shares
+      # watcher never started. Its own down/last-tick gauges read healthy in
+      # that state, so DecdnFeeSharesWatcherStalled cannot see it. The gauge
+      # holds for the life of the process; only a restart clears it.
+      - alert: DecdnFeeSharesWatcherUnregistered
+        expr: decdn_fee_shares_watcher_unregistered == 1
+        for: 5m
+        labels:
+          component: watcher
+          severity: warning
+        annotations:
+          summary: "Fee-shares watcher not running on {{ $labels.instance }}"
+          description: |
+            The startup feeRouter() read failed, so the fee-shares watcher is
+            not registered and the operator share stays at the floor for the
+            life of this process. Check the RPC provider, then restart the
+            node.
 
       - alert: DecdnRpcUnhealthy
         expr: decdn_rpc_healthy == 0
@@ -452,6 +517,38 @@ groups:
             the node cannot read blacklist updates (slash exposure), follow
             pool events, or redeem vouchers. See docs/runbook.md § RPC
             unreachable.
+
+      - alert: DecdnRpcErrorRatioHigh
+        # Reachable is not the same as reliable: the watchdog's net_version
+        # probe can pass while a rate-limited or overloaded provider fails a
+        # large share of the node's real reads. The ratio counts every outcome
+        # but ok and reverted (a revert is the provider answering correctly).
+        # `sum without (method, outcome)` keeps the target labels for routing.
+        # The volume arm keeps a node that sent a handful of requests in the
+        # window from firing on one failure.
+        expr: >-
+          (
+            sum without (method, outcome) (rate(decdn_rpc_requests_total{outcome!~"ok|reverted"}[10m]))
+            /
+            sum without (method, outcome) (rate(decdn_rpc_requests_total[10m]))
+          ) > 0.1
+          and
+          sum without (method, outcome) (rate(decdn_rpc_requests_total[10m])) > 0.05
+        for: 15m
+        labels:
+          component: chain
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#rpc-unreachable"
+          summary: "Chain RPC failing {{ $value | humanizePercentage }} of requests on {{ $labels.instance }}"
+          description: |
+            More than 10% of the node's JSON-RPC requests failed over the last
+            10 minutes, for 15 minutes. Chain reads that fail make the watchers
+            lag head, and failed sends delay redemptions. The chain dashboard's
+            "RPC failures by outcome" panel names the cause: rate_limited means
+            the provider plan is too small for the node's poll cadence;
+            transport_error and timeout mean the provider is unreachable or
+            overloaded; rpc_error usually means an eth_getLogs range cap.
 
       - alert: DecdnConfigReloadFailed
         expr: increase(decdn_config_reload_failures_total[15m]) > 0
@@ -479,6 +576,35 @@ groups:
             The receipt writer could not persist audit records. Settlement is
             unaffected, but the audit log has gaps. Check disk space and
             permissions under identity.data_dir.
+
+      - alert: DecdnPublicNodeInboundRelayed
+        # Relayed inbound is expected behind NAT, so the alert is scoped to
+        # nodes that report a public address. The volume arm keeps a quiet
+        # node from firing on a handful of connections.
+        expr: >-
+          (
+            rate(decdn_inbound_connections_relayed_total[30m])
+            /
+            (rate(decdn_inbound_connections_relayed_total[30m]) + rate(decdn_inbound_connections_direct_total[30m]))
+          ) > 0.2
+          and
+          (rate(decdn_inbound_connections_relayed_total[30m]) + rate(decdn_inbound_connections_direct_total[30m])) > 0.01
+          and
+          decdn_node_public_address == 1
+        for: 30m
+        labels:
+          component: network
+          severity: warning
+        annotations:
+          summary: "Public node {{ $labels.instance }} takes {{ $value | humanizePercentage }} of inbound connections over the relay"
+          description: |
+            The node has a public address, yet more than 20% of its inbound
+            connections arrive over the relay. Dialers are not finding or
+            reaching the public address. Check the bring-up log line on
+            reachability: it names any public address missing from the
+            registry multiaddrs (fix with `decdn node update-multiaddrs`).
+            Otherwise check that the host firewall allows UDP on
+            network.bind_port.
 
       # NOTE: /health 503 detection requires an external prober (e.g.
       # blackbox_exporter) — it is not surfaced as a decdn_* metric. Add
@@ -681,8 +807,10 @@ groups:
         annotations:
           summary: "Voucher redemptions failing on {{ $labels.instance }}"
           description: |
-            redeemMany keeps failing: reverted, refused at send, no receipt, a
-            timed-out receipt, or a lane-store read failure.
+            Redemption steps keep failing: a redeemMany that reverted or was
+            refused at send, or a lane the redeemer could not plan or load.
+            An unconfirmed receipt does not count here; DecdnOnchainTxUnconfirmed
+            covers it.
             The claims stay and retry, but unredeemed revenue accrues and a
             closing pool's grace window can run out. Read the redeemMany warn!
             lines (each carries the tx hash when one was issued) and check the
@@ -707,18 +835,26 @@ groups:
             against the read batch size, and read the stage="reconcile" warn!
             lines for the underlying error.
 
-      - alert: DecdnOnchainTxTimeouts
-        expr: increase(decdn_onchain_tx_timeout_total[1h]) > 0
+      - alert: DecdnOnchainTxUnconfirmed
+        expr: >-
+          increase(decdn_onchain_tx_timeout_total[1h])
+          + increase(decdn_onchain_tx_receipt_failed_total[1h]) > 0
         for: 0m
         labels:
           component: payments
           severity: warning
         annotations:
-          summary: "On-chain transaction receipts timing out on {{ $labels.instance }}"
+          summary: "On-chain transactions unconfirmed on {{ $labels.instance }}"
           description: |
-            A node transaction was issued but its receipt did not arrive in
-            time. It can still mine; look it up by the tx hash in the warn!
-            line. A repeat points at a congested chain or a low gas price.
+            A node transaction was issued, but its receipt wait failed or
+            timed out and three fetches by hash did not find it either. The
+            node leaves its claims for the next sweep, but it cannot record a
+            landed redemption it cannot see. The tx can still mine; look it up
+            by the tx hash in the warn! line. The line's last_lookup field
+            names the cause: "no receipt yet" points at a dropped or
+            underpriced tx (check gas price and the operator key's nonce); an
+            RPC error or "fetch timed out" points at the RPC provider, which
+            may not serve eth_getTransactionReceipt.
 
       # The next four are latent-bug reports, not degradations: each non-zero
       # increase is a node-side fault worth filing. increase(...[1h]) rather
@@ -798,8 +934,8 @@ groups:
             A pool owner started a close while this node held unredeemed
             vouchers on it. The redeemer must land them before the grace window
             ends or the revenue is lost. Check that redeemMany is landing
-            (decdn_onchain_tx_landed_total, DecdnRedemptionFailing) and that the
-            operator key has gas.
+            (decdn_onchain_tx_landed_total, DecdnRedemptionFailing,
+            DecdnOnchainTxUnconfirmed) and that the operator key has gas.
 
       - alert: DecdnBuyerWalletUnfunded
         # Scoped on `> 0`, not on the series existing: every metric is registered
@@ -835,6 +971,75 @@ groups:
             decdn_pool_open_failures_insufficient_deposit_total, which starts
             counting once the wallet is actually empty.
 
+      # Adoption runs once per process, before the first scrape, so the value
+      # is read rather than increase(): a failure at boot is already counted
+      # when Prometheus first sees the series. Only a restart clears it.
+      - alert: DecdnBuyerPoolAdoptionFailed
+        expr: decdn_buyer_pool_adoption_failures_total > 0
+        for: 0m
+        labels:
+          component: payments
+          severity: warning
+        annotations:
+          summary: "Buyer pool adoption failed at boot on {{ $labels.instance }}"
+          description: |
+            Bootstrap could not tell whether this node already owns a
+            payment pool on chain, so the first cache miss opens one. That
+            can escrow a second working deposit beside one the node already
+            holds. Check the RPC provider, then restart so adoption runs
+            again. Compare decdn_buyer_wallet_usdc with the pools the
+            operator address owns on chain.
+
+      - alert: DecdnBuyerLaneSeedFailing
+        expr: rate(decdn_buyer_lane_seed_failures_total[15m]) > 0
+        for: 30m
+        labels:
+          component: payments
+          severity: warning
+        annotations:
+          summary: "Buyer lane watermark reads failing on {{ $labels.instance }}"
+          description: |
+            The node keeps refusing node-to-node pulls because it cannot read
+            a lane's already-paid watermark. It refuses rather than resume
+            the lane from zero, which would strand the lane for good. While
+            this holds the node buys nothing from the affected providers and
+            their misses fall through to origin. Check the RPC provider and
+            the buyer store (buyer.redb).
+
+      - alert: DecdnNodePullBackpressureExhausted
+        expr: increase(decdn_node_pull_backpressure_exhausted_total[1h]) > 0
+        for: 0m
+        labels:
+          component: delivery
+          severity: warning
+        annotations:
+          summary: "Sole upstream holder kept refusing on {{ $labels.instance }}"
+          description: |
+            The only holder of a still-missing range refused for
+            backpressure through the whole wait budget, so the assembly ended
+            short and every serve stream attached to it was truncated. Zero
+            is the expected value. The warn! line beside each tick names the
+            holder. A repeat from one holder means its per-signer cap never
+            releases, or a NotFound refusal that is not a cap at all.
+
+      - alert: DecdnNodePullLegNoProgress
+        expr: increase(decdn_node_pull_leg_no_progress_total[1h]) > 0
+        for: 0m
+        labels:
+          component: delivery
+          severity: warning
+        annotations:
+          summary: "A paid pull leg moved no frontier on {{ $labels.instance }}"
+          description: |
+            A pull leg streamed and finished cleanly but moved neither the
+            paid nor the delivered frontier, so the node ended the gap rather
+            than re-pay the range. Zero is the expected value. A tick means
+            the store did not keep the leg's bytes (check eviction around the
+            time: decdn_cache_evictions_total), the ledger did not record the
+            payment, or the upstream ended the stream without the final
+            proof. The warn! line names the range, both frontiers and the
+            paid wire.
+
       - alert: DecdnNodePullNeverSucceeds
         # attempts without a single success over a long window. Not a rate
         # threshold: one success clears it, so this only fires on a leg that is
@@ -855,6 +1060,41 @@ groups:
             decdn_pool_open_failures_{insufficient_deposit,contract_revert,rpc_error}_total
             for the buyer leg, decdn_node_pull_no_providers_total for discovery,
             and decdn_buyer_wallet_usdc for funding.
+
+      # Seeding runs once at cache open, before the first scrape, so the value
+      # is read rather than increase(). Only a restart clears it.
+      - alert: DecdnCacheRecencySeedFailed
+        expr: decdn_cache_recency_seed_failures_total > 0
+        for: 0m
+        labels:
+          component: cache
+          severity: warning
+        annotations:
+          summary: "Cache eviction recency not seeded on {{ $labels.instance }}"
+          description: |
+            The store walk that seeds eviction recency at cache open failed.
+            Until the next restart, blobs from before the restart are not
+            eviction candidates until accessed. Over the size limit the
+            driver releases only blobs touched since open, which can be the
+            in-flight content, or it starves
+            (decdn_cache_evictions_starved_total). Restart once the store is
+            healthy.
+
+      - alert: DecdnCacheOriginRangeTimeouts
+        expr: rate(decdn_cache_origin_range_timeouts_total[15m]) > 0
+        for: 15m
+        labels:
+          component: origin
+          severity: warning
+        annotations:
+          summary: "Origin range reads timing out on {{ $labels.instance }}"
+          description: |
+            Origin reads on the range-pull path keep running past their
+            budget (cache.node_pull_stall_window_sec plus the read size at
+            cache.node_pull_min_throughput_bps). Each timeout is an origin
+            transport fault, so it advances the origin chain or fails the
+            fill. Check the origin backend, or lower the throughput floor for
+            a slow origin.
 
       - alert: DecdnDhtRoutingTableEmpty
         expr: decdn_dht_routing_table_size == 0

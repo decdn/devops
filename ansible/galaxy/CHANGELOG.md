@@ -211,8 +211,8 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   downloaded again next run, and pinning back to the previous version reinstalls
   it.
 
-- The role now tracks the config schema of decdn/decdn @ 3ebf5f17 (was
-  d3bc7da7).
+- The role now tracks the config schema of decdn/decdn @ 20db95ef (was
+  d3bc7da7; no key has changed since 3ebf5f17).
 
 - `grafana_alloy` fails loud on an architecture Alloy has no package for, instead of
   a 404 at download time.

@@ -658,6 +658,24 @@
           "expr": "min(decdn_rpc_healthy{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"})",
           "refId": "B",
           "legendFormat": "min rpc healthy"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(decdn_chain_boot_read_retries_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"})",
+          "refId": "C",
+          "legendFormat": "boot read retries (since start)"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max(decdn_fee_shares_watcher_unregistered{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"})",
+          "refId": "D",
+          "legendFormat": "fee-shares watcher unregistered"
         }
       ],
       "fieldConfig": {
@@ -734,7 +752,8 @@
         "x": 16,
         "y": 10
       },
-      "id": 6
+      "id": 6,
+      "description": "Boot read retries counts transient-error retries of boot-time chain reads; the metrics listener binds after them, so it reads as a value since start, not a rate. A rise after a restart points at the RPC provider. Fee-shares watcher unregistered is 1 when the startup feeRouter() read failed: the watcher never started, its downtime gauge reads healthy, and the operator share stays at the floor until restart."
     },
     {
       "datasource": {
@@ -743,7 +762,7 @@
       },
       "title": "eth_getLogs window span",
       "type": "timeseries",
-      "description": "Block span of the shared chain-event poller's next eth_getLogs window, per node, and the rate of windows the RPC provider rejected for their range or result count. The span starts at blockchain.get_logs_max_block_span, drops to half a rejected window, and doubles back after 32 accepted windows, so a caught-up node climbs back to the ceiling after a transient rejection. Rejections that keep coming mean the provider caps eth_getLogs: set the ceiling to the lowest span reached while they come.",
+      "description": "Block span of the shared chain-event poller's next eth_getLogs window, per node, and the rate of windows the RPC provider rejected for their range or result count. The span starts at blockchain.get_logs_max_block_span, drops to half a rejected window, and doubles back after 32 accepted windows, so a caught-up node climbs back to the ceiling after a transient rejection. Rejections that keep coming mean the provider caps eth_getLogs: set the ceiling to the lowest span reached while they come. Retries/s counts in-tick retries of eth_getLogs windows after a transient provider error (up to two per window); a retry that succeeds is not watcher downtime, so a steady retry rate shows an unreliable provider. The info log line of each retry gives the cause. Deferred/s counts windows that failed every retry: the tick ends there and the next tick resumes at the window, which is not watcher downtime either; the tick fails only after 2 minutes with no tick reaching head.",
       "targets": [
         {
           "datasource": {
@@ -762,6 +781,24 @@
           "expr": "rate(decdn_chain_get_logs_range_rejections_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval])",
           "refId": "B",
           "legendFormat": "{{instance}} rejections/s"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "rate(decdn_chain_get_logs_retries_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval])",
+          "refId": "C",
+          "legendFormat": "{{instance}} retries/s"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "rate(decdn_chain_get_logs_deferred_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval])",
+          "refId": "D",
+          "legendFormat": "{{instance}} deferred/s"
         }
       ],
       "fieldConfig": {
@@ -819,6 +856,38 @@
             "matcher": {
               "id": "byFrameRefID",
               "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "reqps"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "unit",
+                "value": "reqps"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "D"
             },
             "properties": [
               {
@@ -2018,7 +2087,7 @@
       },
       "title": "Redemption failures",
       "type": "timeseries",
-      "description": "Earned USDC that did not make it on chain. The On-chain transaction outcomes panel splits the revert, send, receipt and timeout cases.",
+      "description": "Redemption steps that failed: a redeemMany that reverted or was refused at send, or a lane the redeemer could not plan. An unconfirmed receipt does not count here; the On-chain transaction outcomes panel shows it as receipt failed or timeout.",
       "targets": [
         {
           "datasource": {
@@ -2037,6 +2106,15 @@
           "expr": "sum(rate(decdn_redemption_skipped_insolvent_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "B",
           "legendFormat": "skipped — pool insolvent"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_redemption_skipped_expired_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "F",
+          "legendFormat": "skipped — capability expired"
         },
         {
           "datasource": {
@@ -2369,7 +2447,7 @@
       },
       "title": "On-chain transaction outcomes",
       "type": "timeseries",
-      "description": "Every node transaction counts once by outcome. receipt failed and timeout were issued and can still mine — their tx hash is in the warn! line.",
+      "description": "Every node transaction counts once by outcome. A receipt wait that fails or times out falls back to fetching the receipt by hash, and a receipt found there counts as landed or reverted. receipt failed and timeout are the transactions still unconfirmed after that fetch; they can still mine, and their tx hash is in the warn! line. receipt recovered is not an outcome: it counts the waits the fetch by hash resolved, which points at a lagging RPC provider.",
       "targets": [
         {
           "datasource": {
@@ -2415,6 +2493,15 @@
           "expr": "sum(rate(decdn_onchain_tx_timeout_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "E",
           "legendFormat": "timeout"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_onchain_tx_receipt_recovered_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "F",
+          "legendFormat": "receipt recovered"
         }
       ],
       "fieldConfig": {
@@ -2499,7 +2586,7 @@
       },
       "title": "Vouchers, redemptions and grace closes",
       "type": "timeseries",
-      "description": "vouchers accepted counts signed vouchers on inbound streams (PayWord reveals are not vouchers). vouchers redeemed counts lane claims that landed on chain — one cumulative voucher per lane. A grace close is a pool its owner is closing while this node still holds unredeemed vouchers on it.",
+      "description": "vouchers accepted counts signed vouchers on inbound streams. reveals accepted counts PayWord preimage reveals that advanced a lane's chain frontier; reveals are not vouchers. vouchers redeemed counts lane claims that landed on chain — one cumulative voucher per lane. A grace close is a pool its owner is closing while this node still holds unredeemed vouchers on it. Watermark reconciles landed counts pre-redeem getWatermarks batches that decoded: the attempt signal behind the already-reconciled skips on the Redemption failures panel. A redeemer submitting claims with this flat at zero is not reconciling.",
       "targets": [
         {
           "datasource": {
@@ -2527,6 +2614,24 @@
           "expr": "sum(rate(decdn_pool_grace_closes_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "C",
           "legendFormat": "grace closes with unredeemed vouchers"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_preimage_reveals_received_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "D",
+          "legendFormat": "reveals accepted"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_redemption_reconcile_ok_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "E",
+          "legendFormat": "watermark reconciles landed"
         }
       ],
       "fieldConfig": {
@@ -2838,7 +2943,7 @@
       },
       "title": "Buyer ledger integrity",
       "type": "timeseries",
-      "description": "A skipped undecodable record is a buyer-pool row silently omitted from an otherwise successful store hydration, counted once per row per load.",
+      "description": "A skipped undecodable record is a buyer-pool row silently omitted from an otherwise successful store hydration, counted once per row per load. A lane seed failure is a pull refused because the lane's already-paid watermark could not be read; a sustained rate means this node buys nothing from the affected providers. A pool adoption failure means bootstrap could not tell whether this node already owns a pool, so the first miss may escrow a second deposit; it runs once per process, so read it as a value since start.",
       "targets": [
         {
           "datasource": {
@@ -2857,6 +2962,24 @@
           "expr": "sum(rate(decdn_buyer_pool_store_skipped_undecodable_records_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "B",
           "legendFormat": "skipped undecodable records"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_buyer_lane_seed_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "C",
+          "legendFormat": "lane seed failures"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(decdn_buyer_pool_adoption_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"})",
+          "refId": "D",
+          "legendFormat": "pool adoption failures (since start)"
         }
       ],
       "fieldConfig": {
@@ -2909,7 +3032,20 @@
           },
           "unit": "ops"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "D"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "short"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -2975,6 +3111,434 @@
         "y": 83
       },
       "id": 26
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 92
+      },
+      "id": 33,
+      "panels": [],
+      "title": "Chain RPC provider",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "RPC requests by method",
+      "type": "timeseries",
+      "description": "JSON-RPC requests the node sent to blockchain.rpc_url, per method, from decdn_rpc_requests_total. Every provider the node builds counts here: watcher reads, filler lookups and transaction sends. Methods outside the fixed set count as other. The startup reachability probe and its watchdog are not provider requests; decdn_rpc_healthy reports them.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (method) (rate(decdn_rpc_requests_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "{{method}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 93
+      },
+      "id": 34
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "RPC error ratio by method",
+      "type": "timeseries",
+      "description": "Share of JSON-RPC requests that failed, per method: every outcome other than ok and reverted, over all requests. A revert is the provider answering correctly that the call failed, so it is excluded. The all methods series is the ratio the DecdnRpcErrorRatioHigh alert reads. RPC failures by outcome breaks a spike down by cause.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (method) (rate(decdn_rpc_requests_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\",outcome!~\"ok|reverted\"}[$__rate_interval])) / sum by (method) (rate(decdn_rpc_requests_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "{{method}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_rpc_requests_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\",outcome!~\"ok|reverted\"}[$__rate_interval])) / sum(rate(decdn_rpc_requests_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "B",
+          "legendFormat": "all methods"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "mappings": [],
+          "max": 1,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.1
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.lineWidth",
+                "value": 3
+              },
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 93
+      },
+      "id": 35
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "RPC failures by outcome",
+      "type": "timeseries",
+      "description": "Failed JSON-RPC requests per second, by outcome. rate_limited: the provider throttled the node (HTTP 429, Retry-After, or a rate-limit error code); raise the plan or lower the poll cadence. transport_error: no usable reply (refused or reset connection, HTTP 5xx, unreadable body). timeout: the request did not resolve before its deadline. rpc_error: any other JSON-RPC error response, such as an eth_getLogs range cap. reverted: the call reverted; this is not a provider fault and is shown for context only.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (outcome) (rate(decdn_rpc_requests_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\",outcome!=\"ok\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 101
+      },
+      "id": 36
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "RPC latency p95 by method",
+      "type": "timeseries",
+      "description": "95th-percentile round trip of a JSON-RPC request, per method, from decdn_rpc_request_duration_seconds. A request the caller dropped at its deadline records no sample and counts as a timeout in RPC failures by outcome, so read the two together: a flat p95 beside a rising timeout rate means a provider that answers some requests fast and never answers others.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.95, sum by (method, le) (rate(decdn_rpc_request_duration_seconds_bucket{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval])))",
+          "refId": "A",
+          "legendFormat": "{{method}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": true,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 101
+      },
+      "id": 37
     }
   ],
   "preload": false,

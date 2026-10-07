@@ -826,6 +826,7 @@
       },
       "title": "File descriptors",
       "type": "timeseries",
+      "description": "File descriptors allocated host-wide. The kernel limit is not plotted: a host with no limit reports 2^63-1, which flattens the allocated line to zero on a shared axis.",
       "targets": [
         {
           "datasource": {
@@ -835,15 +836,6 @@
           "expr": "node_filefd_allocated{job=\"integrations/node_exporter\",instance=~\"$node\"}",
           "refId": "A",
           "legendFormat": "allocated"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "node_filefd_maximum{job=\"integrations/node_exporter\",instance=~\"$node\"}",
-          "refId": "B",
-          "legendFormat": "maximum"
         }
       ],
       "fieldConfig": {
@@ -4086,7 +4078,7 @@
       },
       "title": "Span rate by operation",
       "type": "timeseries",
-      "description": "Spans per second by name. Only deCDN spans are exported; dependency crates' spans are filtered at the node. serve_stream is one inbound client stream. A buffered miss nests pull_through, origin_pull, node_pull, upstream_stream and open_progressive_pull under it; a streaming miss from a peer nests serve_miss_pull, upstream_stream and open_progressive_pull. origin_range_pull is a ranged origin fetch; dht_lookup, redeem_cycle and onchain_tx cover discovery and settlement.",
+      "description": "Spans per second by name. Only deCDN spans are exported; dependency crates' spans are filtered at the node. serve_stream is one inbound client stream. A buffered miss nests pull_through, origin_pull, node_pull, upstream_stream and open_progressive_pull under it; a streaming miss from a peer nests serve_miss_pull, upstream_stream and open_progressive_pull. dht_lookup, redeem_cycle and onchain_tx cover discovery and settlement.",
       "targets": [
         {
           "datasource": {
@@ -4316,7 +4308,7 @@
             "type": "tempo",
             "uid": "${DS_TEMPO}"
           },
-          "query": "{resource.service.name=\"decdn-node\" && resource.service.instance.id=\"$node\" && name=~\"serve_stream|pull_through|serve_miss_pull|origin_pull|origin_range_pull|node_pull|upstream_stream|open_progressive_pull|dht_lookup|redeem_cycle|onchain_tx\"} | quantile_over_time(duration, .5, .95) by (name)",
+          "query": "{resource.service.name=\"decdn-node\" && resource.service.instance.id=\"$node\" && name=~\"serve_stream|pull_through|serve_miss_pull|origin_pull|node_pull|upstream_stream|open_progressive_pull|dht_lookup|redeem_cycle|onchain_tx\"} | quantile_over_time(duration, .5, .95) by (name)",
           "refId": "A",
           "legendFormat": "{{name}} p{{p}}",
           "queryType": "traceql",
@@ -4396,6 +4388,146 @@
         "y": 135
       },
       "id": 44
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 143
+      },
+      "id": 49,
+      "panels": [],
+      "title": "Reachability",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "1 when the host's default route has a public source address, 0 when the node is behind NAT (relayed inbound is then expected).",
+      "title": "Public address",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "decdn_node_public_address{instance=~\"$node\"}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "behind NAT"
+                },
+                "1": {
+                  "text": "public"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true,
+        "percentChangeColorMode": "standard",
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 4,
+        "x": 0,
+        "y": 144
+      },
+      "id": 50
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Inbound connections on every ALPN by arrival path. Relayed inbound on a public node means dialers are not finding or reaching its public address.",
+      "title": "Inbound connections by path",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "rate(decdn_inbound_connections_direct_total{instance=~\"$node\"}[$__rate_interval])",
+          "legendFormat": "direct",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "rate(decdn_inbound_connections_relayed_total{instance=~\"$node\"}[$__rate_interval])",
+          "legendFormat": "relayed",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 20,
+        "x": 4,
+        "y": 144
+      },
+      "id": 51
     }
   ],
   "preload": false,
