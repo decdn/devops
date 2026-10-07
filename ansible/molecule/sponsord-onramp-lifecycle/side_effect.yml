@@ -37,6 +37,36 @@
   hosts: all
   become: true
   tasks:
+    # tar would store the link, not the token: the backup must refuse, not succeed.
+    - name: Back up with the API token replaced by a symlink
+      block:
+        - name: Move the API token aside and symlink it back
+          ansible.builtin.shell:
+            cmd: mv /etc/sponsord/api-token /etc/sponsord/api-token.real && ln -s api-token.real /etc/sponsord/api-token
+          changed_when: true
+
+        - name: Run the sponsord backup against a symlinked credential
+          ansible.builtin.include_role:
+            name: sponsord
+            tasks_from: backup
+
+        - name: Fail if the backup archived a symlink
+          ansible.builtin.fail:
+            msg: The backup succeeded with a symlinked API token.
+      rescue:
+        - name: Require the regular-file check to be what failed
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require every path to archive, as a regular file'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the regular-file check."
+      always:
+        - name: Put the API token back
+          ansible.builtin.shell:
+            cmd: >-
+              if [ -L /etc/sponsord/api-token ]; then
+              rm /etc/sponsord/api-token && mv /etc/sponsord/api-token.real /etc/sponsord/api-token; fi
+          changed_when: true
+
     - name: Make the stub report a held top-up
       ansible.builtin.copy:
         dest: /etc/sponsord/stub-topup-hold

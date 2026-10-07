@@ -252,9 +252,10 @@ the proxy.
    # in sponsord-onramp.env: ONRAMP_GATE_TEMPLATE=/etc/sponsord/onramp-gate/gate.html
    ```
 
-   The onramp serves whatever file `ONRAMP_GATE_TEMPLATE` names, to anyone, so it
-   must point inside `/etc/sponsord/onramp-gate/`, never at `/run/secrets/`. A path
-   it cannot read stops it at start, with the path in its log.
+   The onramp serves whatever file `ONRAMP_GATE_TEMPLATE` names, to anyone, and its
+   container also holds the API token and the Turnstile secret. So `compose.yaml`
+   starts it through a check: unless the path resolves (symlinks followed) to a file
+   in `/etc/sponsord/onramp-gate/`, the onramp exits at start and its log says why.
 
 6. **TLS in front of the onramp.** Either:
    - **Caddy** (`caddy` profile): point the domain's DNS at this host and open

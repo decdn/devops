@@ -356,16 +356,23 @@
       {{ sponsord_onramp_domain | default('your domain', true) }}. sponsord_onramp_brand_name
       may hold no control characters.
 
-# RUST_LOG lands unquoted in an EnvironmentFile: no whitespace, quotes or control
-# characters, and no span syntax the onramp's Targets filter would reject.
+# RUST_LOG lands unquoted in an EnvironmentFile, and the onramp's Targets filter
+# reads a bare word that is not a level as a target, and rejects a bad level
+# outright; either way the onramp then logs nothing. Each comma-separated part
+# must be a level or target=level (the sponsord role's sponsord_log_level rule).
 - name: Validate sponsord_onramp_log_level
+  vars:
+    # One tracing directive: a level, or target=level.
+    _directive: '(?i)^(?:[a-z_][a-z0-9_:]*=)?(?:trace|debug|info|warn|error|off|[0-5])\Z'
   ansible.builtin.assert:
     that:
-      - sponsord_onramp_log_level | string is match('^[A-Za-z0-9_=,.:-]*\Z')
+      - >-
+        (sponsord_onramp_log_level | string) == ''
+        or (sponsord_onramp_log_level | string).split(',') | reject('match', _directive) | list | length == 0
     fail_msg: >-
-      sponsord_onramp_log_level must be "" (info), a level such as debug, or
-      target=level pairs such as sponsord_onramp=debug,info (letters, digits and
-      _=,.:- only), got "{{ sponsord_onramp_log_level }}".
+      sponsord_onramp_log_level must be "" (info), or comma-separated parts that are
+      each a level (trace, debug, info, warn, error, off) or target=level, such as
+      debug or sponsord_onramp=debug,info; got "{{ sponsord_onramp_log_level }}".
 
 - name: Validate the release pins the installers use
   ansible.builtin.assert:

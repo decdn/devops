@@ -195,12 +195,14 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   (passed as JSON) overrides it.
 - `sponsord`, `sponsord_onramp`: `sponsord_log_level` / `sponsord_onramp_log_level`,
   rendered as `RUST_LOG` (`""` keeps the daemon's errors-only and the onramp's info
-  default). The onramp is built without tracing's env-filter, so it takes a level or
-  `target=level` pairs only; the role refuses anything else.
+  default). Each comma-separated part must be a level or `target=level`: tracing
+  reads any other bare word as a target name, and the onramp (built without
+  tracing's env-filter) logs nothing at all on a value it cannot parse.
 - `sponsord`: `tasks_from: backup` (`sponsord_backup_*`): the treasury keystore and
   password, the API token and the onramp's Turnstile secret (`secret.env` opt-in),
   taken hot and encrypted on the host to `sponsord_backup_age_recipients` (default
-  `decdn_backup_age_recipients`), then fetched.
+  `decdn_backup_age_recipients`), then fetched. Each must be a regular file: tar
+  would store a symlink as the link, not the key.
 - `sponsord`, `sponsord_onramp`: `tasks_from: decommission`. The onramp's stops it,
   removes its unit, and stops and disables the role's Caddy (marker-gated).
   sponsord's refuses while a top-up is held, then stops sponsord and removes its
@@ -232,7 +234,9 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `sponsord_hosts` (and `sponsord_onramp_hosts`): a backup of sponsord's
   credentials; a decommission that first checks every sponsord host for a held
   top-up, then removes the node, the onramp and sponsord, and tears down Alloy on
-  either kind of host.
+  either kind of host. Its first play enforces `decdn_decommission_max_hosts`
+  against every host the run touches: each role checks only its own play, so one
+  node-only and one sponsord-only host would otherwise both pass.
 
 - **Breaking:** `decdn_node_install_method`, `sponsord_install_method` and
   `sponsord_onramp_install_method` now default to `release` (was `manual`). An

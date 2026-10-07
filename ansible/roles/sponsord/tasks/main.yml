@@ -319,16 +319,23 @@
       sponsord_restart_ignore_topup_hold must be booleans (true/false), not quoted
       strings.
 
-# RUST_LOG is a level or comma-separated tracing directives. It lands unquoted in an
-# EnvironmentFile, so whitespace, quotes and control characters are refused.
+# RUST_LOG lands unquoted in an EnvironmentFile, and tracing reads a bare word that
+# is not a level as a target name, so a typo like "verbose" would silence the log.
+# Each comma-separated part must be a level or target=level; nothing else (no
+# whitespace, quotes, span or field filters) gets through.
 - name: Validate sponsord_log_level
+  vars:
+    # One tracing directive: a level, or target=level.
+    _directive: '(?i)^(?:[a-z_][a-z0-9_:]*=)?(?:trace|debug|info|warn|error|off|[0-5])\Z'
   ansible.builtin.assert:
     that:
-      - sponsord_log_level | string is match('^[A-Za-z0-9_=,.:-]*\Z')
+      - >-
+        (sponsord_log_level | string) == ''
+        or (sponsord_log_level | string).split(',') | reject('match', _directive) | list | length == 0
     fail_msg: >-
-      sponsord_log_level must be "" (errors only), a level such as info, or tracing
-      directives such as sponsord=debug,hyper=warn (letters, digits and _=,.:-
-      only), got "{{ sponsord_log_level }}".
+      sponsord_log_level must be "" (errors only), or comma-separated parts that are
+      each a level (trace, debug, info, warn, error, off) or target=level, such as
+      info or sponsord=debug,hyper=warn; got "{{ sponsord_log_level }}".
 
 # --- RPC URL: inventory or host-provisioned secret.env ------------------------------
 # The same two authoring paths, provenance record and guards as decdn_node's

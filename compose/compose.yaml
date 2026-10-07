@@ -165,15 +165,33 @@ services:
       # A custom gate page (upstream docs/operator.md, "Your own gate page"): put
       # the HTML in this directory and set ONRAMP_GATE_TEMPLATE to its path in
       # sponsord-onramp.env. A fixed directory rather than a configurable file, so
-      # no setting can mount a credential into a server that publishes the page.
-      # ONRAMP_GATE_TEMPLATE itself is free-form, and the onramp serves whatever it
-      # names: it must point inside this directory, never at /run/secrets.
+      # no setting can mount a credential into a server that publishes the page;
+      # the entrypoint above refuses a template path outside it.
       # Created empty when absent: unused, the built-in page is served.
       - type: bind
         source: /etc/sponsord/onramp-gate
         target: /etc/sponsord/onramp-gate
         read_only: true
         bind: {create_host_path: true}
+    # Upstream reads ONRAMP_GATE_TEMPLATE with no path check and serves that file to
+    # anyone, while /run/secrets in this same container holds the daemon's token and
+    # the Turnstile secret. So the onramp starts only if the template is unset or
+    # resolves (symlinks followed) to a file in /etc/sponsord/onramp-gate/. No flags:
+    # the binary gets none (a flag would beat the loopback environment), and
+    # tests/invariants.jq pins this script exactly.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        t="$${ONRAMP_GATE_TEMPLATE-}"
+        if [ -n "$$t" ]; then
+          r="$$(realpath -e -- "$$t")" || { echo "ONRAMP_GATE_TEMPLATE $$t is not readable" >&2; exit 1; }
+          case "$$r" in
+            /etc/sponsord/onramp-gate/*) ;;
+            *) echo "ONRAMP_GATE_TEMPLATE must be a file in /etc/sponsord/onramp-gate/ (it resolves to $$r)" >&2; exit 1 ;;
+          esac
+        fi
+        exec sponsord-onramp
     # It reads the daemon's limits only at start, so `docker compose restart
     # sponsord` restarts it too, like the unit's PartOf= (a stop does not
     # propagate). It exits while the daemon is unreachable; the restart policy

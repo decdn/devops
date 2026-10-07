@@ -242,6 +242,20 @@
             decdn_rejected: "{{ decdn_rejected + ['sponsord-log-level'] }}"
           when: ansible_failed_task.name == "Validate sponsord_log_level"
 
+    # A bare word that is not a level reads as a target name: logs nothing.
+    - name: "Case sponsord-log-level — a bare word that is not a level"
+      block:
+        - name: Run sponsord with a bare non-level word
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_log_level: "verbose"
+      rescue:
+        - name: Record sponsord-log-level rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-log-level'] }}"
+          when: ansible_failed_task.name == "Validate sponsord_log_level"
+
     # A newline would add a line to the EnvironmentFile after SPONSORD_BIND, and
     # the later assignment wins: this one would put the API on every interface.
     - name: "Case sponsord-log-level — a log level carrying a second env line"
@@ -955,6 +969,20 @@
           when: ansible_failed_task.name == "Validate the onramp's limits"
 
     # A span filter: the onramp's Targets parser rejects it and then logs nothing.
+    # A misspelled level: the Targets parser rejects the whole value and logs nothing.
+    - name: "Case onramp-log-level — an unknown level"
+      block:
+        - name: Run sponsord_onramp with an unknown level
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_log_level: "sponsord_onramp=verbose"
+      rescue:
+        - name: Record onramp-log-level rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-log-level'] }}"
+          when: ansible_failed_task.name == "Validate sponsord_onramp_log_level"
+
     - name: "Case onramp-log-level — a span filter"
       block:
         - name: Run sponsord_onramp with a span-filter log level
@@ -1263,8 +1291,9 @@
            "sponsord-network-chain", "sponsord-pool-id", "sponsord-pool-id-empty",
            "sponsord-wallet-bool", "sponsord-wallet-cli", "sponsord-zero-address", "sponsord-bind",
            "sponsord-limit", "sponsord-limit", "sponsord-bool", "sponsord-bool",
-           "sponsord-log-level", "sponsord-log-level", "sponsord-backup", "sponsord-backup",
-           "sponsord-backup-dir", "sponsord-backup-dir", "onramp-log-level", "sponsord-rpc-newline",
+           "sponsord-log-level", "sponsord-log-level", "sponsord-log-level", "sponsord-backup",
+           "sponsord-backup", "sponsord-backup-dir", "sponsord-backup-dir", "onramp-log-level",
+           "onramp-log-level", "sponsord-rpc-newline",
            "sponsord-rpc-gate", "sponsord-treasury", "sponsord-treasury", "sponsord-token",
            "sponsord-dir-missing", "sponsord-dir-format", "sponsord-dir-cross",
            "sponsord-bind", "sponsord-overwrite-untracked", "sponsord-token",

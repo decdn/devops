@@ -9,20 +9,37 @@
 #   make decommission LIMIT=<host>          # LIMIT is required; asks for typed confirmation
 # Take a backup first (make backup). See docs/lifecycle.md.
 
-# Before anything stops: sponsord must not be stopped while it holds an unconfirmed
-# pool top-up (a stop forgets the hold, and the pool could be refilled twice). The
-# sponsord play below checks again right before its stop.
-- name: Check sponsord hosts for a held pool top-up
-  hosts: sponsord_hosts
+# Before anything stops, over every host this run decommissions:
+#   - the host cap, against all of them: each role checks only its own play, so a
+#     LIMIT naming one node-only host and one sponsord-only host would pass both
+#     plays' checks and decommission two;
+#   - sponsord must not be stopped while it holds an unconfirmed pool top-up (a stop
+#     forgets the hold, and the pool could be refilled twice). The sponsord role
+#     checks again right before its stop.
+- name: Check the hosts before anything stops
+  hosts: decdn_nodes:sponsord_onramp_hosts:sponsord_hosts
   become: true
   gather_facts: false
   tasks:
+    - name: Refuse to decommission more hosts than allowed at once
+      ansible.builtin.assert:
+        that:
+          - decdn_decommission_max_hosts | default(1) | int > 0
+          - ansible_play_hosts_all | length <= decdn_decommission_max_hosts | default(1) | int
+        fail_msg: >-
+          This run decommissions {{ ansible_play_hosts_all | length }} hosts
+          ({{ ansible_play_hosts_all | sort | join(', ') }}), more than
+          decdn_decommission_max_hosts ({{ decdn_decommission_max_hosts | default(1) }}).
+          Scope it with LIMIT, or raise decdn_decommission_max_hosts deliberately.
+        quiet: true
+
     - name: Refuse while sponsord holds a pool top-up
       ansible.builtin.include_role:
         name: sponsord
         tasks_from: topup-hold
       vars:
         _sponsord_hold_action: stop
+      when: "'sponsord_hosts' in group_names"
 
 - name: Decommission deCDN nodes
   hosts: decdn_nodes

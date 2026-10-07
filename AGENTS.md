@@ -281,6 +281,11 @@ and its rules have promtool unit tests (`charts/decdn-node/tests/sponsord-alerts
     read-only one by one into `/run/secrets/`. Listeners and secret paths are set in
     `environment:`, which beats env files, because the release images default to
     `0.0.0.0`.
+  - **Onramp entrypoint:** upstream serves whatever `ONRAMP_GATE_TEMPLATE` names, and
+    the container also mounts the daemon token and the Turnstile secret, so the
+    onramp starts through a `/bin/sh` check that the path resolves into
+    `/etc/sponsord/onramp-gate/`, then a flagless `exec`. `invariants.jq` pins that
+    script byte for byte (`onramp_entrypoint`): change both together.
   - **Caddy:** the official image by digest, non-root, keeping only
     `NET_BIND_SERVICE`. `compose/Caddyfile` is a hand-kept copy of the role's
     `Caddyfile.j2`: change one, change both.

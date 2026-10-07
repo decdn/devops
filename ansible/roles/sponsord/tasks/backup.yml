@@ -104,14 +104,21 @@
   register: _sponsord_backup_stat
   loop: "{{ _sponsord_backup_paths }}"
 
-- name: Require every path to archive
+# Regular files only: tar stores a symlink as the link, not the key it points to,
+# so a symlinked keystore would back up as a dangling link and restore nothing.
+- name: Require every path to archive, as a regular file
   ansible.builtin.assert:
     that:
       - _sponsord_backup_stat.results | rejectattr('stat.exists') | list | length == 0
+      - _sponsord_backup_stat.results | selectattr('stat.exists') | rejectattr('stat.isreg') | list | length == 0
     fail_msg: >-
-      Missing on the host: {{ _sponsord_backup_stat.results | rejectattr('stat.exists')
-      | map(attribute='item') | join(', ') }}. There is no treasury to back up yet
-      (deploy sponsord first), or a path variable does not match this host.
+      {% set missing = _sponsord_backup_stat.results | rejectattr('stat.exists') | map(attribute='item') | list %}
+      {% set odd = _sponsord_backup_stat.results | selectattr('stat.exists') | rejectattr('stat.isreg')
+         | map(attribute='item') | list %}
+      {{ ('Missing on the host: ' ~ missing | join(', ') ~ '. There is no treasury to back up yet
+      (deploy sponsord first), or a path variable does not match this host. ') if missing else '' }}
+      {{- ('Not a regular file (a symlink or directory): ' ~ odd | join(', ') ~ '. A backup of
+      it would not hold the credential; replace it with the file itself.') if odd else '' }}
 
 - name: Install age
   ansible.builtin.apt:

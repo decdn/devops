@@ -13,8 +13,9 @@
 #                 to "" to skip, loudly.
 #   PROMTOOL_IMAGE  promtool's container image, for `promtool test rules`, which
 #                 reads files rather than stdin: the test directory is mounted into
-#                 it (the Makefile passes the same pinned image). Unset: the local
-#                 `promtool`. Skipped with PROMTOOL.
+#                 it (the Makefile passes the same pinned image). Unset: PROMTOOL is
+#                 run in that directory instead, so it must then be a local binary.
+#                 Skipped with PROMTOOL.
 #   DECDN_CLI     path to a real `decdn` binary: also run `decdn config validate`
 #                 on every positive render (catches value/type errors the key check
 #                 can't). Skipped, loudly, when unset.
@@ -162,7 +163,7 @@ if [ -n "$promtool" ]; then
     docker run --rm -v "$work/rules-test:/w:ro" -w /w --entrypoint promtool "$PROMTOOL_IMAGE" \
       test rules sponsord-alerts_test.yml > "$work/promtool.out" 2>&1
   else
-    (cd "$work/rules-test" && promtool test rules sponsord-alerts_test.yml) > "$work/promtool.out" 2>&1
+    (cd "$work/rules-test" && $promtool test rules sponsord-alerts_test.yml) > "$work/promtool.out" 2>&1
   fi || { cat "$work/promtool.out" >&2; fail "promtool test rules (tests/sponsord-alerts_test.yml)"; }
   pass "promtool test rules: sponsord alerts"
 else

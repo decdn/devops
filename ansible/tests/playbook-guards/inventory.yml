@@ -1,10 +1,13 @@
 ---
 # Fixture for tests/scripts-test.sh's playbook-guard cases. Nothing here is ever
-# contacted: the cases run only the guard play, which gathers no facts.
+# contacted: the cases run only guard tasks, which gather no facts.
 all:
   vars:
     ansible_connection: local
   children:
+    decdn_nodes:
+      hosts:
+        node-only: {}
     sponsord_hosts:
       hosts:
         both: {}

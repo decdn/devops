@@ -106,7 +106,8 @@ sponsord_pool_watch_interval_secs: ""      # [3600] how often the keeper checks 
 # --- Logging ----------------------------------------------------------------------
 # RUST_LOG for the daemon: a level (info) or tracing directives (sponsord=debug,
 # hyper=warn). "" omits it, and the daemon then logs errors only; info adds the
-# listener and each top-up. Letters, digits and _=,.:- only (no span filters).
+# listener and each top-up. Each comma-separated part must be a level or
+# target=level (no span or field filters).
 sponsord_log_level: ""
 
 # --- Secrets on the host --------------------------------------------------------

@@ -272,6 +272,8 @@ variant "onramp by tag"            "sponsord-onramp: image is pinned"           
 variant "onramp holds keystore"    "sponsord-onramp: mounts are exactly"          "${onr} s#^(\s*)volumes:\$#\1volumes:\n\1  - /etc/sponsord/treasury-keystore.json:/run/secrets/k:ro#"
 variant "writable turnstile mount" "sponsord-onramp: mounts are exactly"          "${onr} {/target: \/run\/secrets\/turnstile-secret$/{n;s/read_only: true/read_only: false/}}"
 variant "writable gate-page mount"  "sponsord-onramp: mounts are exactly"          "${onr} {/target: \/etc\/sponsord\/onramp-gate$/{n;s/read_only: true/read_only: false/}}"
+variant "onramp entrypoint flag"   "sponsord-onramp: entrypoint is exactly"       "${onr} s#^(\s*)exec sponsord-onramp\$#\1exec sponsord-onramp --bind 0.0.0.0:8080#"
+variant "gate check dropped"       "sponsord-onramp: entrypoint is exactly"       "${onr} s#^(\s*)/etc/sponsord/onramp-gate/\*\) ;;\$#\1*) ;;#"
 variant "gate page from a secret"  "sponsord-onramp: mounts are exactly"          "${onr} s#source: /etc/sponsord/onramp-gate\$#source: /etc/sponsord/treasury-keystore.json#"
 variant "inline Turnstile secret"  "sponsord-onramp: no inline ONRAMP_TURNSTILE_SECRET" "${onr} s/^(\s*)ONRAMP_BIND: (.*)$/&\n\1ONRAMP_TURNSTILE_SECRET: x/"
 variant "onramp on sponsord hosts" "sponsord-onramp: profiles are [onramp]"       "${onr} s/^(\s*)profiles: \[onramp\]$/\1profiles: [onramp, sponsord]/"
@@ -412,10 +414,11 @@ pass "source-build and decommission defaults, and the installer, identical acros
 # half decommissioned. The role checks again right before its own stop.
 if command -v yq >/dev/null; then
   pb="$repo/ansible/playbooks/decommission.yml"
-  [[ "$(yq '.[0].hosts' "$pb")" == sponsord_hosts \
-     && "$(yq '.[0].tasks[0]["ansible.builtin.include_role"].tasks_from' "$pb")" == topup-hold ]] \
-    || fail "playbooks/decommission.yml: the first play must be sponsord's top-up hold check"
-  pass "decommission.yml checks for a held top-up before it stops anything"
+  [[ "$(yq '.[0].hosts' "$pb")" == decdn_nodes:sponsord_onramp_hosts:sponsord_hosts \
+     && "$(yq '.[0].tasks[0]["ansible.builtin.assert"] | has("that")' "$pb")" == true \
+     && "$(yq '.[0].tasks[1]["ansible.builtin.include_role"].tasks_from' "$pb")" == topup-hold ]] \
+    || fail "playbooks/decommission.yml: the first play must check the host cap, then sponsord's top-up hold"
+  pass "decommission.yml checks the host cap and a held top-up before it stops anything"
 elif [[ -n ${CI:-} ]]; then
   fail "yq is not on PATH in CI; the decommission play-order check would be skipped"
 else
@@ -443,6 +446,14 @@ if command -v ansible >/dev/null; then
     expect 2 "sponsord.yml refuses an onramp host outside sponsord_hosts" guard onramp-only
     grep -q "is in sponsord_onramp_hosts but not in sponsord_hosts" "$work/out" \
       || { cat "$work/out" >&2; fail "the onramp-only refusal did not come from the placement check"; }
+    # decommission.yml's host cap covers the whole run: a node-only host and a
+    # sponsord host pass each role's own per-play cap but not this one. Only the
+    # cap task is lifted (the hold check needs the roles).
+    yq '[.[0] | .tasks = [.tasks[0]]]' "$repo/ansible/playbooks/decommission.yml" > "$work/guard.yml"
+    expect 0 "decommission.yml accepts one host" guard node-only
+    expect 2 "decommission.yml refuses a node host plus a sponsord host" guard node-only,both
+    grep -q "This run decommissions 2 hosts" "$work/out" \
+      || { cat "$work/out" >&2; fail "the two-host refusal did not come from the run-wide host cap"; }
   elif [[ -n ${CI:-} ]]; then
     fail "yq is not on PATH in CI; the playbook-guard cases would be skipped"
   else
