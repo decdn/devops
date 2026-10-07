@@ -42,7 +42,7 @@ behind `decdn_network`), it is a generated mirror with its upstream commit recor
 - **Monitoring.** The deCDN Grafana dashboards and alert rules, with the labels they
   expect: opt-in Grafana Cloud shipping via `grafana_alloy` on Ansible, a
   `ServiceMonitor` + `PrometheusRule` + dashboard ConfigMaps on Helm
-  ([`charts/decdn-node/files/monitoring/`](charts/decdn-node/files/monitoring/README.md)).
+  ([`monitoring/`](monitoring/README.md)).
 - **Day 2.** Encrypted backups, restore and host migration, and a guarded
   decommission: [`docs/lifecycle.md`](docs/lifecycle.md).
 
@@ -102,7 +102,8 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 | [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `sponsord.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
 | [`cloud-init/`](cloud-init/README.md) | The cloud-init deploy path: `user-data.yaml` (a node), `user-data-sponsord.yaml` (a sponsor host), the on-host `bootstrap.sh`, and the pinned ansible-core and collections it installs. |
 | [`compose/`](compose/README.md) | The Docker Compose deploy path: the node, `sponsord`, `sponsord-onramp` and Caddy, one profile each. |
-| [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart, with the deCDN dashboards and alert rules in `files/monitoring/`. |
+| [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart; it renders the node's dashboards and alert rules from `monitoring/`. |
+| [`monitoring/`](monitoring/README.md) | The deCDN Grafana dashboards and Prometheus alert rules, for the node (`decdn-node/`) and sponsord (`sponsord/`), on every deploy path. |
 | [`docs/`](docs/requirements.md) | Cross-path operator docs: requirements, lifecycle. |
 | `scripts/` | Generators for the upstream mirrors (network profiles) and the release gate. |
 | `Makefile` | Lint, test and security targets; CI runs the same ones. `make help` lists them. |

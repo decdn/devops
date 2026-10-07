@@ -48,7 +48,7 @@
       }
     ]
   },
-  "description": "Everything that touches the chain: watcher liveness for all five chain-event watchers, the capacity-bond and active-staker registries, seller and buyer payment flow, and the slash-risk signals. Thresholds here match monitoring/prometheus-alerts.yml rather than sitting looser than the pages.",
+  "description": "Everything that touches the chain: watcher liveness for all five chain-event watchers, the capacity-bond and active-staker registries, seller and buyer payment flow, and the slash-risk signals. Thresholds here match monitoring/decdn-node/prometheus-alerts.yml rather than sitting looser than the pages.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,

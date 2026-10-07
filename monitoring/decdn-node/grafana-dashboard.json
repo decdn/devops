@@ -48,7 +48,7 @@
       }
     ]
   },
-  "description": "Fleet-wide health for every decdn-node: status, delivery, slash safety, and the logs and traces that explain them. Deep dives live in the deCDN dashboard dropdown. Companion to adr/appendix-observability.md, monitoring/prometheus-alerts.yml and docs/runbook.md.",
+  "description": "Fleet-wide health for every decdn-node: status, delivery, slash safety, and the logs and traces that explain them. Deep dives live in the deCDN dashboard dropdown. Companion to adr/appendix-observability.md, monitoring/decdn-node/prometheus-alerts.yml and docs/runbook.md.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,

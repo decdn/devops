@@ -95,7 +95,7 @@ install). Every new commit is a full build from scratch, crates downloaded again
 ## CPU and memory
 
 Upstream publishes no minimum figures yet, so this repo quotes none. Watch the node's
-own metrics (`decdn node top`, the dashboards in `charts/decdn-node/files/monitoring/`)
+own metrics (`decdn node top`, the dashboards in `monitoring/`)
 under real load and size from that.
 
 The Ansible `source` install method compiles on the host, which needs far more memory

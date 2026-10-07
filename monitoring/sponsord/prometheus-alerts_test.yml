@@ -1,10 +1,11 @@
-# promtool unit tests for files/monitoring/sponsord/prometheus-alerts.yml, run by
-# render-test.sh (`make lint-helm`). The rules do time arithmetic on unix-time
+# promtool unit tests for prometheus-alerts.yml beside it, run by the chart's
+# tests/render-test.sh (`make lint-helm`). The rules do time arithmetic on unix-time
 # gauges, which promtool check cannot catch. The test clock starts at 0.
 #
-# render-test.sh runs this against a copy of the rules with the annotations
-# stripped (promtool compares annotations exactly, and they are prose), placed
-# beside this file as sponsord-alerts.yml.
+# It does not run in place: render-test.sh copies it into a scratch directory as
+# sponsord-alerts_test.yml, beside a copy of prometheus-alerts.yml with the
+# annotations stripped (promtool compares annotations exactly, and they are prose)
+# named sponsord-alerts.yml, the name rule_files below expects.
 rule_files:
   - sponsord-alerts.yml
 

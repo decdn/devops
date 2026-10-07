@@ -57,9 +57,8 @@ reads the checkout's working tree, so check out the ref you mean first.
 the weekly `upstream-drift` workflow wraps `gen-schema-keys.py` in a generate-then-diff
 check so it reports the two differently too.
 
-The Grafana dashboards and Prometheus alert rules in `charts/decdn-node/files/monitoring/`
-are not a mirror: they are maintained here. See
-[its README](charts/decdn-node/files/monitoring/README.md).
+The Grafana dashboards and Prometheus alert rules in `monitoring/` are not a mirror:
+they are maintained here. See [its README](monitoring/README.md).
 
 ## CI overview
 
@@ -68,8 +67,8 @@ are not a mirror: they are maintained here. See
     `actionlint`;
   - on `ansible/**`: `ansible-lint` (plus a syntax-check of every playbook),
     `galaxy-build` and `alloy-config` (`make lint-alloy`);
-  - on `charts/**` (or the shared schema files, the root `Makefile`, `ci.yml`): `helm`
-    (`make lint-helm`);
+  - on `charts/**` or `monitoring/**` (or the shared schema files, the root `Makefile`,
+    `ci.yml`): `helm` (`make lint-helm`);
   - on `compose/**` (or the root `Makefile`, `ci.yml`): `compose` (`make lint-compose`);
   - on `cloud-init/**` (or `ansible/requirements.yml`, the root `Makefile`, `ci.yml`):
     `cloud-init` (`make lint-cloud-init`);

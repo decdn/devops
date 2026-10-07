@@ -11,14 +11,14 @@
 # exporter of your own. SponsordKeeperFailing is the symptom when it runs dry.
 #
 # sponsord runs on the Ansible and Compose paths only. The decdn-node chart does
-# NOT render this file (its PrometheusRule reads ../prometheus-alerts.yml).
+# NOT render this file (its PrometheusRule reads ../decdn-node/prometheus-alerts.yml).
 #
 # Validate locally with `make lint-helm`: it runs promtool check rules on this
-# file, and promtool test rules on ../../../tests/sponsord-alerts_test.yml against
-# a copy with the annotations stripped (see that file).
+# file, and promtool test rules on prometheus-alerts_test.yml against a copy
+# with the annotations stripped (see that file).
 #
-# Load into Grafana Cloud with mimirtool, or into Prometheus via rule_files (see
-# ../README.md).
+# Load into Grafana Cloud with mimirtool (see ../README.md), or into Prometheus via
+# rule_files (example in ../decdn-node/prometheus-alerts.yml).
 
 groups:
   - name: sponsord

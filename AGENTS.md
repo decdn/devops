@@ -69,8 +69,11 @@ compose/                # Docker Compose deploy path for a single host (see its 
 charts/
   decdn-node/           # Helm chart for the node on Kubernetes (see its README.md)
     ci/                 # CI values files (mirror molecule/schema's three plays)
-    files/monitoring/   # Grafana dashboards + Prometheus alert rules (maintained here)
+    files/monitoring    # symlink to ../../../monitoring/decdn-node (helm package dereferences it)
     tests/render-test.sh  # positive/negative render tests (`make lint-helm`)
+monitoring/             # Grafana dashboards + Prometheus alert rules (maintained here)
+  decdn-node/           # the node's, rendered by the chart
+  sponsord/             # sponsord's (+ promtool unit tests), Ansible/Compose only
 docs/                   # cross-path operator docs: requirements.md, lifecycle.md
 scripts/                # upstream-mirror generators, the release gate, the molecule driver (molecule.sh)
 ```
@@ -83,15 +86,19 @@ and `ansible/molecule/schema/files/schema-keys.txt` (`gen-schema-keys.py`). The 
 `upstream-drift` workflow flags staleness. These are the only protocol facts (contract
 addresses) the repo carries, and they carry their upstream commit.
 
-**Monitoring assets are maintained here, by hand.** `charts/decdn-node/files/monitoring/`
-holds the deCDN Grafana dashboards and Prometheus alert rules; upstream ships none. Every
+**Monitoring assets are maintained here, by hand.** `monitoring/` holds the deCDN
+Grafana dashboards and Prometheus alert rules for every deploy path; upstream ships none.
+The chart renders `monitoring/decdn-node/` through its `files/monitoring` symlink
+(`.Files` cannot read outside the chart; `render-test.sh` checks the link and that the
+packaged chart carries those files and nothing else), so copy a chart tree with `cp -RL`. Every
 `decdn_*` series a panel or rule names must be one `decdn-node` exports — check the
 node's `/metrics` and upstream's `adr/appendix-observability.md` registry (a `planned`
 row emits nothing). Nothing in CI checks the names, so a typo renders `(no data)` or a
 rule that never fires. See `.claude/skills/grafana-dashboards/SKILL.md`. sponsord's pair
-lives in its `sponsord/` subdirectory, which the chart does not render; its `sponsord_*`
+lives in `monitoring/sponsord/`, which the chart does not render; its `sponsord_*`
 names must be ones upstream `decdn/sponsord` `crates/sponsord/src/metrics.rs` exports,
-and its rules have promtool unit tests (`charts/decdn-node/tests/sponsord-alerts_test.yml`).
+and its rules have promtool unit tests (`monitoring/sponsord/prometheus-alerts_test.yml`,
+run by `make lint-helm`).
 
 ## Current services
 
@@ -329,7 +336,8 @@ and its rules have promtool unit tests (`charts/decdn-node/tests/sponsord-alerts
   `schema-keys.txt` on the rendered ConfigMap, so a re-sync covers both paths. Unlike the
   role, CI has no real-binary `decdn config validate` for the chart — run
   `DECDN_CLI=… make lint-helm` locally when bumping the decdn version. Optional
-  `PrometheusRule` + dashboard ConfigMaps render `files/monitoring/` (never through `tpl`:
+  `PrometheusRule` + dashboard ConfigMaps render `files/monitoring/`, the symlink to
+  `monitoring/decdn-node/` (never through `tpl`:
   the alert annotations carry Prometheus templates).
 
 ## Commands
