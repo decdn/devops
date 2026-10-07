@@ -29,6 +29,7 @@ def allowed_mounts: {
                ["/etc/sponsord/treasury-password", "/run/secrets/treasury-password", true],
                ["/etc/sponsord/treasury-keystore.json", "/run/secrets/treasury-keystore.json", true]],
   "sponsord-onramp": [["/etc/sponsord/api-token", "/run/secrets/api-token", true],
+                      ["/etc/sponsord/onramp-gate", "/etc/sponsord/onramp-gate", true],
                       ["/etc/sponsord/turnstile-secret", "/run/secrets/turnstile-secret", true]],
   "caddy": [["Caddyfile", "/etc/caddy/Caddyfile", true], ["/var/lib/caddy", "/data", false]]
 };
@@ -49,6 +50,11 @@ def inline_secrets: {
   "sponsord": ["SPONSORD_API_TOKEN", "SPONSORD_TREASURY_PASSWORD"],
   "sponsord-onramp": ["ONRAMP_DAEMON_TOKEN", "ONRAMP_TURNSTILE_SECRET"]
 };
+
+# The onramp's entrypoint, as `config` renders it ($$ is Compose's escape for $):
+# refuse an ONRAMP_GATE_TEMPLATE outside /etc/sponsord/onramp-gate/, then exec the
+# binary with no arguments. A change to compose.yaml's script must be made here too.
+def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ -n \"$$t\" ]; then\n  r=\"$$(realpath -e -- \"$$t\")\" || { echo \"ONRAMP_GATE_TEMPLATE $$t is not readable\" >&2; exit 1; }\n  case \"$$r\" in\n    /etc/sponsord/onramp-gate/*) ;;\n    *) echo \"ONRAMP_GATE_TEMPLATE must be a file in /etc/sponsord/onramp-gate/ (it resolves to $$r)\" >&2; exit 1 ;;\n  esac\nfi\nexec sponsord-onramp\n"];
 
 .services as $all
 | (["caddy", "decdn-node", "sponsord", "sponsord-onramp"] as $want
@@ -80,10 +86,13 @@ def inline_secrets: {
   check("sponsord"; "stop_grace_period is 120s"; $all.sponsord.stop_grace_period == "2m0s"),
   check("sponsord-onramp"; "stop_grace_period is 30s"; $all["sponsord-onramp"].stop_grace_period == "30s"),
 
-  # The sponsord daemons run the image's entrypoint with no flags: a flag beats the
+  # The sponsord daemons run the image's binary with no flags: a flag beats the
   # environment, so `--bind 0.0.0.0:…` would get past the loopback checks below.
-  (["sponsord", "sponsord-onramp"][] as $n
-   | check($n; "no command or entrypoint override"; $all[$n].command == null and $all[$n].entrypoint == null)),
+  # sponsord runs the image's entrypoint; the onramp runs exactly the gate-page
+  # path check in compose.yaml, which ends in a flagless exec of the binary.
+  check("sponsord"; "no command or entrypoint override"; $all.sponsord.command == null and $all.sponsord.entrypoint == null),
+  check("sponsord-onramp"; "entrypoint is exactly the gate-page check, with no command";
+    $all["sponsord-onramp"].command == null and $all["sponsord-onramp"].entrypoint == onramp_entrypoint),
 
   # The sponsor's listeners stay on loopback whatever an env file says (the release
   # images default to 0.0.0.0); the rendered environment has env_file merged in.

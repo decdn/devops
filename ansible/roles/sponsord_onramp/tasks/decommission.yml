@@ -1,0 +1,131 @@
+---
+# Take the onramp out of service: `include_role: {name: sponsord_onramp,
+# tasks_from: decommission}` (playbooks/decommission.yml, `make decommission
+# LIMIT=<host>`). It runs before sponsord's own decommission: the onramp needs the
+# daemon.
+#
+# What it does: stop the onramp and disable and remove its systemd unit, and stop
+# and disable the role's Caddy (only when /etc/caddy/Caddyfile carries the role's
+# marker; a foreign Caddy is never touched). What it KEEPS: the Turnstile secret
+# and the other files under sponsord_onramp_etc, the binary and the caddy package.
+# The tcp/80 + tcp/443 firewall holes stay until the host leaves
+# sponsord_onramp_hosts and baseline runs again.
+
+- name: Refuse to decommission in check mode
+  ansible.builtin.assert:
+    that:
+      - not ansible_check_mode
+    fail_msg: Decommissioning has no dry run; run it without --check once you mean it.
+
+- name: Refuse to decommission more hosts than allowed at once
+  ansible.builtin.assert:
+    that:
+      - decdn_decommission_max_hosts | int > 0
+      - ansible_play_hosts_all | length <= decdn_decommission_max_hosts | int
+      - decdn_decommission_prompt_seconds | int > 0
+    fail_msg: >-
+      This run targets {{ ansible_play_hosts_all | length }} hosts
+      ({{ ansible_play_hosts_all | sort | join(', ') }}), more than
+      decdn_decommission_max_hosts ({{ decdn_decommission_max_hosts }}). Scope it
+      with LIMIT, or raise decdn_decommission_max_hosts deliberately.
+      decdn_decommission_prompt_seconds must be a positive number of seconds.
+
+# Typed confirmation (AGENTS.md hard rule 4), as decdn_node's and sponsord's; a host
+# that already confirmed in an earlier play of this run is not asked again.
+- name: Ask for typed confirmation
+  ansible.builtin.pause:
+    prompt: >-
+      About to STOP {{ _decom_services | join(', ') }}, REMOVE their systemd units
+      and tear down this repo's Grafana Alloy on:
+      {{ ansible_play_hosts_all | sort | join(',') }}.
+      This one confirmation covers all of them. Nothing on-chain is done.
+      Type the host list above exactly to continue
+      (times out after {{ decdn_decommission_prompt_seconds }} s)
+    seconds: "{{ decdn_decommission_prompt_seconds | int }}"
+  register: _sponsord_onramp_decommission_typed
+  run_once: true
+  vars:
+    # Every service this repo's playbooks/decommission.yml stops on these hosts, by
+    # their groups, so the one confirmation names all it covers (a later play does
+    # not ask again). This role's own service is always listed.
+    _decom_groups: "{{ ansible_play_hosts_all | map('extract', hostvars, 'group_names') | flatten | unique }}"
+    _decom_services: >-
+      {{ ((['decdn-node'] if 'decdn_nodes' in _decom_groups else [])
+          + (['sponsord-onramp and its Caddy'] if 'sponsord_onramp_hosts' in _decom_groups else [])
+          + (['sponsord'] if 'sponsord_hosts' in _decom_groups else [])
+          + ['sponsord-onramp and its Caddy']) | unique }}
+  when:
+    - decdn_decommission_confirm is not defined
+    - not (_decdn_decommission_confirmed | default(false) | bool)
+
+- name: Require the typed confirmation to match the targeted hosts
+  ansible.builtin.assert:
+    that:
+      - (decdn_decommission_confirm | default(_sponsord_onramp_decommission_typed.user_input | default('')) | trim)
+        == (ansible_play_hosts_all | sort | join(','))
+    fail_msg: >-
+      Confirmation did not match "{{ ansible_play_hosts_all | sort | join(',') }}".
+      Nothing was changed.
+  when: not (_decdn_decommission_confirmed | default(false) | bool)
+
+- name: Remember the confirmation for the rest of this run
+  ansible.builtin.set_fact:
+    _decdn_decommission_confirmed: true
+
+- name: Check for the sponsord-onramp unit
+  ansible.builtin.stat:
+    path: /etc/systemd/system/sponsord-onramp.service
+  register: _sponsord_onramp_decommission_unit
+
+- name: Stop and disable sponsord-onramp
+  ansible.builtin.systemd_service:
+    name: sponsord-onramp
+    state: stopped
+    enabled: false
+  when: _sponsord_onramp_decommission_unit.stat.exists
+
+- name: Remove the sponsord-onramp unit and its restart-inputs record
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/sponsord-onramp.service
+    - "{{ sponsord_onramp_inputs_checksum_file }}"
+
+# Unconditional: cheap, and right even after an earlier run removed the file but
+# failed before reloading.
+- name: Reload systemd after removing the unit
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# Only a Caddy serving this role's Caddyfile: with the backend gone it would answer
+# every request with a 502 on the public ports.
+- name: Check the Caddyfile for this role's marker
+  ansible.builtin.command:
+    argv: [grep, -qF, "MANAGED BY the sponsord_onramp role", "{{ _sponsord_onramp_caddyfile }}"]
+  register: _sponsord_onramp_decommission_caddy
+  changed_when: false
+  # 1 = no marker, 2 = no file (or unreadable): neither is the role's Caddy.
+  failed_when: false
+
+- name: Stop and disable the role's Caddy
+  ansible.builtin.systemd_service:
+    name: caddy
+    state: stopped
+    enabled: false
+  when: _sponsord_onramp_decommission_caddy.rc == 0
+
+- name: Report what is left to do
+  ansible.builtin.debug:
+    msg:
+      - >-
+        sponsord-onramp is stopped and its unit removed on {{ inventory_hostname }}
+        {{- "; the role's Caddy is stopped and disabled" if _sponsord_onramp_decommission_caddy.rc == 0
+            else "; no Caddy of this role's was found" }}.
+      - >-
+        Kept: {{ sponsord_onramp_turnstile_secret_file }} and the other files under
+        {{ sponsord_onramp_etc }}, {{ sponsord_onramp_bin }}, the caddy package and
+        {{ _sponsord_onramp_caddyfile }}.
+      - >-
+        tcp/80 and tcp/443 stay open until you take the host out of
+        sponsord_onramp_hosts and re-run baseline.

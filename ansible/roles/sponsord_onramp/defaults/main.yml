@@ -151,6 +151,15 @@ sponsord_onramp_ttl_secs: ""                  # [the daemon's maximum] TTL per c
 sponsord_onramp_fund_rate_per_min: ""         # [10] POST /v1/fund per address; 0 = off
 sponsord_onramp_poll_rate_per_min: ""         # [120] GET /v1/capability per address; 0 = off
 
+# --- Logging ----------------------------------------------------------------------
+# RUST_LOG for the onramp: a level (debug) or target=level pairs
+# (sponsord_onramp=debug,info). "" omits it and the onramp logs at info. Its
+# release is built without tracing's env-filter, so span or field filters are not
+# understood: the onramp prints "Ignoring RUST_LOG" and then logs NOTHING, and a
+# bare word that is not a level is read as a target. The role accepts only parts
+# that are each a level or target=level.
+sponsord_onramp_log_level: ""
+
 # --- Files on the host ----------------------------------------------------------
 # Beside the daemon's files: the directory and the API token follow the sponsord
 # role's sponsord_etc / sponsord_api_token_file when inventory sets them (the
@@ -174,3 +183,12 @@ sponsord_onramp_bin: /usr/local/bin/sponsord-onramp
 # 200 is the config gate. A timeout FAILS the deploy. Window ~60s.
 sponsord_onramp_readiness_retries: 30
 sponsord_onramp_readiness_delay: 2
+
+# --- Lifecycle: decommission (tasks_from: decommission) -------------------------
+# Only read by that entry point (playbooks/decommission.yml). Shared with decdn_node
+# and sponsord (and identical there, `make test-scripts` checks): one typed
+# confirmation covers every service on the host. A non-interactive run sets
+# decdn_decommission_confirm to the comma-joined, sorted host list (deliberately NOT
+# defaulted here).
+decdn_decommission_max_hosts: 1
+decdn_decommission_prompt_seconds: 300   # an unanswered confirmation prompt fails closed after this

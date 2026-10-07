@@ -1,9 +1,46 @@
 ---
-# Take a node out of service: stop decdn-node, remove its unit, tear down the
-# opt-in Grafana Alloy agent. Keeps the identity (needed to withdraw the bond) and
-# does NOT touch the chain; the last task prints the deregister/unbond steps.
+# Take a host out of service: stop every service this repo deployed on it and
+# remove its unit (decdn-node, sponsord-onramp, sponsord; the onramp's Caddy is
+# stopped and disabled, not removed), then tear down the opt-in Grafana Alloy agent.
+# Keeps the identities and keys (the node's keystore withdraws the bond; sponsord's
+# treasury keystore owns the pool) and does NOT touch the chain; each role's last
+# task prints what is left to do. One typed confirmation, in the first play that
+# reaches a host, names every service it covers there.
 #   make decommission LIMIT=<host>          # LIMIT is required; asks for typed confirmation
 # Take a backup first (make backup). See docs/lifecycle.md.
+
+# Before anything stops, over every host this run decommissions:
+#   - the host cap, against all of them: each role checks only its own play, so a
+#     LIMIT naming one node-only host and one sponsord-only host would pass both
+#     plays' checks and decommission two;
+#   - sponsord must not be stopped while it holds an unconfirmed pool top-up (a stop
+#     forgets the hold, and the pool could be refilled twice). The sponsord role
+#     checks again right before its stop.
+- name: Check the hosts before anything stops
+  hosts: decdn_nodes:sponsord_onramp_hosts:sponsord_hosts
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Refuse to decommission more hosts than allowed at once
+      ansible.builtin.assert:
+        that:
+          - decdn_decommission_max_hosts | default(1) | int > 0
+          - ansible_play_hosts_all | length <= decdn_decommission_max_hosts | default(1) | int
+        fail_msg: >-
+          This run decommissions {{ ansible_play_hosts_all | length }} hosts
+          ({{ ansible_play_hosts_all | sort | join(', ') }}), more than
+          decdn_decommission_max_hosts ({{ decdn_decommission_max_hosts | default(1) }}).
+          Scope it with LIMIT, or raise decdn_decommission_max_hosts deliberately.
+        quiet: true
+
+    - name: Refuse while sponsord holds a pool top-up
+      ansible.builtin.include_role:
+        name: sponsord
+        tasks_from: topup-hold
+      vars:
+        _sponsord_hold_action: stop
+      when: "'sponsord_hosts' in group_names"
+
 - name: Decommission deCDN nodes
   hosts: decdn_nodes
   become: true
@@ -13,9 +50,34 @@
         name: decdn_node
         tasks_from: decommission
 
-    # grafana_alloy's disabled path removes only an installation this role wrote
-    # (it checks the managed-by marker in the unit), so this is a no-op on a host
-    # that never enabled Grafana Cloud or runs a foreign Alloy.
+# The onramp needs the daemon, so it goes first.
+- name: Decommission sponsord onramps
+  hosts: sponsord_onramp_hosts
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stop and remove the onramp service
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+        tasks_from: decommission
+
+- name: Decommission sponsord
+  hosts: sponsord_hosts
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stop and remove the sponsord service
+      ansible.builtin.include_role:
+        name: sponsord
+        tasks_from: decommission
+
+# grafana_alloy's disabled path removes only an installation this role wrote (it
+# checks the managed-by marker in the unit), so this is a no-op on a host that never
+# enabled Grafana Cloud or runs a foreign Alloy.
+- name: Tear down the Grafana Alloy agent
+  hosts: decdn_nodes:sponsord_hosts
+  become: true
+  tasks:
     - name: Tear down the Grafana Alloy agent this repo installed
       ansible.builtin.include_role:
         name: grafana_alloy

@@ -128,7 +128,8 @@ decommission:
 # install-method and wallet side effects run in sponsord-install), sponsord-onramp
 # and sponsord-onramp-caddy (the onramp beside its daemon, behind the real distro
 # Caddy; the proxy side effects run in sponsord-onramp-caddy), sponsord-onramp-source
-# (that converge, then both sponsord roles built from source), source-build (the
+# (that converge, then both sponsord roles built from source), sponsord-onramp-lifecycle
+# (that converge, then sponsord's backup and decommission), source-build (the
 # node built from source on the host: sandbox, stamps, rollback), and cloud-init and
 # cloud-init-sponsord (the cloud-init/ templates, booted for real). The glob in
 # scripts/molecule.sh is the authority; this list is a guide.
@@ -164,7 +165,7 @@ decommission:
 SCENARIOS ?= all
 JOBS ?=
 SLOW_FIRST ?= cloud-init-sponsord cloud-init sponsord-onramp validation \
-	validation-sponsord sponsord-onramp-caddy sponsord-install sponsord \
+	validation-sponsord sponsord-onramp-caddy sponsord-onramp-lifecycle sponsord-install sponsord \
 	validation-alloy os-matrix grafana-cloud
 MOLECULE_LOCK_PREFIX ?= /tmp/decdn-devops-molecule
 molecule_env = SCENARIOS='$(SCENARIOS)' JOBS='$(JOBS)' SLOW_FIRST='$(SLOW_FIRST)' \

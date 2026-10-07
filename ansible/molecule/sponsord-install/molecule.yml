@@ -66,6 +66,7 @@ provisioner:
         sponsord_rpc_url: "https://rpc.example.invalid/?key=$$HOME$$(touch /tmp/sponsord-rpc-expanded)&q=o'brien \"x\""
         sponsord_max_ttl_secs: 3600
         sponsord_pool_low_water_micro_usdc: 0
+        sponsord_log_level: "sponsord=debug,info"
         sponsord_readiness_retries: 10
         sponsord_readiness_delay: 1
         decdn_grafana_cloud_enabled: true

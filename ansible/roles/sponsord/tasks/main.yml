@@ -313,9 +313,29 @@
     that:
       - sponsord_generate_api_token is boolean
       - sponsord_secret_env_overwrite_host_file is boolean
+      - sponsord_restart_ignore_topup_hold is boolean
     fail_msg: >-
-      sponsord_generate_api_token and sponsord_secret_env_overwrite_host_file must be
-      booleans (true/false), not quoted strings.
+      sponsord_generate_api_token, sponsord_secret_env_overwrite_host_file and
+      sponsord_restart_ignore_topup_hold must be booleans (true/false), not quoted
+      strings.
+
+# RUST_LOG lands unquoted in an EnvironmentFile, and tracing reads a bare word that
+# is not a level as a target name, so a typo like "verbose" would silence the log.
+# Each comma-separated part must be a level or target=level; nothing else (no
+# whitespace, quotes, span or field filters) gets through.
+- name: Validate sponsord_log_level
+  vars:
+    # One tracing directive: a level, or target=level.
+    _directive: '(?i)^(?:[a-z_][a-z0-9_:]*=)?(?:trace|debug|info|warn|error|off|[0-5])\Z'
+  ansible.builtin.assert:
+    that:
+      - >-
+        (sponsord_log_level | string) == ''
+        or (sponsord_log_level | string).split(',') | reject('match', _directive) | list | length == 0
+    fail_msg: >-
+      sponsord_log_level must be "" (errors only), or comma-separated parts that are
+      each a level (trace, debug, info, warn, error, off) or target=level, such as
+      info or sponsord=debug,hyper=warn; got "{{ sponsord_log_level }}".
 
 # --- RPC URL: inventory or host-provisioned secret.env ------------------------------
 # The same two authoring paths, provenance record and guards as decdn_node's
@@ -629,9 +649,9 @@
       the file and set the matching sponsord_* variables in inventory instead.
   when: sponsord_rpc_url | length == 0
 
-# After every gate, so a deploy that stops at one has notified no restart for a unit
-# that may not exist yet. A run that fails LATER loses its pending restart (Ansible
-# runs no handlers for a failed host); the inputs record below catches that.
+# After every gate, so a deploy that stops at one has replaced no binary for a unit
+# that may not exist yet. Nothing here notifies a restart: the inputs record below
+# decides that, so a run that fails before it leaves the restart to the next run.
 - name: Install the sponsord binary
   ansible.builtin.import_tasks: install.yml
 
@@ -646,7 +666,6 @@
     content: |
       SPONSORD_RPC_URL={{ sponsord_rpc_url | string | to_json(ensure_ascii=false) }}
   no_log: true
-  notify: Restart sponsord
   when: sponsord_rpc_url | length > 0
 
 # Provenance only ("who wrote secret.env"), so it is written as soon as the file is
@@ -717,7 +736,6 @@
     owner: root
     group: root
     mode: "0644"
-  notify: Restart sponsord
 
 - name: Install the sponsord systemd unit
   ansible.builtin.template:
@@ -726,7 +744,6 @@
     owner: root
     group: root
     mode: "0644"
-  notify: Restart sponsord
 
 # --- Restart inputs -----------------------------------------------------------------
 # Everything the daemon starts from: the credentials, both env files, the unit and
@@ -734,7 +751,7 @@
 # file), so whatever left the running daemon on stale inputs is caught on the next
 # converge — an operator rotating a credential or editing a host-provisioned
 # secret.env out of band, or an earlier run that changed a file and then failed
-# before its restart handler ran. An ABSENT record counts only
+# before restarting. An ABSENT record counts only
 # when the daemon is already running (below).
 - name: Hash the restart inputs
   ansible.builtin.stat:
@@ -774,6 +791,28 @@
          | map(attribute='checksum', default='') | join(' ') }}
     sponsord_inputs_recorded_sums: "{{ sponsord_inputs_recorded.content | default('') | b64decode | trim }}"
 
+# The ONLY restart trigger. The tasks that write an input (secret.env, sponsord.env,
+# the unit, the binary) notify nothing themselves: every one of them is hashed
+# above, and a restart is owed exactly when the hashes differ from what the daemon
+# last started healthy on. One predicate for the restart and the hold guard below,
+# so no write (a revert onto the recorded content included) restarts unguarded.
+# Under --check nothing is written, so no restart is reported.
+- name: Decide whether a sponsord restart is pending
+  ansible.builtin.set_fact:
+    _sponsord_restart_pending: >-
+      {{ (sponsord_inputs_recorded_sums | length > 0 and sponsord_inputs_sums != sponsord_inputs_recorded_sums)
+         or (sponsord_inputs_recorded_sums | length == 0
+             and sponsord_is_active.status.ActiveState | default('') == 'active') }}
+
+# Before anything is queued: a refused run leaves no restart pending in the handler
+# queue (so not even --force-handlers runs it), and writes no inputs record, so the
+# restart is retried on the next run.
+- name: Refuse a restart that would forget a held pool top-up
+  ansible.builtin.include_tasks: topup-hold.yml
+  vars:
+    _sponsord_hold_action: restart
+  when: _sponsord_restart_pending | bool
+
 - name: Note restart inputs that changed since the daemon last started healthy
   ansible.builtin.debug:
     msg: >-
@@ -784,10 +823,7 @@
       — restarting sponsord.
   changed_when: true
   notify: Restart sponsord
-  when: >-
-    (sponsord_inputs_recorded_sums | length > 0 and sponsord_inputs_sums != sponsord_inputs_recorded_sums)
-    or (sponsord_inputs_recorded_sums | length == 0
-        and sponsord_is_active.status.ActiveState | default('') == 'active')
+  when: _sponsord_restart_pending | bool
 
 - name: Apply pending sponsord changes
   ansible.builtin.meta: flush_handlers

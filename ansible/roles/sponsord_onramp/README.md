@@ -138,6 +138,8 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | `sponsord_onramp_fund_rate_per_min`, `_poll_rate_per_min` | `""` | Per-address rate limits (upstream 10 and 120; `0` turns one off). |
 | `sponsord_onramp_bind_address` / `_port` | `127.0.0.1` / `8080` | IPv4 loopback only (asserted). |
 | `sponsord_onramp_readiness_retries` / `_delay` | `30` / `2` | `/healthz` window (about 60 s). |
+| `sponsord_onramp_log_level` | `""` | `RUST_LOG`: a level or `target=level` pairs (`""` = info). |
+| `decdn_decommission_max_hosts` / `_prompt_seconds` | `1` / `300` | `tasks_from: decommission`, shared with the other roles. |
 
 ## Bringing your own proxy
 
@@ -169,16 +171,19 @@ collector; its access logs are not shipped.
   `sponsord_onramp_min_cli_version` to make existing users re-run the installer.
 - **Certificate trouble:** `sudo journalctl -u caddy -e`. Check that the domain
   resolves to the host and that tcp/80 and tcp/443 reach it.
-- **Logs:** `journalctl -u sponsord-onramp`.
-- **Removal:**
+- **Logs:** `journalctl -u sponsord-onramp`, at info by default. `sponsord_onramp_log_level`
+  sets `RUST_LOG`: a level or `target=level` pairs only. The release is built without
+  tracing's env-filter, so a span or field filter makes it log nothing at all.
+- **Removal:** `make decommission LIMIT=<host>` (`tasks_from: decommission`, run
+  before sponsord's) asks for the typed host list, stops the onramp and removes its
+  unit, and stops and disables the role's Caddy (only when `/etc/caddy/Caddyfile`
+  carries the role's marker). It keeps the files under `/etc/sponsord`, the binary
+  and the caddy package. To remove those by hand afterwards:
 
   ```bash
-  sudo systemctl disable --now sponsord-onramp caddy
-  sudo rm /etc/systemd/system/sponsord-onramp.service
-  sudo systemctl daemon-reload
   sudo rm -f /usr/local/bin/sponsord-onramp /etc/sponsord/sponsord-onramp.env \
-    /etc/sponsord/onramp-gate.html /etc/sponsord/.onramp-inputs.sha256 \
-    /etc/sponsord/turnstile-secret
+    /etc/sponsord/onramp-gate.html /etc/sponsord/turnstile-secret \
+    /etc/sponsord/.turnstile-secret.sha256
   sudo rm -rf /usr/local/lib/sponsord-onramp
   sudo apt-get remove caddy
   ```

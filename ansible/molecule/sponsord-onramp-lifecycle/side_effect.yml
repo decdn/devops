@@ -1,0 +1,170 @@
+---
+# Backup, then decommission: refused while sponsord holds a pool top-up, without a
+# confirmation and with a wrong one, then for real through the playbook, twice. The
+# header of molecule.yml lists what each step proves; verify.yml checks the result.
+- name: Prepare the backup recipient
+  hosts: all
+  become: true
+  tasks:
+    - name: Install age
+      ansible.builtin.apt:
+        name: age
+        state: present
+        update_cache: true
+
+    - name: Generate a throwaway age identity
+      ansible.builtin.command:
+        cmd: age-keygen -o /root/molecule-age.key
+        creates: /root/molecule-age.key
+
+    - name: Read the backup recipient's public key
+      ansible.builtin.command:
+        cmd: age-keygen -y /root/molecule-age.key
+      register: _molecule_age_pub
+      changed_when: false
+
+    # Host facts, not inventory: the inventory must stay identical to
+    # ../sponsord-onramp's. sponsord_backup_age_recipients defaults to this list.
+    - name: Encrypt the backups to it, and fetch them into the ephemeral dir
+      ansible.builtin.set_fact:
+        decdn_backup_age_recipients: ["{{ _molecule_age_pub.stdout | trim }}"]
+        sponsord_backup_local_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/backups"
+
+- name: Backup
+  ansible.builtin.import_playbook: ../../playbooks/backup.yml
+
+- name: Decommission refuses a held top-up, a missing and a wrong confirmation
+  hosts: all
+  become: true
+  tasks:
+    # tar would store the link, not the token: the backup must refuse, not succeed.
+    - name: Back up with the API token replaced by a symlink
+      block:
+        - name: Move the API token aside and symlink it back
+          ansible.builtin.shell:
+            cmd: mv /etc/sponsord/api-token /etc/sponsord/api-token.real && ln -s api-token.real /etc/sponsord/api-token
+          changed_when: true
+
+        - name: Run the sponsord backup against a symlinked credential
+          ansible.builtin.include_role:
+            name: sponsord
+            tasks_from: backup
+
+        - name: Fail if the backup archived a symlink
+          ansible.builtin.fail:
+            msg: The backup succeeded with a symlinked API token.
+      rescue:
+        - name: Require the regular-file check to be what failed
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require every path to archive, as a regular file'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the regular-file check."
+      always:
+        - name: Put the API token back
+          ansible.builtin.shell:
+            cmd: >-
+              if [ -L /etc/sponsord/api-token ]; then
+              rm /etc/sponsord/api-token && mv /etc/sponsord/api-token.real /etc/sponsord/api-token; fi
+          changed_when: true
+
+    - name: Make the stub report a held top-up
+      ansible.builtin.copy:
+        dest: /etc/sponsord/stub-topup-hold
+        content: "1700000000\n"
+        mode: "0644"
+
+    # Confirmed, so only the hold can stop it.
+    - name: Decommission while a top-up is held
+      block:
+        - name: Run sponsord's decommission (confirmed) during a hold
+          ansible.builtin.include_role:
+            name: sponsord
+            tasks_from: decommission
+          vars:
+            decdn_decommission_confirm: "{{ ansible_play_hosts_all | sort | join(',') }}"
+        - name: Fail if decommission stopped sponsord during a hold
+          ansible.builtin.fail:
+            msg: decommission proceeded while sponsord held a pool top-up.
+      rescue:
+        - name: Require the hold guard to be what failed
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Refuse to restart or stop sponsord while a pool top-up is held'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the hold guard."
+
+    - name: Clear the hold
+      ansible.builtin.file:
+        path: /etc/sponsord/stub-topup-hold
+        state: absent
+
+    # Molecule has no TTY, and the 1 s timeout covers an interactive run: either way
+    # the prompt yields empty input, which must not count as confirmation.
+    - name: Decommission the onramp with no confirmation given
+      block:
+        - name: Run the onramp decommission without decdn_decommission_confirm
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+            tasks_from: decommission
+          vars:
+            decdn_decommission_prompt_seconds: 1
+        - name: Fail if the onramp decommission proceeded unconfirmed
+          ansible.builtin.fail:
+            msg: the onramp decommission proceeded without a typed confirmation.
+      rescue:
+        - name: Require the confirmation assert to be what failed (unconfirmed)
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name is match('^Require the typed confirmation')
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the confirmation check."
+
+    - name: Decommission sponsord with the wrong confirmation
+      block:
+        - name: Run the sponsord decommission with a mistyped host list
+          ansible.builtin.include_role:
+            name: sponsord
+            tasks_from: decommission
+          vars:
+            decdn_decommission_confirm: not-this-host
+        - name: Fail if the sponsord decommission accepted a wrong confirmation
+          ansible.builtin.fail:
+            msg: the sponsord decommission proceeded with a confirmation that did not match.
+      rescue:
+        - name: Require the confirmation assert to be what failed (mistyped)
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name is match('^Require the typed confirmation')
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the confirmation check."
+
+    - name: Read the services after the rejected runs
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+      register: _molecule_units
+      loop: [sponsord, sponsord-onramp, caddy]
+
+    - name: Require every service to survive the rejected runs
+      ansible.builtin.assert:
+        that:
+          - _molecule_units.results | map(attribute='status.ActiveState') | unique == ['active']
+        fail_msg: >-
+          A rejected decommission stopped something:
+          {{ _molecule_units.results | map(attribute='status.ActiveState') | list }}.
+
+    # A refusal must not leave the run-wide confirmation behind, or a later play
+    # of a real run would skip its prompt.
+    - name: Require no rejected run to have recorded a confirmation
+      ansible.builtin.assert:
+        that:
+          - _decdn_decommission_confirmed is not defined
+        fail_msg: A rejected decommission left _decdn_decommission_confirmed set.
+
+    - name: Confirm the real decommission non-interactively
+      ansible.builtin.set_fact:
+        decdn_decommission_confirm: "{{ ansible_play_hosts_all | sort | join(',') }}"
+
+- name: Decommission
+  ansible.builtin.import_playbook: ../../playbooks/decommission.yml
+
+# Re-running must be safe: the units are gone, sponsord is not running (so the hold
+# check passes), and every removal is already done.
+- name: Decommission again
+  ansible.builtin.import_playbook: ../../playbooks/decommission.yml

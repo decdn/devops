@@ -1,0 +1,135 @@
+---
+# Take sponsord out of service: `include_role: {name: sponsord, tasks_from:
+# decommission}` (playbooks/decommission.yml, `make decommission LIMIT=<host>`).
+#
+# What it does: refuse while the daemon holds an unconfirmed pool top-up (a stop
+# forgets the hold, and the pool could be refilled twice), then stop the daemon and
+# disable and remove its systemd unit. What it deliberately KEEPS: sponsord_etc (the
+# treasury keystore owns the pool and holds its funds; the API token), the binary
+# and the shared decdn-build user and toolchain. The onramp needs the daemon, so
+# playbooks/decommission.yml runs sponsord_onramp's decommission first.
+#
+# It does NOT touch the chain: the pool and its USDC stay with the treasury wallet,
+# and withdrawing them is an operator step with the decdn CLI; the final task says so.
+
+- name: Refuse to decommission in check mode
+  ansible.builtin.assert:
+    that:
+      - not ansible_check_mode
+    fail_msg: Decommissioning has no dry run; run it without --check once you mean it.
+
+- name: Refuse to decommission more hosts than allowed at once
+  ansible.builtin.assert:
+    that:
+      - decdn_decommission_max_hosts | int > 0
+      - ansible_play_hosts_all | length <= decdn_decommission_max_hosts | int
+      - decdn_decommission_prompt_seconds | int > 0
+    fail_msg: >-
+      This run targets {{ ansible_play_hosts_all | length }} hosts
+      ({{ ansible_play_hosts_all | sort | join(', ') }}), more than
+      decdn_decommission_max_hosts ({{ decdn_decommission_max_hosts }}). Scope it
+      with LIMIT, or raise decdn_decommission_max_hosts deliberately.
+      decdn_decommission_prompt_seconds must be a positive number of seconds.
+
+# Checked before the prompt, so nobody types a confirmation for a run that cannot
+# proceed, and again right before the stop: the prompt can wait minutes, and the
+# keeper can start a hold meanwhile.
+- name: Refuse to stop a sponsord that holds a pool top-up
+  ansible.builtin.include_tasks: topup-hold.yml
+  vars:
+    _sponsord_hold_action: stop
+
+# Typed confirmation (AGENTS.md hard rule 4), as decdn_node's. A host that already
+# confirmed in an earlier play of this run (a co-located node, or the onramp) is not
+# asked again.
+- name: Ask for typed confirmation
+  ansible.builtin.pause:
+    prompt: >-
+      About to STOP {{ _decom_services | join(', ') }}, REMOVE their systemd units
+      and tear down this repo's Grafana Alloy on:
+      {{ ansible_play_hosts_all | sort | join(',') }}.
+      This one confirmation covers all of them. Nothing on-chain is done: the pool
+      and the treasury's funds are NOT touched.
+      Type the host list above exactly to continue
+      (times out after {{ decdn_decommission_prompt_seconds }} s)
+    seconds: "{{ decdn_decommission_prompt_seconds | int }}"
+  register: _sponsord_decommission_typed
+  run_once: true
+  vars:
+    # Every service this repo's playbooks/decommission.yml stops on these hosts, by
+    # their groups, so the one confirmation names all it covers (a later play does
+    # not ask again). This role's own service is always listed.
+    _decom_groups: "{{ ansible_play_hosts_all | map('extract', hostvars, 'group_names') | flatten | unique }}"
+    _decom_services: >-
+      {{ ((['decdn-node'] if 'decdn_nodes' in _decom_groups else [])
+          + (['sponsord-onramp and its Caddy'] if 'sponsord_onramp_hosts' in _decom_groups else [])
+          + (['sponsord'] if 'sponsord_hosts' in _decom_groups else [])
+          + ['sponsord']) | unique }}
+  when:
+    - decdn_decommission_confirm is not defined
+    - not (_decdn_decommission_confirmed | default(false) | bool)
+
+- name: Require the typed confirmation to match the targeted hosts
+  ansible.builtin.assert:
+    that:
+      - (decdn_decommission_confirm | default(_sponsord_decommission_typed.user_input | default('')) | trim)
+        == (ansible_play_hosts_all | sort | join(','))
+    fail_msg: >-
+      Confirmation did not match "{{ ansible_play_hosts_all | sort | join(',') }}".
+      Nothing was changed.
+  when: not (_decdn_decommission_confirmed | default(false) | bool)
+
+- name: Remember the confirmation for the rest of this run
+  ansible.builtin.set_fact:
+    _decdn_decommission_confirmed: true
+
+- name: Check again for a held pool top-up, right before the stop
+  ansible.builtin.include_tasks: topup-hold.yml
+  vars:
+    _sponsord_hold_action: stop
+
+- name: Check for the sponsord unit
+  ansible.builtin.stat:
+    path: /etc/systemd/system/sponsord.service
+  register: _sponsord_decommission_unit
+
+# SIGTERM: the daemon stops serving, then waits for a top-up it already sent to
+# settle, for up to sponsord_stop_timeout_sec.
+- name: Stop and disable sponsord
+  ansible.builtin.systemd_service:
+    name: sponsord
+    state: stopped
+    enabled: false
+  when: _sponsord_decommission_unit.stat.exists
+
+# The record goes too: a later redeploy then starts from a fresh daemon rather
+# than comparing against inputs of one that no longer exists.
+- name: Remove the sponsord unit and its restart-inputs record
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/sponsord.service
+    - "{{ sponsord_inputs_checksum_file }}"
+
+# Unconditional: cheap, and right even after an earlier run removed the file but
+# failed before reloading.
+- name: Reload systemd after removing the unit
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Report what is left to do
+  ansible.builtin.debug:
+    msg:
+      - "sponsord is stopped and its unit removed on {{ inventory_hostname }}."
+      - >-
+        Kept: {{ sponsord_etc }} (the treasury keystore and password, the API token,
+        secret.env), {{ sponsord_bin }} and, after a source install, the shared
+        {{ decdn_build_home }}. Take a backup first (make backup) and keep the keystore
+        until the pool is drained: it is the only key that controls the pool's funds.
+      - >-
+        On-chain: the pool and its USDC stay with the treasury wallet. Withdraw them
+        with the decdn CLI from the treasury wallet; the role does not.
+      - >-
+        Take the host out of sponsord_hosts (and sponsord_onramp_hosts) so the next
+        deploy does not bring sponsord back.

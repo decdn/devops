@@ -1,9 +1,12 @@
 ---
-# Encrypted backup of each node's identity (default) or full state.
+# Encrypted backups: each node's identity (default) or full state, and each
+# sponsord host's credentials (the treasury keystore and password, the API token,
+# the onramp's Turnstile secret).
 #   make backup LIMIT=<host> ANSIBLE_ARGS='-e decdn_backup_scope=full'
-# decdn_backup_age_recipients (public keys) is required; set it in group_vars.
-# See roles/decdn_node/tasks/backup.yml for what is archived and docs/lifecycle.md
-# for restore and host migration.
+# decdn_backup_age_recipients (public keys) is required; set it in group_vars
+# (sponsord_backup_age_recipients defaults to it). See roles/decdn_node/tasks/backup.yml
+# and roles/sponsord/tasks/backup.yml for what is archived and docs/lifecycle.md for
+# restore and host migration.
 - name: Back up deCDN nodes
   hosts: decdn_nodes
   become: true
@@ -15,4 +18,16 @@
     - name: Back up this node
       ansible.builtin.include_role:
         name: decdn_node
+        tasks_from: backup
+
+# Hot: sponsord keeps no state and is never stopped for its backup.
+- name: Back up sponsord hosts
+  hosts: sponsord_hosts
+  become: true
+  serial: 1
+  gather_facts: false
+  tasks:
+    - name: Back up this host's sponsord credentials
+      ansible.builtin.include_role:
+        name: sponsord
         tasks_from: backup

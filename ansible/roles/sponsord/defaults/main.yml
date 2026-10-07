@@ -103,6 +103,13 @@ sponsord_pool_low_water_micro_usdc: ""     # [20000000 = $20] top up below this
 sponsord_pool_refill_micro_usdc: ""        # [100000000 = $100] each top-up adds this
 sponsord_pool_watch_interval_secs: ""      # [3600] how often the keeper checks the pool
 
+# --- Logging ----------------------------------------------------------------------
+# RUST_LOG for the daemon: a level (info) or tracing directives (sponsord=debug,
+# hyper=warn). "" omits it, and the daemon then logs errors only; info adds the
+# listener and each top-up. Each comma-separated part must be a level or
+# target=level (no span or field filters).
+sponsord_log_level: ""
+
 # --- Secrets on the host --------------------------------------------------------
 # Root-owned under sponsord_etc: the secret files 0600, sponsord.env 0644 (it holds
 # no secret). systemd reads the API token, treasury keystore and password as root
@@ -159,6 +166,19 @@ sponsord_bin: /usr/local/bin/sponsord
 # is the cap before SIGKILL.
 sponsord_stop_timeout_sec: 120
 
+# --- Top-up hold ------------------------------------------------------------------
+# When the keeper broadcasts a pool top-up and cannot read its receipt, it holds every
+# further top-up until that transaction mines or provably never can
+# (sponsord_pool_topup_unconfirmed_since_unix > 0 on /metrics). A restart forgets the
+# hold, and if the transaction is still pending the pool can be refilled twice
+# (upstream docs/operator.md, "Monitor"). So the role reads /metrics before any
+# restart it is about to cause (and decommission before it stops the daemon), and
+# fails instead while a hold is on or /metrics does not answer; the next run retries
+# once it clears. true skips both refusals: only for a hold you have confirmed can
+# never mine. Pass it as JSON (-e '{"sponsord_restart_ignore_topup_hold":true}'):
+# -e name=true is a string, which the boolean check refuses.
+sponsord_restart_ignore_topup_hold: false
+
 # --- Readiness --------------------------------------------------------------------
 # The daemon binds only after it has decrypted the keystore and confirmed on-chain
 # that the treasury owns sponsord_pool_id, so /healthz answering 200 is the role's
@@ -166,3 +186,26 @@ sponsord_stop_timeout_sec: 120
 # probe, a timeout here FAILS the deploy. Window = retries x delay (~60s).
 sponsord_readiness_retries: 30
 sponsord_readiness_delay: 2
+
+# --- Lifecycle: backup + decommission (tasks_from: backup / decommission) -------
+# Only read by those entry points (playbooks/backup.yml, playbooks/decommission.yml);
+# a normal deploy ignores them. See docs/lifecycle.md.
+#
+# The daemon keeps no state, so a backup is the credentials under sponsord_etc: the
+# treasury keystore and password (the pool's owner, holding its funds), the API
+# token, and the onramp's Turnstile secret when present. It is taken hot and
+# encrypted on the host to these PUBLIC keys (age1… recipients and/or ssh-ed25519 /
+# ssh-rsa lines), so no plaintext key leaves the host. REQUIRED for a backup; by
+# default the node's list, so one inventory list covers a co-located host.
+sponsord_backup_age_recipients: "{{ decdn_backup_age_recipients | default([]) }}"
+sponsord_backup_include_env: false     # also archive secret.env (the RPC URL, maybe an API key)
+sponsord_backup_dir: /var/backups/sponsord   # on the host, root 0700
+sponsord_backup_fetch: true            # copy the ENCRYPTED archive (kilobytes) to the control machine
+sponsord_backup_local_dir: "{{ playbook_dir }}/../backups"   # control machine; git-ignored in this repo
+#
+# Shared with decdn_node (and identical there, `make test-scripts` checks): one typed
+# confirmation covers every service on the host. A non-interactive run sets
+# decdn_decommission_confirm to the comma-joined, sorted host list (deliberately NOT
+# defaulted here).
+decdn_decommission_max_hosts: 1
+decdn_decommission_prompt_seconds: 300   # an unanswered confirmation prompt fails closed after this

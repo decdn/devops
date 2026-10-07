@@ -40,7 +40,16 @@ their only home.
   `decdn-delivery`. Every rule carries a `component` label. Only rules with a matching
   section in upstream's `docs/runbook.md` (20 of 51) also carry a `runbook_url`.
 
-Add a row to an existing dashboard before starting a fifth one. The Helm chart renders
+- `sponsord/` — the onboarding sponsor's own pair: `dashboard-sponsord.json` (uid
+  `decdn-sponsord`) and `prometheus-alerts.yml` (group `sponsord`, `job="sponsord"`).
+  The chart does not render this subdirectory (sponsord has no Kubernetes path). Its
+  `sponsord_*` names come from upstream `decdn/sponsord` `crates/sponsord/src/metrics.rs`
+  (check them with the recipe after the node one below). Its logs are plain text,
+  not JSON: select `{unit="sponsord.service"}` and filter on the `level` label the
+  `grafana_alloy` role parses. The rules have promtool unit tests in
+  `charts/decdn-node/tests/sponsord-alerts_test.yml`: keep them in step.
+
+Add a row to an existing dashboard before starting a fifth node one. The Helm chart renders
 these files as-is (`templates/prometheusrule.yaml`, `templates/dashboards-configmap.yaml`),
 so a new `*.json` becomes a new ConfigMap and `charts/decdn-node/tests/render-test.sh`
 checks the rule and dashboard counts against the directory. Never pass them through
@@ -68,6 +77,18 @@ curl -s http://127.0.0.1:9090/metrics | grep -v '^#' | grep -oE '^decdn_[a-z0-9_
   | sed -E 'p; s/_(bucket|sum|count)$//' | sort -u > /tmp/exported
 comm -23 /tmp/used /tmp/exported   # must print nothing
 ```
+
+For sponsord, from the same directory (`sponsord_log_level` in a panel description is an
+Ansible variable, not a series):
+
+```bash
+grep -hv '^\s*#' sponsord/*.json sponsord/*.yml | grep -oE 'sponsord_[a-z0-9_]+' | sort -u > /tmp/used-sd
+curl -s http://127.0.0.1:8090/metrics | grep -v '^#' | grep -oE '^sponsord_[a-z0-9_]+' | sort -u > /tmp/exported-sd
+comm -23 /tmp/used-sd /tmp/exported-sd   # prints only sponsord_log_level
+```
+
+A code's `sponsord_request_errors_total{code}` series appears only after that code's first
+error, so a fresh daemon may not export it yet; check against upstream `metrics.rs` then.
 
 `decdn_iroh_*` series appear only once the node's endpoint is up, and a labelled family
 with no child (e.g. `decdn_staker_set_active_by_region` before any staker declares a

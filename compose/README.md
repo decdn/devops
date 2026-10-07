@@ -169,6 +169,7 @@ what each setting does; this section covers the Compose side.
 | `/etc/sponsord/treasury-keystore.json` | `sponsord`, `0600` | sponsord | read-only file in `/run/secrets/` |
 | `/etc/sponsord/treasury-password` | `sponsord`, `0600` | sponsord | read-only file in `/run/secrets/` |
 | `/etc/sponsord/turnstile-secret` | `sponsord`, `0600` | onramp | read-only file in `/run/secrets/` |
+| `/etc/sponsord/onramp-gate/` | `root`, `0755` | onramp | read-only directory, same path: an optional custom gate page |
 | `/var/lib/caddy/` | `caddy`, `0700` | Caddy | `/data`: certificates, ACME account |
 
 The paths match the Ansible roles, with one difference: the credential files belong
@@ -241,6 +242,21 @@ the proxy.
 
    `sudoedit` writes the file back with its existing owner and mode.
 
+   **Your own gate page** (optional; upstream `docs/operator.md`, "Your own gate
+   page", lists its placeholders): put the HTML in `/etc/sponsord/onramp-gate/`, the
+   one directory the onramp mounts for it (created empty when absent), and point
+   `ONRAMP_GATE_TEMPLATE` at it in `sponsord-onramp.env`:
+
+   ```bash
+   sudo install -D -m 0644 -o root -g root gate.html /etc/sponsord/onramp-gate/gate.html
+   # in sponsord-onramp.env: ONRAMP_GATE_TEMPLATE=/etc/sponsord/onramp-gate/gate.html
+   ```
+
+   The onramp serves whatever file `ONRAMP_GATE_TEMPLATE` names, to anyone, and its
+   container also holds the API token and the Turnstile secret. So `compose.yaml`
+   starts it through a check: unless the path resolves (symlinks followed) to a file
+   in `/etc/sponsord/onramp-gate/`, the onramp exits at start and its log says why.
+
 6. **TLS in front of the onramp.** Either:
    - **Caddy** (`caddy` profile): point the domain's DNS at this host and open
      **tcp/80** and **tcp/443** in the host firewall and the cloud security group.
@@ -278,6 +294,23 @@ the proxy.
 
 As for the node, run these from the repository root with `sudo`.
 
+**Before anything that restarts or stops sponsord** (a restart, a stop, an `up -d`
+that recreates it, a treasury rotation), check that it holds no unconfirmed pool
+top-up:
+
+```bash
+curl -fsS 127.0.0.1:8090/metrics | grep '^sponsord_pool_topup_unconfirmed_since_unix'
+```
+
+`… 0` means no hold. An error or no output means the state is unknown: do not
+restart until you know. Anything else is a held top-up: the keeper broadcast one and could not read its
+receipt, so it sends no other until that transaction mines or provably never can. A
+restart forgets the hold, and the pool can then be refilled twice. Wait for it to
+clear; if the transaction was dropped, send 0-value transactions from the treasury to
+itself until it does (the error log line names the transaction and how many). The
+Ansible role refuses such a restart on its own; Compose cannot, so this check is
+yours. The `SponsordTopupHeld` alert (below) flags it.
+
 - **Logs:** `sudo docker compose -f compose/compose.yaml logs -f sponsord sponsord-onramp caddy`.
 - **Stop:** `sudo docker compose -f compose/compose.yaml stop caddy sponsord-onramp sponsord`
   (leave out `caddy` without that profile). On SIGTERM sponsord waits for a pool
@@ -298,7 +331,23 @@ As for the node, run these from the repository root with `sudo`.
   wallet must own `SPONSORD_POOL_ID`, or sponsord exits at start.
 - **Health:** no container healthchecks, as for the node. Probe the two `/healthz`
   endpoints above from the host. sponsord also serves `/metrics` on the same port, and
-  logs errors only unless `RUST_LOG=info` is set in `sponsord.env`.
+  logs errors only unless `RUST_LOG=info` is set in `sponsord.env`. The onramp logs
+  at info; its `RUST_LOG` takes a level or `target=level` pairs only (a span or
+  field filter makes it log nothing).
+- **Dashboard and alerts:** a sponsord dashboard and alert rules (pool balance, keeper
+  failures, a held top-up) are in
+  [`charts/decdn-node/files/monitoring/sponsord/`](../charts/decdn-node/files/monitoring/README.md#sponsord).
+- **Backup:** the treasury keystore and password are the only copy of the key that
+  owns the pool and its funds. Copy them off the host encrypted, with the same
+  files the Ansible path's `make backup` takes
+  ([`docs/lifecycle.md`](../docs/lifecycle.md)):
+
+  ```bash
+  set -o pipefail
+  sudo tar -C / --numeric-owner -czf - etc/sponsord/treasury-keystore.json \
+      etc/sponsord/treasury-password etc/sponsord/api-token etc/sponsord/turnstile-secret \
+    | age -r age1… -o sponsord.tar.age
+  ```
 
 ## Before a release: a local image
 

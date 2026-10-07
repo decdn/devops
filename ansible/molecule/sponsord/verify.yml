@@ -84,6 +84,7 @@
           # Set knobs are emitted (0 included), unset ones are not.
           - "'SPONSORD_MAX_TTL_SECS=3600' in _sp_env_text"
           - "'SPONSORD_POOL_LOW_WATER_MICRO_USDC=0' in _sp_env_text"
+          - "'RUST_LOG=sponsord=debug,info' in _sp_env_text"
           - "'SPONSORD_MAX_SPENDING_CAP' not in _sp_env_text"
           - "'SPONSORD_POOL_REFILL' not in _sp_env_text"
           - "'RPC_URL' not in _sp_env_text"

@@ -634,7 +634,8 @@ decdn node drain --wait  # graceful shutdown. Without --wait it is fire-and-forg
                          # Under this role's unit (Restart=always) systemd starts
                          # a drained daemon again 5 s later: to take the node
                          # down, use `systemctl stop decdn-node` (same graceful
-                         # path, via SIGTERM) or `make decommission`.
+                         # path, via SIGTERM) or `make decommission`
+                         # (which also removes a co-located sponsord).
 
 # Read-only chain query, not admin RPC: lists active registered nodes and maps
 # node-ids/regions to operator addresses. Loads no keystore and spends nothing.

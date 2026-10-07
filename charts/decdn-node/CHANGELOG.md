@@ -17,6 +17,11 @@ both (see [RELEASING.md](../../RELEASING.md)).
   (`metrics.prometheusRule`), and the deCDN Grafana dashboards as sidecar-labelled
   ConfigMaps (`metrics.grafanaDashboards`). Both live in `files/monitoring/`, which
   this repo maintains; `decdn/decdn` no longer ships them.
+- `files/monitoring/sponsord/`: a Grafana dashboard (`uid: decdn-sponsord`) and
+  alert rules for the onboarding sponsor (down, keeper failing, stale pool read, a
+  held top-up, an empty pool, request errors), with promtool unit tests. sponsord
+  has no Kubernetes path, so the chart does not render them; they ship for import
+  on the Ansible and Compose paths.
 
 ### Fixed
 

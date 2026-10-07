@@ -16,8 +16,8 @@ authors:
   - deCDN Contributors
 description: >-
   Deploy and harden a public deCDN node: DevSec host baseline, the decdn_node
-  daemon (with backup and decommission), the sponsord onboarding sponsor and its
-  public onramp, and opt-in Grafana Cloud observability.
+  daemon and the sponsord onboarding sponsor with its public onramp (each with
+  backup and decommission), and opt-in Grafana Cloud observability.
 license:
   - MIT
 # Galaxy tags must match ^[a-z0-9]+$ (no hyphens/underscores).
