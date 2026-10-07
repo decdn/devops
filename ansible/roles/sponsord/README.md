@@ -178,13 +178,14 @@ yourself.
   - a restart after a credential rotation;
   - that the `/healthz` gate fails the deploy when the daemon will not start;
   - each `secret.env` hand-off between inventory and host, with its guards;
+  - the Alloy toggles.
+- `molecule/sponsord-install` runs beside it on the same converge. It checks:
   - release mode against a locally signed mirror: the version stamp, a re-run
     with the mirror down, and rejection of a bad checksum, a bad signature and
     a binary that is not the pinned version;
-  - the Alloy toggles;
   - treasury wallet generation through a `key-gen` stub: the files and modes, the
     stop on an empty pool id, an existing wallet kept, and the daemon starting on it.
 - `molecule/grafana-cloud` co-locates sponsord with a node.
 - `molecule/cloud-init-sponsord` deploys it from `cloud-init/user-data-sponsord.yaml`
   (no control machine), in release mode, beside the onramp.
-- `molecule/validation` holds the negative cases.
+- `molecule/validation-sponsord` holds the negative cases.

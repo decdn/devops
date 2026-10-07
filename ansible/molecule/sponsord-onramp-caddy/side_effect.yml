@@ -1,0 +1,183 @@
+---
+# Split from ../sponsord-onramp/side_effect.yml so the two run side by side; same
+# converged host (that scenario's prepare, converge and verify, by path). What a green
+# converge cannot prove about the role's proxy handling:
+#   1. proxy "none": no client-IP header, the public URL as given, and a warning
+#      that the role's Caddy is still installed.
+#   2. ACME mode: the Caddyfile has no `tls internal`, Caddy's http redirect
+#      answers, and a certificate that cannot be issued only warns. With the
+#      internal CA, a broken upstream behind Caddy fails the run.
+#   3. The role never silently replaces a Caddyfile it did not write; the package's
+#      untouched default it does replace.
+# Order matters: 1 leaves the host in proxy "none" mode and 2's first converge puts
+# Caddy back. The host is left healthy on the role's own Caddyfile, `tls internal`,
+# for verify. Plays after the first reuse its facts (gather_facts: false).
+- name: Side effect — bring your own proxy
+  hosts: all
+  become: true
+  tasks:
+    - name: Converge with proxy "none"
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_proxy: none
+        sponsord_onramp_public_url: https://downloads.molecule.test
+
+    - name: Read the env file in proxy "none" mode
+      ansible.builtin.slurp:
+        src: /etc/sponsord/sponsord-onramp.env
+      register: _or_none_env
+
+    # With an arbitrary proxy in front, trusting X-Forwarded-For would let clients
+    # pick the address the rate limits key on.
+    - name: Require no client-IP header, the given public URL, and the stale-Caddy warning
+      ansible.builtin.assert:
+        that:
+          - "'ONRAMP_CLIENT_IP_HEADER' not in _env"
+          - "'ONRAMP_PUBLIC_URL=https://downloads.molecule.test\n' in _env"
+          - sponsord_onramp_stale_caddy.rc == 0
+        fail_msg: "{{ _env }}"
+      vars:
+        _env: "{{ _or_none_env.content | b64decode }}"
+
+- name: Side effect — ACME, and a broken upstream behind Caddy
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    # No public DNS points at a container, so no certificate can be issued: the
+    # role must still finish, on the redirect probe, with only the ACME warning.
+    - name: Converge in ACME mode
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_caddy_tls: acme
+        sponsord_onramp_readiness_retries: 2
+
+    - name: Read the ACME-mode Caddyfile
+      ansible.builtin.slurp:
+        src: /etc/caddy/Caddyfile
+      register: _or_acme_caddy
+
+    - name: Require ACME's Caddyfile, and the certificate failure judged advisory
+      ansible.builtin.assert:
+        that:
+          - "'tls internal' not in (_or_acme_caddy.content | b64decode)"
+          - sponsord_onramp_caddy_redirect.status == 308
+          - sponsord_onramp_caddy_probe.rc in [35, 60]
+        fail_msg: >-
+          ACME mode: tls internal still present, the redirect probe got
+          {{ sponsord_onramp_caddy_redirect.status | default('none') }}, or curl exit
+          {{ sponsord_onramp_caddy_probe.rc }} is not a pending-certificate failure.
+
+    # Caddy pointed at a port nothing listens on: TLS works (internal CA), the
+    # upstream answers 502, and that must fail the run.
+    - name: Run the Caddy tasks against a dead upstream
+      block:
+        - name: Point Caddy at a port nothing listens on
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+            tasks_from: caddy
+          vars:
+            sponsord_onramp_port: 8099
+            sponsord_onramp_readiness_retries: 2
+
+        - name: Fail — the Caddy probe let a dead upstream through
+          ansible.builtin.fail:
+            msg: The role finished although Caddy could not reach the onramp.
+      rescue:
+        - name: Require the failure to come from the Caddy probe report
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Report an onramp that is not reachable through Caddy'
+            fail_msg: >-
+              Expected the Caddy probe to fail the run, but it failed at
+              "{{ ansible_failed_task.name }}".
+
+    - name: Converge back onto the internal CA and the real upstream
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+- name: Side effect — a Caddyfile someone else wrote, and the package's default
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Replace the Caddyfile with one this role did not write
+      ansible.builtin.copy:
+        dest: /etc/caddy/Caddyfile
+        mode: "0644"
+        content: |
+          # the operator's own site
+          other.molecule.test {
+            tls internal
+            respond "not the onramp"
+          }
+
+    - name: Converge against the foreign Caddyfile
+      block:
+        - name: Run the role without the overwrite confirmation
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+
+        - name: Fail — the role replaced a Caddyfile it did not write
+          ansible.builtin.fail:
+            msg: The role finished although /etc/caddy/Caddyfile carried no marker.
+      rescue:
+        - name: Require the failure to come from the Caddyfile refusal
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Refuse to replace a Caddyfile this role did not write'
+            fail_msg: >-
+              Expected the role to refuse the foreign Caddyfile, but it failed at
+              "{{ ansible_failed_task.name }}".
+
+    - name: Read the Caddyfile after the refusal
+      ansible.builtin.slurp:
+        src: /etc/caddy/Caddyfile
+      register: _or_foreign
+
+    - name: Require the foreign Caddyfile to be untouched
+      ansible.builtin.assert:
+        that:
+          - "'not the onramp' in (_or_foreign.content | b64decode)"
+        fail_msg: The refused run still changed /etc/caddy/Caddyfile.
+
+    - name: Converge with the takeover confirmed
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_caddy_overwrite_config: true
+
+    # The role refreshes the package lists only when it installs Caddy, which a
+    # converged host never does again; `apt-get download` below needs them.
+    - name: Refresh the package lists for the download below
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    # What a first run leaves when it installs Caddy and stops before templating.
+    - name: Put the package's own default Caddyfile back
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          cd "$(mktemp -d)"
+          apt-get download caddy >/dev/null
+          dpkg-deb --fsys-tarfile caddy_*.deb | tar -xO ./etc/caddy/Caddyfile > /etc/caddy/Caddyfile
+      changed_when: true
+
+    - name: Converge over the package's default Caddyfile, unconfirmed
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    - name: Read the Caddyfile after replacing the default
+      ansible.builtin.slurp:
+        src: /etc/caddy/Caddyfile
+      register: _or_after_default
+
+    - name: Require the role's Caddyfile in place of the default
+      ansible.builtin.assert:
+        that:
+          - "'MANAGED BY the sponsord_onramp role' in (_or_after_default.content | b64decode)"
+        fail_msg: The role did not take over the caddy package's untouched default Caddyfile.

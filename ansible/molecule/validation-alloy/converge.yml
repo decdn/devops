@@ -1,0 +1,811 @@
+---
+# NEGATIVE-path scenario for grafana_alloy: proves the opt-in Grafana Cloud role's
+# OWN fail-loud gates (#55) REJECT bad inputs (AGENTS.md hard-rule 4), so a
+# regression that weakens one fails CI. Split by role from ../validation
+# (decdn_node) so molecule runs them in parallel; ../validation-sponsord covers
+# sponsord and sponsord_onramp. Same shape as both: each case runs grafana_alloy
+# with ONE broken input, wrapped in block/rescue, and the rescue records a tag ONLY
+# when the failing task is the specific gate that case targets (matched on
+# ansible_failed_task.name). A bad value that slipped past its gate fails later at
+# a differently-named task, is NOT counted, and the final assert catches the miss.
+#
+# Tags name the GATE, not the case: several cases share one (secret-file,
+# managed-paths, host-collectors, …). Repeated tags are kept in the final multiset,
+# so every sibling case must fail independently.
+#
+# Broken configs abort inside preflight-imported tasks BEFORE any host mutation
+# (user/package/config), so no service starts and case order does not matter.
+# Fixtures (credential files, provenance records, symlinks) are staged and removed
+# per case; the two UID/GID-0 alias fixtures are left to molecule's destroy (see
+# those cases). No prepare.yml: no case reads the node wallet material that
+# ../validation/prepare.yml stages under /etc/decdn and /var/lib/decdn.
+- name: Converge grafana_alloy (expect validation failures)
+  hosts: all
+  become: true
+  vars:
+    # The only baseline the cases need. grafana_alloy_region defaults to
+    # decdn_region (one inventory knob for both roles) and preflight requires it
+    # non-empty: without it every case behind that gate would fail there instead of
+    # at the gate it targets, and none of them would be counted.
+    decdn_region: "US"
+  tasks:
+    - name: Initialize the rejected-by-validation tracker
+      ansible.builtin.set_fact:
+        decdn_rejected: []
+
+    # --- Cases: grafana_alloy preflight gates (#55) --------------------------------
+    - name: "Case ga-no-secret — enabled without /etc/grafana-alloy.env"
+      block:
+        - name: Stage only a placeholder credential path (absent file)
+          ansible.builtin.file:
+            path: /etc/grafana-alloy.env
+            state: absent
+
+        - name: Run grafana_alloy with its credential file absent
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+      rescue:
+        - name: Record ga-no-secret rejection (only if the secret-file assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['secret-file'] }}"
+          when: ansible_failed_task.name is match('^Require the Grafana Cloud secret environment file')
+
+    - name: "Case ga-symlink-secret — symlinked credential file"
+      block:
+        - name: Stage the symlink target outside /etc/decdn
+          ansible.builtin.copy:
+            dest: /var/lib/grafana-alloy-fixture.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+              GC_API_TOKEN=molecule-test-token
+
+        - name: Point the credential path at the out-of-tree symlink target
+          ansible.builtin.file:
+            src: /var/lib/grafana-alloy-fixture.env
+            dest: /etc/grafana-alloy.env
+            state: link
+            force: true
+
+        - name: Run grafana_alloy against a symlinked credential file
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+      rescue:
+        - name: Record ga-symlink-secret rejection (only if the secret-file assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['secret-file'] }}"
+          when: ansible_failed_task.name is match('^Assert the secret file')
+      always:
+        - name: Remove the symlink and target
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/grafana-alloy.env
+            - /var/lib/grafana-alloy-fixture.env
+
+    - name: "Case ga-missing-key — GC_API_TOKEN line dropped"
+      block:
+        - name: Stage an otherwise-complete credential file without the token
+          ansible.builtin.copy:
+            dest: /etc/grafana-alloy.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+
+        - name: Run grafana_alloy with an incomplete credential file
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+      rescue:
+        - name: Record ga-missing-key rejection (only if the grep report gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['secret-content'] }}"
+          when: ansible_failed_task.name is match('^Report which credential key')
+      always:
+        - name: Remove the partial credential fixture
+          ansible.builtin.file:
+            path: /etc/grafana-alloy.env
+            state: absent
+
+    - name: "Case ga-http-url — cleartext remote-write endpoint"
+      block:
+        - name: Stage a credential file with an http:// push URL
+          ansible.builtin.copy:
+            dest: /etc/grafana-alloy.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=http://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+              GC_API_TOKEN=molecule-test-token
+
+        - name: Run grafana_alloy with a non-https push URL
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+      rescue:
+        - name: Record ga-http-url rejection (only if the grep report gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['secret-content'] }}"
+          when: ansible_failed_task.name is match('^Report which credential key')
+      always:
+        - name: Remove the http-url credential fixture
+          ansible.builtin.file:
+            path: /etc/grafana-alloy.env
+            state: absent
+
+    - name: "Case ga-ratio — trace sampler keep-ratio above 1"
+      block:
+        - name: Run grafana_alloy with a malformed sampling ratio
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_trace_sampling_ratio: "0.5x"
+      rescue:
+        - name: Record ga-ratio rejection (only if the knob validator failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['pipeline-knobs'] }}"
+          when: ansible_failed_task.name is match('^Validate the pipeline knobs')
+
+    - name: "Case ga-root-user — Alloy cannot run as root"
+      block:
+        - name: Run disabled grafana_alloy with root as its service user
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            # The disabled path can delete a recognized installation's account.
+            decdn_grafana_cloud_enabled: false
+            grafana_alloy_user: root
+      rescue:
+        - name: Record ga-root-user rejection (only if the identity gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['alloy-root-user'] }}"
+          when: ansible_failed_task.name is match('^Require an unprivileged Alloy identity')
+
+    - name: "Case ga-root-group — Alloy cannot run with root group"
+      block:
+        - name: Run disabled grafana_alloy with numeric root as its service group
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: false
+            grafana_alloy_group: "0"
+      rescue:
+        - name: Record ga-root-group rejection (only if the identity gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['alloy-root-group'] }}"
+          when: ansible_failed_task.name is match('^Require an unprivileged Alloy identity')
+
+    - name: "Case ga-root-user-alias — named account resolves to UID 0"
+      block:
+        - name: Stage a root-UID alias account
+          ansible.builtin.user:
+            name: alloy-root-alias
+            uid: 0
+            group: root
+            non_unique: true
+            create_home: false
+            shell: /usr/sbin/nologin
+
+        - name: Run disabled grafana_alloy with the root-UID alias
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: false
+            grafana_alloy_user: alloy-root-alias
+      rescue:
+        - name: Record root-UID alias rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['alloy-root-user-alias'] }}"
+          when: ansible_failed_task.name is match('^Require an unprivileged Alloy identity')
+      # Do not remove this UID-0 fixture: in a container, userdel treats PID 1
+      # (root) as using every UID-0 alias and refuses deletion. Molecule destroys
+      # the entire test instance after this scenario, which safely removes it.
+
+    - name: "Case ga-root-group-alias — named group resolves to GID 0"
+      block:
+        - name: Stage a root-GID alias group
+          ansible.builtin.group:
+            name: alloy-root-group-alias
+            gid: 0
+            non_unique: true
+
+        - name: Run disabled grafana_alloy with the root-GID alias
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: false
+            grafana_alloy_group: alloy-root-group-alias
+      rescue:
+        - name: Record root-GID alias rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['alloy-root-group-alias'] }}"
+          when: ansible_failed_task.name is match('^Require an unprivileged Alloy identity')
+      # As with the UID-0 alias above, do not groupdel this fixture: GID 0 is
+      # root's primary group, so groupdel refuses the duplicate alias. Molecule
+      # destroys the whole validation-alloy container after the scenario.
+
+    - name: "Case ga-path-traversal — state directory escaping /var/lib"
+      block:
+        - name: Run grafana_alloy with a traversing state directory
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            # Passes a naive "^/var/lib/[A-Za-z0-9._/-]+$" prefix check, but
+            # resolves to /etc — which the disable path would delete outright.
+            grafana_alloy_state_dir: /var/lib/../../etc
+      rescue:
+        - name: Record ga-path-traversal rejection (only if the path gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
+          when: ansible_failed_task.name is match('^Constrain the managed Alloy paths')
+
+    - name: "Case ga-dot-segment — disabled teardown path contains a normalising dot"
+      block:
+        - name: Run disabled grafana_alloy with a dot segment in its state directory
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: false
+            grafana_alloy_state_dir: /var/lib/alloy/.
+      rescue:
+        - name: Record ga-dot-segment rejection (only if the path gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
+          when: ansible_failed_task.name is match('^Constrain the managed Alloy paths')
+
+    - name: "Case ga-nested-secret-path — credentials are not directly under /etc"
+      block:
+        - name: Stage a root-controlled nested credential directory
+          ansible.builtin.file:
+            path: /etc/alloy-credentials
+            state: directory
+            owner: root
+            group: root
+            mode: "0750"
+
+        - name: Stage a root-owned credential file inside the nested directory
+          ansible.builtin.copy:
+            dest: /etc/alloy-credentials/grafana-alloy.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+              GC_API_TOKEN=molecule-test-token
+
+        # The fixture is deliberately root-owned and 0750 — the credential must
+        # still be refused purely on path shape, because auditing only the
+        # immediate parent cannot rule out a writable grandparent swapping it.
+        - name: Run grafana_alloy against a nested credential path
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_secret_file: /etc/alloy-credentials/grafana-alloy.env
+      rescue:
+        - name: Record nested secret-path rejection (only if its gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['secret-path-nested'] }}"
+          when: ansible_failed_task.name is match('^Constrain the managed Alloy paths')
+      always:
+        - name: Remove the nested credential directory fixture
+          ansible.builtin.file:
+            path: /etc/alloy-credentials
+            state: absent
+
+
+    - name: "Case ga-config-outside-dir — rendered config outside the managed directory"
+      block:
+        - name: Run grafana_alloy with a config file outside its config directory
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_config_dir: /etc/alloy
+            grafana_alloy_config_file: /etc/somewhere-else/config.alloy
+      rescue:
+        - name: Record ga-config-outside-dir rejection (only if the containment gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
+          when: ansible_failed_task.name is match('^Require the rendered config to live inside')
+
+    # The provenance file is root-written, root-read and removed during teardown.
+    # It must be the fixed companion of the credential file, not an independently
+    # aimable path that can slurp/clobber/delete another file under /etc.
+    - name: "Case ga-provenance-path — checksum record is not beside the credential file"
+      block:
+        - name: Run grafana_alloy with an independently aimed provenance path
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_env_checksum_file: /etc/molecule-unrelated-root-file
+      rescue:
+        - name: Record ga-provenance-path rejection (only if the companion-path gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
+          when: ansible_failed_task.name is match('^Require the provenance record to sit beside')
+
+    - name: "Case ga-provenance-content — unrelated file occupies the record path"
+      block:
+        - name: Stage an unrelated root-only file at the provenance path
+          ansible.builtin.copy:
+            dest: /etc/grafana-alloy.env.sha256
+            owner: root
+            group: root
+            mode: "0600"
+            # A valid first NUL-delimited grep record followed by unrelated bytes:
+            # `grep -zq` accepts this unless validation full-matches the byte stream.
+            content: >-
+              {{ ('aG9zdCAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMD'
+                  ~ 'AwMDAwMDAwMDAwMDAwMDAwMDAwAHVucmVsYXRlZC1zZW5zaXRpdmUtY29udGVudAo=')
+                 | b64decode }}
+
+        - name: Run grafana_alloy with the unrelated provenance-path occupant
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            # kics-scan ignore-line (fake fixture token, not a committed secret)
+            grafana_alloy_api_token: molecule-test-token
+      rescue:
+        - name: Record ga-provenance-content rejection (only if shape validation failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['provenance-record'] }}"
+          when: ansible_failed_task.name is match('^Require an existing provenance record to have')
+      always:
+        - name: Remove the unrelated provenance-path occupant
+          ansible.builtin.file:
+            path: /etc/grafana-alloy.env.sha256
+            state: absent
+
+    - name: "Case ga-config-record-collision — teardown directory contains retained provenance"
+      block:
+        - name: Run disabled grafana_alloy with config_dir aimed at the provenance file
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: false
+            grafana_alloy_config_dir: /etc/grafana-alloy.env.sha256
+            grafana_alloy_config_file: /etc/grafana-alloy.env.sha256/config.alloy
+      rescue:
+        - name: Record ga-config-record-collision rejection
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['managed-paths'] }}"
+          when: ansible_failed_task.name is match('^Keep destructive directories away')
+
+    - name: "Case ga-collector — unknown node_exporter collector name"
+      block:
+        - name: Run grafana_alloy with a bogus host collector
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            # An unknown collector is NOT a startup crash — Alloy resolves the
+            # set by map lookup and silently ignores what it does not know, so a
+            # typo ships fewer metrics forever. Only the committed name
+            # inventory in the role's vars/ can catch it, and only here.
+            grafana_alloy_host_collectors: [cpu, diskstat]
+      rescue:
+        - name: Record ga-collector rejection (only if the collector validator failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['host-collectors'] }}"
+          when: ansible_failed_task.name is match('^Validate the node_exporter collector names')
+
+    - name: "Case ga-no-collectors — host metrics on with every collector list empty"
+      block:
+        - name: Run grafana_alloy with an empty collector set
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_host_collectors: []
+            grafana_alloy_host_extra_collectors: []
+      rescue:
+        - name: Record ga-no-collectors rejection (only if the non-empty gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['host-collectors'] }}"
+          when: ansible_failed_task.name is match('^Require a non-empty effective host collector set')
+
+    # An empty set_collectors does NOT mean "measure nothing" to Alloy: it reads
+    # as unset and re-enables the full ~45-collector default set. Vetoing every
+    # collector must therefore be refused, not rendered.
+    - name: "Case ga-disable-all — every collector vetoed by the disable list"
+      block:
+        - name: Run grafana_alloy with the whole collector set disabled
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_host_collectors: [cpu]
+            grafana_alloy_host_extra_collectors: [systemd]
+            grafana_alloy_host_disable_collectors: [cpu, systemd]
+      rescue:
+        - name: Record ga-disable-all rejection (only if the non-empty gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['host-collectors'] }}"
+          when: ansible_failed_task.name is match('^Require a non-empty effective host collector set')
+
+    - name: "Case ga-loki-http — cleartext Loki endpoint from inventory"
+      block:
+        - name: Run grafana_alloy with a non-https Loki URL
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_loki_url: http://logs-prod-xx.molecule.invalid/loki/api/v1/push
+      rescue:
+        - name: Record ga-loki-http rejection (only if the endpoint validator failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['endpoint-scheme'] }}"
+          when: ansible_failed_task.name is match('^Validate any inventory-provided Grafana Cloud endpoints')
+
+    - name: "Case ga-inventory-token — access token smuggled into inventory"
+      block:
+        # config.alloy is 0644 on the host, so a token reaching an inventory
+        # variable would be rendered world-readable — the one thing the whole
+        # host-provisioned credential design exists to prevent.
+        - name: Run grafana_alloy with a token in a non-secret variable
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_prom_username: glc_eyJvIjoiMTIzNDU2NyJ9
+      rescue:
+        - name: Record ga-inventory-token rejection (only if the token gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['inventory-token'] }}"
+          when: ansible_failed_task.name is match('^Refuse a Grafana Cloud token smuggled into inventory')
+
+    - name: "Case ga-inventory-sa-token — service-account token smuggled into inventory"
+      block:
+        # glsa_ tokens carry no '@' and pass the instance-ID charset, so the
+        # gate must key off the prefix rather than shape alone.
+        - name: Run grafana_alloy with a service-account token in a non-secret variable
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_loki_username: glsa_AbCdEf0123456789_0a1b2c3d
+      rescue:
+        - name: Record ga-inventory-sa-token rejection (only if the token gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['inventory-token'] }}"
+          when: ansible_failed_task.name is match('^Refuse a Grafana Cloud token smuggled into inventory')
+
+    - name: "Case ga-otlp-username-shape — malformed OTLP instance ID in inventory"
+      block:
+        # The OTLP gateway's username is the stack instance ID, not the
+        # Prometheus one, so it is its own variable — and must be covered by the
+        # same charset gate rather than silently reaching basic_auth.
+        - name: Run grafana_alloy with a whitespace-bearing OTLP instance ID
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_otlp_username: "2345678 # stack id"
+      rescue:
+        - name: Record ga-otlp-username-shape rejection (only if the ID validator failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['instance-id'] }}"
+          when: ansible_failed_task.name is match('^Validate any inventory-provided Grafana Cloud instance IDs')
+
+    - name: "Case ga-max-age — malformed journal catch-up window"
+      block:
+        - name: Run grafana_alloy with a bad max_age suffix
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_logs_max_age: 12hours
+      rescue:
+        - name: Record ga-max-age rejection (only if the knob validator failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['pipeline-knobs'] }}"
+          when: ansible_failed_task.name is match('^Validate the pipeline knobs')
+
+    - name: "Case ga-loki-key — logs enabled with neither Loki key nor variable"
+      block:
+        # The Loki pair is required ONLY when logs are on and inventory supplies
+        # nothing: this proves the conditional gate still fires when it should.
+        - name: Stage a credential file with no Loki keys
+          ansible.builtin.copy:
+            dest: /etc/grafana-alloy.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+              GC_API_TOKEN=molecule-test-token
+
+        - name: Run grafana_alloy with logs enabled and no Loki credentials
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_logs_enabled: true
+      rescue:
+        - name: Record ga-loki-key rejection (only if the grep report gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['secret-content'] }}"
+          when: ansible_failed_task.name is match('^Report which credential key')
+      always:
+        - name: Remove the Loki-less credential fixture
+          ansible.builtin.file:
+            path: /etc/grafana-alloy.env
+            state: absent
+
+    - name: "Case ga-otlp-username-env — malformed GC_OTLP_USERNAME on the host"
+      block:
+        # The key is optional, so nothing above requires it — but a present,
+        # malformed value wins the rendered coalesce() over the valid Prometheus
+        # fallback and 401s every span, so it gets its own present-then-shaped
+        # gate.
+        - name: Stage a credential file whose OTLP instance ID carries a comment
+          ansible.builtin.copy:
+            dest: /etc/grafana-alloy.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+              GC_OTLP_USERNAME=1830557 # stack id
+              GC_LOKI_URL=https://logs-prod-xx.molecule.invalid/loki/api/v1/push
+              GC_LOKI_USERNAME=999888778
+              GC_API_TOKEN=molecule-test-token
+
+        - name: Run grafana_alloy with a malformed host OTLP instance ID
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+      rescue:
+        - name: Record ga-otlp-username-env rejection (only if the OTLP ID gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['otlp-username-env'] }}"
+          when: ansible_failed_task.name is match('^Refuse a malformed host-provided OTLP instance ID')
+      always:
+        - name: Remove the malformed OTLP-username fixture
+          ansible.builtin.file:
+            path: /etc/grafana-alloy.env
+            state: absent
+
+    # The #39 relaxation lets the token ride inventory, but only as a bare,
+    # whitespace-free value — it becomes a single systemd EnvironmentFile line.
+    - name: "Case ga-token-var-shape — whitespace inside grafana_alloy_api_token"
+      block:
+        - name: Run grafana_alloy with a whitespace-carrying API token variable
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            # kics-scan ignore-line (fake fixture token, not a committed secret)
+            grafana_alloy_api_token: "glc_molecule spaced"
+      rescue:
+        - name: Record ga-token-var-shape rejection (only if the token-shape gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['token-shape'] }}"
+          when: ansible_failed_task.name is match('^Validate the shape of an inventory-provided API token')
+
+    # An existing host-authored env file with NO provenance is the upgrade state
+    # of every pre-record deployment. It must not be silently clobbered by an
+    # inventory token; unknown provenance requires the explicit opt-in knob.
+    - name: "Case ga-collision — inventory token aimed at an untracked host env file"
+      block:
+        - name: Stage a host-style credential fixture
+          ansible.builtin.copy:
+            dest: /etc/grafana-alloy.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+              GC_API_TOKEN=molecule-test-token
+
+        - name: Run grafana_alloy with an inventory token against the foreign fixture
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            # kics-scan ignore-line (fake fixture token, not a committed secret)
+            grafana_alloy_api_token: molecule-test-token
+      rescue:
+        - name: Record ga-collision rejection (only if the overwrite gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['token-collision'] }}"
+          when: ansible_failed_task.name is match('^Require confirmation to overwrite an env file')
+      always:
+        - name: Remove the collision fixtures
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/grafana-alloy.env
+            - /etc/grafana-alloy.env.sha256
+
+    # Python's `$` also matches just before a trailing newline, so the shape gate
+    # must anchor on \Z. A YAML block scalar (`grafana_alloy_api_token: |`) is the
+    # natural way to wrap a long token and appends exactly that newline; systemd
+    # would deliver it to the daemon as a literal \n and every push would 401
+    # behind a green deploy.
+    - name: "Case ga-token-newline — trailing newline in grafana_alloy_api_token"
+      block:
+        - name: Run grafana_alloy with a newline-terminated API token variable
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            # kics-scan ignore-line (fake fixture token, not a committed secret)
+            grafana_alloy_api_token: "glc_molecule_trailing\n"
+      rescue:
+        - name: Record ga-token-newline rejection (only if the token-shape gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['token-shape'] }}"
+          when: ansible_failed_task.name is match('^Validate the shape of an inventory-provided API token')
+
+    # The flag that authorises destroying an operator-provisioned credential file
+    # must not be reachable by YAML truthiness: "yes"/"on"/"1" would coerce to an
+    # authorisation nobody typed.
+    - name: "Case ga-overwrite-bool — quoted string for the overwrite opt-in"
+      block:
+        - name: Run grafana_alloy with a stringly-typed overwrite knob
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            # kics-scan ignore-line (fake fixture token, not a committed secret)
+            grafana_alloy_api_token: molecule-test-token
+            grafana_alloy_overwrite_host_file: "yes"
+      rescue:
+        - name: Record ga-overwrite-bool rejection (only if the knob-type gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['credential-knobs'] }}"
+          when: ansible_failed_task.name is match('^Validate the credential-path knobs')
+
+    # An inventory token makes the env file TOKEN-ONLY, so every other connection
+    # value must already come from inventory. Without this gate the role authors a
+    # file with nothing but the token, config.alloy resolves the missing endpoint
+    # to "" via sys.env, `alloy validate` passes, the unit starts, every assertion
+    # is green — and not one metric is ever shipped.
+    - name: "Case ga-token-no-endpoints — inventory token without the Prometheus endpoint"
+      block:
+        - name: Run grafana_alloy with a token but no inventory endpoints
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            # kics-scan ignore-line (fake fixture token, not a committed secret)
+            grafana_alloy_api_token: molecule-test-token
+      rescue:
+        - name: Record ga-token-no-endpoints rejection (only if the all-or-nothing gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['token-all-or-nothing'] }}"
+          when: ansible_failed_task.name is match('^Demand every non-token connection setting from inventory')
+
+    # Same gate, the conditional half: the Loki pair is only required while logs
+    # are enabled, and `not (…) or (…)` is exactly the shape that silently inverts.
+    - name: "Case ga-token-no-loki — inventory token with logs on but no Loki pair"
+      block:
+        - name: Run grafana_alloy with every endpoint but the Loki pair
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_logs_enabled: true
+            # kics-scan ignore-line (fake fixture token, not a committed secret)
+            grafana_alloy_api_token: molecule-test-token
+            grafana_alloy_prom_url: https://prometheus-prod-xx.molecule.invalid/api/prom/push
+            grafana_alloy_prom_username: "1234567"
+            grafana_alloy_otlp_endpoint: https://otlp-gateway-prod-xx.molecule.invalid/otlp
+      rescue:
+        - name: Record ga-token-no-loki rejection (only if the all-or-nothing gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['token-all-or-nothing'] }}"
+          when: ansible_failed_task.name is match('^Demand every non-token connection setting from inventory')
+
+    # The record's stat gate runs BEFORE the slurp that reads it onto the control
+    # machine. That ordering is the whole defence against a symlink planted at the
+    # record path pulling an arbitrary root-only file into controller memory — so
+    # it needs its own case, not just the content validator's.
+    - name: "Case ga-symlink-record — symlinked provenance record"
+      block:
+        - name: Stage a complete host-provisioned credential file
+          ansible.builtin.copy:
+            dest: /etc/grafana-alloy.env
+            owner: root
+            group: root
+            mode: "0600"
+            content: |
+              GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+              GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+              GC_PROM_USERNAME=999888777
+              GC_LOKI_URL=https://logs-prod-xx.molecule.invalid/loki/api/v1/push
+              GC_LOKI_USERNAME=7654321
+              GC_API_TOKEN=molecule-test-token
+
+        - name: Stage the record symlink target outside /etc
+          ansible.builtin.copy:
+            dest: /var/lib/grafana-alloy-record-fixture
+            owner: root
+            group: root
+            mode: "0600"
+            content: "host {{ '0' * 64 }}\n"
+
+        - name: Point the provenance-record path at the out-of-tree target
+          ansible.builtin.file:
+            src: /var/lib/grafana-alloy-record-fixture
+            dest: /etc/grafana-alloy.env.sha256
+            state: link
+            force: true
+
+        - name: Run grafana_alloy against a symlinked provenance record
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+      rescue:
+        - name: Record ga-symlink-record rejection (only if the record stat gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['provenance-record'] }}"
+          when: ansible_failed_task.name is match('^Require an existing provenance record to be a protected')
+      always:
+        - name: Remove the record symlink fixtures
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/grafana-alloy.env
+            - /etc/grafana-alloy.env.sha256
+            - /var/lib/grafana-alloy-record-fixture
+
+    - name: Confirm every bad value was rejected by the role's own validation
+      ansible.builtin.assert:
+        that:
+          # Keep duplicates: every case must contribute its own rejection. Deduping
+          # lets one broken sibling hide behind another case that uses the same gate.
+          - decdn_rejected | sort == _decdn_expected | sort
+        fail_msg: >-
+          grafana_alloy did not reject every bad value at its preflight gates.
+          Expected {{ _decdn_expected | sort }}, got {{ decdn_rejected | sort }} —
+          a missing tag means that bad value slipped past validation (it would reach
+          the daemon/crash-loop it at config load, or ship credentials insecurely).
+      vars:
+        _decdn_expected:
+          ["secret-file", "secret-file", "secret-path-nested", "secret-content",
+           "secret-content", "secret-content", "pipeline-knobs", "pipeline-knobs",
+           "alloy-root-user", "alloy-root-group",
+           "alloy-root-user-alias", "alloy-root-group-alias",
+           "host-collectors", "host-collectors", "host-collectors",
+           "endpoint-scheme", "inventory-token", "inventory-token", "instance-id",
+           "otlp-username-env", "token-shape", "token-shape", "token-collision",
+           "credential-knobs", "token-all-or-nothing", "token-all-or-nothing",
+           "provenance-record", "provenance-record",
+           "managed-paths", "managed-paths", "managed-paths", "managed-paths", "managed-paths"]

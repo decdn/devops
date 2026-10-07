@@ -8,9 +8,9 @@
 #
 # Needs network access to static.rust-lang.org. The fixture has no dependencies,
 # so it compiles in seconds; a real decdn/decdn build is minutes and is not run in
-# CI. The sponsord and sponsord_onramp roles' tasks/source.yml are exercised by the
-# last phase of ../sponsord-onramp/side_effect.yml; their validation asserts are in
-# the `validation` scenario.
+# CI. The sponsord and sponsord_onramp roles' tasks/source.yml are exercised by
+# ../sponsord-onramp-source; the input asserts are in ../validation and
+# ../validation-sponsord.
 driver:
   name: docker
 platforms:

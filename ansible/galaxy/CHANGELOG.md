@@ -34,7 +34,12 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `decdn_node`: the daemon binary's sha256 is recorded after the start
   (`decdn_bin_checksum_file`), and a mismatch restarts the daemon, so a binary
   installed by a run that failed before its restart handler ran is not left
-  unused behind a green deploy.
+  unused behind a green deploy. A host with no record yet has it initialised from
+  the binary in place before anything is installed, so the first run on this
+  version is covered without restarting an unchanged daemon.
+- Source mode never runs a source-built binary as root: the `--version` backstop
+  of all three roles runs it in a throwaway sandboxed unit (`DynamicUser`, no
+  network, read-only filesystem).
 
 - `sponsord`: opt-in treasury wallet generation (`sponsord_generate_treasury_wallet`,
   `sponsord_decdn_cli_bin_src`). With the keystore absent, the role runs `decdn
@@ -198,11 +203,13 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   inventory that relied on the old default must set `manual` explicitly. Upstream
   has cut no release yet, so `release` needs a pinned version and a mirror until
   it does; the version assert now names the alternatives.
-- `decdn_node`, `sponsord`, `sponsord_onramp`: the release version stamp is
-  removed before a release is extracted and written only after the `--version`
-  backstop passes (`decdn_node` used to write it before), so a release that
-  installs a broken binary is downloaded again next run, and pinning back to the
-  previous version reinstalls it.
+- `decdn_node`, `sponsord`, `sponsord_onramp`: every install method clears both
+  install stamps (release and source) before it replaces the first binary, and
+  writes its own only after the `--version` backstop passes (`decdn_node` used to
+  write the release stamp before the backstop), so an install interrupted half way
+  (a method switch included) is redone, a release that installs a broken binary is
+  downloaded again next run, and pinning back to the previous version reinstalls
+  it.
 
 - The role now tracks the config schema of decdn/decdn @ 3ebf5f17 (was
   d3bc7da7).
@@ -213,6 +220,11 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `decdn_otlp_endpoint` must be `http://host:port`, matching upstream: `https://`,
   a missing port, a path/query/fragment and userinfo are rejected at deploy time.
   OTLP export is always compiled in; no `--features otlp` build is needed.
+
+- `sponsord_onramp` checks for Caddy and curl with one `dpkg-query` instead of
+  `package_facts`, and skips the apt install (and its cache refresh) when both are
+  installed. A re-run no longer loads the whole package database or refreshes the apt
+  lists. It no longer sets `ansible_facts.packages`.
 
 ### Fixed
 

@@ -1,12 +1,15 @@
 ---
-# NEGATIVE-path scenario: proves the role's fail-loud tuning-knob validation
-# actually REJECTS bad values (AGENTS.md hard-rule 4). converge.yml runs the role
-# with an otherwise-valid config plus one bad knob per case and asserts each is
-# rejected — so a regression that weakens an assert fails this scenario. The role
-# aborts at its validation asserts (before any host mutation), so no service starts
-# here; there is no verify/idempotence step — the converge IS the assertion. Reuses
-# the default scenario's stub binary. `baseline` is not exercised (host-only — see
-# molecule/default/molecule.yml).
+# NEGATIVE-path scenario for decdn_node: proves the role's fail-loud tuning-knob
+# validation actually REJECTS bad values (AGENTS.md hard-rule 4). converge.yml runs
+# the role with an otherwise-valid config plus one bad knob per case and asserts
+# each is rejected — so a regression that weakens an assert fails this scenario.
+# The role aborts at its validation asserts (before any host mutation), so no
+# service starts here; there is no verify/idempotence step — the converge IS the
+# assertion. Reuses the default scenario's stub binary. `baseline` is not exercised
+# (host-only — see molecule/default/molecule.yml).
+# The other roles' broken-input matrices were split out of this scenario so the
+# three run in parallel, each in its own container: ../validation-alloy
+# (grafana_alloy) and ../validation-sponsord (sponsord and sponsord_onramp).
 # No `dependency` step (and no dependency config): molecule never vendored anything
 # here. Its roles invoker reads `role-file`, not `requirements-file`, and its
 # collections invoker resolves a relative path against the process CWD — so

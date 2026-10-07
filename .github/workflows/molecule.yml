@@ -1,19 +1,21 @@
 ---
 name: Molecule
 
-# Containerised converge + idempotence + verify for the decdn_node role.
-# Heavy (privileged systemd Docker container) — scoped to ansible/ changes and
-# blocking. Mark it a required status check in branch protection once proven.
-# This file is in `paths` alongside ansible/ so a change to the job itself (its cache
-# wiring, JOBS, the timeout) is exercised by the PR that makes it. cloud-init/ is in
-# `paths` because the `cloud-init` scenarios boot cloud-init/user-data*.yaml and run
-# cloud-init/bootstrap.sh.
+# Containerised converge + idempotence + verify of the roles, one runner per scenario.
+# Heavy (privileged systemd Docker containers) — scoped to ansible/ changes and
+# blocking. Mark the `molecule` check (the aggregate job below) required in branch
+# protection once proven; the per-scenario check names follow the scenario list.
+# This file is in `paths` alongside ansible/ so a change to the jobs themselves (their
+# cache wiring, the matrix, the timeouts) is exercised by the PR that makes it.
+# cloud-init/ is in `paths` because the `cloud-init` scenarios boot
+# cloud-init/user-data*.yaml and run cloud-init/bootstrap.sh, and scripts/molecule.sh
+# because every scenario runs through it (`make molecule`).
 on:
   pull_request:
-    paths: ['ansible/**', 'cloud-init/**', '.github/workflows/molecule.yml']
+    paths: ['ansible/**', 'cloud-init/**', 'scripts/molecule.sh', '.github/workflows/molecule.yml']
   push:
     branches: [main]
-    paths: ['ansible/**', 'cloud-init/**', '.github/workflows/molecule.yml']
+    paths: ['ansible/**', 'cloud-init/**', 'scripts/molecule.sh', '.github/workflows/molecule.yml']
 
 permissions:
   contents: read
@@ -23,20 +25,44 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  molecule:
+  # The matrix comes from the same discovery `make molecule` uses, so a new scenario
+  # directory is picked up with no edit here, and a directory without a molecule.yml
+  # fails the run instead of silently dropping out of it (scripts/molecule.sh).
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5          # seconds in practice
+    outputs:
+      scenarios: ${{ steps.list.outputs.scenarios }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: List the scenarios
+        id: list
+        working-directory: ansible
+        run: |
+          scenarios="$(make -s molecule-list)"
+          echo "$scenarios"
+          echo "scenarios=$scenarios" >>"$GITHUB_OUTPUT"
+
+  # One runner per scenario. They were one job at JOBS=3 on one 4-vCPU runner: ~31m
+  # for 14 scenarios, CPU-bound (per-task overhead roughly doubled under contention),
+  # with the slowest scenarios queued last. Now the wall clock is the slowest single
+  # scenario plus setup: ~10m for 18 scenarios (first run, PR #96), set by
+  # cloud-init-sponsord (~9m45s), then cloud-init (~8m) and sponsord-onramp (~7m30s);
+  # most others take 2-5m. Re-measure against the timeout when a scenario grows, and
+  # split one that approaches it along its side effects (see CONTRIBUTING.md).
+  scenario:
+    name: molecule (${{ matrix.scenario }})
+    needs: discover
     runs-on: ubuntu-latest      # Docker is preinstalled
-    # ~4m41s at JOBS=3 with 8 scenarios. os-matrix (3 containers) and lifecycle took the
-    # suite to ~10m at JOBS=3 on a local 16-thread box; re-measure from CI's first run.
-    # sponsord added a 12th scenario (2 containers, Debian 12 + Ubuntu 24.04), and
-    # sponsord-onramp a 13th (the same 2, plus an apt install of Caddy each), and
-    # cloud-init-sponsord a 14th (1 container: a cloud-init boot, pip, Galaxy, Caddy),
-    # and source-build a 15th (1 container: rustup and a Rust toolchain download plus
-    # several fixture builds); sponsord-onramp also builds its fixture on both
-    # containers. Re-measure against this bound after the first CI run.
     # A bound, not a target: without one a wedged privileged systemd container burns
     # the 360-minute default, and with cancel-in-progress above, some branch-protection
     # setups read the resulting cancelled check as "not failed" rather than as a failure.
-    timeout-minutes: 45
+    timeout-minutes: 25
+    strategy:
+      # Every scenario always reports: one failure must not hide another's.
+      fail-fast: false
+      matrix:
+        scenario: ${{ fromJSON(needs.discover.outputs.scenarios) }}
     defaults:
       run:
         working-directory: ansible
@@ -66,26 +92,41 @@ jobs:
           path: ansible/collections
           key: galaxy-${{ runner.os }}-${{ hashFiles('ansible/requirements.yml') }}
       - name: molecule test
-        # `make molecule` runs every scenario under ansible/molecule/ and fans them out
-        # in parallel; ansible/Makefile documents the set and the fail-loud guards.
-        #
-        # There is deliberately no separate `make deps` step: the molecule targets take
-        # `deps` as a prerequisite, so a standalone one would resolve and install the
-        # Galaxy requirements a second time every run — a second chance to trip over a
-        # flaky galaxy.ansible.com, for no added coverage. The cache above wraps that
-        # Make-owned invocation instead.
-        #
-        # JOBS is capped at 3 rather than the default (one job per scenario): every
-        # scenario is a privileged systemd container, and they share this
-        # runner's cores and cgroup hierarchy. If this job turns flaky, drop to JOBS=1
-        # or swap in `make molecule-serial` — the latter also serialises the output.
-        run: make molecule JOBS=3
+        # There is deliberately no separate `make deps` step: `make molecule` runs deps
+        # itself, so a standalone one would resolve and install the Galaxy requirements
+        # a second time every run — a second chance to trip over a flaky
+        # galaxy.ansible.com, for no added coverage. The cache above wraps that
+        # Make-owned invocation instead. The name goes through env, not into the
+        # script text: it comes from a directory name in the PR.
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        run: make molecule SCENARIOS="$SCENARIO"
       # A step `if:` without a status-check function implies success(), so this is
       # skipped when anything above failed — including a genuinely failing scenario,
-      # which leaves the cache cold for that run. Conservative on purpose: it is the
-      # same guard that keeps a part-way Galaxy install out of the cache.
+      # which leaves the cache cold for that leg. Conservative on purpose: it is the
+      # same guard that keeps a part-way Galaxy install out of the cache. On a cold
+      # key every passing leg races to save; the losers log a harmless "Cache already
+      # exists", as ci.yml's jobs that share this key do.
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: steps.galaxy-cache.outputs.cache-hit != 'true'
         with:
           path: ansible/collections
           key: galaxy-${{ runner.os }}-${{ hashFiles('ansible/requirements.yml') }}
+
+  # The one stable check name for branch protection: a matrix leg's name changes with
+  # the scenario list. `always()` so it reports even when discovery or a leg failed
+  # (skipped dependants otherwise leave the check skipped, which reads as passing),
+  # and it passes only when every leg succeeded.
+  molecule:
+    needs: [discover, scenario]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5          # seconds in practice
+    steps:
+      - name: Require every scenario to pass
+        env:
+          DISCOVER: ${{ needs.discover.result }}
+          SCENARIOS: ${{ needs.scenario.result }}
+        run: |
+          echo "discover: $DISCOVER, scenarios: $SCENARIOS"
+          test "$DISCOVER" = success && test "$SCENARIOS" = success

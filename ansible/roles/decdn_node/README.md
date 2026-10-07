@@ -670,7 +670,17 @@ above.)
 A binary installed by a run that then failed before its restart handler ran is
 still restarted onto: the role records the daemon binary's sha256 after the start
 (`decdn_bin_checksum_file`) and restarts the daemon when the installed binary no
-longer matches it.
+longer matches it. On a host that has no record yet (its first run on this role
+version), the record is initialised from the binary in place before anything is
+installed, so that first run is covered too, and an unchanged daemon is not
+restarted.
+
+Every method clears both install stamps before it replaces the first binary, and
+records its own only after the `--version` backstop passes, so an install
+interrupted half way (a method switch included) is always redone. In `source` mode
+the backstop runs the freshly built binaries in a throwaway sandboxed unit
+(`systemd-run` with `DynamicUser`, no network, a read-only filesystem), never as
+root.
 
 After switching away from `source` for good, `/var/lib/decdn-build` and the
 `decdn-build` user stay behind (shared with the `sponsord` roles). Once no role on

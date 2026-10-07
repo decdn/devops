@@ -250,10 +250,13 @@
         # Dropped before anything is installed, so a run that fails from here on
         # leaves no stamp, and the next run (even one rolled back to the previous
         # commit) rebuilds and reinstalls instead of trusting it.
-        - name: Clear the installed-source stamp before installing
+        - name: Clear both install stamps before installing
           ansible.builtin.file:
-            path: /usr/local/lib/sponsord/installed-source
+            path: "{{ item }}"
             state: absent
+          loop:
+            - /usr/local/lib/sponsord/installed-version
+            - /usr/local/lib/sponsord/installed-source
 
         # Root reads the file in its own clone, without following a symlink the
         # repo might carry there.
@@ -442,11 +445,3 @@
               sponsord_source_build_timeout ({{ sponsord_source_build_timeout }}s)
               is too short. Check free disk under {{ decdn_build_home }} too;
               the work directory {{ sponsord_work }} is left for inspection.
-
-# Outside the check-mode skip, so `make check` shows a release -> source switch
-# dropping it. A leftover release stamp would make a later release deploy of the
-# SAME version skip the download over these source-built binaries.
-- name: Clear the release version stamp in source mode
-  ansible.builtin.file:
-    path: /usr/local/lib/sponsord/installed-version
-    state: absent

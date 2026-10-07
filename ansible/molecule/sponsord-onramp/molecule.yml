@@ -13,16 +13,19 @@
 #   idempotence  an unchanged host must not restart anything.
 #   side_effect  rotate the Turnstile secret out of band -> the next converge must
 #                restart the onramp (and only it); make the onramp refuse to start
-#                -> the /healthz gate must FAIL the converge; strip the role's
-#                marker from the Caddyfile -> the role must refuse to replace it
-#                until sponsord_onramp_caddy_overwrite_config is set.
+#                -> the /healthz gate must FAIL the converge; a custom gate page;
+#                the Turnstile secret from inventory.
 #   verify       files, modes, unit hardening, credentials, listeners, the whole
 #                https chain through Caddy, the client address Caddy passes on.
 #
+# The proxy side effects (proxy "none", ACME, a Caddyfile the role did not write)
+# run in ../sponsord-onramp-caddy on the same converge, so the two run side by side.
+# Its inventory below must stay identical to this one (`make test-scripts` checks).
+#
 # `baseline` is skipped (real-host-only — see ../default/molecule.yml), so the
 # tcp/80 + tcp/443 holes are covered by tests/firewall-holes instead. Release
-# mode is covered for the sponsord role (../sponsord), whose install tasks this
-# role mirrors. The broken-input matrix lives in ../validation.
+# mode is covered for the sponsord role (../sponsord-install), whose install tasks this
+# role mirrors. The broken-input matrix lives in ../validation-sponsord.
 driver:
   name: docker
 platforms:
@@ -77,7 +80,8 @@ provisioner:
         grafana_alloy_loki_url: https://logs-prod-xx.molecule.invalid/loki/api/v1/push
       sponsord_onramp_hosts:
         sponsord_onramp_install_method: manual
-        sponsord_onramp_manual_bin_src: "${MOLECULE_SCENARIO_DIRECTORY}/files/sponsord-onramp-stub"
+        sponsord_onramp_manual_bin_src: >-
+          ${MOLECULE_PROJECT_DIRECTORY}/molecule/sponsord-onramp/files/sponsord-onramp-stub
         sponsord_onramp_version: "0.0.0-molecule-stub"
         # sponsord_onramp_network follows sponsord_network (arbitrum-sepolia).
         sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc

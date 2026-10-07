@@ -1,7 +1,7 @@
 ---
 # Inventory-path exercise of the #39 relaxation: grafana_alloy_api_token set in
 # (git-ignored) inventory instead of a host-provisioned /etc/grafana-alloy.env.
-# Positive path only — the broken-input matrix lives in ../validation; the
+# Positive path only — the broken-input matrix lives in ../validation-alloy; the
 # host-provisioned positive path lives in ../grafana-cloud. No prepare-stage env
 # file AT ALL here by design: the absence is what proves preflight's existence
 # gate honours the token variable, and that the role authors the file itself.

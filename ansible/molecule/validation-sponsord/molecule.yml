@@ -1,0 +1,42 @@
+---
+# NEGATIVE-path scenario for sponsord and sponsord_onramp: proves both roles'
+# fail-loud input validation actually REJECTS bad values (AGENTS.md hard-rule 4).
+# converge.yml runs each role with an otherwise-valid config plus one bad input per
+# case and asserts each is rejected at the assert it targets — so a regression that
+# weakens an assert fails this scenario. Every case stops before the binary is
+# installed, so no service starts here; there is no verify/idempotence step — the
+# converge IS the assertion. Reuses the stub binaries of ../sponsord and
+# ../sponsord-onramp, whose positive paths those scenarios cover.
+# Split by role from ../validation (decdn_node) so the matrices run in parallel,
+# each in its own container; ../validation-alloy covers grafana_alloy.
+# No `dependency` step: see ../validation/molecule.yml. The collections come from
+# `make deps` -> ansible/collections, surfaced by ANSIBLE_COLLECTIONS_PATH below.
+driver:
+  name: docker
+platforms:
+  - name: sponsord-validation
+    # Same digest-pinned image as the other scenarios (repo convention). Re-resolve
+    # all of them together to bump.
+    image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # Drops a `docker exec` round trip per remote task — see ../validation/molecule.yml.
+    ANSIBLE_PIPELINING: "true"
+scenario:
+  test_sequence:
+    # Leading `destroy` so an orphaned container is never reused — see
+    # ../default/molecule.yml. No prepare playbook: every fixture is staged (and
+    # removed) by the case that needs it.
+    - destroy
+    - create
+    - converge
+    - destroy

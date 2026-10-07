@@ -1,12 +1,13 @@
 # Convenience targets for the deCDN Ansible project.
 # Always run from the ansible/ directory.
-.PHONY: deps lint check deploy check-sponsord deploy-sponsord backup decommission molecule molecule-serial molecule-fanout molecule-all build galaxy-check
+.PHONY: deps lint check deploy check-sponsord deploy-sponsord backup decommission molecule molecule-serial molecule-list build galaxy-check
 SHELL := /bin/bash
 
 # Install the required Galaxy collections (>= constraints in requirements.yml)
-# into ./collections (git-ignored).
+# into ./collections (git-ignored). Safe beside a running molecule suite: it refuses
+# to rewrite the tree under one (see scripts/molecule.sh).
 deps:
-	ansible-galaxy collection install -r requirements.yml -p collections
+	@$(molecule_env) ../scripts/molecule.sh deps
 
 # Static analysis: YAML style + Ansible best-practice linting.
 lint:
@@ -115,100 +116,68 @@ decommission:
 # Containerised converge + idempotence + verify of the roles against stub daemons
 # (needs Docker; privileged systemd containers). See molecule/.
 # Scenarios: default (rendered values + idempotence), schema (config key-set drift
-# against the upstream field list), validation (bad knobs, every role, must be
-# rejected by their own asserts), generate-keystore (opt-in host-side wallet),
-# host-env (host-provisioned /etc/decdn/decdn.env), slow-readiness (advisory
+# against the upstream field list), validation, validation-alloy and
+# validation-sponsord (bad knobs, every role, must be rejected by their own asserts;
+# split by role so they run side by side), generate-keystore (opt-in host-side
+# wallet), host-env (host-provisioned /etc/decdn/decdn.env), slow-readiness (advisory
 # /metrics probe timeout), grafana-cloud and grafana-cloud-token (opt-in Grafana
 # Cloud observability, host-provisioned vs inventory token), os-matrix (default's
 # plays on Debian 13, Ubuntu 24.04 and 26.04), lifecycle (network profile,
-# backup + decommission), sponsord (the sponsord role on a host with no node,
-# through playbooks/sponsord.yml, on Debian 12 and Ubuntu 24.04) and sponsord-onramp
-# (the onramp beside its daemon, behind the real distro Caddy). The glob below is the
-# authority; this list is a guide.
+# backup + decommission), sponsord and sponsord-install (the sponsord role on a host
+# with no node, through playbooks/sponsord.yml, on Debian 12 and Ubuntu 24.04; the
+# install-method and wallet side effects run in sponsord-install), sponsord-onramp
+# and sponsord-onramp-caddy (the onramp beside its daemon, behind the real distro
+# Caddy; the proxy side effects run in sponsord-onramp-caddy), sponsord-onramp-source
+# (that converge, then both sponsord roles built from source), source-build (the
+# node built from source on the host: sandbox, stamps, rollback), and cloud-init and
+# cloud-init-sponsord (the cloud-init/ templates, booted for real). The glob in
+# scripts/molecule.sh is the authority; this list is a guide.
+#
+#   make molecule                               every scenario, in parallel
+#   make molecule SCENARIOS='sponsord schema'   a subset
+#   make molecule JOBS=2                        narrower fan-out on a small machine
+#   make molecule-serial                        one at a time, stops at the first failure
+#   make molecule-list                          the selection as JSON (CI's matrix)
 #
 # The scenarios run concurrently: distinct container names, no published host ports,
 # per-scenario ephemeral dirs, and what they share on the control machine (the
-# vendored collections, roles/, the stub under default/files/) they only read.
+# vendored collections, roles/, the stubs under */files/) they only read.
 # 595s -> 151s on a 16-core box. They DO share one Docker daemon and the host cgroup
-# hierarchy — every platform is a privileged systemd container — which is why CI caps
-# JOBS. Output interleaves, hence the [scenario] prefix; `molecule-serial` is the
-# escape hatch when a failure needs reading in order. Override the fan-out width with
-# e.g. `make molecule JOBS=2` on a small machine.
+# hierarchy (every platform is a privileged systemd container), which is why CI gives
+# each scenario its own runner (.github/workflows/molecule.yml). Output interleaves,
+# hence the [scenario] prefix; `molecule-serial` is the escape hatch when a failure
+# needs reading in order.
 #
 # Molecule's own --workers is not usable here: it refuses to run outside collection
 # mode ("--workers > 1 is only supported in collection mode (galaxy.yml required)"),
 # and this project deliberately has no galaxy.yml at its root — that would make
 # ansible-lint reinterpret the deploy project as a collection (see galaxy/README.md).
 #
-# Fail loud (hard rule 4), in three places, because a test harness that passes when it
-# did not run is worse than a slow one:
-#   - the guard below refuses an empty or truncated scenario set. Discovery moved from
-#     molecule to a glob, and a glob that matches nothing (wrong cwd, renamed layout)
-#     would otherwise run zero scenarios and exit 0 — a green build that tested nothing.
-#   - pipefail stops the [scenario] prefixing pipe from masking molecule's status, and
-#     each scenario announces its own failure by name (the bare xargs message does not).
-#   - xargs then exits non-zero. The `|| exit 1` in the wrapper normalises every
-#     scenario failure to 1, which is what keeps xargs off its own abort-on-255 path —
-#     that one stops launching queued scenarios, so a single unlucky exit code would
-#     otherwise cut the suite short. So: 123 when a scenario failed, 125 if one was
-#     killed by a signal, and every scenario always gets to run.
+# Fail-loud discovery, the per-scenario locks (two agents can run disjoint scenarios
+# at once, never the same one) and the lock that keeps deps from rewriting
+# collections/ under a running scenario live in scripts/molecule.sh, with the
+# reasoning; tests/scripts-test.sh pins them.
 #
-# One suite at a time per host. Overlapping runs are not isolated from each other:
-# container names are fixed per scenario on the one Docker daemon (so this covers
-# other checkouts and worktrees too), each scenario starts by destroying its
-# container, and lifecycle/cloud-init stage files in molecule's ephemeral dir,
-# which is keyed on scenario, not run. So `molecule` and `molecule-serial` take a
-# host-wide lock and a second run refuses to start (exit 75) instead of
-# corrupting the first. `deps` runs under the lock too: it rewrites collections/,
-# which a running suite reads. `flock -o` holds the lock in flock itself, not in
-# anything molecule leaves running. molecule-fanout and molecule-all are the
-# unlocked bodies; call the locked targets, not them.
-#
-# The lock is a DIRECTORY in /tmp, shared by every user of the host (users of one
-# Docker daemon collide just the same). Not $XDG_RUNTIME_DIR, which is per user,
-# and not a regular file: with fs.protected_regular (Ubuntu/Debian default) another
-# user cannot open(O_CREAT) a file someone else created in sticky /tmp, so the
-# second user would fail even when no suite is running. Directories are exempt,
-# and flock(1) falls back to a read-only open on one, so 0755 is enough.
-MOLECULE_LOCK ?= /tmp/decdn-devops-molecule.lock
-define molecule_locked
-@command -v flock >/dev/null || { \
-  echo "make $@ needs util-linux's flock on PATH"; exit 1; }
-@test -e '$(MOLECULE_LOCK)' || mkdir -m 0755 '$(MOLECULE_LOCK)' 2>/dev/null || test -e '$(MOLECULE_LOCK)' || { \
-  echo "cannot create the molecule lock directory $(MOLECULE_LOCK)"; exit 1; }
-@flock -n -o -E 75 '$(MOLECULE_LOCK)' $(1) || { rc=$$?; \
-  test $$rc -ne 75 || echo "another molecule suite holds $(MOLECULE_LOCK) — wait for it to finish (overlapping runs share containers)"; \
-  exit $$rc; }
-endef
-
-SCENARIOS := $(notdir $(patsubst %/,%,$(dir $(wildcard molecule/*/molecule.yml))))
-SCENARIO_DIRS := $(notdir $(patsubst %/,%,$(wildcard molecule/*/)))
-JOBS ?= $(words $(SCENARIOS))
+# SLOW_FIRST is the start order of the heavy scenarios, longest first as measured in
+# CI; the rest follow by name. A name here that is not a scenario fails the run, so a
+# rename cannot leave it silently stale.
+SCENARIOS ?= all
+JOBS ?=
+SLOW_FIRST ?= cloud-init-sponsord cloud-init sponsord-onramp validation \
+	validation-sponsord sponsord-onramp-caddy sponsord-install sponsord \
+	validation-alloy os-matrix grafana-cloud
+MOLECULE_LOCK_PREFIX ?= /tmp/decdn-devops-molecule
+molecule_env = SCENARIOS='$(SCENARIOS)' JOBS='$(JOBS)' SLOW_FIRST='$(SLOW_FIRST)' \
+	MOLECULE_LOCK_PREFIX='$(MOLECULE_LOCK_PREFIX)'
 
 molecule:
-	@test -n "$(strip $(SCENARIOS))" && test "$(strip $(SCENARIOS))" = "$(strip $(SCENARIO_DIRS))" || { \
-	  echo "scenario discovery failed: molecule.yml in [$(SCENARIOS)] but scenario dirs are [$(SCENARIO_DIRS)]"; \
-	  echo "refusing to run a silently-truncated suite (this target must run from ansible/)"; exit 1; }
-	@case '$(JOBS)' in ''|*[!0-9]*) \
-	  echo "JOBS must be a positive integer (got '$(JOBS)')"; exit 1 ;; esac
-	@test "$$((10#$(JOBS)))" -gt 0 || { \
-	  echo "JOBS must be a positive integer (got '$(JOBS)'): any all-zero value — 0, 00, 000 —"; \
-	  echo "reaches xargs as -P 0, which means UNLIMITED concurrency, not none"; exit 1; }
-	$(call molecule_locked,$(MAKE) --no-print-directory molecule-fanout JOBS='$(JOBS)')
+	@$(molecule_env) ../scripts/molecule.sh parallel
 
-molecule-fanout: deps
-	@printf '%s\n' $(SCENARIOS) | xargs -P $(JOBS) -I{} \
-		bash -c 'set -euo pipefail; molecule test -s {} --no-command-borders 2>&1 | sed -u "s/^/[{}] /" \
-		  || { echo "[{}] SCENARIO FAILED"; exit 1; }'
-
-# The same suite, one scenario at a time (molecule's own --all). It stops at the FIRST
-# failing scenario (--continue-on-failure defaults off), so it reports less than the
-# parallel target — but readably, which is the point.
 molecule-serial:
-	$(call molecule_locked,$(MAKE) --no-print-directory molecule-all)
+	@$(molecule_env) ../scripts/molecule.sh serial
 
-molecule-all: deps
-	molecule test --all
+molecule-list:
+	@$(molecule_env) ../scripts/molecule.sh list
 
 # --- Galaxy collection (decdn.node) ------------------------------------------
 # Stage baseline + decdn_node + grafana_alloy + sponsord + sponsord_onramp into a clean collection tree and

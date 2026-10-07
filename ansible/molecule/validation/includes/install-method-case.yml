@@ -1,9 +1,9 @@
 ---
-# One install-method case for converge.yml (looped over _im_case: role, tag, task,
-# and the method/ref/repo/jobs/timeout to pass). An ACCEPT case for an earlier
-# assert names a later one as its task and breaks only that later input. Runs the role with that input and records
-# the tag only if the role failed at _im_case.task. The three role includes differ
-# only in their variable prefix; `when` picks the one the case names.
+# One install-method case for converge.yml (looped over _im_case: tag, task, and the
+# method/ref/repo/jobs/timeout to pass). Runs decdn_node with that input and records
+# the tag only if the role failed at _im_case.task. An ACCEPT case for an earlier
+# assert names a later one as its task and breaks only that later input. The
+# sponsord roles' twin is ../../validation-sponsord/includes/install-method-case.yml.
 - name: "Install-method case {{ _im_case.tag }}"
   block:
     - name: Run decdn_node with the install-method case
@@ -15,29 +15,6 @@
         decdn_node_source_repo: "{{ _im_case.repo | default('https://example.invalid/decdn.git') }}"
         decdn_node_source_build_jobs: "{{ _im_case.jobs | default('') }}"
         decdn_node_source_build_timeout: "{{ _im_case.timeout | default(7200) }}"
-      when: _im_case.role == 'decdn_node'
-
-    - name: Run sponsord with the install-method case
-      ansible.builtin.include_role:
-        name: sponsord
-      vars:
-        sponsord_install_method: "{{ _im_case.method }}"
-        sponsord_source_ref: "{{ _im_case.ref | default('main') }}"
-        sponsord_source_repo: "{{ _im_case.repo | default('https://example.invalid/sponsord.git') }}"
-        sponsord_source_build_jobs: "{{ _im_case.jobs | default('') }}"
-        sponsord_source_build_timeout: "{{ _im_case.timeout | default(7200) }}"
-      when: _im_case.role == 'sponsord'
-
-    - name: Run sponsord_onramp with the install-method case
-      ansible.builtin.include_role:
-        name: sponsord_onramp
-      vars:
-        sponsord_onramp_install_method: "{{ _im_case.method }}"
-        sponsord_onramp_source_ref: "{{ _im_case.ref | default('main') }}"
-        sponsord_onramp_source_repo: "{{ _im_case.repo | default('https://example.invalid/sponsord.git') }}"
-        sponsord_onramp_source_build_jobs: "{{ _im_case.jobs | default('') }}"
-        sponsord_onramp_source_build_timeout: "{{ _im_case.timeout | default(7200) }}"
-      when: _im_case.role == 'sponsord_onramp'
   rescue:
     - name: Record the rejection (only if its assert failed) of {{ _im_case.tag }}
       ansible.builtin.set_fact:

@@ -6,7 +6,8 @@
 #   "source": clone sponsord_onramp_source_repo at sponsord_onramp_source_ref on the host and
 #     cargo-build it as an unprivileged user (tasks/source.yml).
 #   "manual": copy a locally-built binary from the control machine.
-# Each method clears the other methods' stamps, so switching back reinstalls.
+# Every method clears BOTH stamps before it replaces the binary, so an interrupted
+# install (a switch included) leaves no stamp vouching for it.
 # The verification steps mirror roles/decdn_node/tasks/install.yml, which carries
 # the full rationale for each (status-parsed gpg, exact manifest entry, private
 # staging dir kept on failure).
@@ -161,10 +162,13 @@
         # Dropped before extracting, so a release that then fails the version
         # check leaves no stamp and the next run (even one pinned back to the
         # previous version) downloads again.
-        - name: Clear the installed-version stamp before installing
+        - name: Clear both install stamps before installing
           ansible.builtin.file:
-            path: /usr/local/lib/sponsord-onramp/installed-version
+            path: "{{ item }}"
             state: absent
+          loop:
+            - /usr/local/lib/sponsord-onramp/installed-version
+            - /usr/local/lib/sponsord-onramp/installed-source
 
         - name: Extract the binary into /usr/local/bin
           ansible.builtin.unarchive:
@@ -196,11 +200,6 @@
             - not (sponsord_onramp_sig_check.failed | default(false)
                    or sponsord_onramp_sum_check.failed | default(false))
 
-    - name: Clear the source build stamp in release mode
-      ansible.builtin.file:
-        path: /usr/local/lib/sponsord-onramp/installed-source
-        state: absent
-
 - name: Build and install from source on the host
   ansible.builtin.import_tasks: source.yml
   when: sponsord_onramp_install_method == "source"
@@ -208,6 +207,16 @@
 - name: Install a locally-built binary from the control machine
   when: sponsord_onramp_install_method == "manual"
   block:
+    # Before the copy, so an interrupted manual install leaves neither stamp
+    # vouching for it.
+    - name: Clear both install stamps before copying
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/local/lib/sponsord-onramp/installed-version
+        - /usr/local/lib/sponsord-onramp/installed-source
+
     - name: Copy the sponsord-onramp binary from the control machine
       ansible.builtin.copy:
         src: "{{ _sponsord_onramp_bin_src }}"
@@ -217,22 +226,23 @@
         mode: "0755"
       notify: Restart sponsord-onramp
 
-    # A leftover stamp would make a later release (or source) deploy of the SAME
-    # version (or commit) skip the download (or build), keeping this manual binary.
-    - name: Clear the release and source stamps in manual mode
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /usr/local/lib/sponsord-onramp/installed-version
-        - /usr/local/lib/sponsord-onramp/installed-source
-
 # Runs every converge, so a binary that drifted from the pin is caught. With
 # sponsord_onramp_version empty (the usual source/manual case) it degrades to a liveness check.
 # An exact match on clap's `sponsord-onramp <version>` line, so a 0.1.0 pin does not
 # accept 10.1.0 or 0.1.0-rc.1.
+# In source mode the binary is the output of untrusted build scripts, so it runs in
+# a throwaway sandboxed unit (ephemeral DynamicUser, no network, read-only
+# filesystem), never as root; see roles/decdn_node/tasks/install.yml.
 - name: Run the installed sponsord-onramp --version (version backstop)
-  ansible.builtin.command: "{{ sponsord_onramp_bin }} --version"
+  ansible.builtin.command:
+    argv: >-
+      {{ (['systemd-run', '--wait', '--pipe', '--collect', '--quiet',
+            '--property=DynamicUser=yes', '--property=ProtectSystem=strict',
+            '--property=ProtectHome=yes', '--property=PrivateTmp=yes',
+            '--property=PrivateDevices=yes', '--property=PrivateNetwork=yes',
+            '--property=NoNewPrivileges=yes', '--property=RuntimeMaxSec=60', '--']
+           if sponsord_onramp_install_method == 'source' else [])
+          + [sponsord_onramp_bin, '--version'] }}
   register: sponsord_onramp_installed_version
   changed_when: false
   failed_when: false

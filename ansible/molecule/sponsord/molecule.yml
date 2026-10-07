@@ -11,11 +11,16 @@
 #   idempotence  an unchanged host must not restart anything.
 #   side_effect  rotate the treasury password out of band -> the next converge
 #                must restart; make the daemon refuse to start -> the /healthz
-#                gate must FAIL the converge; then put it back.
+#                gate must FAIL the converge; then put it back; secret.env's
+#                provenance guards.
 #   verify       files, modes, unit hardening, credentials, listener, Alloy config.
 #
+# Release mode and treasury wallet generation run in ../sponsord-install on the same
+# converge, so the two run side by side. Its inventory below must stay identical to
+# this one (`make test-scripts` checks).
+#
 # `baseline` is skipped (real-host-only — see ../default/molecule.yml). The
-# broken-input matrix for this role lives in ../validation.
+# broken-input matrix for this role lives in ../validation-sponsord.
 driver:
   name: docker
 platforms:
@@ -60,7 +65,7 @@ provisioner:
       # import_playbook, which takes no vars of its own.
       sponsord_hosts:
         sponsord_install_method: manual
-        sponsord_manual_bin_src: "${MOLECULE_SCENARIO_DIRECTORY}/files/sponsord-stub"
+        sponsord_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/sponsord/files/sponsord-stub"
         sponsord_version: "0.0.0-molecule-stub"
         sponsord_network: arbitrum-sepolia
         sponsord_pool_id: "0x00000000000000000000000000000000000000000000000000000000000000aa"

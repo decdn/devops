@@ -199,12 +199,15 @@ collector; its access logs are not shipped.
     cannot choose the address the onramp sees;
   - that a Turnstile rotation restarts the onramp and not the daemon;
   - that the `/healthz` gate fails the deploy when the onramp will not start;
-  - the refusal of a foreign Caddyfile, and the confirmed takeover.
-- `molecule/validation` holds the negative cases.
+  - a custom gate page, and the Turnstile secret from inventory.
+- `molecule/sponsord-onramp-caddy` runs beside it on the same converge. It checks
+  proxy `none`, ACME mode, a broken upstream behind Caddy, the refusal of a foreign
+  Caddyfile, and the confirmed takeover.
+- `molecule/validation-sponsord` holds the negative cases.
 - `tests/firewall-holes` (`make test-scripts`) pins the tcp/80 and tcp/443 holes.
 - `tests/alloy-config` (`make lint-alloy`) runs the onramp's log lines through the
   real Alloy.
 - `molecule/cloud-init-sponsord` boots `cloud-init/user-data-sponsord.yaml`, which
   installs both services in release mode from a locally signed mirror, and checks the
   https chain through Caddy. It is the only test of this role's release mode, whose
-  tasks mirror the `sponsord` role's (`molecule/sponsord` tests those in more depth).
+  tasks mirror the `sponsord` role's (`molecule/sponsord-install` tests those in more depth).
