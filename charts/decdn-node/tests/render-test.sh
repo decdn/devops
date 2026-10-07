@@ -261,9 +261,11 @@ if name == "ci-values.yaml":
         check(d["metadata"]["labels"].get("grafana_dashboard") == "1", "dashboard sidecar label")
         for k, v in d["data"].items():
             uid = json.loads(v).get("uid")
-            check(isinstance(uid, str) and 0 < len(uid) <= 40, f"{k}: uid {uid!r} is not a 1-40 character string")
-            uids.append(uid)
-    check(len(uids) == len(set(uids)), f"duplicate dashboard uids: {sorted(map(str, uids))}")
+            if isinstance(uid, str) and 0 < len(uid) <= 40:
+                uids.append(uid)
+            else:
+                check(False, f"{k}: uid {uid!r} is not a 1-40 character string")
+    check(len(uids) == len(set(uids)), f"duplicate dashboard uids: {sorted(uids)}")
 else:
     check(not [d for d in docs if d["kind"] == "PrometheusRule"], "PrometheusRule rendered while disabled")
     check(not [d for d in docs if d["kind"] == "ConfigMap"

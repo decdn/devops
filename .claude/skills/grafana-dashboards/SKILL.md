@@ -37,8 +37,8 @@ their only home.
 - `dashboard-node.json` — uid `decdn-node`. Single-node drilldown: host,
   process, iroh transport, DHT and probe, logs, traces.
 - `prometheus-alerts.yml` — three groups: `decdn-slash-safety`, `decdn-liveness`,
-  `decdn-delivery`. Every rule carries a `component` label, and a `runbook_url` into
-  upstream's `docs/runbook.md` where it has a matching section.
+  `decdn-delivery`. Every rule carries a `component` label. Only rules with a matching
+  section in upstream's `docs/runbook.md` (20 of 51) also carry a `runbook_url`.
 
 Add a row to an existing dashboard before starting a fifth one. The Helm chart renders
 these files as-is (`templates/prometheusrule.yaml`, `templates/dashboards-configmap.yaml`),
@@ -140,9 +140,11 @@ Validate rule edits with `promtool check rules prometheus-alerts.yml`.
 
 **Publishing.** `GRAFANA_SERVICE_ACCOUNT_TOKEN` is in the environment; dashboards go to
 `POST /api/dashboards/db` with `overwrite: true`, into folder uid `dfykix7ln0gsgc` ("deCDN").
-The Grafana Cloud **ruler proxy rejects writes** (`400 bad request data`) even for a valid
-group, so alerts are provisioned as Grafana-managed rules through
-`/api/v1/provisioning/alert-rules` instead. Each rule's PromQL already holds its own
+The Grafana Cloud **ruler proxy rejects writes made with a service-account token**
+(`400 bad request data`) even for a valid group, so with that token alerts are provisioned
+as Grafana-managed rules through `/api/v1/provisioning/alert-rules` instead. (Operators
+with a Cloud Access Policy token can load the file as-is with `mimirtool rules load`
+against the stack's Prometheus endpoint, as `files/monitoring/README.md` describes.) Each rule's PromQL already holds its own
 comparison, so the surviving values are not a threshold (`up == 0` fires at value 0): the
 Grafana-managed condition counts datapoints, with `noDataState: OK` as the not-firing case.
 
