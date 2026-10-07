@@ -29,7 +29,10 @@ jobs:
     # suite to ~10m at JOBS=3 on a local 16-thread box; re-measure from CI's first run.
     # sponsord added a 12th scenario (2 containers, Debian 12 + Ubuntu 24.04), and
     # sponsord-onramp a 13th (the same 2, plus an apt install of Caddy each), and
-    # cloud-init-sponsord a 14th (1 container: a cloud-init boot, pip, Galaxy, Caddy).
+    # cloud-init-sponsord a 14th (1 container: a cloud-init boot, pip, Galaxy, Caddy),
+    # and source-build a 15th (1 container: rustup and a Rust toolchain download plus
+    # several fixture builds); sponsord-onramp also builds its fixture on both
+    # containers. Re-measure against this bound after the first CI run.
     # A bound, not a target: without one a wedged privileged systemd container burns
     # the 360-minute default, and with cancel-in-progress above, some branch-protection
     # setups read the resulting cancelled check as "not failed" rather than as a failure.

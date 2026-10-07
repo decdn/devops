@@ -19,13 +19,23 @@ gate, installers, behind a TLS reverse proxy), is the
 ## What it does
 
 - **Installs the binary.**
-  - `manual` (the default) copies a binary built from a `decdn/sponsord` checkout
-    on the control machine (`sponsord_manual_bin_src`, or
-    `sponsord_release_target_dir` with an ELF/arch check).
-  - `release` downloads `sponsord-v<version>` and verifies it against the
-    GPG-signed `SHA256SUMS`, using `files/sponsord-release-KEYS.asc`, a copy of
-    upstream's `KEYS`.
-  - Upstream has cut no release yet, so `manual` is the only working method today.
+  - `release` (the default) downloads `sponsord-v<version>` and verifies it
+    against the GPG-signed `SHA256SUMS`, using `files/sponsord-release-KEYS.asc`, a
+    copy of upstream's `KEYS`. Upstream has cut no release yet, so until it does
+    this needs a mirror (`sponsord_release_base`).
+  - `source` clones `sponsord_source_repo` (default `decdn/sponsord` on GitHub) at
+    `sponsord_source_ref` (any tag, branch or SHA) on the host and runs `cargo build
+    --release --locked -p sponsord` as the unprivileged `decdn-build` user, exactly
+    as the `decdn_node` role's `source` mode does (see its README): a sha256-pinned
+    rustup, the checkout's `rust-toolchain.toml`, a `<repo>@<commit>` stamp so an
+    unchanged commit is not rebuilt, and a root-side install that refuses
+    symlinks. Leave `sponsord_version` empty: the version check enforces it
+    exactly, and upstream's crates report `0.0.0`. The build user, its home and the toolchain are
+    shared with the other roles on the host. cargo also fetches upstream's
+    `decdn/decdn` git dependencies, pinned by `Cargo.lock`.
+  - `manual` copies a binary built from a `decdn/sponsord` checkout on the control
+    machine (`sponsord_manual_bin_src`, or `sponsord_release_target_dir` with an
+    ELF/arch check).
 - **Places the secrets.** All of them live under `/etc/sponsord`, root 0600:
 
   | File | Who provides it |
@@ -107,7 +117,9 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `sponsord_install_method` | `manual` | `manual` or `release` |
+| `sponsord_install_method` | `release` | `release`, `source` or `manual` |
+| `sponsord_source_repo` / `sponsord_source_ref` | `decdn/sponsord` on GitHub / `""` | `source` only. The ref is required: a tag, branch or SHA. |
+| `sponsord_source_build_jobs` | `""` | `source` only: `CARGO_BUILD_JOBS` (`""` = one per CPU). |
 | `sponsord_manual_bin_src` / `sponsord_release_target_dir` | `""` | `manual` only. Set one. |
 | `sponsord_version` | `""` | Required in `release` mode, e.g. `0.1.0` → tag `sponsord-v0.1.0`. |
 | `sponsord_network` | `""` | Network profile: `arbitrum-sepolia` supplies chain id and PaymentPool. |
@@ -149,10 +161,12 @@ yourself.
   sudo rm /etc/systemd/system/sponsord.service
   sudo systemctl daemon-reload
   sudo rm -f /usr/local/bin/sponsord
-  sudo rm -rf /usr/local/lib/sponsord     # the release version stamp and decdn CLI
+  sudo rm -rf /usr/local/lib/sponsord     # the version or source stamp and decdn CLI
   ```
 
-  Then delete `/etc/sponsord` (secrets, env files and the role's two `.sha256`
+  After a `source` install, the build user and its home stay behind (shared with
+  the other roles on the host): `sudo userdel -r decdn-build` once nothing on the
+  host builds from source. Then delete `/etc/sponsord` (secrets, env files and the role's two `.sha256`
   records) once the treasury files are safe elsewhere.
 
 ## Testing

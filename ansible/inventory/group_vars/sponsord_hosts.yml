@@ -11,12 +11,17 @@
 # The API token is generated on the host at /etc/sponsord/api-token.
 
 # --- Binary ------------------------------------------------------------------------
-# Until upstream tags a sponsord-v* release: a decdn/sponsord checkout's target dir
-# (`cargo build --release -p sponsord`; the role checks the ELF matches the host).
-# sponsord_release_target_dir: /path/to/sponsord/target/release
-# Once a release exists:
-# sponsord_install_method: release
+# The default method, "release", needs the sponsord-v* release to install (upstream
+# has cut none yet; serve one from a mirror via sponsord_release_base until then):
 # sponsord_version: "0.1.0"
+# Or build on the host from a git ref (tag, branch or SHA), with sponsord_version
+# left empty (it is enforced exactly in every mode; upstream reports 0.0.0):
+# sponsord_install_method: source
+# sponsord_source_ref: main
+# Or copy a control-machine build: a decdn/sponsord checkout's target dir
+# (`cargo build --release -p sponsord`; the role checks the ELF matches the host).
+# sponsord_install_method: manual
+# sponsord_release_target_dir: /path/to/sponsord/target/release
 
 # --- Chain + pool ------------------------------------------------------------------
 # chain_id and the PaymentPool address from upstream's deployment manifest.

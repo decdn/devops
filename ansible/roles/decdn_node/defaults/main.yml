@@ -7,14 +7,16 @@
 # to author that file for you.
 
 # --- Install method -----------------------------------------------------------
-# "release" (default): download the pinned GitHub Release tarballs (a v<version>
-# release must exist). "manual": copy locally-built binaries from the Ansible
-# control machine — for pre-release / dev deploys where no release exists yet.
-# Upstream has cut NO release tag yet (release.yml fires on a v[0-9]* tag push and
-# `git ls-remote --tags decdn/decdn` is empty), so "release" mode currently has
-# nothing to fetch. The default is therefore "manual"; flip it to "release" and pin
-# decdn_node_version once an upstream release exists.
-decdn_node_install_method: manual   # "release" | "manual"
+# "release" (default): download the pinned GitHub Release tarballs and verify them
+#   against the GPG-signed SHA256SUMS (a v<version> release must exist — upstream
+#   has cut none yet, so pin decdn_node_version against a mirror via
+#   decdn_node_release_base, or use one of the two methods below until it does).
+# "source": clone decdn_node_source_repo at decdn_node_source_ref ON THE NODE and
+#   `cargo build` it there as an unprivileged build user. No release and no
+#   control-machine toolchain needed; costs a Rust toolchain plus build time,
+#   RAM and disk on the host (see "Build from source" below).
+# "manual": copy locally-built binaries from the Ansible control machine.
+decdn_node_install_method: release   # "release" | "source" | "manual"
 decdn_node_manual_bin_src: ""        # manual: control-machine path to the decdn-node daemon binary
 decdn_cli_manual_bin_src: ""         # manual: control-machine path to the decdn CLI binary
 # Alternative to the two explicit *_manual_bin_src paths: point at the control-
@@ -26,6 +28,33 @@ decdn_cli_manual_bin_src: ""         # manual: control-machine path to the decdn
 # --release` on a non-Linux control machine (macOS) silently produces a Mach-O the
 # Linux node cannot exec. Leave "" to use the explicit paths above instead.
 decdn_release_target_dir: ""
+
+# --- Build from source (decdn_node_install_method "source") -------------------
+# The repo and the ref to build: any tag, branch or commit SHA (REQUIRED in
+# "source" mode). A branch is re-resolved every run, so a moved branch rebuilds;
+# an unchanged commit does not. The URL must not embed credentials.
+decdn_node_source_repo: "https://github.com/decdn/decdn.git"
+decdn_node_source_ref: ""
+# CARGO_BUILD_JOBS for the build ("" = one per CPU). Lower it on a host that runs
+# out of memory compiling (each job is a rustc process).
+decdn_node_source_build_jobs: ""
+# Ceiling for the build in seconds. It runs async, so a long build outlives the
+# SSH session; past this the task fails.
+decdn_node_source_build_timeout: 7200
+# The build runs as this unprivileged system user (dependency build scripts are
+# arbitrary code — never root). Its home holds the rustup toolchain (shared by
+# every role building on the host) and one checkout per role under src/.
+decdn_build_user: decdn-build
+decdn_build_home: /var/lib/decdn-build
+# rustup-init, pinned by version and per-triple sha256 (from
+# static.rust-lang.org/rustup/archive/<version>/<triple>/rustup-init.sha256). It
+# installs no toolchain itself: the checkout's rust-toolchain.toml picks it, so the
+# build always uses the toolchain upstream pins. Keep in sync with the sponsord and
+# sponsord_onramp roles' copies.
+decdn_rustup_version: "1.29.1"
+decdn_rustup_sha256:
+  x86_64-unknown-linux-gnu: dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
+  aarch64-unknown-linux-gnu: 15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433
 
 # --- Release to install (REQUIRED in "release" mode — a v<version> GitHub Release must exist) ---
 decdn_node_version: ""            # e.g. "0.1.1" (asserted non-empty in "release" mode)
@@ -371,6 +400,10 @@ decdn_env_file: /etc/decdn/decdn.env     # DECDN_RPC_URL (sensitive) — 0600
 # wrote the file. Written on BOTH paths, which is why the source token exists — a
 # matching hash alone only proves the file is unchanged, not who authored it.
 decdn_env_checksum_file: /etc/decdn/.decdn.env.sha256
+# sha256 of the decdn-node binary the daemon was last started on (written after the
+# start, like decdn_env_checksum_file), so a binary installed by a run that then
+# failed before its restart handler ran is still restarted onto by the next run.
+decdn_bin_checksum_file: /etc/decdn/.decdn-node.bin.sha256
 # Confirm that rendering the env file from inventory may DISCARD a host-side edit.
 # Only consulted when the recorded checksum proves the file on the host is not the
 # one this role last wrote; with no record (a pre-#39 host) the role cannot tell

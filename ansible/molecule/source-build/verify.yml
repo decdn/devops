@@ -1,0 +1,90 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Resolve the fixture's main commit  # noqa: command-instead-of-module
+      ansible.builtin.command: git -C /srv/decdn-fixture.git rev-parse main
+      register: _fixture_head
+      changed_when: false
+
+    - name: Read the installed-source stamp
+      ansible.builtin.slurp:
+        src: /usr/local/lib/decdn/installed-source
+      register: _stamp
+
+    - name: Require the stamp to name the repo and the built commit
+      ansible.builtin.assert:
+        that:
+          - >-
+            (_stamp.content | b64decode | trim)
+            == 'file:///srv/decdn-fixture.git@' ~ _fixture_head.stdout
+        fail_msg: >-
+          installed-source is {{ _stamp.content | b64decode | trim }}, expected
+          main @ {{ _fixture_head.stdout }}
+
+    - name: Stat the release stamp, the binaries, the build output and rustup
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /usr/local/lib/decdn/installed-version
+        - /usr/local/bin/decdn-node
+        - /usr/local/bin/decdn
+        - /var/lib/decdn-build/src/decdn/target/release/decdn-node
+        - /var/lib/decdn-build/.cargo/bin/rustup
+        - /var/lib/decdn-build/rustup-init
+        - /var/lib/decdn-build
+      register: _st
+
+    - name: Require root-owned binaries and a build owned by the build user
+      vars:
+        _s: "{{ dict(_st.results | map(attribute='item') | zip(_st.results | map(attribute='stat'))) }}"
+      ansible.builtin.assert:
+        that:
+          - not _s['/usr/local/lib/decdn/installed-version'].exists
+          - _s['/usr/local/bin/decdn-node'].pw_name == 'root'
+          - _s['/usr/local/bin/decdn-node'].mode == '0755'
+          - _s['/usr/local/bin/decdn'].pw_name == 'root'
+          - _s['/usr/local/bin/decdn'].mode == '0755'
+          - _s['/var/lib/decdn-build/src/decdn/target/release/decdn-node'].pw_name == 'decdn-build'
+          - _s['/var/lib/decdn-build/.cargo/bin/rustup'].pw_name == 'decdn-build'
+          - not _s['/var/lib/decdn-build/rustup-init'].exists
+          - _s['/var/lib/decdn-build'].mode == '0750'
+        fail_msg: "{{ _s | to_nice_json }}"
+
+    - name: Read the installed binaries' fixture revision
+      ansible.builtin.command: "{{ item }} --fixture-rev"
+      loop:
+        - /usr/local/bin/decdn-node
+        - /usr/local/bin/decdn
+      register: _rev
+      changed_when: false
+
+    - name: Require the binaries built from the fixture's first commit
+      ansible.builtin.assert:
+        that:
+          - _rev.results | map(attribute='stdout') | list == ['1', '1']
+
+    - name: Read the build user's account entry
+      ansible.builtin.getent:
+        database: passwd
+        key: decdn-build
+
+    - name: Require a no-login system build user
+      ansible.builtin.assert:
+        that:
+          # getent fields after the name: password, uid, gid, gecos, home, shell.
+          - ansible_facts.getent_passwd['decdn-build'][1] | int < 1000
+          - ansible_facts.getent_passwd['decdn-build'][4] == '/var/lib/decdn-build'
+          - ansible_facts.getent_passwd['decdn-build'][5] == '/usr/sbin/nologin'
+
+    - name: Read the decdn-node unit state
+      ansible.builtin.systemd:
+        name: decdn-node
+      register: _unit
+
+    - name: Require decdn-node running on the source-built binary
+      ansible.builtin.assert:
+        that:
+          - _unit.status.ActiveState == 'active'

@@ -1,0 +1,245 @@
+---
+# What converge + idempotence + verify cannot prove:
+#   1. A new commit on the tracked branch is rebuilt, reinstalled, stamped, and the
+#      daemon is restarted onto it.
+#   2. A missing installed binary is rebuilt even though the stamp matches.
+#   3. A binary the daemon was never restarted onto (a run that installed it and
+#      failed before its handler ran) is restarted onto by the next run.
+#   4. A commit whose binary fails the --version backstop leaves NO stamp, and
+#      rolling the ref back to the previous commit (a SHA ref) reinstalls it.
+#   5. "manual" clears the source stamp, and switching back to source rebuilds.
+- name: Side effect — branch move, missing binary, lost restart
+  hosts: all
+  become: true
+  vars:
+    _bin_record: /etc/decdn/.decdn-node.bin.sha256
+  tasks:
+    - name: Read the daemon's PID before the branch moves
+      ansible.builtin.systemd_service:
+        name: decdn-node
+      register: _unit_before
+
+    - name: Commit FIXTURE_REV 2 to the fixture's main branch
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          cd /srv/decdn-fixture-work
+          sed -i 's/FIXTURE_REV: &str = "1"/FIXTURE_REV: \&str = "2"/' \
+            crates/node/src/main.rs crates/cli/src/main.rs
+          grep -q 'FIXTURE_REV: &str = "2"' crates/node/src/main.rs
+          git -c user.name=molecule -c user.email=molecule@example.invalid commit -q -am "fixture rev 2"
+          git push -q /srv/decdn-fixture.git main
+          git rev-parse HEAD
+        executable: /bin/bash
+      register: _rev2
+      changed_when: true
+
+    - name: Re-run the role on the moved branch
+      ansible.builtin.include_role:
+        name: decdn_node
+
+    - name: Read the installed binaries' fixture revision
+      ansible.builtin.command: "{{ item }} --fixture-rev"
+      loop:
+        - /usr/local/bin/decdn-node
+        - /usr/local/bin/decdn
+      register: _rev
+      changed_when: false
+
+    - name: Read the installed-source stamp
+      ansible.builtin.slurp:
+        src: /usr/local/lib/decdn/installed-source
+      register: _stamp
+
+    - name: Read the daemon's PID after the branch move
+      ansible.builtin.systemd_service:
+        name: decdn-node
+      register: _unit_after
+
+    - name: Require the new commit built, installed, stamped and running
+      ansible.builtin.assert:
+        that:
+          - _rev.results | map(attribute='stdout') | list == ['2', '2']
+          - (_stamp.content | b64decode | trim) == 'file:///srv/decdn-fixture.git@' ~ (_rev2.stdout_lines | last)
+          - _unit_after.status.MainPID != _unit_before.status.MainPID
+        fail_msg: >-
+          revs {{ _rev.results | map(attribute='stdout') | list }}, stamp
+          {{ _stamp.content | b64decode | trim }}, PID {{ _unit_before.status.MainPID }}
+          -> {{ _unit_after.status.MainPID }}; expected rev 2 at
+          {{ _rev2.stdout_lines | last }} and a restarted daemon.
+
+    # 2. The stamp still matches; only the missing file can trigger the rebuild.
+    - name: Remove the installed decdn CLI
+      ansible.builtin.file:
+        path: /usr/local/bin/decdn
+        state: absent
+
+    - name: Re-run the role with the CLI missing
+      ansible.builtin.include_role:
+        name: decdn_node
+
+    - name: Read the reinstalled CLI's fixture revision
+      ansible.builtin.command: /usr/local/bin/decdn --fixture-rev
+      register: _cli_rev
+      changed_when: false
+
+    - name: Require the CLI reinstalled from the same commit
+      ansible.builtin.assert:
+        that:
+          - _cli_rev.stdout == '2'
+
+    # 3. Stand in for "installed by a run that failed before restarting": the
+    # record no longer matches the binary on disk.
+    - name: Read the daemon's PID before the lost-restart case
+      ansible.builtin.systemd_service:
+        name: decdn-node
+      register: _unit_before
+
+    - name: Make the binary record disagree with the installed binary
+      ansible.builtin.copy:
+        dest: "{{ _bin_record }}"
+        content: "0000000000000000000000000000000000000000000000000000000000000000\n"
+        mode: "0644"
+
+    - name: Re-run the role
+      ansible.builtin.include_role:
+        name: decdn_node
+
+    - name: Read the daemon's PID and the binary record afterwards
+      ansible.builtin.systemd_service:
+        name: decdn-node
+      register: _unit_after
+
+    - name: Hash the installed daemon binary
+      ansible.builtin.stat:
+        path: /usr/local/bin/decdn-node
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: _bin
+
+    - name: Read the binary record
+      ansible.builtin.slurp:
+        src: "{{ _bin_record }}"
+      register: _record
+
+    - name: Require a restart and a record of the running binary
+      ansible.builtin.assert:
+        that:
+          - _unit_after.status.MainPID != _unit_before.status.MainPID
+          - (_record.content | b64decode | trim) == _bin.stat.checksum
+
+- name: Side effect — a broken commit, then a rollback by SHA
+  hosts: all
+  become: true
+  tasks:
+    # Rev 3's binaries fail `--version`, so the backstop rejects them after they
+    # are installed.
+    - name: Commit a FIXTURE_REV 3 whose binaries fail --version
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          cd /srv/decdn-fixture-work
+          ins='    if args.first().map(String::as_str) == Some("--version") {\n        exit(1);\n    }\n'
+          for f in crates/node/src/main.rs crates/cli/src/main.rs; do
+            sed -i 's/FIXTURE_REV: &str = "2"/FIXTURE_REV: \&str = "3"/' "$f"
+            sed -i "s|    let err = Command::new(STUB)|${ins}&|" "$f"
+          done
+          grep -q 'exit(1);' crates/node/src/main.rs
+          git -c user.name=molecule -c user.email=molecule@example.invalid commit -q -am "fixture rev 3 (broken)"
+          git push -q /srv/decdn-fixture.git main
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Run the role on the broken commit
+      block:
+        - name: Converge onto rev 3
+          ansible.builtin.include_role:
+            name: decdn_node
+
+        - name: Fail — a binary that fails --version was accepted
+          ansible.builtin.fail:
+            msg: The role finished although rev 3's decdn-node exits 1 on --version.
+      rescue:
+        - name: Require the failure at the version backstop
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Verify the installed decdn-node runs (version backstop)'
+            fail_msg: "Expected the version backstop to fail, got: {{ ansible_failed_task.name }}"
+
+    - name: Stat the installed-source stamp after the broken install
+      ansible.builtin.stat:
+        path: /usr/local/lib/decdn/installed-source
+      register: _stamp_broken
+
+    - name: Require no stamp for a commit that failed the backstop
+      ansible.builtin.assert:
+        that:
+          - not _stamp_broken.stat.exists
+
+    - name: Roll back to rev 2 by SHA
+      ansible.builtin.include_role:
+        name: decdn_node
+      vars:
+        decdn_node_source_ref: "{{ hostvars[inventory_hostname]._rev2.stdout_lines | last }}"
+
+    - name: Read the rolled-back binaries' fixture revision
+      ansible.builtin.command: "{{ item }} --fixture-rev"
+      loop:
+        - /usr/local/bin/decdn-node
+        - /usr/local/bin/decdn
+      register: _rev
+      changed_when: false
+
+    - name: Read the installed-source stamp after the rollback
+      ansible.builtin.slurp:
+        src: /usr/local/lib/decdn/installed-source
+      register: _stamp
+
+    - name: Require rev 2 reinstalled and stamped
+      ansible.builtin.assert:
+        that:
+          - _rev.results | map(attribute='stdout') | list == ['2', '2']
+          - >-
+            (_stamp.content | b64decode | trim)
+            == 'file:///srv/decdn-fixture.git@' ~ (hostvars[inventory_hostname]._rev2.stdout_lines | last)
+
+- name: Side effect — manual clears the source stamp; source again rebuilds
+  hosts: all
+  become: true
+  vars:
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/default/files/decdn-node-stub"
+    _rev2_sha: "{{ hostvars[inventory_hostname]._rev2.stdout_lines | last }}"
+  tasks:
+    - name: Re-run the role in manual mode with the stub
+      ansible.builtin.include_role:
+        name: decdn_node
+      vars:
+        decdn_node_install_method: manual
+        decdn_node_manual_bin_src: "{{ stub_bin }}"
+        decdn_cli_manual_bin_src: "{{ stub_bin }}"
+
+    - name: Stat the installed-source stamp
+      ansible.builtin.stat:
+        path: /usr/local/lib/decdn/installed-source
+      register: _stamp_after
+
+    - name: Require the source stamp cleared
+      ansible.builtin.assert:
+        that:
+          - not _stamp_after.stat.exists
+
+    - name: Switch back to source at rev 2
+      ansible.builtin.include_role:
+        name: decdn_node
+      vars:
+        decdn_node_source_ref: "{{ _rev2_sha }}"
+
+    - name: Read the reinstalled daemon's fixture revision
+      ansible.builtin.command: /usr/local/bin/decdn-node --fixture-rev
+      register: _rev
+      changed_when: false
+
+    - name: Require the source-built binary back in place
+      ansible.builtin.assert:
+        that:
+          - _rev.stdout == '2'

@@ -1,0 +1,7 @@
+# The same channel decdn/decdn's rust-toolchain.toml pins, so the role's toolchain
+# path (rustup-init with no default toolchain, then this file) is the one a real
+# build takes. Unlike upstream it adds no rustfmt/clippy components, to keep the
+# download small.
+[toolchain]
+channel = "1.95.0"
+profile = "minimal"

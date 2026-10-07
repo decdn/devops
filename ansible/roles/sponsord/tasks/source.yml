@@ -1,0 +1,210 @@
+---
+# sponsord_install_method "source": build sponsord on the host from sponsord_source_repo at
+# sponsord_source_ref, then install it as root. The steps mirror
+# roles/decdn_node/tasks/source.yml, which carries the rationale for each: the
+# build runs as the unprivileged decdn_build_user (dependency build scripts are
+# arbitrary code), root never acts by name on a path inside that user's tree, the
+# toolchain comes from a sha256-pinned rustup-init plus the checkout's
+# rust-toolchain.toml, and a <repo>@<commit> stamp, cleared before installing and
+# written only after the --version check passes, skips rebuilding an unchanged
+# commit.
+
+- name: Report that the source build is not simulated in check mode
+  ansible.builtin.debug:
+    msg: >-
+      check mode: skipping the fetch + build of {{ sponsord_source_repo }} @
+      {{ sponsord_source_ref }}. The binary on the target is NOT rebuilt or checked
+      against the ref by this run.
+  when: ansible_check_mode
+
+- name: Build sponsord from source
+  when: not ansible_check_mode
+  vars:
+    sponsord_build_env:
+      CARGO_HOME: "{{ decdn_build_home }}/.cargo"
+      RUSTUP_HOME: "{{ decdn_build_home }}/.rustup"
+      PATH: "{{ decdn_build_home }}/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+    decdn_rustup_archive: "https://static.rust-lang.org/rustup/archive/{{ decdn_rustup_version }}"
+  block:
+    - name: Require a pinned rustup-init digest for this target
+      ansible.builtin.assert:
+        that:
+          - sponsord_target in decdn_rustup_sha256
+        fail_msg: >-
+          decdn_rustup_sha256 has no digest for {{ sponsord_target }}. Add the sha256 of
+          rustup {{ decdn_rustup_version }}'s rustup-init for it: the
+          rustup-init.sha256 published beside it under
+          {{ decdn_rustup_archive }}.
+
+    - name: Install the build dependencies
+      ansible.builtin.apt:
+        name:
+          - acl
+          - build-essential
+          - ca-certificates
+          - cmake
+          - git
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create the build group
+      ansible.builtin.group:
+        name: "{{ decdn_build_user }}"
+        system: true
+
+    - name: Create the build user
+      ansible.builtin.user:
+        name: "{{ decdn_build_user }}"
+        group: "{{ decdn_build_user }}"
+        system: true
+        home: "{{ decdn_build_home }}"
+        create_home: true
+        shell: /usr/sbin/nologin
+      register: sponsord_build_account
+
+    - name: Create the build home
+      ansible.builtin.file:
+        path: "{{ decdn_build_home }}"
+        state: directory
+        owner: "{{ decdn_build_user }}"
+        group: "{{ decdn_build_user }}"
+        mode: "0750"
+        follow: false
+
+    - name: Create the source directory as the build user
+      ansible.builtin.file:
+        path: "{{ decdn_build_home }}/src"
+        state: directory
+        mode: "0750"
+      become: true
+      become_user: "{{ decdn_build_user }}"
+
+    - name: Check for an installed rustup and cargo
+      ansible.builtin.stat:
+        path: "{{ decdn_build_home }}/.cargo/bin/cargo"
+      register: sponsord_cargo_stat
+
+    - name: Install rustup for the build user
+      when: not sponsord_cargo_stat.stat.exists
+      become: true
+      become_user: "{{ decdn_build_user }}"
+      block:
+        - name: Download the pinned rustup-init
+          ansible.builtin.get_url:
+            url: "{{ decdn_rustup_archive }}/{{ sponsord_target }}/rustup-init"
+            dest: "{{ decdn_build_home }}/rustup-init"
+            checksum: "sha256:{{ decdn_rustup_sha256[sponsord_target] }}"
+            mode: "0700"
+
+        - name: Run rustup-init as the build user
+          ansible.builtin.command:
+            argv:
+              - "{{ decdn_build_home }}/rustup-init"
+              - -y
+              - --no-modify-path
+              - --profile
+              - minimal
+              - --default-toolchain
+              - none
+          environment: "{{ sponsord_build_env }}"
+          changed_when: true
+      always:
+        - name: Remove rustup-init
+          ansible.builtin.file:
+            path: "{{ decdn_build_home }}/rustup-init"
+            state: absent
+
+    - name: Fetch the source at {{ sponsord_source_ref }}
+      ansible.builtin.git:
+        repo: "{{ sponsord_source_repo }}"
+        dest: "{{ decdn_build_home }}/src/sponsord"
+        version: "{{ sponsord_source_ref }}"
+        force: true
+      become: true
+      become_user: "{{ decdn_build_user }}"
+      register: sponsord_source_git
+
+    - name: Read the installed-source stamp
+      ansible.builtin.slurp:
+        src: /usr/local/lib/sponsord/installed-source
+      register: sponsord_source_stamp
+      failed_when: false
+      changed_when: false
+
+    - name: Check the installed binary
+      ansible.builtin.stat:
+        path: "{{ sponsord_bin }}"
+      register: sponsord_source_bin
+
+    - name: Decide whether a build is needed
+      ansible.builtin.set_fact:
+        sponsord_source_id: "{{ sponsord_source_repo }}@{{ sponsord_source_git.after }}"
+        sponsord_need_build: >-
+          {{ (sponsord_source_stamp.content is not defined)
+             or ((sponsord_source_stamp.content | b64decode | trim)
+                 != (sponsord_source_repo ~ '@' ~ sponsord_source_git.after))
+             or not sponsord_source_bin.stat.exists }}
+
+    - name: Build and install @ {{ sponsord_source_git.after }}
+      when: sponsord_need_build
+      block:
+        - name: Clear the installed-source stamp before installing
+          ansible.builtin.file:
+            path: /usr/local/lib/sponsord/installed-source
+            state: absent
+
+        - name: Remove the previous build's output
+          ansible.builtin.file:
+            path: "{{ decdn_build_home }}/src/sponsord/target/release/sponsord"
+            state: absent
+          become: true
+          become_user: "{{ decdn_build_user }}"
+
+        - name: Build sponsord @ {{ sponsord_source_git.after }}
+          ansible.builtin.command:
+            argv:
+              - "{{ decdn_build_home }}/.cargo/bin/cargo"
+              - build
+              - --release
+              - --locked
+              - -p
+              - sponsord
+            chdir: "{{ decdn_build_home }}/src/sponsord"
+          become: true
+          become_user: "{{ decdn_build_user }}"
+          environment: >-
+            {{ sponsord_build_env
+               | combine({'CARGO_BUILD_JOBS': sponsord_source_build_jobs | string}
+                         if (sponsord_source_build_jobs | string) | length > 0 else {}) }}
+          async: "{{ sponsord_source_build_timeout | int }}"
+          poll: 30
+          changed_when: true
+
+        - name: Install the built binary
+          ansible.builtin.script:
+            cmd: >-
+              install-build-output.py {{ decdn_build_home | quote }}
+              src/sponsord/target/release/sponsord {{ sponsord_bin | quote }}
+              {{ sponsord_build_account.uid }}
+            executable: /usr/bin/python3
+          register: sponsord_source_install
+          changed_when: sponsord_source_install.stdout | trim == 'changed'
+          notify: Restart sponsord
+      rescue:
+        - name: Report the failed source build
+          ansible.builtin.fail:
+            msg: >-
+              Building or installing {{ sponsord_source_id }} failed at
+              "{{ ansible_failed_task.name }}":
+              {{ (ansible_failed_result.stderr | default('', true) | trim)[-2000:]
+                 or ansible_failed_result.msg | default('(no output)') }}.
+              A compiler killed by the kernel is usually memory: lower
+              sponsord_source_build_jobs. "async task did not complete" means
+              sponsord_source_build_timeout ({{ sponsord_source_build_timeout }}s) is too
+              short. Check free disk under {{ decdn_build_home }} too.
+
+- name: Clear the release version stamp in source mode
+  ansible.builtin.file:
+    path: /usr/local/lib/sponsord/installed-version
+    state: absent

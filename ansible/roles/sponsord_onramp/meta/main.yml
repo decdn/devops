@@ -3,9 +3,10 @@ galaxy_info:
   role_name: sponsord_onramp
   author: deCDN Contributors
   description: >-
-    deCDN sponsord-onramp, the public gate in front of sponsord — release-tarball or
-    manual local-binary install, hardened DynamicUser systemd unit with credentials,
-    loopback listener behind an optional Caddy TLS front.
+    deCDN sponsord-onramp, the public gate in front of sponsord — signed
+    release-tarball, on-host source build or manual local-binary install, hardened
+    DynamicUser systemd unit with credentials, loopback listener behind an optional
+    Caddy TLS front.
   license: MIT
   min_ansible_version: "2.15"
   galaxy_tags: [decdn, sponsord, caddy, systemd, web3, debian]

@@ -10,10 +10,15 @@
 # The daemon's API token (/etc/sponsord/api-token) is the sponsord role's.
 
 # --- Binary ------------------------------------------------------------------------
-# Follows sponsord_release_target_dir (`cargo build --release` in a decdn/sponsord
-# checkout builds both binaries). Once a release exists:
-# sponsord_onramp_install_method: release
+# The same three methods as sponsord. "release" (default):
 # sponsord_onramp_version: "0.1.0"
+# Or build on the host (its own checkout, so it may pin a different ref), with
+# sponsord_onramp_version left empty, as for sponsord:
+# sponsord_onramp_install_method: source
+# sponsord_onramp_source_ref: main
+# Or manual, which follows sponsord_release_target_dir (`cargo build --release` in
+# a decdn/sponsord checkout builds both binaries):
+# sponsord_onramp_install_method: manual
 
 # --- Public address ----------------------------------------------------------------
 # Caddy terminates TLS for this name (ACME). Its A/AAAA records must point at the

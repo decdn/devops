@@ -1,0 +1,259 @@
+---
+# decdn_node_install_method "source": build decdn-node + the decdn CLI on the node
+# from decdn_node_source_repo at decdn_node_source_ref, then install them as root.
+#
+# The build runs as the unprivileged decdn_build_user, never root: cargo executes
+# every dependency's build script, which is arbitrary code. The toolchain comes
+# from a sha256-pinned rustup-init, and the checkout's rust-toolchain.toml selects
+# the Rust version, so the node builds with exactly the toolchain upstream pins.
+#
+# Root never acts on a path inside the build user's tree by name: the build home
+# (whose parent is root-owned) is the only thing root creates there, everything
+# under it is created as the build user, and the outputs are installed by
+# files/install-build-output.py, which refuses symlinks and foreign files without
+# a check-then-use race.
+#
+# Idempotent through a stamp holding <repo>@<commit>: a run that resolves the same
+# commit (and finds both binaries installed) skips the build; a moved branch or a
+# new ref rebuilds. The stamp is removed before a build installs anything and
+# written again by install.yml only after the --version backstop passes, so a
+# failed install, or a rollback to the previous ref after one, always rebuilds.
+
+- name: Report that the source build is not simulated in check mode
+  ansible.builtin.debug:
+    msg: >-
+      check mode: skipping the fetch + build of {{ decdn_node_source_repo }} @
+      {{ decdn_node_source_ref }}. The binaries on the target are NOT rebuilt or
+      checked against the ref by this run; the config and unit below still diff.
+  when: ansible_check_mode
+
+- name: Build decdn-node + decdn CLI from source
+  when: not ansible_check_mode
+  vars:
+    decdn_build_env:
+      CARGO_HOME: "{{ decdn_build_home }}/.cargo"
+      RUSTUP_HOME: "{{ decdn_build_home }}/.rustup"
+      PATH: "{{ decdn_build_home }}/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+    decdn_rustup_archive: "https://static.rust-lang.org/rustup/archive/{{ decdn_rustup_version }}"
+  block:
+    - name: Require a pinned rustup-init digest for this target
+      ansible.builtin.assert:
+        that:
+          - decdn_node_target in decdn_rustup_sha256
+        fail_msg: >-
+          decdn_rustup_sha256 has no digest for {{ decdn_node_target }}. Add the
+          sha256 of rustup {{ decdn_rustup_version }}'s rustup-init for it: the
+          rustup-init.sha256 published beside it under
+          {{ decdn_rustup_archive }}.
+
+    # acl: becoming the unprivileged build user needs it on a non-root connection
+    # (baseline installs it too; this keeps the role self-contained). cmake is
+    # optional upstream but speeds up the aws-lc-sys build.
+    - name: Install the build dependencies
+      ansible.builtin.apt:
+        name:
+          - acl
+          - build-essential
+          - ca-certificates
+          - cmake
+          - git
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create the build group
+      ansible.builtin.group:
+        name: "{{ decdn_build_user }}"
+        system: true
+
+    - name: Create the build user
+      ansible.builtin.user:
+        name: "{{ decdn_build_user }}"
+        group: "{{ decdn_build_user }}"
+        system: true
+        home: "{{ decdn_build_home }}"
+        create_home: true
+        shell: /usr/sbin/nologin
+      register: decdn_build_account
+
+    # Root may set owner and mode here only because the parent directory is
+    # root-owned, so the build user cannot have swapped this path for a symlink.
+    - name: Create the build home
+      ansible.builtin.file:
+        path: "{{ decdn_build_home }}"
+        state: directory
+        owner: "{{ decdn_build_user }}"
+        group: "{{ decdn_build_user }}"
+        mode: "0750"
+        follow: false
+
+    # As the build user: a src/ it replaced with a symlink to a root-owned
+    # directory then fails here instead of being chowned by root.
+    - name: Create the source directory as the build user
+      ansible.builtin.file:
+        path: "{{ decdn_build_home }}/src"
+        state: directory
+        mode: "0750"
+      become: true
+      become_user: "{{ decdn_build_user }}"
+
+    # cargo, not rustup: an install interrupted after the rustup binary but before
+    # the cargo proxy is re-run rather than failing every later build.
+    - name: Check for an installed rustup and cargo
+      ansible.builtin.stat:
+        path: "{{ decdn_build_home }}/.cargo/bin/cargo"
+      register: decdn_cargo_stat
+
+    - name: Install rustup for the build user
+      when: not decdn_cargo_stat.stat.exists
+      become: true
+      become_user: "{{ decdn_build_user }}"
+      block:
+        - name: Download the pinned rustup-init
+          ansible.builtin.get_url:
+            url: "{{ decdn_rustup_archive }}/{{ decdn_node_target }}/rustup-init"
+            dest: "{{ decdn_build_home }}/rustup-init"
+            checksum: "sha256:{{ decdn_rustup_sha256[decdn_node_target] }}"
+            mode: "0700"
+
+        # --default-toolchain none: the checkout's rust-toolchain.toml installs the
+        # pinned toolchain on the first cargo call, so nothing here goes stale.
+        - name: Run rustup-init as the build user
+          ansible.builtin.command:
+            argv:
+              - "{{ decdn_build_home }}/rustup-init"
+              - -y
+              - --no-modify-path
+              - --profile
+              - minimal
+              - --default-toolchain
+              - none
+          environment: "{{ decdn_build_env }}"
+          changed_when: true
+      always:
+        - name: Remove rustup-init
+          ansible.builtin.file:
+            path: "{{ decdn_build_home }}/rustup-init"
+            state: absent
+
+    # force: discard any local edit in the checkout, so what is built is exactly
+    # the ref. target/ is git-ignored upstream and survives, so rebuilds are
+    # incremental.
+    - name: Fetch the source at {{ decdn_node_source_ref }}
+      ansible.builtin.git:
+        repo: "{{ decdn_node_source_repo }}"
+        dest: "{{ decdn_build_home }}/src/decdn"
+        version: "{{ decdn_node_source_ref }}"
+        force: true
+      become: true
+      become_user: "{{ decdn_build_user }}"
+      register: decdn_source_git
+
+    - name: Read the installed-source stamp
+      ansible.builtin.slurp:
+        src: /usr/local/lib/decdn/installed-source
+      register: decdn_source_stamp
+      failed_when: false
+      changed_when: false
+
+    - name: Check the installed binaries
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ decdn_bin }}"
+        - "{{ decdn_cli_bin }}"
+      register: decdn_source_bins
+
+    - name: Decide whether a build is needed
+      ansible.builtin.set_fact:
+        decdn_source_id: "{{ decdn_node_source_repo }}@{{ decdn_source_git.after }}"
+        decdn_need_build: >-
+          {{ (decdn_source_stamp.content is not defined)
+             or ((decdn_source_stamp.content | b64decode | trim)
+                 != (decdn_node_source_repo ~ '@' ~ decdn_source_git.after))
+             or (decdn_source_bins.results | rejectattr('stat.exists') | list | length > 0) }}
+
+    - name: Build and install @ {{ decdn_source_git.after }}
+      when: decdn_need_build
+      block:
+        # Dropped before anything is installed, so a run that fails from here on
+        # leaves no stamp, and the next run (even one rolled back to the previous
+        # commit) rebuilds and reinstalls instead of trusting it.
+        - name: Clear the installed-source stamp before installing
+          ansible.builtin.file:
+            path: /usr/local/lib/decdn/installed-source
+            state: absent
+
+        # target/ survives between builds, so a binary this commit no longer
+        # produces (a renamed bin target) would otherwise be installed stale.
+        - name: Remove the previous build's outputs
+          ansible.builtin.file:
+            path: "{{ decdn_build_home }}/src/decdn/target/release/{{ item }}"
+            state: absent
+          loop:
+            - decdn-node
+            - decdn
+          become: true
+          become_user: "{{ decdn_build_user }}"
+
+        # async: a cold build of the workspace takes many minutes, longer than an
+        # SSH session should be trusted to stay up; the job keeps running on the
+        # host and is polled. --locked builds the committed Cargo.lock, never a
+        # re-resolved one.
+        - name: Build decdn-node + decdn CLI @ {{ decdn_source_git.after }}
+          ansible.builtin.command:
+            argv:
+              - "{{ decdn_build_home }}/.cargo/bin/cargo"
+              - build
+              - --release
+              - --locked
+              - -p
+              - decdn-node
+              - -p
+              - decdn-cli
+            chdir: "{{ decdn_build_home }}/src/decdn"
+          become: true
+          become_user: "{{ decdn_build_user }}"
+          environment: >-
+            {{ decdn_build_env
+               | combine({'CARGO_BUILD_JOBS': decdn_node_source_build_jobs | string}
+                         if (decdn_node_source_build_jobs | string) | length > 0 else {}) }}
+          async: "{{ decdn_node_source_build_timeout | int }}"
+          poll: 30
+          changed_when: true
+
+        - name: Install the built binaries
+          ansible.builtin.script:
+            cmd: >-
+              install-build-output.py {{ decdn_build_home | quote }}
+              {{ ('src/decdn/target/release/' ~ item.name) | quote }}
+              {{ item.dest | quote }} {{ decdn_build_account.uid }}
+            executable: /usr/bin/python3
+          loop:
+            - {name: decdn-node, dest: "{{ decdn_bin }}"}
+            - {name: decdn, dest: "{{ decdn_cli_bin }}"}
+          loop_control:
+            label: "{{ item.dest }}"
+          register: decdn_source_install
+          changed_when: decdn_source_install.stdout | trim == 'changed'
+          notify: Restart decdn-node
+      rescue:
+        - name: Report the failed source build
+          ansible.builtin.fail:
+            msg: >-
+              Building or installing {{ decdn_source_id }} failed at
+              "{{ ansible_failed_task.name }}":
+              {{ (ansible_failed_result.stderr | default('', true) | trim)[-2000:]
+                 or ansible_failed_result.msg | default('(no output)') }}.
+              A compiler killed by the kernel is usually memory: lower
+              decdn_node_source_build_jobs. "async task did not complete" means
+              decdn_node_source_build_timeout ({{ decdn_node_source_build_timeout }}s)
+              is too short. Check free disk under {{ decdn_build_home }} too.
+
+# Outside the check-mode skip, so `make check` shows a release -> source switch
+# dropping it. A leftover release stamp would make a later release deploy of the
+# SAME version skip the download over these source-built binaries.
+- name: Clear the release version stamp in source mode
+  ansible.builtin.file:
+    path: /usr/local/lib/decdn/installed-version
+    state: absent

@@ -13,8 +13,8 @@
 # still win for a node that differs.
 
 # --- Binaries (fleet-wide) ------------------------------------------------------
-# Until upstream tags a release, install locally built binaries. Rather than the two
-# per-host *_manual_bin_src paths in host_vars, point every node at one decdn
+# With decdn_node_install_method: manual, rather than the two per-host
+# *_manual_bin_src paths in host_vars, point every node at one decdn
 # checkout's target/release dir (cross-compile for aarch64 hosts; the role derives
 # each host's target from its architecture and checks the ELF before shipping):
 #   cargo build --release -p decdn-node -p decdn-cli

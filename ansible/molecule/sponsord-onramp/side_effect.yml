@@ -19,6 +19,10 @@
 #      confirmed, lands verbatim at 0600 with an `inventory` record and restarts the
 #      onramp; an unchanged re-run is a no-op; an emptied value never adopts the
 #      role's own file; with the record discarded the host's file is accepted.
+#   9. "source" for both roles: each builds its own checkout of one fixture repo
+#      shaped like decdn/sponsord, sharing one build user and toolchain, installs
+#      and stamps its binary, and passes its /healthz gate; "manual" afterwards
+#      clears both stamps.
 # The host is left healthy on the role's own Caddyfile, `tls internal`, for verify.
 - name: Side effect — rotation, the fatal gate and the restart-input record
   hosts: all
@@ -577,3 +581,140 @@
         that:
           - (_or_ts_handover.content | b64decode) is match('^host [0-9a-f]{64}\s*$')
         fail_msg: The handed-over secret was not recorded as the host's.
+
+# --- 9. Build from source -------------------------------------------------------------
+# set_fact outranks the scenario's inventory group_vars, so the real playbook (and its
+# group_vars) runs with the methods switched, as a deploy would.
+- name: Side effect — prepare the source fixture and switch both roles to source
+  hosts: all
+  become: true
+  vars:
+    _fixture_src: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/files/fixture/"
+    _stubs: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule"
+  tasks:
+    - name: Install git
+      ansible.builtin.apt:
+        name: git
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create the stub directory
+      ansible.builtin.file:
+        path: /usr/local/lib/decdn-molecule
+        state: directory
+        mode: "0755"
+
+    - name: Install the stubs the fixture binaries exec
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "/usr/local/lib/decdn-molecule/{{ item.name }}"
+        mode: "0755"
+      loop:
+        - {name: sponsord-stub, src: "{{ _stubs }}/sponsord/files/sponsord-stub"}
+        - {name: sponsord-onramp-stub, src: "{{ _stubs }}/sponsord-onramp/files/sponsord-onramp-stub"}
+
+    - name: Copy the fixture workspace
+      ansible.builtin.copy:
+        src: "{{ _fixture_src }}"
+        dest: /srv/sponsord-fixture-work/
+        mode: preserve
+
+    - name: Commit the fixture and publish it as a bare repo
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          cd /srv/sponsord-fixture-work
+          git init -q -b main
+          git add -A
+          git -c user.name=molecule -c user.email=molecule@example.invalid commit -q -m fixture
+          git clone -q --bare /srv/sponsord-fixture-work /srv/sponsord-fixture.git
+          # Root owns the repo; the roles clone it as decdn-build.
+          git config --system --add safe.directory /srv/sponsord-fixture.git
+        creates: /srv/sponsord-fixture.git
+        executable: /bin/bash
+
+    - name: Switch both roles to source
+      ansible.builtin.set_fact:
+        sponsord_install_method: source
+        sponsord_source_repo: file:///srv/sponsord-fixture.git
+        sponsord_source_ref: main
+        sponsord_onramp_install_method: source
+        sponsord_onramp_source_repo: file:///srv/sponsord-fixture.git
+        sponsord_onramp_source_ref: main
+
+- name: Side effect — converge both roles from source
+  ansible.builtin.import_playbook: ../../playbooks/sponsord.yml
+
+- name: Side effect — check the source install, then switch back to manual
+  hosts: all
+  become: true
+  tasks:
+    - name: Resolve the fixture's main commit  # noqa: command-instead-of-module
+      ansible.builtin.command: git -C /srv/sponsord-fixture.git rev-parse main
+      register: _fx_head
+      changed_when: false
+
+    - name: Read both source stamps
+      ansible.builtin.slurp:
+        src: "/usr/local/lib/{{ item }}/installed-source"
+      loop: [sponsord, sponsord-onramp]
+      register: _fx_stamps
+
+    - name: Read both binaries' fixture revision
+      ansible.builtin.command: "/usr/local/bin/{{ item }} --fixture-rev"
+      loop: [sponsord, sponsord-onramp]
+      register: _fx_revs
+      changed_when: false
+
+    - name: Stat the two checkouts and the shared toolchain
+      ansible.builtin.stat:
+        path: "/var/lib/decdn-build/{{ item }}"
+      loop: [src/sponsord, src/sponsord-onramp, .cargo/bin/cargo]
+      register: _fx_tree
+
+    - name: Read both units
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+      loop: [sponsord, sponsord-onramp]
+      register: _fx_units
+
+    - name: Require both binaries built, stamped and serving
+      ansible.builtin.assert:
+        that:
+          - >-
+            _fx_stamps.results | map(attribute='content') | map('b64decode') | map('trim') | list
+            == ['file:///srv/sponsord-fixture.git@' ~ _fx_head.stdout] * 2
+          - _fx_revs.results | map(attribute='stdout') | list == ['1', '1']
+          - _fx_tree.results[0].stat.isdir | default(false)
+          - _fx_tree.results[1].stat.isdir | default(false)
+          - _fx_tree.results[2].stat.exists
+          - _fx_units.results | map(attribute='status.ActiveState') | list == ['active', 'active']
+        fail_msg: >-
+          stamps {{ _fx_stamps.results | map(attribute='content') | map('b64decode') | list }},
+          revs {{ _fx_revs.results | map(attribute='stdout') | list }}, units
+          {{ _fx_units.results | map(attribute='status.ActiveState') | list }}; expected
+          main @ {{ _fx_head.stdout }}, rev 1, both active.
+
+    - name: Switch both roles back to manual
+      ansible.builtin.set_fact:
+        sponsord_install_method: manual
+        sponsord_onramp_install_method: manual
+
+- name: Side effect — converge both roles back to manual
+  ansible.builtin.import_playbook: ../../playbooks/sponsord.yml
+
+- name: Side effect — check manual cleared the source stamps
+  hosts: all
+  become: true
+  tasks:
+    - name: Stat both source stamps
+      ansible.builtin.stat:
+        path: "/usr/local/lib/{{ item }}/installed-source"
+      loop: [sponsord, sponsord-onramp]
+      register: _fx_cleared
+
+    - name: Require both source stamps cleared
+      ansible.builtin.assert:
+        that:
+          - _fx_cleared.results | selectattr('stat.exists') | list | length == 0

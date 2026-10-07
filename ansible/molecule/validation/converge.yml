@@ -48,6 +48,8 @@
     # REQUIRED upstream (ADR 011/031) — the role asserts it with the other three.
     decdn_content_blacklist_address: "0x4444444444444444444444444444444444444444"
     # Valid sponsord baseline for the sponsord-* cases (unused by the others).
+    # manual, because the role's default ("release") needs a published version.
+    sponsord_install_method: manual
     sponsord_manual_bin_src: >-
       {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/sponsord/files/sponsord-stub
     sponsord_network: arbitrum-sepolia
@@ -2159,6 +2161,7 @@
     # The daemon's network, which the onramp's follows.
     sponsord_network: arbitrum-sepolia
     # Valid sponsord_onramp baseline for the onramp-* cases.
+    sponsord_onramp_install_method: manual
     sponsord_onramp_manual_bin_src: >-
       {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY')
       }}/molecule/sponsord-onramp/files/sponsord-onramp-stub
@@ -2667,6 +2670,75 @@
             - /etc/sponsord
             - /etc/caddy
 
+    # --- Install method + build-from-source inputs, all three roles --------------
+    # Every one of these asserts runs before any other input is read, so the cases
+    # need no per-role baseline. In this play only to keep the first under
+    # ansible-lint's per-play task cap.
+    - name: "Cases *install-method / *source-* — install method and source inputs"
+      vars:
+        _im_cases:
+          - {role: decdn_node, tag: install-method, method: binary, task: Require a valid install method}
+          - {role: decdn_node, tag: source-ref, method: source, ref: "", task: Require a git ref to build}
+          - {role: decdn_node, tag: source-ref, method: source, ref: "  ", task: Require a git ref to build}
+          - role: decdn_node
+            tag: source-repo
+            method: source
+            repo: "https://user:token@github.com/decdn/decdn.git"
+            task: Refuse credentials in the source repo URL
+          - {role: decdn_node, tag: source-jobs, method: source, jobs: "two",
+             task: Validate decdn_node_source_build_jobs}
+          - {role: decdn_node, tag: source-timeout, method: source, timeout: "0",
+             task: Validate decdn_node_source_build_jobs}
+          - role: decdn_node
+            tag: source-repo
+            method: source
+            repo: "user:token@github.com:decdn/decdn.git"
+            task: Refuse credentials in the source repo URL
+          # Accepted: an ssh deploy-key URL passes the credential check and fails
+          # at the next assert (the bad jobs value) instead.
+          - role: decdn_node
+            tag: source-repo-ssh-ok
+            method: source
+            repo: "ssh://git@github.com/decdn/decdn.git"
+            jobs: "x"
+            task: Validate decdn_node_source_build_jobs
+          - {role: sponsord, tag: sponsord-install-method, method: binary, task: Require a valid install method}
+          - {role: sponsord, tag: sponsord-source-ref, method: source, ref: "", task: Require a git ref to build}
+          - role: sponsord
+            tag: sponsord-source-repo
+            method: source
+            repo: "https://token@github.com/decdn/sponsord.git"
+            task: Refuse credentials in the source repo URL
+          - {role: sponsord, tag: sponsord-source-jobs, method: source, jobs: "0",
+             task: Validate sponsord_source_build_jobs}
+          - role: sponsord
+            tag: sponsord-source-repo
+            method: source
+            repo: "https://github.com/decdn/sponsord.git?access_token=x"
+            task: Refuse credentials in the source repo URL
+          - {role: sponsord_onramp, tag: onramp-install-method, method: binary,
+             task: Require a valid install method}
+          - {role: sponsord_onramp, tag: onramp-source-ref, method: source, ref: "",
+             task: Require a git ref to build}
+          - role: sponsord_onramp
+            tag: onramp-source-repo
+            method: source
+            repo: "https://user:token@github.com/decdn/sponsord.git"
+            task: Refuse credentials in the source repo URL
+          - {role: sponsord_onramp, tag: onramp-source-jobs, method: source, jobs: "-1",
+             task: Validate sponsord_onramp_source_build_jobs}
+          - role: sponsord_onramp
+            tag: onramp-source-repo-scp-ok
+            method: source
+            repo: "git@github.com:decdn/sponsord.git"
+            jobs: "x"
+            task: Validate sponsord_onramp_source_build_jobs
+      ansible.builtin.include_tasks: includes/install-method-case.yml
+      loop: "{{ _im_cases }}"
+      loop_control:
+        loop_var: _im_case
+        label: "{{ _im_case.tag }}"
+
     - name: Confirm every bad value was rejected by the role's own validation
       ansible.builtin.assert:
         that:
@@ -2716,4 +2788,10 @@
            "onramp-turnstile", "onramp-turnstile", "onramp-turnstile-empty",
            "onramp-turnstile-inventory",
            "onramp-network-chain", "onramp-proxy", "onramp-proxy", "onramp-domain",
-           "onramp-rpc", "onramp-limit", "onramp-caddyfile"]
+           "onramp-rpc", "onramp-limit", "onramp-caddyfile",
+           "install-method", "source-ref", "source-ref", "source-repo", "source-repo", "source-jobs",
+           "source-timeout", "source-repo-ssh-ok",
+           "sponsord-install-method", "sponsord-source-ref", "sponsord-source-repo", "sponsord-source-repo",
+           "sponsord-source-jobs",
+           "onramp-install-method", "onramp-source-ref", "onramp-source-repo", "onramp-source-jobs",
+           "onramp-source-repo-scp-ok"]

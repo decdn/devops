@@ -12,7 +12,7 @@ deCDN ADRs.
 | Host hardening (firewall, SSH, patching) | yes, `baseline` | yes, `baseline` | no, yours | no, the cluster's |
 | Fleets | yes, one inventory | one user-data per VM | one host per compose project | one release per node |
 | Secrets | host file or git-ignored inventory | host file, written over SSH | host file | operator-created Secrets |
-| Install source | signed release tarball, or local build | signed release tarball | image by digest (enforced) | image by digest (recommended) or tag |
+| Install source | signed release tarball, build on the host from a git ref, or local build | signed release tarball | image by digest (enforced) | image by digest (recommended) or tag |
 | Chain config | `decdn_network` profile | `decdn_network` profile | `decdn config init --chain` | explicit values |
 | Monitoring | opt-in Grafana Cloud agent | opt-in Grafana Cloud agent (token in a host file) | bring your own | ServiceMonitor, PrometheusRule, dashboards |
 | Backup / decommission | `make backup` / `make decommission` | the Ansible targets, from a workstation inventory | manual commands | PVC snapshot |
@@ -87,11 +87,21 @@ cache_size_mb                    the cache (role default 10 GiB)
 (`BlobTooLarge`), so size it to the largest single object you expect to serve (role
 default 1 GiB). Put `/var/lib/decdn` on the fast disk.
 
+The Ansible `source` install method adds, outside the data volume, a Rust toolchain,
+the git checkout and its `target/` build tree under `/var/lib/decdn-build` (one
+checkout per role building on the host). That is several GB, and it is kept so
+rebuilds are incremental.
+
 ## CPU and memory
 
 Upstream publishes no minimum figures yet, so this repo quotes none. Watch the node's
 own metrics (`decdn node top`, the upstream dashboards) under real load and size from
 that.
+
+The Ansible `source` install method compiles on the host, which needs far more memory
+and CPU than running the daemon, for the length of the build (this repo has not
+measured a real build yet). On a small host, lower `*_source_build_jobs`, or build
+elsewhere and use `manual`.
 
 ## Accounts and keys
 

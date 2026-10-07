@@ -31,7 +31,9 @@ The bootstrap then waits for both sets of secrets.
 
 > **Upstream has not published a release yet.** The node installs only from a
 > GPG-verified release tarball (`release` mode). The `manual` mode would install
-> binaries that nothing verified, so the lint refuses it. Until a release exists, serve
+> binaries that nothing verified, and the Ansible path's `source` mode builds whatever
+> its git ref points at (and takes many minutes on first boot), so the lint refuses
+> both. Until a release exists, serve
 > `v<version>/{decdn-node,decdn}-<version>-<target>.tar.gz`, `SHA256SUMS` and
 > `SHA256SUMS.asc` from a mirror, and set `decdn_node_release_base` in the user-data
 > to point at it. The signature is still checked against deCDN's release key.
@@ -177,7 +179,8 @@ holds the treasury wallet, and
 Caddy terminating TLS. The flow is the node's. Only the values and the secrets differ.
 
 > **Upstream has not published a sponsord release yet.** Both services install only
-> from GPG-verified release tarballs (`release` mode), and the lint refuses `manual`.
+> from GPG-verified release tarballs (`release` mode), and the lint refuses `manual`
+> and `source`.
 > Until `sponsord-v<version>` and `sponsord-onramp-v<version>` exist, serve them from
 > a mirror and set `sponsord_release_base` and `sponsord_onramp_release_base`. The
 > signature is still checked against the KEYS vendored in the `sponsord` role.

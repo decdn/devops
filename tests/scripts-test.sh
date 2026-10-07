@@ -204,6 +204,7 @@ if command -v cloud-init >/dev/null; then
   # Hardening and the signed install
   ci_variant "the test-only baseline skip" 'mentions TEST-ONLY-skip-baseline' 's#^  - \[/usr/local/sbin/decdn-bootstrap\]$#  - [touch, /etc/decdn-bootstrap/TEST-ONLY-skip-baseline]\n&#'
   ci_variant "manual install method"       'decdn_node_install_method must be release' 's/^(\s*)decdn_node_install_method: release$/\1decdn_node_install_method: manual/'
+  ci_variant "source install method"       'decdn_node_install_method must be release' 's/^(\s*)decdn_node_install_method: release$/\1decdn_node_install_method: source/'
   ci_variant "no host-generated wallet"    'decdn_node_generate_keystore must be true' 's/^(\s*)decdn_node_generate_keystore: true(.*)$/\1decdn_node_generate_keystore: false\2/'
   ci_variant "signature off as a host var" 'set decdn_verify_release_signature only in decdn_nodes.vars' "s#$loc#&\\n\\1decdn_verify_release_signature: false#"
   ci_variant "install method as a host var" 'set decdn_node_install_method only in decdn_nodes.vars' "s#$loc#&\\n\\1decdn_node_install_method: manual#"
@@ -225,6 +226,7 @@ if command -v cloud-init >/dev/null; then
   ci_variant "Turnstile secret in the inventory" 'sponsord_onramp_turnstile_secret looks secret-bearing' "s#$onproxy#&\\n\\1sponsord_onramp_turnstile_secret: x#" "$sponsorud"
   ci_variant "credentials in the onramp RPC URL" 'a URL with embedded credentials' 's#^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME"$#\1sponsord_onramp_rpc_url: "https://user:key@rpc.example/"#' "$sponsorud"
   ci_variant "sponsord manual install"     'sponsord_install_method must be release' 's/^(\s*)sponsord_install_method: release$/\1sponsord_install_method: manual/' "$sponsorud"
+  ci_variant "sponsord source install"     'sponsord_install_method must be release' 's/^(\s*)sponsord_install_method: release$/\1sponsord_install_method: source/' "$sponsorud"
   ci_variant "onramp manual install"       'sponsord_onramp_install_method must be release' 's/^(\s*)sponsord_onramp_install_method: release$/\1sponsord_onramp_install_method: manual/' "$sponsorud"
   ci_variant "sponsord signature off as a host var" 'set sponsord_verify_release_signature only in sponsord_hosts.vars' "s#$loc#&\\n\\1sponsord_verify_release_signature: false#" "$sponsorud"
   ci_variant "onramp pin in another group" 'set sponsord_onramp_install_method only in sponsord_onramp_hosts.vars' "s#$spnet#&\\n\\1sponsord_onramp_install_method: release#" "$sponsorud"
@@ -263,6 +265,23 @@ elif [[ -n ${CI:-} ]]; then
 else
   skipped+=("lint-cloud-init negatives (needs cloud-init on PATH; CI installs it)")
 fi
+
+# --- the source install method's shared pieces stay identical across roles --------
+# decdn_build_user/home and the rustup pins are defined in all three roles' defaults
+# (one build user and toolchain per host), and the root-side installer is copied
+# into decdn_node and sponsord (sponsord_onramp uses sponsord's).
+shared_keys() { # <defaults file>
+  grep -E '^(decdn_build_user|decdn_build_home|decdn_rustup_version|decdn_rustup_sha256):|^  (x86_64|aarch64)-unknown-linux-gnu:' "$1"
+}
+want=$(shared_keys "$repo/ansible/roles/decdn_node/defaults/main.yml")
+for r in sponsord sponsord_onramp; do
+  [ "$(shared_keys "$repo/ansible/roles/$r/defaults/main.yml")" = "$want" ] \
+    || fail "$r/defaults/main.yml: decdn_build_* / decdn_rustup_* differ from decdn_node's"
+done
+cmp -s "$repo/ansible/roles/decdn_node/files/install-build-output.py" \
+       "$repo/ansible/roles/sponsord/files/install-build-output.py" \
+  || fail "decdn_node and sponsord files/install-build-output.py differ"
+pass "source-build defaults and installer identical across roles"
 
 # --- baseline firewall holes per host shape, and playbook guards ---------------------
 if command -v ansible >/dev/null; then

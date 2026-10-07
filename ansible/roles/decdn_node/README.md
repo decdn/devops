@@ -1,15 +1,16 @@
 # roles/decdn_node
 
 Provisions a **public deCDN node** (`decdn-node` daemon) under a hardened systemd
-unit. Two install methods (`decdn_node_install_method`): `release` pulls a pinned
-GitHub Release tarball and verifies it against the GPG-signed `SHA256SUMS`
-manifest, and `manual` copies locally-built binaries from the Ansible control
-machine. This is the repo's deployment (`playbooks/site.yml`).
+unit. Three install methods (`decdn_node_install_method`): `release` (the default)
+pulls a pinned GitHub Release tarball and verifies it against the GPG-signed
+`SHA256SUMS` manifest, `source` clones a git ref on the node and builds it there,
+and `manual` copies locally-built binaries from the Ansible control machine. This
+is the repo's deployment (`playbooks/site.yml`).
 
-> **The default is `manual`, because upstream has cut no release yet.**
-> `decdn/decdn`'s `release.yml` fires on a `v[0-9]*` tag push and
-> `git ls-remote --tags` is empty, so there is nothing for `release` mode to
-> download. Build the two binaries from a checkout until that changes.
+> **Upstream has cut no release yet.** `decdn/decdn`'s `release.yml` fires on a
+> `v[0-9]*` tag push and `git ls-remote --tags` is empty, so the default `release`
+> mode has nothing to download from GitHub. Until that changes, serve a release
+> from a mirror, or use `source` or `manual`.
 
 **Schema tracking.** This role renders `node.toml` against the config schema of
 `decdn/decdn` main @ `3ebf5f17` (crate version 0.0.0 — unreleased). Upstream marks every config
@@ -55,7 +56,46 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
      from the target host; override `decdn_node_release_base` for a mirror.
      **No upstream release exists yet**, so this mode currently has nothing to
      fetch — the role's assert says so rather than surfacing a bare 404.
-   - **`manual`** (current default) — the role copies the two binaries from the
+   - **`source`** — the role builds the two binaries **on the node** from
+     `decdn_node_source_repo` (default `https://github.com/decdn/decdn.git`) at
+     `decdn_node_source_ref`, which is required and may be any tag, branch or SHA:
+     - The build runs as the unprivileged system user `decdn_build_user`
+       (`decdn-build`, home `decdn_build_home` = `/var/lib/decdn-build`), never
+       root: cargo runs every dependency's build script. Root creates only the
+       home itself; everything under it is created as the build user, and the
+       finished `target/release/{decdn-node,decdn}` are installed by
+       `files/install-build-output.py`, which walks the path without following
+       symlinks and refuses anything but a regular file owned by the build user,
+       so a build script cannot point root at another file.
+     - The toolchain comes from `rustup-init` pinned by `decdn_rustup_version` and a
+       per-target `decdn_rustup_sha256`, installed with no default toolchain; the
+       checkout's `rust-toolchain.toml` then picks the Rust version (and any
+       components it lists), so the build uses exactly what upstream pins.
+       `build-essential`, `cmake`, `git`, `acl` and `ca-certificates` are
+       installed from apt.
+     - The build is `cargo build --release --locked`, async (up to
+       `decdn_node_source_build_timeout` seconds), so it survives a dropped SSH
+       session. `decdn_node_source_build_jobs` sets `CARGO_BUILD_JOBS`; lower it on
+       a host that runs out of memory compiling. A failed build names these knobs.
+     - `/usr/local/lib/decdn/installed-source` records `<repo>@<commit>`. A run
+       that resolves the same commit, with both binaries installed, skips the
+       build; a moved branch or a new ref rebuilds. The stamp is removed before
+       anything is installed and written back only after the `--version`
+       backstop passes, so a commit that fails it is rebuilt on the next run, and
+       rolling the ref back to the previous commit reinstalls that.
+     - **Leave `decdn_node_version` empty** (or set it to the version the ref's
+       crates report: upstream's workspace is `0.0.0`). The backstop enforces it
+       in this mode too, so a release version left over fails the deploy.
+     - The repo URL may not carry a secret: no password, no user on an http(s)
+       URL, no query. For a private repo give the build user an ssh deploy key
+       and the host's key in its `~/.ssh/known_hosts` (the clone does not accept
+       unknown host keys), and use `ssh://git@host/path` or `git@host:path`.
+     - The build costs the node a Rust toolchain, the checkout and its `target/`
+       under `/var/lib/decdn-build` (several GB), and far more RAM and CPU than
+       the daemon itself needs, during the build only. The `sponsord` roles share
+       the same user, home and toolchain on a co-located host, each with its own
+       checkout.
+   - **`manual`** — the role copies the two binaries from the
      Ansible control machine. Point it at them **either** way:
      - **`decdn_release_target_dir`** (recommended) — the Cargo `target/release`
        dir. The role derives both binary paths from it, **falls back** to the
@@ -79,7 +119,8 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
      **Architecture.** `decdn_node_target` is derived from the host's gathered
      architecture: `x86_64-unknown-linux-gnu` on x86_64,
      `aarch64-unknown-linux-gnu` on aarch64 (Graviton, Ampere, Hetzner CAX). It
-     picks the release tarball and the ELF check above. A play with
+     picks the release tarball, the pinned `rustup-init` in `source` mode and the
+     ELF check above. A play with
      `gather_facts: false` must set it explicitly (or gather `min`); an explicit
      value that disagrees with the host fails the deploy.
 
@@ -125,7 +166,8 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
 
 ## Required variables (set in `host_vars/<node>/`)
 
-`decdn_node_version` (`release` mode only) **or**, in `manual` mode, either
+`decdn_node_version` (`release` mode, the default) **or**, in `source` mode,
+`decdn_node_source_ref` **or**, in `manual` mode, either
 `decdn_release_target_dir` or `decdn_node_manual_bin_src` + `decdn_cli_manual_bin_src`
 (see [Prerequisites](#prerequisites) above), an RPC endpoint (sensitive — may embed an
 API key; provision it on the host or set `decdn_rpc_url` in the git-ignored
@@ -593,8 +635,22 @@ Upgrades (`manual` mode): there is **no** version stamp — rebuild the binaries
 locally and re-deploy. `copy` compares checksums and re-pushes (and restarts) only
 when the control-machine binary actually changed.
 
-Switching methods: a `manual` deploy clears the release version stamp on the host,
-so returning to `release` afterwards always re-fetches and re-installs the official
-tarball — even when `decdn_node_version` is unchanged. (This is separate from the
-`--version` backstop: a `decdn_node_version` left set in `manual` mode is still
-enforced against the local build — see the `manual` prerequisite above.)
+Upgrades (`source` mode): move the branch `decdn_node_source_ref` names, or point it
+at a new tag or SHA, and re-deploy. The `<repo>@<commit>` stamp no longer matches,
+so the node rebuilds (incrementally: `target/` is kept), reinstalls and restarts.
+
+Switching methods: every method clears the other methods' stamps on the host, so
+returning to `release` (or `source`) afterwards always re-fetches (or rebuilds) and
+re-installs — even when `decdn_node_version` (or the commit) is unchanged. (This is
+separate from the `--version` backstop: a `decdn_node_version` left set in `manual`
+or `source` mode is still enforced against that binary — see the prerequisites
+above.)
+
+A binary installed by a run that then failed before its restart handler ran is
+still restarted onto: the role records the daemon binary's sha256 after the start
+(`decdn_bin_checksum_file`) and restarts the daemon when the installed binary no
+longer matches it.
+
+After switching away from `source` for good, `/var/lib/decdn-build` and the
+`decdn-build` user stay behind (shared with the `sponsord` roles); remove them once
+no role on the host builds from source: `userdel -r decdn-build`.

@@ -149,14 +149,20 @@ ignored on the first converge.
 
 **Prerequisites** (see `roles/decdn_node/README.md` for the full flow):
 
-1. **Binaries.** Upstream has not tagged a release yet, so the default install method
-   is **`manual`**: build `decdn-node` and `decdn` from a `decdn/decdn` checkout and point
-   the role at them (`decdn_release_target_dir`, or both `decdn_node_manual_bin_src` and
-   `decdn_cli_manual_bin_src`). Cross-compile for aarch64 hosts; the role derives each
-   host's target from its architecture and checks the ELF before shipping. Once a
-   `v<version>` release exists, switch to `decdn_node_install_method: release` +
-   `decdn_node_version`; the role then downloads the tarballs from
-   `decdn_node_release_base` and verifies them against the GPG-signed `SHA256SUMS`.
+1. **Binaries.** Pick `decdn_node_install_method`:
+   - **`release`** (the default) downloads the `v<decdn_node_version>` tarballs from
+     `decdn_node_release_base` and verifies them against the GPG-signed `SHA256SUMS`.
+     Upstream has not tagged a release yet, so until it does this needs a mirror, or
+     use one of the other two methods.
+   - **`source`** clones `decdn_node_source_repo` (default `decdn/decdn` on GitHub) at
+     `decdn_node_source_ref` (any tag, branch or SHA) **on the node** and builds it there
+     as an unprivileged `decdn-build` user, with a sha256-pinned rustup and the
+     checkout's own `rust-toolchain.toml`. No control-machine toolchain needed; the
+     host pays the build in time, RAM and disk.
+   - **`manual`** copies `decdn-node` and `decdn` built on the control machine
+     (`decdn_release_target_dir`, or both `decdn_node_manual_bin_src` and
+     `decdn_cli_manual_bin_src`). Cross-compile for aarch64 hosts; the role derives
+     each host's target from its architecture and checks the ELF before shipping.
 2. **Per-node config** in `inventory/host_vars/<node>/main.yml` (committed): the binary
    sources, `decdn_region`, the cache origin, and the chain, as
    `decdn_network: arbitrum-sepolia`. The network profile supplies `chain_id` and every
@@ -368,7 +374,8 @@ the RPC URL when it is not provisioned on the host instead). Highlights:
 | `baseline_extra_inbound` | `[]` | public inbound ports; `decdn_nodes` opens udp/4433. |
 | `baseline_preserve_ipv6_autoconf` | `true` | Keep IPv6 RA/autoconf under hardening; set `false` for static-IPv6 hosts. |
 | `baseline_rp_filter_loose` | `false` | `true` loosens reverse-path filtering (`rp_filter=2`) for multi-homed nodes. |
-| `decdn_node_install_method` | `manual` | `manual` (local build) until upstream tags a release, then `release` with `decdn_node_version`. |
+| `decdn_node_install_method` | `release` | `release` (needs `decdn_node_version`), `source` (build `decdn_node_source_ref` on the node) or `manual` (copy a control-machine build). |
+| `decdn_node_source_repo` / `decdn_node_source_ref` | `decdn/decdn` on GitHub / `""` | `source` only: the repo (no credentials in the URL) and the tag, branch or SHA to build. |
 | `decdn_node_target` | from the host | The release target triple, derived from the host architecture (x86_64 or aarch64). |
 | `decdn_network` | `""` | `arbitrum-sepolia` sets `chain_id` and every contract address from the role's manifest mirror; inventory values still win. `""` = set them yourself. |
 | `decdn_rpc_url` | `""` | **required** per node, from a host-provisioned `0600 /etc/decdn/decdn.env` (preferred) *or* `host_vars/<node>/secret.yml`. |

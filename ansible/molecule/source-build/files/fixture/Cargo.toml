@@ -1,0 +1,12 @@
+# Test fixture for molecule/source-build: a two-package workspace shaped like
+# decdn/decdn (packages decdn-node and decdn-cli, binaries decdn-node and decdn),
+# with no dependencies so it compiles in seconds. Each binary execs the default
+# scenario's Python stub, so the role runs end to end on a source-built pair.
+[workspace]
+resolver = "3"
+members = ["crates/node", "crates/cli"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95.0"

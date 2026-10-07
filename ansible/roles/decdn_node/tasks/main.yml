@@ -7,27 +7,28 @@
 - name: Require a valid install method
   ansible.builtin.assert:
     that:
-      - decdn_node_install_method in ["release", "manual"]
+      - decdn_node_install_method in ["release", "source", "manual"]
     fail_msg: >-
-      decdn_node_install_method must be "release" (pinned GitHub Release tarballs)
-      or "manual" (copy locally-built binaries from the control machine).
+      decdn_node_install_method must be "release" (pinned GitHub Release tarballs),
+      "source" (build decdn_node_source_ref on the node) or "manual" (copy
+      locally-built binaries from the control machine).
 
-# NOTE (2026-09): upstream decdn/decdn has NO release tags yet — `git ls-remote
+# NOTE (2026-10): upstream decdn/decdn has NO release tags yet — `git ls-remote
 # --tags` is empty and .github/workflows/release.yml only fires on a v[0-9]* tag
-# push. Until the first tag is cut, "release" mode has nothing to download and
-# "manual" is the only working method; that is why the role default is "manual".
-# This assert stays so the failure names the cause instead of surfacing a bare 404
-# from the first get_url.
+# push. Until the first tag is cut, the default "release" mode has nothing to
+# download from GitHub. This assert names that cause and the alternatives instead
+# of surfacing a bare 404 from the first get_url.
 - name: Require a pinned release version
   ansible.builtin.assert:
     that:
       - decdn_node_version | length > 0
     fail_msg: >-
-      decdn_node_install_method "release" requires decdn_node_version (e.g. "0.1.1")
-      and a matching v<version> GitHub Release. As of decdn/decdn @ d306cc5c no
-      release tag has been cut, so there is nothing to download — build the two
-      binaries from a checkout and use decdn_node_install_method "manual" until an
-      upstream release exists. Set the version in host_vars once one does.
+      decdn_node_install_method "release" (the default) requires decdn_node_version
+      (e.g. "0.1.1") and a matching v<version> release. Upstream decdn/decdn has
+      cut no release tag yet, so until it does either serve one from a mirror
+      (decdn_node_release_base), set decdn_node_install_method "source" with a
+      decdn_node_source_ref to build on the node, or use "manual" to copy binaries
+      built on the control machine.
   when: decdn_node_install_method == "release"
 
 - name: Validate decdn_verify_release_signature is a real boolean
@@ -40,14 +41,67 @@
       it off means the tarballs are taken on trust.
   when: decdn_node_install_method == "release"
 
-# The target triple picks the release tarball and, in manual dir-mode, the ELF
-# architecture the binaries must match. It is derived from gathered facts by
-# default; an explicit value that disagrees with the host would install binaries
+# Build-from-source inputs. The ref is any tag, branch or SHA; the repo URL must not
+# carry credentials, because inventory is the wrong home for a token (a private
+# mirror should authenticate another way, e.g. a deploy key in the build user's
+# ~/.ssh or a credential helper provisioned on the host).
+- name: Validate the build-from-source inputs
+  when: decdn_node_install_method == "source"
+  block:
+    - name: Require a git ref to build
+      ansible.builtin.assert:
+        that:
+          - decdn_node_source_ref is string
+          - decdn_node_source_ref | trim | length > 0
+        fail_msg: >-
+          decdn_node_install_method "source" requires decdn_node_source_ref: the tag,
+          branch or commit SHA of {{ decdn_node_source_repo }} to build (e.g. "main").
+
+    # A secret in the URL is a password (https://user:token@, or user:token@host:
+    # in scp form), any userinfo on an http(s) URL (a bare token as the username),
+    # or a query/fragment (?access_token=). An ssh username is not a secret:
+    # ssh://git@host/path and git@host:path both pass, for a deploy key.
+    - name: Refuse credentials in the source repo URL
+      ansible.builtin.assert:
+        that:
+          - decdn_node_source_repo is string
+          - decdn_node_source_repo | length > 0
+          - "'?' not in decdn_node_source_repo and '#' not in decdn_node_source_repo"
+          - >-
+            ((decdn_node_source_repo | urlsplit('password') or '') | length == 0)
+            if decdn_node_source_repo is match('^[A-Za-z][A-Za-z0-9+.-]*://')
+            else decdn_node_source_repo is not match('^[^/@]*:[^/@]*@')
+          - >-
+            not (decdn_node_source_repo | urlsplit('scheme') in ['http', 'https']
+                 and (decdn_node_source_repo | urlsplit('username') or '') | length > 0)
+        fail_msg: >-
+          decdn_node_source_repo must not carry a secret (so it is not echoed here):
+          no password, no user on an http(s) URL, no query or fragment.
+          Inventory is not a place for secrets. For a private repo give the
+          {{ decdn_build_user }} user an ssh deploy key (and the host's key in
+          its ~/.ssh/known_hosts) and use ssh://git@host/path or git@host:path,
+          or a credential helper on the host.
+
+    - name: Validate decdn_node_source_build_jobs
+      ansible.builtin.assert:
+        that:
+          - (decdn_node_source_build_jobs | string) == ""
+            or (decdn_node_source_build_jobs | string) is match("^[1-9][0-9]*$")
+          - (decdn_node_source_build_timeout | string) is match("^[1-9][0-9]*$")
+        fail_msg: >-
+          decdn_node_source_build_jobs must be "" (one job per CPU) or a positive
+          integer, and decdn_node_source_build_timeout a positive number of
+          seconds (got "{{ decdn_node_source_build_jobs }}" and
+          "{{ decdn_node_source_build_timeout }}").
+
+# The target triple picks the release tarball, the pinned rustup-init in source
+# mode and, in manual dir-mode, the ELF architecture the binaries must match. It
+# is derived from gathered facts by default; an explicit value that disagrees with the host would install binaries
 # the node cannot exec, so both cases are checked before anything is fetched.
 # Explicit *_manual_bin_src paths never consult the triple, so they skip this.
 - name: Resolve the node target triple
   when: >-
-    decdn_node_install_method == "release"
+    decdn_node_install_method in ["release", "source"]
     or (decdn_release_target_dir | length > 0
         and not (decdn_node_manual_bin_src | length > 0 and decdn_cli_manual_bin_src | length > 0))
   block:
@@ -1663,7 +1717,7 @@
          or decdn_config_validate.stdout | default('', true)
          or decdn_config_validate.msg | default('(no output)', true) }}
       — this role renders a key the installed decdn
-      {{ decdn_node_version | default('(manual)', true) }} does not accept, or a
+      {{ decdn_node_version | default('(' ~ decdn_node_install_method ~ ' install)', true) }} does not accept, or a
       value outside its range. Config sections are deny_unknown_fields with no
       aliases upstream, so re-sync roles/decdn_node/templates/node.toml.j2 against
       the binary's schema.
@@ -1692,6 +1746,17 @@
     name: decdn-node
     enabled: true
     state: started
+
+# The binary the daemon now runs; see "Hash the installed decdn-node binary" in
+# install.yml. Same placement rule as the env-file record below.
+- name: Record the decdn-node binary checksum (the daemon is now running on it)
+  ansible.builtin.copy:
+    dest: "{{ decdn_bin_checksum_file }}"
+    content: "{{ decdn_bin_stat.stat.checksum }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when: decdn_bin_stat.stat.checksum is defined
 
 # Record the env file's hash LAST, and only here — deliberately after the handler
 # flush and the start above, so the record means "the daemon is running on this

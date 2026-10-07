@@ -28,6 +28,7 @@ body:
       description: Ansible only (cloud-init is always release).
       options:
         - release (signed tarball)
+        - source (built on the host from a git ref)
         - manual (locally built binaries)
         - not applicable
     validations:
