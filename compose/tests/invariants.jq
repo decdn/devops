@@ -29,6 +29,7 @@ def allowed_mounts: {
                ["/etc/sponsord/treasury-password", "/run/secrets/treasury-password", true],
                ["/etc/sponsord/treasury-keystore.json", "/run/secrets/treasury-keystore.json", true]],
   "sponsord-onramp": [["/etc/sponsord/api-token", "/run/secrets/api-token", true],
+                      ["/etc/sponsord/onramp-gate", "/etc/sponsord/onramp-gate", true],
                       ["/etc/sponsord/turnstile-secret", "/run/secrets/turnstile-secret", true]],
   "caddy": [["Caddyfile", "/etc/caddy/Caddyfile", true], ["/var/lib/caddy", "/data", false]]
 };

@@ -162,6 +162,16 @@ services:
         target: /run/secrets/turnstile-secret
         read_only: true
         bind: {create_host_path: false}
+      # A custom gate page (upstream docs/operator.md, "Your own gate page"): put
+      # the HTML in this directory and set ONRAMP_GATE_TEMPLATE to its path in
+      # sponsord-onramp.env. A fixed directory rather than a configurable file, so
+      # no setting can mount a credential into a server that publishes the page.
+      # Created empty when absent: unused, the built-in page is served.
+      - type: bind
+        source: /etc/sponsord/onramp-gate
+        target: /etc/sponsord/onramp-gate
+        read_only: true
+        bind: {create_host_path: true}
     # It reads the daemon's limits only at start, so `docker compose restart
     # sponsord` restarts it too, like the unit's PartOf= (a stop does not
     # propagate). It exits while the daemon is unreachable; the restart policy
