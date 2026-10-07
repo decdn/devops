@@ -1,5 +1,5 @@
 ---
-# Positive path only — see molecule.yml for scope and ../validation for the
+# Positive path only — see molecule.yml for scope and ../validation-alloy for the
 # negative (block/rescue) matrix. The roles run in sequence: Alloy first so its
 # receivers exist before the daemon is started and exports spans at them, then
 # sponsord on the same host — the CO-LOCATED shape (a host in both decdn_nodes and

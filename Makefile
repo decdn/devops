@@ -138,7 +138,7 @@ lint-cloud-init:     ## schema-check the cloud-init/ user-data templates and the
 # The guard rails nothing else exercises: ansible/Makefile's scoping guards, the
 # release gate, the lint-compose and lint-cloud-init negative cases, and (with
 # UPSTREAM=<decdn checkout>) the upstream-mirror generators' exit codes. CI job `scripts`.
-test-scripts:        ## test the Makefile guards, release gate, lint-compose and lint-cloud-init negatives (needs docker, jq, cloud-init, yq)
+test-scripts:        ## test the Makefile and molecule-driver guards, release gate, lint-compose and lint-cloud-init negatives (needs docker, jq, cloud-init, yq)
 	tests/scripts-test.sh
 
 lint-helm:           ## helm lint + render tests + kubeconform + shared schema-key check (needs helm, yq, python3>=3.11, docker)
@@ -154,10 +154,10 @@ lint-helm:           ## helm lint + render tests + kubeconform + shared schema-k
 lint-alloy:          ## validate grafana_alloy's rendered config against the real pinned Alloy binary
 	ansible/tests/alloy-config/validate.sh
 
-molecule:            ## containerised converge/verify of the decdn_node role, scenarios in parallel (needs Docker)
+molecule:            ## containerised converge/verify of the roles, scenarios in parallel (needs Docker; SCENARIOS='a b', JOBS=<n>)
 	$(MAKE) -C ansible molecule
 
-molecule-serial:     ## same suite, one scenario at a time (readable output on failure)
+molecule-serial:     ## same selection, one scenario at a time (readable output on failure)
 	$(MAKE) -C ansible molecule-serial
 
 galaxy-build:        ## stage + build the decdn.node Galaxy collection artifact

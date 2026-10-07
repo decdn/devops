@@ -8,7 +8,7 @@
 # (endpoint URLs, instance IDs) MAY come from plain committed inventory; those are validated here
 # too, and each one that is set removes its key from the host-state gates below.
 #
-# Ordering matters for testability (molecule/validation): PURE-INVENTORY gates
+# Ordering matters for testability (molecule/validation-alloy): PURE-INVENTORY gates
 # run first so a bad knob rejects deterministically regardless of what fixtures
 # exist on the host; the host-state credential gates follow.
 

@@ -16,4 +16,4 @@
     name: caddy
     state: restarted
     daemon_reload: true
-  when: not ansible_check_mode or 'caddy' in ansible_facts.packages
+  when: not ansible_check_mode or sponsord_onramp_caddy_installed | default(false)

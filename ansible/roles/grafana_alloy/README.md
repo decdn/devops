@@ -364,7 +364,7 @@ Three layers, because the first one cannot prove correctness on its own:
 
 1. **`grafana-cloud` molecule scenario** — the role end-to-end against a *stub*
    binary (plumbing, rendered content, hardened unit, group membership, teardown
-   scope), plus negative preflight cases in `validation` and disabled-path
+   scope), plus negative preflight cases in `validation-alloy` and disabled-path
    assertions in `default`. The stub exits 0 for every subcommand, so a green run
    says nothing about whether Alloy can load the config. It also runs in a
    container with no D-Bus and no real journal, so the `systemd` collector and

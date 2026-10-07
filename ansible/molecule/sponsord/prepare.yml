@@ -3,12 +3,8 @@
 #   1. the treasury keystore + password (placeholders, staged at 0644 so verify.yml
 #      can attribute the 0600 lock-down to the role);
 #   2. the Grafana Cloud credential env file (as ../grafana-cloud/prepare.yml);
-#   3. a unit drop-in that switches the stub's byte-for-byte RPC URL check on;
-#   4. a release mirror on loopback (127.0.0.1:8081): the stub packaged the way
-#      upstream names a sponsord release, a SHA256SUMS signed by a throwaway key, and
-#      a second release whose binary reports the wrong version. side_effect.yml
-#      installs from it; the role verifies against the mirror's key (fetched to
-#      the controller, since sponsord_release_keyring is a controller-side file).
+#   3. a unit drop-in that switches the stub's byte-for-byte RPC URL check on.
+# ../sponsord-install/prepare.yml runs this, then adds its release mirror.
 # The API token is NOT staged: the role must generate it.
 #
 # CONTAINER-ONLY step first: systemd builds each unit's LoadCredential= ramfs in a
@@ -71,88 +67,3 @@
         content: |
           [Service]
           Environment=SPONSORD_MOLECULE_RPC_LITERAL=1
-
-    # --- The release mirror -------------------------------------------------------
-    - name: Install gnupg and tar for the release mirror
-      ansible.builtin.apt:
-        name: [gnupg, tar]
-        state: present
-        update_cache: true
-
-    - name: Create the mirror's served tree and private directories
-      ansible.builtin.file:
-        path: "{{ item.path }}"
-        state: directory
-        owner: root
-        group: root
-        mode: "{{ item.mode }}"
-      loop:
-        - {path: /srv/sponsord-mirror, mode: "0755"}
-        - {path: /srv/sponsord-mirror/www, mode: "0755"}
-        - {path: /srv/sponsord-mirror/www/releases, mode: "0755"}
-        - {path: /srv/sponsord-mirror/www/releases/sponsord-v0.0.0-molecule-stub, mode: "0755"}
-        - {path: /srv/sponsord-mirror/www/releases/sponsord-v0.0.9, mode: "0755"}
-        - {path: /srv/sponsord-mirror/gnupg, mode: "0700"}
-        - {path: /srv/sponsord-mirror/stage, mode: "0700"}
-      loop_control:
-        label: "{{ item.path }}"
-
-    - name: Stage the stub as the release binary
-      ansible.builtin.copy:
-        src: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/files/sponsord-stub"
-        dest: /srv/sponsord-mirror/stage/sponsord
-        owner: root
-        group: root
-        mode: "0755"
-
-    # sponsord-v<ver>/sponsord-<ver>-<triple>.tar.gz with the binary at the archive
-    # root, as upstream's release.yml publishes. v0.0.9 holds the same stub, which
-    # reports 0.0.0-molecule-stub: a release whose binary is not the pinned version.
-    - name: Build, checksum and sign the mirror's releases
-      ansible.builtin.shell:
-        cmd: |
-          set -euo pipefail
-          export GNUPGHOME=/srv/sponsord-mirror/gnupg
-          gpg --batch --pinentry-mode loopback --passphrase '' \
-            --quick-gen-key 'molecule sponsord mirror <mirror@molecule.invalid>' ed25519 sign 1d
-          gpg --batch --armor --export > /srv/sponsord-mirror/KEYS.asc
-          for ver in 0.0.0-molecule-stub 0.0.9; do
-            cd /srv/sponsord-mirror/www/releases/sponsord-v$ver
-            tar -C /srv/sponsord-mirror/stage -czf "sponsord-$ver-{{ _sp_triple }}.tar.gz" sponsord
-            sha256sum -- *.tar.gz > SHA256SUMS
-            gpg --batch --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
-            chmod 0644 -- *
-          done
-        executable: /bin/bash
-        creates: /srv/sponsord-mirror/KEYS.asc
-      vars:
-        _sp_triple: >-
-          {{ {'x86_64': 'x86_64-unknown-linux-gnu',
-              'aarch64': 'aarch64-unknown-linux-gnu'}[ansible_facts['architecture']] }}
-
-    - name: Fetch the mirror's public key to the controller
-      ansible.builtin.fetch:
-        src: /srv/sponsord-mirror/KEYS.asc
-        dest: "{{ _sp_eph }}/sponsord-mirror-KEYS-{{ inventory_hostname }}.asc"
-        flat: true
-      vars:
-        _sp_eph: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
-
-    - name: Install the mirror's HTTP server unit
-      ansible.builtin.copy:
-        dest: /etc/systemd/system/molecule-sponsord-mirror.service
-        owner: root
-        group: root
-        mode: "0644"
-        content: |
-          [Unit]
-          Description=Loopback sponsord release mirror for the molecule scenario
-          [Service]
-          ExecStart=/usr/bin/python3 -m http.server 8081 --bind 127.0.0.1 --directory /srv/sponsord-mirror/www
-          DynamicUser=yes
-
-    - name: Start the mirror
-      ansible.builtin.systemd_service:
-        name: molecule-sponsord-mirror
-        state: started
-        daemon_reload: true

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for the repo's own guard rails that no molecule scenario or chart render
-# exercises: the ansible/ Makefile's scoping guards, the release gate, the
+# exercises: the ansible/ Makefile's scoping guards, the molecule driver's guards
+# and locks (scripts/molecule.sh), the release gate, the
 # lint-compose and lint-cloud-init invariants (negative cases), the firewall holes
 # playbooks/group_vars/ derives per host, and — with
 # UPSTREAM=<decdn checkout> — the upstream-mirror generators' exit codes.
@@ -37,26 +38,145 @@ pass "decommission LIMIT=h scopes playbooks/decommission.yml"
 mk backup | grep -q -- "playbooks/backup.yml" || fail "backup does not run playbooks/backup.yml"
 pass "backup runs playbooks/backup.yml fleet-wide by default"
 
-# --- molecule suite lock: a second run must refuse, not share the containers ----------
-# Hold the lock, then start the suite for real. flock -n refuses at once, so no
-# scenario runs and — since deps sits behind the lock — no galaxy install either;
-# make reports the recipe failure as 2. A directory lock, like the default.
-lock="$work/molecule.lock"
-mkdir "$lock"
+# --- molecule driver (scripts/molecule.sh): selection, guards, locks ------------------
+# Against a throwaway ansible/ layout, so nothing here can start a container or touch
+# the real collections/: every case below stops before `molecule test`, and the deps
+# cases hold the collections lock so no install runs either.
+fake="$work/ansible"
+mkdir -p "$fake/molecule/a" "$fake/molecule/b" "$fake/molecule/c"
+for s in a b c; do : >"$fake/molecule/$s/molecule.yml"; done
+echo 'collections: []' >"$fake/requirements.yml"
+prefix="$work/mol"
+# mol [VAR=value...] <mode>: the driver in the fake layout, with a clean selection env.
+mol() {
+  local vars=()
+  while [[ "$1" == *=* ]]; do vars+=("$1"); shift; done
+  (cd "$fake" && env -u SCENARIOS -u JOBS -u SLOW_FIRST MOLECULE_LOCK_PREFIX="$prefix" \
+    "${vars[@]}" "$repo/scripts/molecule.sh" "$@")
+}
+# said <description> <pattern>: the last command's output must contain the pattern.
+said() { grep -qF -- "$2" "$work/out" || { cat "$work/out" >&2; fail "$1: output lacks '$2'"; }; }
+no_deps() { ! grep -q "ansible-galaxy" "$work/out" || { cat "$work/out" >&2; fail "$1 ran deps"; }; }
+
+expect 0 "molecule list: every scenario, SLOW_FIRST first, the rest by name" mol SLOW_FIRST=c list
+[[ "$(<"$work/out")" == '["c","a","b"]' ]] || fail "molecule list printed $(<"$work/out")"
+expect 0 "molecule list: a subset, sorted when nothing in it is slow" mol 'SCENARIOS=c a' list
+[[ "$(<"$work/out")" == '["a","c"]' ]] || fail "molecule list SCENARIOS='c a' printed $(<"$work/out")"
+expect 1 "molecule refuses an unknown scenario" mol SCENARIOS=nope list
+said "unknown scenario" "unknown scenario 'nope'"
+expect 1 "molecule refuses an empty SCENARIOS" mol SCENARIOS= list
+said "empty SCENARIOS" "SCENARIOS is empty"
+expect 1 "molecule refuses a stale SLOW_FIRST entry" mol SLOW_FIRST=gone list
+said "stale SLOW_FIRST" "SLOW_FIRST names 'gone'"
+mkdir "$fake/molecule/d"
+expect 1 "molecule refuses a scenario dir without molecule.yml" mol list
+said "truncated discovery" "refusing to run a silently-truncated suite"
+rmdir "$fake/molecule/d"
+for jobs in 0 00 x; do
+  expect 1 "molecule refuses JOBS=$jobs before deps" mol JOBS=$jobs parallel
+  said "JOBS=$jobs" "JOBS must be a positive integer"
+  no_deps "JOBS=$jobs"
+done
+
+# A held scenario lock refuses the whole run up front: nothing starts, no deps.
+mkdir "$prefix.b.lock"
 # The sleep itself holds the lock fd, so killing it releases the lock (a
 # `flock <path> sleep` holder would leave an orphaned sleep holding it).
-( exec 9<"$lock"; flock 9; exec sleep 60 ) & holder=$!
-until ! flock -n "$lock" true; do sleep 0.1; done
-for target in molecule molecule-serial; do
-  expect 2 "$target refuses to start while another suite holds the lock" \
-    make -C "$repo/ansible" "$target" MOLECULE_LOCK="$lock"
-  grep -q "another molecule suite holds $lock" "$work/out" \
-    || { cat "$work/out" >&2; fail "$target lock refusal does not say why"; }
-  ! grep -q "ansible-galaxy" "$work/out" \
-    || { cat "$work/out" >&2; fail "$target ran deps outside the lock"; }
+( exec 9<"$prefix.b.lock"; flock 9; exec sleep 60 ) & holder=$!
+until ! flock -n "$prefix.b.lock" true; do sleep 0.1; done
+for mode in parallel serial; do
+  expect 75 "molecule $mode refuses while another run holds one of its scenarios" mol 'SCENARIOS=a b' "$mode"
+  said "$mode lock refusal" "another molecule run holds scenario b ($prefix.b.lock)"
+  no_deps "$mode lock refusal"
 done
 kill "$holder"; wait "$holder" 2>/dev/null || true
 
+# deps beside a running scenario (shared collections lock held): it never rewrites
+# the tree, and proceeds only if the tree was installed from this requirements.yml.
+mkdir -p "$prefix.collections.lock" "$fake/collections"
+( exec 9<"$prefix.collections.lock"; flock -s 9; exec sleep 60 ) & holder=$!
+until ! flock -n -x "$prefix.collections.lock" true; do sleep 0.1; done
+expect 1 "deps refuses a changed requirements.yml while a run uses collections/" mol deps
+said "deps refusal" "requirements.yml changed while another molecule run is using collections/"
+no_deps "the deps refusal"
+(cd "$fake" && sha256sum requirements.yml | cut -d' ' -f1 >collections/.requirements.sha256)
+expect 0 "deps leaves a current collections/ alone while a run uses it" mol deps
+said "deps skip" "not reinstalling"
+no_deps "the deps skip"
+kill "$holder"; wait "$holder" 2>/dev/null || true
+
+# Whole runs against stand-ins for molecule and ansible-galaxy: every selected
+# scenario stays reserved until the run ends (a queued one included, so a second run
+# wanting it refuses up front), the locks go with the run, and a failing scenario
+# fails the run by name. The stand-in molecule waits while $FAKE_HOLD exists and
+# fails the scenario named in $FAKE_FAIL.
+mkdir -p "$work/bin"
+cat >"$work/bin/molecule" <<'EOF'
+#!/usr/bin/env bash
+echo "fake molecule $*"
+while [[ -e "${FAKE_HOLD:-/nonexistent}" ]]; do sleep 0.1; done
+[[ " $* " != *" -s ${FAKE_FAIL:-none} "* ]]
+EOF
+cat >"$work/bin/ansible-galaxy" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p collections && echo "fake ansible-galaxy $*"
+EOF
+chmod +x "$work/bin/molecule" "$work/bin/ansible-galaxy"
+fake_path="PATH=$work/bin:$PATH"
+
+touch "$work/hold"
+mol "$fake_path" FAKE_HOLD="$work/hold" 'SCENARIOS=a b' serial >"$work/run.out" 2>&1 & runner=$!
+until grep -q 'fake molecule test -s a' "$work/run.out" 2>/dev/null; do sleep 0.1; done
+! flock -n "$prefix.b.lock" true || fail "scenario b, queued behind a, is not reserved by the run"
+pass "a run reserves every selected scenario, the queued ones included"
+expect 75 "a second run wanting a reserved scenario refuses up front" mol "$fake_path" SCENARIOS=b serial
+said "the reserved-scenario refusal" "another molecule run holds scenario b"
+rm "$work/hold"
+rc=0; wait "$runner" || rc=$?
+[[ $rc == 0 ]] || { cat "$work/run.out" >&2; fail "the reserving run exited $rc"; }
+if ! { grep -q 'fake molecule test -s b' "$work/run.out" && grep -q 'fake ansible-galaxy' "$work/run.out"; }; then
+  cat "$work/run.out" >&2; fail "the run did not install deps and run both scenarios"
+fi
+pass "the run installs deps, then runs both scenarios"
+for lock in a b collections; do
+  flock -n -x "$prefix.$lock.lock" true || fail "the $lock lock outlived the run that took it"
+done
+pass "the run's locks end with it"
+expect 123 "a failing scenario fails a parallel run (xargs 123)" mol "$fake_path" FAKE_FAIL=b 'SCENARIOS=a b' parallel
+said "the failing scenario" "[b] SCENARIO FAILED"
+
+# The real Makefile wiring: the lock refusal reaches make (which reports it as 2).
+mkdir "$prefix.default.lock"
+( exec 9<"$prefix.default.lock"; flock 9; exec sleep 60 ) & holder=$!
+until ! flock -n "$prefix.default.lock" true; do sleep 0.1; done
+for target in molecule molecule-serial; do
+  expect 2 "make $target refuses while another run holds the scenario" \
+    env -u JOBS -u SLOW_FIRST make -C "$repo/ansible" "$target" SCENARIOS=default MOLECULE_LOCK_PREFIX="$prefix"
+  said "make $target lock refusal" "another molecule run holds scenario default"
+  no_deps "make $target lock refusal"
+done
+kill "$holder"; wait "$holder" 2>/dev/null || true
+
+# CI's matrix is make molecule-list: exactly the scenario dirs, and SLOW_FIRST valid.
+expect 0 "make molecule-list lists the real scenarios" \
+  env -u SCENARIOS -u SLOW_FIRST make -s -C "$repo/ansible" molecule-list
+want="$(cd "$repo/ansible/molecule" && for d in */molecule.yml; do echo "${d%/molecule.yml}"; done | sort)"
+[[ "$(jq -r '.[]' "$work/out" | sort)" == "$want" ]] \
+  || { cat "$work/out" >&2; fail "make molecule-list does not match ansible/molecule/*/molecule.yml"; }
+
+# Split scenarios share one converge, so their inventories must not drift apart.
+if command -v yq >/dev/null; then
+  for pair in sponsord:sponsord-install sponsord-onramp:sponsord-onramp-caddy; do
+    a="$repo/ansible/molecule/${pair%%:*}/molecule.yml" b="$repo/ansible/molecule/${pair##*:}/molecule.yml"
+    [[ "$(yq -o=json '.provisioner.inventory' "$a")" == "$(yq -o=json '.provisioner.inventory' "$b")" ]] \
+      || fail "molecule ${pair%%:*} and ${pair##*:} inventories differ (they share one converge)"
+    pass "molecule ${pair%%:*} and ${pair##*:} share one inventory"
+  done
+elif [[ -n ${CI:-} ]]; then
+  fail "yq is not on PATH in CI; the split-scenario inventory check would be skipped"
+else
+  skipped+=("split-scenario inventory check (needs yq)")
+fi
 # --- release gate ----------------------------------------------------------------------
 gate="$repo/scripts/check-release-version.sh"
 expect 2 "release gate rejects a stray argument" "$gate" v0.1.0 notes.md

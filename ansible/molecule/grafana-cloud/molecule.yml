@@ -3,7 +3,7 @@
 # `grafana_alloy` role end-to-end against a stub binary (manual install mode,
 # mirroring how ../default stubs the daemon) followed by `decdn_node`, proving
 # the mirrored flag wires otlp_endpoint into node.toml pointing at Alloy's
-# receiver. The broken-input matrix lives in ../validation (block/rescue cases
+# receiver. The broken-input matrix lives in ../validation-alloy (block/rescue cases
 # cannot be idempotence-clean, which this scenario must stay).
 #
 # Known boundary (why no runtime socket assertions): the stub does NOT bind

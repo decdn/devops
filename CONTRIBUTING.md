@@ -29,12 +29,12 @@ targets, so a local pass means a CI pass. Deploy targets live in
 |--------|--------------|
 | `make lint` | every pre-commit hook on every file (CI job `pre-commit`) |
 | `make lint-ansible` | install Galaxy collections + `ansible-lint` (production profile, which includes the Ansible security rules) |
-| `make molecule` | every `ansible/molecule/*/` scenario in parallel, in privileged systemd containers (needs Docker and util-linux `flock`; cap with `JOBS=<n>`). `make molecule-serial` runs them one at a time for readable failures. Both take a host-wide lock, so a second suite refuses to start (overlapping runs share container names). |
+| `make molecule` | every `ansible/molecule/*/` scenario in parallel, in privileged systemd containers (needs Docker and util-linux `flock`; cap with `JOBS=<n>`, pick some with `SCENARIOS='a b'`). `make molecule-serial` runs them one at a time for readable failures. Each scenario takes its own host-wide lock, so two runs can share a host as long as they share no scenario (a run that would refuses to start: runs of one scenario share its container names). `make molecule-list` prints the selection as JSON (CI's matrix). The driver is `scripts/molecule.sh`. |
 | `make lint-helm` | chart: `helm lint --strict`, positive/negative render tests, kubeconform (digest-pinned image), the shared schema-key check (needs `helm`, `yq`, `python3` ≥ 3.11, Docker). Set `DECDN_CLI=<path to decdn>` to also run the real `decdn config validate` (CI can't). |
 | `make lint-alloy` | renders `roles/grafana_alloy`'s templates and validates them with the **real** digest-pinned Alloy binary. The molecule stub exits 0 for everything, so this is the only gate that proves the config loads. `ALLOY_BIN=<path>` skips the download. |
 | `make lint-compose` | renders `compose/compose.yaml` with every profile on (with its example env, without env files, with an empty `.env`) and asserts `compose/tests/invariants.jq`, `inline-env.jq` and `fail-closed.jq` |
 | `make lint-cloud-init` | `cloud-init schema` on `cloud-init/user-data.yaml` and `cloud-init/user-data-sponsord.yaml`, then `cloud-init/tests/lint.py` on each: no secrets (only the bootstrap's own files, no secret-looking keys or assignments), no hardening skip, `release` installs verified against the vendored keys with a host-generated node wallet (trust knobs only in their own group's `vars`, no moved keyring or secret path), only localhost, in `decdn_nodes` and/or `sponsord_hosts` (the onramp only beside sponsord), a keyed admin account, `runcmd` exactly stage 1, shellcheck-clean scripts, and a collection lock that covers `ansible/requirements.yml` (needs `cloud-init`, `shellcheck`, `yq`). `CLOUD_INIT_FILE=<path>` checks your own filled-in copy. |
-| `make test-scripts` | `tests/scripts-test.sh`: the `ansible/Makefile` scoping guards (dry runs), the release gate, and the negative cases of `lint-compose` and `lint-cloud-init` (the latter skipped without `cloud-init` on PATH). `UPSTREAM=<decdn checkout>` adds the sync generators' exit codes. |
+| `make test-scripts` | `tests/scripts-test.sh`: the `ansible/Makefile` scoping guards (dry runs), the molecule driver's selection guards and locks (no containers), the split scenarios' shared inventories, the release gate, and the negative cases of `lint-compose` and `lint-cloud-init` (the latter skipped without `cloud-init` on PATH). `UPSTREAM=<decdn checkout>` adds the sync generators' exit codes. |
 | `make security` | KICS IaC scan of `ansible/`, the rendered chart and `compose/` (digest-pinned engine, fail on HIGH) |
 | `make galaxy-check` | build the `decdn.node` collection and run galaxy-importer's checks |
 
@@ -71,9 +71,14 @@ reports the two differently.
     `cloud-init` (`make lint-cloud-init`);
   - on the Ansible, chart or compose paths: `kics` (`make security`). KICS has no
     cloud-init platform.
-- **`molecule.yml`**: `make molecule JOBS=3` on `ansible/**` or `cloud-init/**` changes.
-  The `cloud-init` and `cloud-init-sponsord` scenarios boot the real user-data templates,
-  so they need network access to apt, PyPI and Galaxy.
+- **`molecule.yml`**: on `ansible/**`, `cloud-init/**` or `scripts/molecule.sh` changes, one runner per
+  scenario (`make molecule SCENARIOS=<one>`), the matrix read from `make molecule-list`.
+  The `molecule` job aggregates them: it is the one check name to require, since the
+  per-scenario names follow the scenario list. The `cloud-init` and
+  `cloud-init-sponsord` scenarios boot the real user-data templates, so they need
+  network access to apt, PyPI and Galaxy. Keep each scenario well under its leg's
+  timeout; when one grows, split it along its side effects (as `sponsord-install`,
+  `sponsord-onramp-caddy` and the `validation-*` scenarios are).
 - **`release.yml`**: on `vX.Y.Z` tags; see [RELEASING.md](RELEASING.md).
 - **`upstream-drift.yml`**: weekly, non-blocking; see "Upstream mirrors" above.
 - **Every job is bounded** by `timeout-minutes`. The values are bounds sized off

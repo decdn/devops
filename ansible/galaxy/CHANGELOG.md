@@ -175,6 +175,11 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   a missing port, a path/query/fragment and userinfo are rejected at deploy time.
   OTLP export is always compiled in; no `--features otlp` build is needed.
 
+- `sponsord_onramp` checks for Caddy and curl with one `dpkg-query` instead of
+  `package_facts`, and skips the apt install (and its cache refresh) when both are
+  installed. A re-run no longer loads the whole package database or refreshes the apt
+  lists. It no longer sets `ansible_facts.packages`.
+
 ### Fixed
 
 - On a host in both `decdn_nodes` and `sponsord_hosts`, the sponsord play's
