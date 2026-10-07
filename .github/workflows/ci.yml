@@ -185,13 +185,13 @@ jobs:
           if-no-files-found: ignore
 
   # Helm chart: `helm lint --strict`, positive + negative render tests, kubeconform
-  # (digest-pinned image) and the upstream schema-key check shared with molecule —
-  # all via `make lint-helm`, the same command developers run locally.
+  # and promtool (digest-pinned images) and the upstream schema-key check shared
+  # with molecule — all via `make lint-helm`, the same command developers run locally.
   helm:
     needs: changes
     if: needs.changes.outputs.helm == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20         # pulls the kubeconform image; ~1m in practice
+    timeout-minutes: 20         # pulls the kubeconform and promtool images; ~1m in practice
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Helm version is pinned here, in the kics job below and twice in release.yml;

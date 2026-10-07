@@ -33,9 +33,9 @@ image has no CLI.
 | `Service` (quic) | Public UDP. The type is `LoadBalancer`, `NodePort` or `ClusterIP`, with `externalTrafficPolicy: Local`. |
 | `Service` (metrics) | ClusterIP only, never public. |
 | `NetworkPolicy` | Ingress allows QUIC from anywhere and metrics only from `metrics.networkPolicy.from`. Egress is open unless `networkPolicy.egress` is set. |
-| `ServiceMonitor` | Optional (`metrics.serviceMonitor.enabled`). Adds the `job`, `region`, `deployment_environment` and `instance` target labels the upstream dashboards and alerts select on. |
-| `PrometheusRule` | Optional (`metrics.prometheusRule.enabled`). Upstream's reference alert rules. |
-| `ConfigMap` × 4 (dashboards) | Optional (`metrics.grafanaDashboards.enabled`). Upstream's Grafana dashboards, labelled for the Grafana sidecar. |
+| `ServiceMonitor` | Optional (`metrics.serviceMonitor.enabled`). Adds the `job`, `region`, `deployment_environment` and `instance` target labels the dashboards and alerts in `files/monitoring/` select on. |
+| `PrometheusRule` | Optional (`metrics.prometheusRule.enabled`). The deCDN reference alert rules (`files/monitoring/`). |
+| `ConfigMap` × 4 (dashboards) | Optional (`metrics.grafanaDashboards.enabled`). The deCDN Grafana dashboards (`files/monitoring/`), labelled for the Grafana sidecar. |
 
 What it does **not** do:
 
@@ -247,9 +247,8 @@ their own token volume, so they should work with the chart's
 
 ## Monitoring
 
-The chart vendors upstream's Grafana dashboards and Prometheus alert rules in
-[`files/monitoring/`](files/monitoring/README.md) (re-vendored by
-`scripts/sync-monitoring.sh`; a weekly CI job flags drift). With the Prometheus
+The chart ships the deCDN Grafana dashboards and Prometheus alert rules in
+[`files/monitoring/`](files/monitoring/README.md). With the Prometheus
 Operator and a Grafana sidecar (kube-prometheus-stack), turn them on next to the
 ServiceMonitor:
 

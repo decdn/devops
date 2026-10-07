@@ -11,12 +11,12 @@ both (see [RELEASING.md](../../RELEASING.md)).
 ### Added
 
 - `ServiceMonitor`: the `job`, `region`, `deployment_environment` and `instance`
-  target labels the upstream dashboards and alerts select on, configurable through
+  target labels the dashboards and alerts select on, configurable through
   `metrics.serviceMonitor.jobLabel`, `.deploymentEnvironment` and `.relabelings`.
-- Optional `PrometheusRule` with upstream's reference alert rules
-  (`metrics.prometheusRule`), and the upstream Grafana dashboards as sidecar-labelled
-  ConfigMaps (`metrics.grafanaDashboards`). Both are vendored in `files/monitoring/`
-  by `scripts/sync-monitoring.sh`, with the upstream commit recorded in `SOURCE`.
+- Optional `PrometheusRule` with the deCDN reference alert rules
+  (`metrics.prometheusRule`), and the deCDN Grafana dashboards as sidecar-labelled
+  ConfigMaps (`metrics.grafanaDashboards`). Both live in `files/monitoring/`, which
+  this repo maintains; `decdn/decdn` no longer ships them.
 
 ## [0.1.0] — unreleased
 

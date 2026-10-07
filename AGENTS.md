@@ -69,7 +69,7 @@ compose/                # Docker Compose deploy path for a single host (see its 
 charts/
   decdn-node/           # Helm chart for the node on Kubernetes (see its README.md)
     ci/                 # CI values files (mirror molecule/schema's three plays)
-    files/monitoring/   # GENERATED: upstream dashboards + alert rules (scripts/sync-monitoring.sh)
+    files/monitoring/   # Grafana dashboards + Prometheus alert rules (maintained here)
     tests/render-test.sh  # positive/negative render tests (`make lint-helm`)
 docs/                   # cross-path operator docs: requirements.md, lifecycle.md
 scripts/                # upstream-mirror generators, the release gate, the molecule driver (molecule.sh)
@@ -78,11 +78,17 @@ scripts/                # upstream-mirror generators, the release gate, the mole
 **Generated mirrors of upstream — regenerate, never hand-edit:**
 `ansible/roles/decdn_node/vars/main/networks.yml` and its subsets
 `ansible/roles/sponsord/vars/main/networks.yml` and
-`ansible/roles/sponsord_onramp/vars/main/networks.yml` (all `scripts/sync-network-profiles.py`),
-`charts/decdn-node/files/monitoring/` (`scripts/sync-monitoring.sh`) and
-`ansible/molecule/schema/files/schema-keys.txt` (`gen-schema-keys.py`). The weekly
+`ansible/roles/sponsord_onramp/vars/main/networks.yml` (all `scripts/sync-network-profiles.py`)
+and `ansible/molecule/schema/files/schema-keys.txt` (`gen-schema-keys.py`). The weekly
 `upstream-drift` workflow flags staleness. These are the only protocol facts (contract
 addresses) the repo carries, and they carry their upstream commit.
+
+**Monitoring assets are maintained here, by hand.** `charts/decdn-node/files/monitoring/`
+holds the deCDN Grafana dashboards and Prometheus alert rules; upstream ships none. Every
+`decdn_*` series a panel or rule names must be one `decdn-node` exports — check the
+node's `/metrics` and upstream's `adr/appendix-observability.md` registry (a `planned`
+row emits nothing). Nothing in CI checks the names, so a typo renders `(no data)` or a
+rule that never fires. See `.claude/skills/grafana-dashboards/SKILL.md`.
 
 ## Current services
 
@@ -301,8 +307,8 @@ addresses) the repo carries, and they carry their upstream commit.
   `schema-keys.txt` on the rendered ConfigMap, so a re-sync covers both paths. Unlike the
   role, CI has no real-binary `decdn config validate` for the chart — run
   `DECDN_CLI=… make lint-helm` locally when bumping the decdn version. Optional
-  `PrometheusRule` + dashboard ConfigMaps render the vendored `files/monitoring/` (never
-  through `tpl`: the alert annotations carry Prometheus templates).
+  `PrometheusRule` + dashboard ConfigMaps render `files/monitoring/` (never through `tpl`:
+  the alert annotations carry Prometheus templates).
 
 ## Commands
 
@@ -315,7 +321,7 @@ drives deploys (its targets must run from `ansible/`). The full target list is i
 make lint             # every pre-commit hook, every file (also the CI `pre-commit` job)
 make lint-ansible     # vendor collections + ansible-lint (production profile)
 make molecule         # every ansible/molecule/*/ scenario in parallel (Docker; JOBS=<n>, SCENARIOS='a b')
-make lint-helm        # chart: lint + render tests + kubeconform + schema keys
+make lint-helm        # chart: lint + render tests + kubeconform + promtool + schema keys
 make lint-alloy       # grafana_alloy config against the real pinned Alloy binary
 make lint-compose     # compose/ invariants (three renders, compose/tests/*.jq)
 make lint-cloud-init  # cloud-init/user-data*.yaml: schema + invariants (no secrets, release mode, lock)

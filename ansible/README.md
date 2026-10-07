@@ -258,7 +258,7 @@ Only the API token is secret. It lives on each host in `0600 /etc/grafana-alloy.
 in the git-ignored `secret.yml` as `grafana_alloy_api_token`. The endpoints and instance
 IDs are ordinary inventory variables. Setup, token handling, upgrade notes, cost
 guardrails and rollback: [`roles/grafana_alloy/README.md`](roles/grafana_alloy/README.md).
-To import upstream's decdn dashboards and alert rules into that stack, see
+To import the deCDN dashboards and alert rules into that stack, see
 [`charts/decdn-node/files/monitoring/`](../charts/decdn-node/files/monitoring/README.md).
 
 ### sponsord (optional)

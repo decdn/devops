@@ -30,7 +30,7 @@ targets, so a local pass means a CI pass. Deploy targets live in
 | `make lint` | every pre-commit hook on every file (CI job `pre-commit`) |
 | `make lint-ansible` | install Galaxy collections + `ansible-lint` (production profile, which includes the Ansible security rules) |
 | `make molecule` | every `ansible/molecule/*/` scenario in parallel, in privileged systemd containers (needs Docker and util-linux `flock`; cap with `JOBS=<n>`, pick some with `SCENARIOS='a b'`). `make molecule-serial` runs them one at a time for readable failures. Each scenario takes its own host-wide lock, so two runs can share a host as long as they share no scenario (a run that would refuses to start: runs of one scenario share its container names). `make molecule-list` prints the selection as JSON (CI's matrix). The driver is `scripts/molecule.sh`. |
-| `make lint-helm` | chart: `helm lint --strict`, positive/negative render tests, kubeconform (digest-pinned image), the shared schema-key check (needs `helm`, `yq`, `python3` ≥ 3.11, Docker). Set `DECDN_CLI=<path to decdn>` to also run the real `decdn config validate` (CI can't). |
+| `make lint-helm` | chart: `helm lint --strict`, positive/negative render tests, kubeconform and `promtool check rules` on the alert rules (digest-pinned images), the shared schema-key check (needs `helm`, `yq`, `python3` ≥ 3.11, Docker). Set `DECDN_CLI=<path to decdn>` to also run the real `decdn config validate` (CI can't). |
 | `make lint-alloy` | renders `roles/grafana_alloy`'s templates and validates them with the **real** digest-pinned Alloy binary. The molecule stub exits 0 for everything, so this is the only gate that proves the config loads. `ALLOY_BIN=<path>` skips the download. |
 | `make lint-compose` | renders `compose/compose.yaml` with every profile on (with its example env, without env files, with an empty `.env`) and asserts `compose/tests/invariants.jq`, `inline-env.jq` and `fail-closed.jq` |
 | `make lint-cloud-init` | `cloud-init schema` on `cloud-init/user-data.yaml` and `cloud-init/user-data-sponsord.yaml`, then `cloud-init/tests/lint.py` on each: no secrets (only the bootstrap's own files, no secret-looking keys or assignments), no hardening skip, `release` installs verified against the vendored keys with a host-generated node wallet (trust knobs only in their own group's `vars`, no moved keyring or secret path), only localhost, in `decdn_nodes` and/or `sponsord_hosts` (the onramp only beside sponsord), a keyed admin account, `runcmd` exactly stage 1, shellcheck-clean scripts, and a collection lock that covers `ansible/requirements.yml` (needs `cloud-init`, `shellcheck`, `yq`). `CLOUD_INIT_FILE=<path>` checks your own filled-in copy. |
@@ -43,19 +43,23 @@ with `make lint-ansible`, or `pre-commit run ansible-lint --hook-stage manual`.
 
 ### Upstream mirrors
 
-Three things here are generated from `decdn/decdn`; regenerate, never hand-edit:
+Two things here are generated from `decdn/decdn`; regenerate, never hand-edit:
 
 | Mirror | Regenerate with |
 |--------|-----------------|
 | `ansible/roles/decdn_node/vars/main/networks.yml` (contract addresses per network) | `scripts/sync-network-profiles.py <decdn-checkout>` |
-| `charts/decdn-node/files/monitoring/` (dashboards, alert rules) | `scripts/sync-monitoring.sh <decdn-checkout>` |
 | `ansible/molecule/schema/files/schema-keys.txt` (node.toml keys) | `ansible/molecule/schema/files/gen-schema-keys.py <decdn-checkout> > …` |
 
-The two `scripts/sync-*` generators read `origin/main` through git (override with
-`--ref`), so the checkout's own branch doesn't matter for them; `gen-schema-keys.py`
-reads the checkout's working tree, so check out the ref you mean first. The generators
-exit 1 for "stale" and 2 for "could not run"; the weekly `upstream-drift` workflow
-reports the two differently.
+`scripts/sync-network-profiles.py` reads `origin/main` through git (override with
+`--ref`), so the checkout's own branch doesn't matter for it; `gen-schema-keys.py`
+reads the checkout's working tree, so check out the ref you mean first.
+`sync-network-profiles.py --check` exits 1 for "stale" and 2 for "could not run";
+the weekly `upstream-drift` workflow wraps `gen-schema-keys.py` in a generate-then-diff
+check so it reports the two differently too.
+
+The Grafana dashboards and Prometheus alert rules in `charts/decdn-node/files/monitoring/`
+are not a mirror: they are maintained here. See
+[its README](charts/decdn-node/files/monitoring/README.md).
 
 ## CI overview
 
@@ -112,8 +116,8 @@ reports the two differently.
   `v2.1.20`. The engine's `--fail-on high` exit code is the gate.
 - **Dependabot** (`.github/dependabot.yml`) bumps the action SHAs and the pre-commit
   hook revs weekly.
-- **Bump manually** (Dependabot can't parse them): the `KICS_IMAGE` and
-  `KUBECONFORM_IMAGE` digests in the `Makefile`; the molecule image digests in
+- **Bump manually** (Dependabot can't parse them): the `KICS_IMAGE`,
+  `KUBECONFORM_IMAGE` and `PROMTOOL_IMAGE` digests in the `Makefile`; the molecule image digests in
   `ansible/molecule/*/molecule.yml` (all together, `docker buildx imagetools inspect`);
   the four `setup-helm` `version:` inputs (`ci.yml`'s `helm` and `kics` jobs, both
   jobs in `release.yml`); the collection versions in `ansible/requirements.yml`, and

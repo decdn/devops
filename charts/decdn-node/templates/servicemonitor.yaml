@@ -24,7 +24,7 @@ spec:
       path: /metrics
       interval: {{ .Values.metrics.serviceMonitor.interval }}
       scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout }}
-      # Target labels the upstream dashboards and alerts key on (the node does not
+      # Target labels the dashboards and alerts key on (the node does not
       # emit them itself): a stable job, the node's region and an optional
       # deployment_environment, plus instance = pod name so $instance reads as a
       # node, not an IP:port. grafana_alloy stamps the same set on the Ansible path.

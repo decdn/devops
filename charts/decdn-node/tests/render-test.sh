@@ -3,11 +3,14 @@
 #
 #   charts/decdn-node/tests/render-test.sh
 #
-# Needs: helm, yq (mikefarah v4), python3 >= 3.11 (tomllib), and kubeconform on
-# PATH unless KUBECONFORM is overridden.
+# Needs: helm, yq (mikefarah v4), python3 >= 3.11 (tomllib), and kubeconform and
+# promtool on PATH unless KUBECONFORM / PROMTOOL are overridden.
 # Optional env:
 #   KUBECONFORM   command to run kubeconform (default: `kubeconform`; the Makefile
 #                 passes a digest-pinned container). Set to "" to skip, loudly.
+#   PROMTOOL      command to run promtool, reading the rules on stdin (default:
+#                 `promtool`; the Makefile passes a digest-pinned container). Set
+#                 to "" to skip, loudly.
 #   DECDN_CLI     path to a real `decdn` binary: also run `decdn config validate`
 #                 on every positive render (catches value/type errors the key check
 #                 can't). Skipped, loudly, when unset.
@@ -19,6 +22,7 @@ repo="$(cd "$chart/../.." && pwd)"
 schema_files="$repo/ansible/molecule/schema/files"
 checker="$schema_files/check-schema-keys.py"
 kubeconform="${KUBECONFORM-kubeconform}"
+promtool="${PROMTOOL-promtool}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 skipped=()
@@ -130,7 +134,19 @@ pass "resolve-only discovery"
 
 # --- workload and exposure invariants, per render --------------------------------
 # Explicit checks rather than `assert`, which PYTHONOPTIMIZE would turn into no-ops.
-# The vendored monitoring files the ci-values render must carry in full.
+# The alert rules, checked raw rather than rendered: Helm's fromYaml keeps the last
+# of a duplicated key (a second `expr:` silently replaces the real one), so only the
+# file itself still shows it. promtool also catches PromQL and template syntax,
+# which would otherwise make the operator drop the whole PrometheusRule.
+if [ -n "$promtool" ]; then
+  $promtool check rules < "$chart/files/monitoring/prometheus-alerts.yml" > "$work/promtool.out" 2>&1 \
+    || { cat "$work/promtool.out" >&2; fail "promtool check rules (files/monitoring/prometheus-alerts.yml)"; }
+  pass "promtool check rules: $(grep -o '[0-9]* rules found' "$work/promtool.out")"
+else
+  skipped+=("promtool (PROMTOOL is empty): alert rule syntax is NOT checked")
+fi
+
+# The monitoring files the ci-values render must carry in full.
 yq -o=json '.' "$chart/files/monitoring/prometheus-alerts.yml" > "$work/alerts.json"
 for name in ci-values ci-origins ci-resolve-only; do
   yq ea -o=json '[.]' "$work/$name.yaml" > "$work/$name.json"
@@ -212,36 +228,44 @@ if name == "ci-values.yaml":
     check("hostPort" not in ports["quic"], "hostPort open by default")
     check(len(tcp_rules) == 1, "metrics rule missing although metrics.networkPolicy.from is set")
     check(one("ServiceMonitor") is not None, "ServiceMonitor missing")
-    # Target labels the upstream dashboards/alerts select on.
+    # Target labels the dashboards/alerts select on.
     relabel = {r.get("targetLabel"): r for r in one("ServiceMonitor")["spec"]["endpoints"][0].get("relabelings", [])}
     check(relabel.get("job", {}).get("replacement") == "decdn-node", "ServiceMonitor job relabel")
     check(relabel.get("region", {}).get("replacement") == cfg["identity"]["region"], "ServiceMonitor region relabel")
     check(relabel.get("deployment_environment", {}).get("replacement") == "ci", "ServiceMonitor deployment_environment relabel")
     check(relabel.get("instance", {}).get("sourceLabels") == ["__meta_kubernetes_pod_name"], "ServiceMonitor instance relabel")
-    # PrometheusRule: every vendored rule, extras merged in, the rule's own labels kept.
-    vendored = [r for g in json.load(open(sys.argv[4]))["groups"] for r in g["rules"]]
+    # PrometheusRule: every shipped rule, extras merged in, the rule's own labels kept.
+    shipped = [r for g in json.load(open(sys.argv[4]))["groups"] for r in g["rules"]]
     pr = one("PrometheusRule", "alerts")
     check(pr is not None, "PrometheusRule missing")
     if pr:
         rules = [r for g in pr["spec"]["groups"] for r in g["rules"]]
-        check(len(rules) == len(vendored) > 0, f"PrometheusRule has {len(rules)} rules, vendored file {len(vendored)}")
+        check(len(rules) == len(shipped) > 0, f"PrometheusRule has {len(rules)} rules, files/monitoring has {len(shipped)}")
         check(all(r["labels"].get("team") == "node-ops" for r in rules), "ruleLabels not merged into every rule")
         # ci-values sets ruleLabels.severity: a rule's own severity must win, and
         # only a rule without one may take the extra.
         check([r["labels"].get("severity") for r in rules]
-              == [r.get("labels", {}).get("severity", "overridden") for r in vendored],
+              == [r.get("labels", {}).get("severity", "overridden") for r in shipped],
               "ruleLabels overrode a rule's own labels")
-    # One sidecar-labelled ConfigMap per vendored dashboard, each valid JSON with a uid.
+    # One sidecar-labelled ConfigMap per shipped dashboard, each valid JSON with its
+    # own uid: the sidecar provisions by uid, so a shared one silently drops a
+    # dashboard. Grafana caps uids at 40 characters.
     import pathlib
     want = sorted(p.name for p in pathlib.Path(sys.argv[5]).glob("*.json"))
-    check(want, "no vendored dashboards in files/monitoring/")
+    check(want, "no dashboards in files/monitoring/")
     cms = [d for d in docs if d["kind"] == "ConfigMap"
            and d["metadata"]["labels"].get("app.kubernetes.io/component") == "dashboard"]
-    check(sorted(k for d in cms for k in d["data"]) == want, "dashboard ConfigMaps vs vendored files")
+    check(sorted(k for d in cms for k in d["data"]) == want, "dashboard ConfigMaps vs files/monitoring")
+    uids = []
     for d in cms:
         check(d["metadata"]["labels"].get("grafana_dashboard") == "1", "dashboard sidecar label")
-        for v in d["data"].values():
-            check("uid" in json.loads(v), "dashboard without a uid")
+        for k, v in d["data"].items():
+            uid = json.loads(v).get("uid")
+            if isinstance(uid, str) and 0 < len(uid) <= 40:
+                uids.append(uid)
+            else:
+                check(False, f"{k}: uid {uid!r} is not a 1-40 character string")
+    check(len(uids) == len(set(uids)), f"duplicate dashboard uids: {sorted(uids)}")
 else:
     check(not [d for d in docs if d["kind"] == "PrometheusRule"], "PrometheusRule rendered while disabled")
     check(not [d for d in docs if d["kind"] == "ConfigMap"
@@ -337,15 +361,15 @@ helm template t "$chart" -f "$chart/ci/ci-values.yaml" --set fullnameOverride="$
 [ ! -s "$work/dupes" ] || { cat "$work/dupes" >&2; fail "duplicate object names with a 63-character fullname"; }
 pass "unique object names with a 63-character fullname"
 
-# Dashboards enabled with none vendored must fail the render, not render nothing.
+# Dashboards enabled with none in files/monitoring/ must fail the render, not render nothing.
 nodash="$work/nodash"
 cp -r "$chart" "$nodash"
 rm -f "$nodash"/files/monitoring/*.json
 if out="$(helm template t "$nodash" -f "$chart/ci/ci-values.yaml" 2>&1)"; then
-  fail "render should fail: dashboards enabled, none vendored"
+  fail "render should fail: dashboards enabled, none shipped"
 fi
 grep -q 'holds no \*.json dashboards' <<<"$out" || { echo "$out" >&2; fail "wrong failure for missing dashboards"; }
-pass "rejects: dashboards enabled, none vendored"
+pass "rejects: dashboards enabled, none shipped"
 
 # --- optional: the real binary --------------------------------------------------
 if [ -n "${DECDN_CLI:-}" ]; then

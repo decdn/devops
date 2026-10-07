@@ -39,7 +39,7 @@ behind `decdn_network`), it is a generated mirror with its upstream commit recor
 - **Signed installs.** Ansible verifies release tarballs against the GPG-signed
   `SHA256SUMS`; Compose only takes the image by digest; Helm takes a digest
   (recommended) or a tag.
-- **Monitoring.** Upstream's Grafana dashboards and alert rules, with the labels they
+- **Monitoring.** The deCDN Grafana dashboards and alert rules, with the labels they
   expect: opt-in Grafana Cloud shipping via `grafana_alloy` on Ansible, a
   `ServiceMonitor` + `PrometheusRule` + dashboard ConfigMaps on Helm
   ([`charts/decdn-node/files/monitoring/`](charts/decdn-node/files/monitoring/README.md)).
@@ -102,9 +102,9 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 | [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `sponsord.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
 | [`cloud-init/`](cloud-init/README.md) | The cloud-init deploy path: `user-data.yaml` (a node), `user-data-sponsord.yaml` (a sponsor host), the on-host `bootstrap.sh`, and the pinned ansible-core and collections it installs. |
 | [`compose/`](compose/README.md) | The Docker Compose deploy path: the node, `sponsord`, `sponsord-onramp` and Caddy, one profile each. |
-| [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart, with vendored dashboards and alert rules in `files/monitoring/`. |
+| [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart, with the deCDN dashboards and alert rules in `files/monitoring/`. |
 | [`docs/`](docs/requirements.md) | Cross-path operator docs: requirements, lifecycle. |
-| `scripts/` | Generators for the upstream mirrors (network profiles, monitoring) and the release gate. |
+| `scripts/` | Generators for the upstream mirrors (network profiles) and the release gate. |
 | `Makefile` | Lint, test and security targets; CI runs the same ones. `make help` lists them. |
 | `.github/workflows/` | CI (`ci.yml`, `molecule.yml`), releases (`release.yml`), the weekly upstream drift check. |
 

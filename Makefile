@@ -14,6 +14,10 @@ KICS_IMAGE := checkmarx/kics:v2.1.20-alpine@sha256:990ae994fbbe59760c8e4f7e89b11
 # Digest-pinned for the same reason as KICS. v0.7.0.
 KUBECONFORM_IMAGE := ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c
 
+# promtool (from the Prometheus image) checks the chart's alert rules. Digest-pinned
+# for the same reason as KICS. v3.14.0.
+PROMTOOL_IMAGE := prom/prometheus:v3.14.0@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0
+
 CHART := charts/decdn-node
 
 help:                ## list targets
@@ -141,8 +145,10 @@ lint-cloud-init:     ## schema-check the cloud-init/ user-data templates and the
 test-scripts:        ## test the Makefile and molecule-driver guards, release gate, lint-compose and lint-cloud-init negatives (needs docker, jq, cloud-init, yq)
 	tests/scripts-test.sh
 
-lint-helm:           ## helm lint + render tests + kubeconform + shared schema-key check (needs helm, yq, python3>=3.11, docker)
-	KUBECONFORM="docker run --rm -i $(KUBECONFORM_IMAGE)" $(CHART)/tests/render-test.sh
+lint-helm:           ## helm lint + render tests + kubeconform + promtool + shared schema-key check (needs helm, yq, python3>=3.11, docker)
+	KUBECONFORM="docker run --rm -i $(KUBECONFORM_IMAGE)" \
+	PROMTOOL="docker run --rm -i --entrypoint promtool $(PROMTOOL_IMAGE)" \
+	$(CHART)/tests/render-test.sh
 
 # The molecule grafana-cloud scenario runs the role against a stub that exits 0
 # for every subcommand, so it can only prove plumbing. This target renders the
