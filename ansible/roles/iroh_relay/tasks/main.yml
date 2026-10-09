@@ -359,48 +359,15 @@
       (iroh_relay_readiness_settle a number of seconds, 0 allowed).
 
 # --- Ports (before any change) ------------------------------------------------------
-# The relay must own its ports. Anything else on them (a web server, the onramp's
-# Caddy, another relay) would make it crash-loop after the install, so look before
-# touching the host. Its own listeners (an earlier converge) are fine.
+# Whether the relay was running before this run touches it, for the restart-inputs
+# decision below. The port guard does not use it (#113).
 - name: Read whether iroh-relay is already running
   ansible.builtin.systemd_service:
     name: iroh-relay
   register: iroh_relay_pre_state
 
-- name: Read the listeners on the relay's ports
-  ansible.builtin.command:
-    argv: "{{ item }}"
-  register: iroh_relay_pre_listeners
-  changed_when: false
-  check_mode: false
-  loop:
-    - [ss, -Hltnp, "( sport = :{{ _iroh_relay_ports.http }} or sport = :{{ _iroh_relay_ports.https }}
-                     or sport = :{{ iroh_relay_metrics_port }} )"]
-    - [ss, -Hlunp, "sport = :{{ _iroh_relay_ports.quic }}"]
-  loop_control:
-    label: "{{ item[1] }}"
-
-- name: Refuse public ports held by another process
-  ansible.builtin.assert:
-    that:
-      - _foreign | length == 0
-    fail_msg: |-
-      Another process holds a port iroh-relay needs (tcp/{{ _iroh_relay_ports.http }},
-      tcp/{{ _iroh_relay_ports.https }}, the metrics port {{ iroh_relay_metrics_port }}{{
-      (', or udp/' ~ _iroh_relay_ports.quic) if iroh_relay_enable_quic_addr_discovery else '' }}):
-        {{ _foreign | join('\n  ') }}
-      The relay terminates its own TLS on 80/443 and cannot share them with a web
-      server or the sponsord-onramp's Caddy: give it a host of its own (or move the
-      metrics port with iroh_relay_metrics_port).
-  vars:
-    _main_pid: "{{ iroh_relay_pre_state.status.MainPID | default('0') | string }}"
-    _lines: >-
-      {{ (iroh_relay_pre_listeners.results[0].stdout_lines | default([]))
-         + ((iroh_relay_pre_listeners.results[1].stdout_lines | default([]))
-            if iroh_relay_enable_quic_addr_discovery else []) }}
-    _foreign: >-
-      {{ _lines | reject('search', 'pid=' ~ _main_pid ~ ',') | list
-         if _main_pid != '0' else _lines }}
+- name: Refuse ports another process holds
+  ansible.builtin.import_tasks: ports.yml
 
 # "::" serves IPv4 too only while the kernel maps it (net.ipv6.bindv6only=0, the
 # default). With 1, every listener would still belong to the unit, so the gate

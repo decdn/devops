@@ -1,0 +1,95 @@
+---
+# The relay must own its ports. Anything else on them (a web server, the onramp's
+# Caddy, another relay) would make it crash-loop after the install, so look before
+# touching the host. Its own listeners (an earlier converge) are fine. Separate so
+# molecule/iroh-relay-gate can run it on a unit it holds still.
+#
+# "Its own" is a listener every holder of which is in the unit's cgroup, read after
+# the listeners (#113): not one held by a MainPID read beforehand, which is 0 while
+# the unit waits to be restarted (Restart=on-failure) or is in ExecStartPre, so a
+# relay started between the two reads would look like another process. The cgroup
+# is compared whole, as /proc shows it: systemd's root (PID 1's cgroup without
+# /init.scope, empty on a host, a prefix in a container sharing the host's cgroup
+# namespace) plus /system.slice/<unit>. A path that merely ends the same way (a
+# relay in a nested container, a user's delegated subtree) is another process.
+# Pids are taken only from ss's `,pid=N,fd=N)` fields, so a process name cannot add
+# one. A process that exits between `ss` and its /proc read (a crash-looping relay)
+# makes the step read both again (5 retries, then this step fails). The relay's own
+# listeners go to stderr, prefixed "own: ".
+
+- name: Read the listeners on the relay's ports and whose they are
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      root=$(sed -n 's|^0::||p' /proc/1/cgroup)
+      case "$root" in
+        */init.scope) unit_cg="${root%/init.scope}/system.slice/{{ _iroh_relay_unit | basename }}" ;;
+        *) echo "PID 1's cgroup is \"$root\", not systemd's init.scope (is this a cgroup v2 systemd host?)" >&2
+           exit 4 ;;
+      esac
+      tcp=$(ss -Hltnp '{{ _tcp_filter }}')
+      udp=""
+      {% if iroh_relay_enable_quic_addr_discovery %}
+      udp=$(ss -Hlunp 'sport = :{{ _iroh_relay_ports.quic }}')
+      {% endif %}
+      foreign=0
+      gone=""
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        pids=$(grep -oE ',pid=[0-9]+,fd=[0-9]+\)' <<<"$line" | cut -d, -f2 | cut -d= -f2 || true)
+        own=1
+        vanished=0
+        for pid in $pids; do
+          if ! cg=$(sed -n 's|^0::||p' "/proc/$pid/cgroup" 2>&1); then
+            if [ -e "/proc/$pid" ]; then
+              echo "cannot read the cgroup of pid $pid ($line): $cg" >&2
+              exit 5
+            fi
+            vanished=1
+          elif [ "$cg" != "$unit_cg" ]; then
+            own=0
+          fi
+        done
+        if [ -z "$pids" ] || { [ "$own" = 0 ] && [ "$vanished" = 0 ]; }; then
+          # A listener another process holds, or one ss names no process for.
+          printf '%s\n' "$line"
+          foreign=1
+        elif [ "$vanished" = 1 ]; then
+          gone="$gone"$'\n'"  $line"
+        else
+          printf 'own: %s\n' "$line" >&2
+        fi
+      done <<<"$tcp"$'\n'"$udp"
+      # A listener found foreign is reported by the assert, whatever else vanished.
+      if [ "$foreign" = 0 ] && [ -n "$gone" ]; then
+        echo "a listener's process exited while it was being read:$gone" >&2
+        exit 3
+      fi
+  vars:
+    _tcp_filter: >-
+      ( sport = :{{ _iroh_relay_ports.http }} or sport = :{{ _iroh_relay_ports.https }}
+      or sport = :{{ iroh_relay_metrics_port }} )
+  register: iroh_relay_pre_listeners
+  changed_when: false
+  check_mode: false
+  failed_when: iroh_relay_pre_listeners.rc not in [0, 3]
+  retries: 5
+  delay: 1
+  until: iroh_relay_pre_listeners.rc != 3
+
+- name: Refuse public ports held by another process
+  ansible.builtin.assert:
+    that:
+      - _foreign | length == 0
+    fail_msg: |-
+      Another process holds a port iroh-relay needs (tcp/{{ _iroh_relay_ports.http }},
+      tcp/{{ _iroh_relay_ports.https }}, the metrics port {{ iroh_relay_metrics_port }}{{
+      (', or udp/' ~ _iroh_relay_ports.quic) if iroh_relay_enable_quic_addr_discovery else '' }}):
+        {{ _foreign | join('\n  ') }}
+      The relay terminates its own TLS on 80/443 and cannot share them with a web
+      server or the sponsord-onramp's Caddy: give it a host of its own (or move the
+      metrics port with iroh_relay_metrics_port). A line naming no process is one ss
+      could not attribute: run the play as root.
+  vars:
+    _foreign: "{{ iroh_relay_pre_listeners.stdout_lines }}"

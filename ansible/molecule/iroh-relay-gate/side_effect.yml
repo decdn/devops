@@ -1,7 +1,10 @@
 ---
 # What a green converge + idempotence cannot prove, on ../iroh-relay's converge:
 #   1. A listener the unit does not hold (no QUIC socket) fails the gate.
-#   2. A relay that binds and then crashes fails the gate (the settle period).
+#   2. A relay that binds and then crashes fails the gate (the settle period); a
+#      re-run right after the crash (the unit restarting, or already back) passes
+#      the port guard. 2b: so does a unit with no MainPID whose own process holds
+#      every port (held in ExecStartPre: what #113's guard saw, held still).
 #   3. A running relay whose record is gone is restarted and recorded again.
 #   4. QAD off: rendered off, no udp/7842 listener, and another process on udp/7842
 #      is no conflict, until QAD is on again (the port guard's UDP half).
@@ -100,15 +103,114 @@
             path: /etc/iroh-relay/stub-exit-after
             state: absent
 
-    # Restart=on-failure brings the crashed relay back within RestartSec. Stopped
-    # first, so the next run's port guard does not read the unit between restarts
-    # (no MainPID yet) and then the restarted relay's listener (a "foreign" one).
-    - name: Stop the crashed relay, cancelling its pending restart
+    # Not stopped first: the crashed relay is being restarted (Restart=on-failure),
+    # which is when an operator re-runs the role; whatever the timing, the port guard
+    # must pass the relay's own listeners (#113). 2b holds the racy case still.
+    - name: Converge the relay back up after the crash
+      ansible.builtin.include_role:
+        name: iroh_relay
+
+    # --- 2b. the port guard on a unit with no MainPID ---------------------------------
+    # What #113's guard saw across two reads (MainPID 0, then the restarted relay's
+    # listeners), held still: the unit's own process holds every port while systemd
+    # reports no MainPID (it is still in ExecStartPre). A guard that matched listeners
+    # to the MainPID would refuse them; this one must report all four as its own.
+    - name: Stop the relay, then hold it in ExecStartPre with the relay running
       ansible.builtin.systemd_service:
         name: iroh-relay
         state: stopped
 
-    - name: Converge the relay back up after the crash
+    - name: Check the port guard against a unit with no MainPID
+      block:
+        - name: Create the relay's drop-in directory
+          ansible.builtin.file:
+            path: /etc/systemd/system/iroh-relay.service.d
+            state: directory
+            mode: "0755"
+
+        - name: Install a drop-in that runs the relay from ExecStartPre and stays there
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/iroh-relay.service.d/molecule-hold.conf
+            content: |
+              [Service]
+              ExecStartPre=/bin/sh -c '/usr/local/bin/iroh-relay \
+                --config-path /etc/iroh-relay/iroh-relay.toml & exec sleep infinity'
+              TimeoutStartSec=infinity
+            mode: "0644"
+
+        - name: Reload systemd with the hold
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+
+        - name: Queue the held relay's start
+          ansible.builtin.command:
+            argv: [systemctl, start, --no-block, iroh-relay]
+          changed_when: true
+
+        - name: Wait for the held relay to bind every port
+          ansible.builtin.shell:
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              ss -Hltn 'sport = :80' | grep -q .
+              ss -Hltn 'sport = :443' | grep -q .
+              ss -Hltn 'sport = :9092' | grep -q .
+              ss -Hlun 'sport = :7842' | grep -q .
+          register: _ir_hold_bound
+          changed_when: false
+          failed_when: false
+          retries: 10
+          delay: 1
+          until: _ir_hold_bound.rc == 0
+
+        - name: Read the held unit
+          ansible.builtin.systemd_service:
+            name: iroh-relay
+          register: _ir_hold_unit
+
+        - name: Require the unit to hold every port with no MainPID
+          ansible.builtin.assert:
+            that:
+              - _ir_hold_bound.rc == 0
+              - _ir_hold_unit.status.ActiveState == 'activating'
+              - _ir_hold_unit.status.MainPID | string == '0'
+            fail_msg: >-
+              The hold did not take: ports bound rc {{ _ir_hold_bound.rc }}, state
+              {{ _ir_hold_unit.status.ActiveState }}/{{ _ir_hold_unit.status.SubState }},
+              MainPID {{ _ir_hold_unit.status.MainPID }}.
+
+        - name: Run the port guard against the held unit (must pass)
+          ansible.builtin.include_role:
+            name: iroh_relay
+            tasks_from: ports
+
+        # Passing on no output would prove nothing: every port must be read as own.
+        - name: Require the guard to have taken every held listener for the relay's
+          ansible.builtin.assert:
+            that:
+              - _own | select('search', ':80\s') | list | length > 0
+              - _own | select('search', ':443\s') | list | length > 0
+              - _own | select('search', ':9092\s') | list | length > 0
+              - _own | select('search', ':7842\s') | list | length > 0
+            fail_msg: "The guard's own listeners: {{ _own }}"
+          vars:
+            _own: "{{ iroh_relay_pre_listeners.stderr_lines | select('match', '^own: ') | list }}"
+      always:
+        - name: Stop the held relay
+          ansible.builtin.systemd_service:
+            name: iroh-relay
+            state: stopped
+
+        - name: Remove the hold drop-in
+          ansible.builtin.file:
+            path: /etc/systemd/system/iroh-relay.service.d/molecule-hold.conf
+            state: absent
+
+        - name: Reload systemd without the hold
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+
+    - name: Converge the relay back up after the hold
       ansible.builtin.include_role:
         name: iroh_relay
 
@@ -169,11 +271,12 @@
           - _ir_qad_off_udp.stdout | trim | length == 0
         fail_msg: "QAD off: udp/7842 listeners {{ _ir_qad_off_udp.stdout }}"
 
+    # Its unit's name ends like the relay's: still another process.
     - name: Squat on udp/7842 with another process
       ansible.builtin.command:
         argv:
           - systemd-run
-          - --unit=molecule-udp-squatter
+          - --unit=iroh-relay-squatter
           - --collect
           - python3
           - -c
@@ -217,7 +320,7 @@
       always:
         - name: Stop the UDP squatter
           ansible.builtin.systemd_service:
-            name: molecule-udp-squatter
+            name: iroh-relay-squatter
             state: stopped
           failed_when: false
 

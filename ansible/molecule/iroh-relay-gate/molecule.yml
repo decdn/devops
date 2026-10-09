@@ -2,11 +2,12 @@
 # The relay's other gate refusals and its knobs, split from ../iroh-relay so the two
 # run side by side: the same host shapes, inventory and converge (that scenario's
 # prepare, converge and verify, by path), then side_effect.yml here: a relay that
-# skips its QUIC socket or crashes after binding FAILS the gate; a missing record
-# restarts a running relay; QAD off renders and binds no udp/7842, and a squatter
-# there is refused only with QAD on; 0.0.0.0 and a specific IPv4 bind are rendered,
-# bound and probed; the access modes, and every way the inventory read of node IDs
-# fails. Two platforms: two nodes sharing an endpoint ID needs two hosts.
+# skips its QUIC socket or crashes after binding FAILS the gate; the port guard
+# passes the unit's own listeners while it restarts or has no MainPID; a missing
+# record restarts a running relay; QAD off renders and binds no udp/7842, and a
+# squatter there is refused only with QAD on; 0.0.0.0 and a specific IPv4 bind are
+# rendered, bound and probed; the access modes, and every way the inventory read of
+# node IDs fails. Two platforms: two nodes sharing an endpoint ID needs two hosts.
 #
 # The inventory below must stay identical to ../iroh-relay/molecule.yml's
 # (`make test-scripts` checks); the stub is the one it names.

@@ -294,7 +294,9 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   - **Gates:** the bind address is parsed with Python's `ipaddress` on the control
     machine (no `ansible.utils`), and `::` is refused where `net.ipv6.bindv6only=1`.
     Before any change, ports 80/443/metrics (and udp/7842 with QAD on) held by any
-    process but the relay are refused. After start, a fatal gate wants loopback
+    process outside the relay unit's cgroup (the whole path) are refused
+    (`tasks/ports.yml`; not by a MainPID read beforehand, which is 0 while the unit
+    waits to restart, #113). After start, a fatal gate wants loopback
     `/metrics` answering, every listener owned by `MainPID`, and the same process
     still up after `iroh_relay_readiness_settle` seconds (the relay binds before it has
     a certificate, and an ACME failure does not stop it). Then a separate certificate
