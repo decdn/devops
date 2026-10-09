@@ -41,6 +41,10 @@ expect 2 "deploy-relay refuses LIMIT from the environment"  env LIMIT=h make -s 
 mk deploy-relay LIMIT=h | grep -q -- "playbooks/iroh_relay.yml --limit 'h'" \
   || fail "deploy-relay LIMIT=h does not run playbooks/iroh_relay.yml scoped to h"
 pass "deploy-relay LIMIT=h scopes playbooks/iroh_relay.yml"
+expect 2 "deploy-dns refuses LIMIT from the environment"    env LIMIT=h make -s -C "$repo/ansible" -n deploy-dns
+mk deploy-dns LIMIT=h | grep -q -- "playbooks/iroh_dns_server.yml --limit 'h'" \
+  || fail "deploy-dns LIMIT=h does not run playbooks/iroh_dns_server.yml scoped to h"
+pass "deploy-dns LIMIT=h scopes playbooks/iroh_dns_server.yml"
 
 # --- molecule driver (scripts/molecule.sh): selection, guards, locks ------------------
 # Against a throwaway ansible/ layout, so nothing here can start a container or touch
@@ -174,6 +178,8 @@ if command -v yq >/dev/null; then
       sponsord-onramp:sponsord-onramp-source sponsord-onramp:sponsord-onramp-lifecycle \
       iroh-relay:iroh-relay-lifecycle iroh-relay:iroh-relay-install \
       iroh-relay:iroh-relay-certificate iroh-relay:iroh-relay-gate \
+      iroh-dns-server:iroh-dns-server-certificate iroh-dns-server:iroh-dns-server-install \
+      iroh-dns-server:iroh-dns-server-lifecycle iroh-dns-server:iroh-dns-server-gate \
       source-build:source-build-rollback source-build:source-build-recovery; do
     a="$repo/ansible/molecule/${pair%%:*}/molecule.yml" b="$repo/ansible/molecule/${pair##*:}/molecule.yml"
     [[ "$(yq -o=json '.provisioner.inventory' "$a")" == "$(yq -o=json '.provisioner.inventory' "$b")" ]] \
@@ -415,23 +421,25 @@ cmp -s "$repo/ansible/roles/decdn_node/files/install-build-output.py" \
        "$repo/ansible/roles/sponsord/files/install-build-output.py" \
   || fail "decdn_node and sponsord files/install-build-output.py differ"
 pass "source-build and decommission defaults, and the installer, identical across roles"
-# iroh_relay has no source build (and its own per-triple sha256 pins), so only its
-# decommission keys are compared.
+# iroh_relay and iroh_dns_server have no source build (and their own per-triple
+# sha256 pins), so only their decommission keys are compared.
 decom_keys() { grep -E '^decdn_decommission_(max_hosts|prompt_seconds):' "$1" || true; }
 want_decom="$(decom_keys "$repo/ansible/roles/decdn_node/defaults/main.yml")"
 [ "$(grep -c . <<<"$want_decom")" -eq 2 ] \
   || fail "decdn_node/defaults/main.yml: expected both decdn_decommission_* keys, found: $want_decom"
-[ "$(decom_keys "$repo/ansible/roles/iroh_relay/defaults/main.yml")" = "$want_decom" ] \
-  || fail "iroh_relay/defaults/main.yml: decdn_decommission_* differ from decdn_node's"
+for r in iroh_relay iroh_dns_server; do
+  [ "$(decom_keys "$repo/ansible/roles/$r/defaults/main.yml")" = "$want_decom" ] \
+    || fail "$r/defaults/main.yml: decdn_decommission_* differ from decdn_node's"
+done
 # One confirmation names every service the run stops, so each role's prompt must
 # know every group decommission.yml covers.
-for r in decdn_node sponsord sponsord_onramp iroh_relay; do
-  for g in decdn_nodes iroh_relay_hosts sponsord_onramp_hosts sponsord_hosts; do
+for r in decdn_node sponsord sponsord_onramp iroh_relay iroh_dns_server; do
+  for g in decdn_nodes iroh_relay_hosts iroh_dns_server_hosts sponsord_onramp_hosts sponsord_hosts; do
     grep -qF "if '$g' in _decom_groups" "$repo/ansible/roles/$r/tasks/decommission.yml" \
       || fail "$r/tasks/decommission.yml: the confirmation prompt does not name $g's service"
   done
 done
-pass "the decommission defaults and the confirmation's service list agree across all four roles"
+pass "the decommission defaults and the confirmation's service list agree across all five roles"
 # iroh_relay's tasks_from node-ids runs `decdn whoami` on the inventory's nodes, where
 # decdn_node's defaults are not loaded: its fallbacks must be those defaults.
 ids="$repo/ansible/roles/iroh_relay/tasks/node-ids.yml"
@@ -465,7 +473,7 @@ fi
 # half decommissioned. The role checks again right before its own stop.
 if command -v yq >/dev/null; then
   pb="$repo/ansible/playbooks/decommission.yml"
-  [[ "$(yq '.[0].hosts' "$pb")" == decdn_nodes:sponsord_onramp_hosts:sponsord_hosts:iroh_relay_hosts \
+  [[ "$(yq '.[0].hosts' "$pb")" == decdn_nodes:sponsord_onramp_hosts:sponsord_hosts:iroh_relay_hosts:iroh_dns_server_hosts \
      && "$(yq '.[0].tasks[0]["ansible.builtin.assert"] | has("that")' "$pb")" == true \
      && "$(yq '.[0].tasks[1]["ansible.builtin.include_role"].tasks_from' "$pb")" == topup-hold ]] \
     || fail "playbooks/decommission.yml: the first play must check the host cap, then sponsord's top-up hold"
@@ -522,6 +530,9 @@ if command -v ansible >/dev/null; then
     expect 2 "decommission.yml refuses a node host plus a relay host" guard node-only,relay-only
     grep -q "This run decommissions 2 hosts" "$work/out" \
       || { cat "$work/out" >&2; fail "the node + relay refusal did not come from the run-wide host cap"; }
+    expect 2 "decommission.yml refuses a node host plus a DNS server host" guard node-only,dns-only
+    grep -q "This run decommissions 2 hosts" "$work/out" \
+      || { cat "$work/out" >&2; fail "the node + DNS server refusal did not come from the run-wide host cap"; }
     # playbooks/iroh_relay.yml refuses a relay on an onramp host (both want 80/443).
     yq '[.[] | select(.name == "Refuse an iroh relay on a sponsord-onramp host")]' \
       "$repo/ansible/playbooks/iroh_relay.yml" > "$work/guard.yml"
@@ -531,6 +542,18 @@ if command -v ansible >/dev/null; then
     expect 2 "iroh_relay.yml refuses a relay on a sponsord-onramp host" guard relay-onramp
     grep -q "is in both iroh_relay_hosts and sponsord_onramp_hosts" "$work/out" \
       || { cat "$work/out" >&2; fail "the relay-onramp refusal did not come from the placement check"; }
+    # playbooks/iroh_dns_server.yml refuses a DNS server on a relay or onramp host (443).
+    yq '[.[] | select(.name == "Refuse an iroh DNS server on an iroh relay or sponsord-onramp host")]' \
+      "$repo/ansible/playbooks/iroh_dns_server.yml" > "$work/guard.yml"
+    [[ "$(yq 'length' "$work/guard.yml")" == 1 ]] \
+      || fail "playbooks/iroh_dns_server.yml has no single DNS server placement play"
+    expect 0 "iroh_dns_server.yml accepts a DNS server host of its own" guard dns-only
+    expect 0 "iroh_dns_server.yml accepts a DNS server beside a deCDN node" guard dns-node
+    for shape in dns-relay:iroh_relay_hosts dns-onramp:sponsord_onramp_hosts; do
+      expect 2 "iroh_dns_server.yml refuses a DNS server also in ${shape##*:}" guard "${shape%%:*}"
+      grep -q "is in iroh_dns_server_hosts and also in ${shape##*:}" "$work/out" \
+        || { cat "$work/out" >&2; fail "the ${shape%%:*} refusal did not come from the placement check"; }
+    done
     # The relay's allowlist reads the inventory's deCDN nodes (tasks_from node-ids).
     # Which nodes (tasks_from node-hosts) is resolved without contacting any: the
     # default group, an explicit list, a missing group, a host outside the inventory.

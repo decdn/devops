@@ -1,0 +1,46 @@
+---
+# iroh DNS servers: the pkarr relay deCDN nodes publish their signed address
+# records to, and the DNS server peers resolve them through (_iroh.<z32>.<origin>),
+# self-hosted in place of n0's dns.iroh.link.
+#   iroh_dns_server_hosts: baseline -> grafana_alloy (opt-in, off by default) ->
+#                          iroh_dns_server
+# Standalone entry point (`make deploy-dns`), also imported by site.yml. The server
+# is public by design: it terminates its own TLS (Let's Encrypt) on tcp/443 and
+# answers DNS on udp+tcp/53, opened by playbooks/group_vars/all.yml; its metrics
+# and health listener stay on loopback. Point nodes at it with
+# decdn_discovery_pkarr_url and decdn_discovery_dns_origin — see
+# roles/iroh_dns_server/README.md.
+# Before the server play: an iroh relay and the onramp's Caddy need tcp/443 too,
+# and only one of them can have it. (Under site.yml, sponsord.yml and
+# iroh_relay.yml run first, so on a host in both groups the other service is
+# already up when this refuses; either way the deploy fails loudly.) The role
+# itself refuses ports another process holds, so the decdn.node collection gets
+# the same protection without this repo's groups. tests/scripts-test.sh runs this
+# play by its name.
+- name: Refuse an iroh DNS server on an iroh relay or sponsord-onramp host
+  hosts: iroh_dns_server_hosts
+  gather_facts: false
+  tasks:
+    - name: Require the host outside iroh_relay_hosts and sponsord_onramp_hosts
+      ansible.builtin.assert:
+        that:
+          - "'iroh_relay_hosts' not in group_names"
+          - "'sponsord_onramp_hosts' not in group_names"
+        fail_msg: >-
+          {{ inventory_hostname }} is in iroh_dns_server_hosts and also in
+          {{ group_names | select('in', ['iroh_relay_hosts', 'sponsord_onramp_hosts']) | join(' and ') }}.
+          The DNS server terminates its own TLS on tcp/443, which the relay and the
+          onramp's proxy need as well: give it a host of its own.
+
+# One server at a time, so a fleet of them never restarts together.
+- name: Provision iroh DNS servers
+  hosts: iroh_dns_server_hosts
+  become: true
+  serial: 1
+  roles:
+    - role: baseline
+      tags: [baseline]
+    - role: grafana_alloy
+      tags: [observability, iroh_dns_server, dns]
+    - role: iroh_dns_server
+      tags: [iroh_dns_server, dns]

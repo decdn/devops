@@ -1,0 +1,247 @@
+---
+# What a green converge + idempotence cannot prove:
+#   1. A re-run with nothing changed leaves the server alone, and a changed knob
+#      (the record TTL) restarts it.
+#   2. The readiness gate is FATAL, and a failed run records nothing: the
+#      restart-input record keeps the last good inputs until a run succeeds, and
+#      the recovery leaves it on the current inputs.
+#   3. Another process on tcp/443, or on port 53 at the DNS bind address, is
+#      refused BEFORE anything changes; one on 127.0.0.53:53 (where
+#      systemd-resolved's stub listens) is not, since the server binds one address.
+#   4. Without its config the unit refuses to start.
+# The certificate check runs in ../iroh-dns-server-certificate, the gate's other
+# refusals and the wildcard DNS bind in ../iroh-dns-server-gate, and decommission
+# in ../iroh-dns-server-lifecycle. The host is left as converged, with the molecule
+# CA trusted, for verify.
+- name: Side effect — restarts, the fatal gate, the port guard, no config
+  hosts: all
+  become: true
+  vars:
+    _ids_record: /etc/iroh-dns-server/.server-inputs.sha256
+    _ids_ip: "{{ ansible_facts['default_ipv4']['address'] }}"
+  tasks:
+    - name: Read the server before anything changes
+      ansible.builtin.systemd_service:
+        name: iroh-dns-server
+      register: _ids_before
+
+    - name: Assert the server was running cleanly
+      ansible.builtin.assert:
+        that:
+          - _ids_before.status.ActiveState == 'active'
+          - _ids_before.status.MainPID | int > 0
+        fail_msg: >-
+          Expected iroh-dns-server active (got ActiveState={{ _ids_before.status.ActiveState }}):
+          journalctl -u iroh-dns-server -e
+
+    # include_role here, import_playbook in the converge: if the two contexts
+    # resolved any input differently, the server would restart for that alone, and
+    # the knob check below would pass for the wrong reason.
+    - name: Re-run the server with nothing changed
+      ansible.builtin.include_role:
+        name: iroh_dns_server
+
+    - name: Read the server after the no-op run
+      ansible.builtin.systemd_service:
+        name: iroh-dns-server
+      register: _ids_noop
+
+    - name: Require the no-op run to have left the server alone
+      ansible.builtin.assert:
+        that:
+          - _ids_noop.status.MainPID == _ids_before.status.MainPID
+        fail_msg: A re-run with no input changed restarted iroh-dns-server.
+
+    - name: Converge with another record TTL
+      ansible.builtin.include_role:
+        name: iroh_dns_server
+      vars:
+        iroh_dns_server_default_ttl: 60
+
+    - name: Read the server after the knob change
+      ansible.builtin.systemd_service:
+        name: iroh-dns-server
+      register: _ids_knob
+
+    - name: Read the rendered config
+      ansible.builtin.slurp:
+        src: /etc/iroh-dns-server/config.toml
+      register: _ids_config_knob
+
+    - name: Require the knob change to be rendered and to have restarted the server
+      ansible.builtin.assert:
+        that:
+          - _ids_knob.status.ActiveState == 'active'
+          - _ids_knob.status.MainPID != _ids_before.status.MainPID
+          - "'default_ttl = 60' in (_ids_config_knob.content | b64decode)"
+        fail_msg: >-
+          After the TTL changed the server's PID went {{ _ids_before.status.MainPID }} ->
+          {{ _ids_knob.status.MainPID }} (must change), or the TTL is not in the config.
+
+    - name: Read the restart-input record the server is now up on
+      ansible.builtin.slurp:
+        src: "{{ _ids_record }}"
+      register: _ids_rec_good
+
+    # --- 2. the fatal gate ---------------------------------------------------------
+    - name: Stop the server, then make it refuse to start
+      ansible.builtin.systemd_service:
+        name: iroh-dns-server
+        state: stopped
+
+    - name: Stage the stub's refuse-to-start marker
+      ansible.builtin.copy:
+        dest: /etc/iroh-dns-server/stub-unhealthy
+        content: ""
+        mode: "0644"
+
+    # A changed input on the failing run (the original TTL): the record must not
+    # take it.
+    - name: Converge against a server that never comes up
+      block:
+        - name: Run the role with a short readiness window
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_readiness_retries: 3
+            iroh_dns_server_readiness_delay: 1
+
+        - name: Fail — the readiness gate let a server that is down through
+          ansible.builtin.fail:
+            msg: The role finished although iroh-dns-server never came up.
+      rescue:
+        - name: Require the failure to come from the readiness gate itself
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require iroh-dns-server to be up on all its listeners'
+            fail_msg: >-
+              Expected the role to fail at its readiness assert, but it failed at
+              "{{ ansible_failed_task.name }}".
+
+        - name: Read the restart-input record after the failed run
+          ansible.builtin.slurp:
+            src: "{{ _ids_record }}"
+          register: _ids_rec_failed
+
+        - name: Require the failed run to have left the record on the good inputs
+          ansible.builtin.assert:
+            that:
+              - _ids_rec_failed.content == _ids_rec_good.content
+            fail_msg: The failed run rewrote the restart-input record.
+
+    - name: Remove the refuse-to-start marker
+      ansible.builtin.file:
+        path: /etc/iroh-dns-server/stub-unhealthy
+        state: absent
+
+    # The server is crash-looping on the marker until this run restarts it: the
+    # record differs from the inputs, so the role restarts it, and it comes up.
+    - name: Converge the server back up
+      ansible.builtin.include_role:
+        name: iroh_dns_server
+
+    - name: Check that the recovery left a running server and a current record
+      ansible.builtin.include_tasks: includes/record-is-current.yml
+
+    # --- 3. another process on the server's ports --------------------------------------
+    - name: Stop the server before squatting on its ports
+      ansible.builtin.systemd_service:
+        name: iroh-dns-server
+        state: stopped
+
+    - name: Hash the config and the unit before the refused runs
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        checksum_algorithm: sha256
+      register: _ids_cfg_pre
+      loop: [/etc/iroh-dns-server/config.toml, /etc/systemd/system/iroh-dns-server.service]
+
+    # A listener on the https port, then one on port 53 at the DNS bind address. A
+    # tcp listener stands in for both protocols: the guard reads udp and tcp alike.
+    - name: Refuse each squatter
+      ansible.builtin.include_tasks: includes/squatter-refused.yml
+      loop:
+        - {port: 443, bind: 0.0.0.0}
+        - {port: 53, bind: "{{ _ids_ip }}"}
+      loop_control:
+        loop_var: _ids_squat
+
+    - name: Hash the config and the unit after the refused runs
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        checksum_algorithm: sha256
+      register: _ids_cfg_post
+      loop: [/etc/iroh-dns-server/config.toml, /etc/systemd/system/iroh-dns-server.service]
+
+    - name: Require the refused runs to have changed nothing
+      ansible.builtin.assert:
+        that:
+          - _ids_cfg_post.results | map(attribute='stat.checksum') | list
+            == _ids_cfg_pre.results | map(attribute='stat.checksum') | list
+        fail_msg: The port guard fired after the config or the unit was already rewritten.
+
+    # systemd-resolved's stub listens on 127.0.0.53:53 (udp and tcp). The server
+    # binds the host's own address, so the two coexist. A host already running
+    # resolved's stub has the real one there.
+    - name: Look for a listener on 127.0.0.53:53
+      ansible.builtin.command:
+        argv: [ss, -Hltn, "( sport = :53 )"]
+      register: _ids_stub_pre
+      changed_when: false
+
+    - name: Listen on 127.0.0.53:53 as systemd-resolved's stub would
+      ansible.builtin.command:
+        argv: [systemd-run, --unit=molecule-resolved-stub, --collect,
+               python3, -m, http.server, "53", --bind, 127.0.0.53]
+      changed_when: true
+      when: "' 127.0.0.53' not in _ids_stub_pre.stdout"
+
+    - name: Wait for the stand-in stub listener
+      ansible.builtin.wait_for:
+        port: 53
+        host: 127.0.0.53
+        timeout: 15
+
+    - name: Converge beside the stand-in stub listener
+      ansible.builtin.include_role:
+        name: iroh_dns_server
+
+    - name: Check the server came up beside it
+      ansible.builtin.include_tasks: includes/record-is-current.yml
+
+    - name: Stop the stand-in stub listener
+      ansible.builtin.systemd_service:
+        name: molecule-resolved-stub
+        state: stopped
+      when: "' 127.0.0.53' not in _ids_stub_pre.stdout"
+
+    # --- 4. no config, no start --------------------------------------------------------
+    - name: Remove the config behind the role's back
+      ansible.builtin.file:
+        path: /etc/iroh-dns-server/config.toml
+        state: absent
+
+    - name: Restart the server without its config  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: systemctl restart iroh-dns-server
+      register: _ids_noconfig
+      changed_when: true
+      failed_when: false
+
+    - name: Read the server without its config
+      ansible.builtin.systemd_service:
+        name: iroh-dns-server
+      register: _ids_noconfig_state
+
+    - name: Require the unit to refuse to start without its config
+      ansible.builtin.assert:
+        that:
+          - _ids_noconfig.rc != 0
+          - _ids_noconfig_state.status.ActiveState != 'active'
+        fail_msg: >-
+          iroh-dns-server started without /etc/iroh-dns-server/config.toml (rc
+          {{ _ids_noconfig.rc }}, {{ _ids_noconfig_state.status.ActiveState }}).
+
+    - name: Converge the config and the server back, as converged for verify
+      ansible.builtin.include_role:
+        name: iroh_dns_server

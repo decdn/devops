@@ -1,0 +1,52 @@
+---
+- name: Verify the DNS server's decommission
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stat the units, the record, and what decommission keeps
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/systemd/system/iroh-dns-server.service
+        - /etc/systemd/system/alloy.service
+        - /etc/iroh-dns-server/.server-inputs.sha256
+        - /etc/iroh-dns-server/config.toml
+        - /usr/local/bin/iroh-dns-server
+        - /var/lib/private/iroh-dns-server/molecule-stub-probe
+        - /var/lib/private/iroh-dns-server/cert_cache
+      register: _after
+
+    - name: Require the units and the record gone, and the config, binary and state kept
+      ansible.builtin.assert:
+        that:
+          - _after.results[0:3] | map(attribute='stat.exists') | unique == [false]
+          - _after.results[3:] | map(attribute='stat.exists') | unique == [true]
+        fail_msg: >-
+          Decommission must remove the DNS server and Alloy units and the
+          restart-input record, and keep the config, the binary and the state
+          directory (record store, ACME state):
+          {{ _after.results | map(attribute='item') | zip(_after.results | map(attribute='stat.exists')) | list }}
+
+    - name: Read the DNS server's state
+      ansible.builtin.systemd_service:
+        name: iroh-dns-server
+      register: _unit
+
+    - name: Require the DNS server stopped
+      ansible.builtin.assert:
+        that:
+          - _unit.status.ActiveState != 'active'
+        fail_msg: iroh-dns-server is still {{ _unit.status.ActiveState }} after decommission.
+
+    - name: Read the listeners on the DNS server's ports
+      ansible.builtin.command:
+        argv: [ss, -Hltun, "( sport = :53 or sport = :443 or sport = :9117 or sport = :9118 )"]
+      register: _ss
+      changed_when: false
+
+    - name: Require the DNS server's ports free
+      ansible.builtin.assert:
+        that:
+          - _ss.stdout | trim | length == 0
+        fail_msg: "Still listening after decommission: {{ _ss.stdout }}"

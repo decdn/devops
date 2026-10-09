@@ -175,6 +175,8 @@
       {{ (_iroh_relay_ports.values() | list)
          + [decdn_metrics_port | default(9090), decdn_admin_port | default(9191),
             sponsord_port | default(8090), sponsord_onramp_port | default(8080),
+            iroh_dns_server_metrics_port | default(9117),
+            iroh_dns_server_health_port | default(9118),
             grafana_alloy_otlp_grpc_port | default(4317),
             grafana_alloy_otlp_http_port | default(4318),
             (grafana_alloy_server_http_addr | default('127.0.0.1:12345')).split(':') | last]

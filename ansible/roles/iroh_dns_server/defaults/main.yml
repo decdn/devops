@@ -1,0 +1,151 @@
+---
+# iroh_dns_server role defaults. iroh-dns-server is n0's pkarr relay and DNS
+# server for iroh: a deCDN node PUTs its signed address record (relay URL and
+# public addresses, ADR 001 § Node Discovery) to https://<hostname>/pkarr, and
+# peers resolve it as the TXT record _iroh.<z32 node id>.<origin>. deCDN nodes use
+# n0's hosted pair (dns.iroh.link) unless decdn_discovery_pkarr_url and
+# decdn_discovery_dns_origin name another; this role deploys that other one.
+#
+# The server is public by design and terminates its own TLS (Let's Encrypt, over
+# TLS-ALPN-01 on tcp/443), so there is no proxy in front of it. It binds tcp/443
+# and udp+tcp/53 (AGENTS.md hard rule 2, DNS server exception); its metrics and
+# the plain-http health listener stay on loopback.
+# Upstream: github.com/n0-computer/iroh, iroh-dns-server/src/config.rs.
+
+# --- Install method -----------------------------------------------------------
+# "release" (default): download the pinned iroh-dns-server GitHub Release tarball
+#   and verify it against the sha256 pinned below (upstream signs nothing).
+# "manual": copy a binary from the control machine (molecule's stub, or your own
+#   build with `cargo install iroh-dns-server`).
+iroh_dns_server_install_method: release        # "release" | "manual"
+iroh_dns_server_manual_bin_src: ""             # manual: control-machine path to the binary
+
+# --- Release to install ----------------------------------------------------------
+# Keep it on the iroh version decdn itself builds against (decdn/Cargo.lock), so
+# the record format matches what nodes publish. Bump the version and every digest
+# together: the digests are the release API's per-asset sha256
+# (gh release view v<version> -R n0-computer/iroh --json assets).
+iroh_dns_server_version: "1.3.0"
+iroh_dns_server_release_base: "https://github.com/n0-computer/iroh/releases/download"
+# Derived from the host's gathered architecture (vars/main.yml).
+iroh_dns_server_target: "{{ _iroh_dns_server_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
+iroh_dns_server_sha256:
+  x86_64-unknown-linux-gnu: e8d3ce15b532be13199abb39ba94badd91ef267ee23f738397983675cef967c6
+  aarch64-unknown-linux-gnu: 06b6a792ae52c071e842d6e4d0353b99c5082a65c62999b676562b3510de8cfc
+
+# --- Public name + certificate ------------------------------------------------------
+# REQUIRED. The DNS name of the zone this server is authoritative for, and the name
+# its https listener answers on: nodes publish to https://<hostname>/pkarr and
+# resolve under <hostname> (decdn_discovery_dns_origin). The parent zone delegates
+# it to this host (NS <hostname>. plus a glue A record, see the README), and the
+# server answers <hostname>'s own A record itself (iroh_dns_server_rr_a), which is
+# what Let's Encrypt connects to.
+iroh_dns_server_hostname: ""
+# REQUIRED. The ACME account contact (an email address; Let's Encrypt mails expiry
+# warnings there). iroh-dns-server refuses to start without one.
+iroh_dns_server_acme_contact: ""
+# true: Let's Encrypt's staging CA, for a trial run that does not spend the
+# production rate limits. Its certificates are NOT trusted: nodes cannot publish
+# until this is false again.
+iroh_dns_server_acme_staging: false
+
+# --- DNS zone ---------------------------------------------------------------------
+# The origins records are served under: _iroh.<z32>.<origin>. Default: the hostname
+# alone. The role writes each fully qualified and always adds "." (the root, which
+# iroh-dns-server 1.3.0 needs to start), so _iroh.<z32>. resolves on this server too.
+iroh_dns_server_origins: ["{{ iroh_dns_server_hostname }}"]
+# The A record answered at each origin apex: the PUBLIC IPv4 address the parent
+# zone's glue names. "" = the DNS bind address when it is a public (global) one;
+# a host behind 1:1 NAT (most clouds) must set it, since its own address is private.
+iroh_dns_server_rr_a: ""
+# The AAAA record at each origin apex ("" = none).
+iroh_dns_server_rr_aaaa: ""
+# The NS record at each origin apex, absolute (trailing dot). Default: the hostname
+# itself, whose address the server answers (rr_a), so the delegation needs a
+# single glue record.
+iroh_dns_server_rr_ns: "{{ iroh_dns_server_hostname }}."
+# The SOA at each origin apex, in zone-file form: "<mname> <rname> <serial>
+# <refresh> <retry> <expire> <minimum>". The serial is a constant (the zone is
+# rebuilt at start, not transferred: AXFR is refused).
+iroh_dns_server_default_soa: >-
+  {{ iroh_dns_server_hostname }}. hostmaster.{{ iroh_dns_server_hostname }}. 0 10800 3600 604800 3600
+# TTL, in seconds, of the node records the server answers. Short, so a node that
+# moves is found at its new address soon (upstream's production example: 30).
+iroh_dns_server_default_ttl: 30
+
+# --- Listeners ------------------------------------------------------------------
+# The public address the https listener (tcp/443) binds: "::" (every address, IPv4
+# included on a dual-stack host), "0.0.0.0" for an IPv4-only host, or one of the
+# host's own unicast addresses. On a host with net.ipv6.bindv6only=1, "::" would
+# serve no IPv4, so the role refuses it there.
+iroh_dns_server_https_bind_address: "::"
+# The ONE address the DNS listener binds udp/53 and tcp/53 on (upstream takes a
+# single bind address for both). Default: the host's default IPv4 address, so a
+# local resolver on loopback (systemd-resolved's stub on 127.0.0.53:53) keeps
+# working. "::" serves IPv6 too, but then nothing else may hold port 53 (turn
+# resolved's stub off with DNSStubListener=no first): the role refuses otherwise.
+iroh_dns_server_dns_bind_address: "{{ ansible_facts.get('default_ipv4', {}).get('address', '') }}"
+# Prometheus metrics, loopback only (asserted). 9117 is upstream's default.
+iroh_dns_server_metrics_bind: 127.0.0.1
+iroh_dns_server_metrics_port: 9117
+# A plain-http listener on 127.0.0.1 only, for the readiness gate: the binary has
+# no --version, and /healthz is where it reports its version.
+iroh_dns_server_health_port: 9118
+
+# --- Behaviour ------------------------------------------------------------------------
+# Rate limit on PUT /pkarr, per client address: "simple" (default; a burst of 2,
+# then one request per 4 s) or "disabled". upstream's "smart" is refused: it is
+# meant to read X-Forwarded-For, which a client of a server with no proxy in front
+# could forge to escape its limit (in 1.3.0 it behaves as "simple").
+iroh_dns_server_pkarr_put_rate_limit: simple   # "simple" | "disabled"
+# Look up a record this server does not hold on the BitTorrent mainline DHT. Off:
+# deCDN nodes publish to their pkarr_url only, never to the DHT, so it finds
+# nothing for them, while every public query for an unknown key would start a DHT
+# lookup from this host.
+iroh_dns_server_mainline_enabled: false
+# DHT bootstrap nodes as "host:port" ([] = mainline's defaults). Mainline only.
+iroh_dns_server_mainline_bootstrap: []
+# Each DNS-over-TCP and https client holds a socket.
+iroh_dns_server_limit_nofile: 65536
+
+# --- Logging ----------------------------------------------------------------------
+# RUST_LOG: a level (info) or comma-separated target=level directives.
+# iroh-dns-server logs only errors when it is unset, so the role always sets it.
+iroh_dns_server_log_level: info
+
+# --- Files on the host ----------------------------------------------------------
+iroh_dns_server_bin: /usr/local/bin/iroh-dns-server
+iroh_dns_server_etc: /etc/iroh-dns-server
+iroh_dns_server_config_file: "{{ iroh_dns_server_etc }}/config.toml"   # non-secret (0644)
+# sha256 record of every restart input (config, unit, binary) as of the last
+# converge that saw the server up.
+iroh_dns_server_inputs_checksum_file: "{{ iroh_dns_server_etc }}/.server-inputs.sha256"
+
+# --- Readiness --------------------------------------------------------------------
+# The server binds every listener at start, before it has a certificate (ACME runs
+# in the background and a failure there does not stop it). The gate is loopback
+# /healthz and /metrics answering, every listener owned by the unit and an SOA
+# answer from the DNS listener over udp and tcp. A timeout FAILS the deploy.
+# Window ~60s for each wait.
+iroh_dns_server_readiness_retries: 30
+iroh_dns_server_readiness_delay: 2
+# Seconds the server must then stay up, on the same process, before the gate passes.
+iroh_dns_server_readiness_settle: 5
+# After the gate: fetch https://<hostname>/healthz on the server's address
+# (loopback for a wildcard bind) and check the certificate against the host's
+# trust store. "warn" (default) reports a server that has not got its FIRST
+# certificate yet as a changed task, and fails once Let's Encrypt has issued a
+# production certificate for this hostname (staging never escalates); "fail"
+# always fails the deploy; "skip" does not look.
+iroh_dns_server_certificate_check: warn        # "warn" | "fail" | "skip"
+iroh_dns_server_certificate_retries: 15
+iroh_dns_server_certificate_delay: 4
+
+# --- Lifecycle: decommission (tasks_from: decommission) -------------------------
+# Only read by that entry point (playbooks/decommission.yml). Shared with decdn_node,
+# sponsord, sponsord_onramp and iroh_relay (and identical there, `make test-scripts`
+# checks): one typed confirmation covers every service on the host. A
+# non-interactive run sets decdn_decommission_confirm to the comma-joined, sorted
+# host list (deliberately NOT defaulted here).
+decdn_decommission_max_hosts: 1
+decdn_decommission_prompt_seconds: 300   # an unanswered confirmation prompt fails closed after this

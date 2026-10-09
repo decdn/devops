@@ -1,0 +1,234 @@
+---
+# The converged server: files, modes, unit hardening, capabilities, listeners, the
+# https routes, DNS answers, and the Alloy blocks that scrape and label it.
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    _ids_ip: "{{ ansible_facts['default_ipv4']['address'] }}"
+  tasks:
+    - name: Read the unit, the config and the Alloy config
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: _ids_files
+      loop:
+        - /etc/systemd/system/iroh-dns-server.service
+        - /etc/iroh-dns-server/config.toml
+        - /etc/alloy/config.alloy
+
+    - name: Name the file contents
+      ansible.builtin.set_fact:
+        _ids_unit: "{{ _ids_files.results[0].content | b64decode }}"
+        _ids_alloy: "{{ _ids_files.results[2].content | b64decode }}"
+
+    - name: Require the unit's hardening and lifecycle directives
+      ansible.builtin.assert:
+        that:
+          - item in _ids_unit.splitlines()
+        fail_msg: "/etc/systemd/system/iroh-dns-server.service lacks the line: {{ item }}"
+        quiet: true
+      loop:
+        - "ExecStart=/usr/local/bin/iroh-dns-server --config /etc/iroh-dns-server/config.toml"
+        - "AssertPathExists=/etc/iroh-dns-server/config.toml"
+        - "AssertFileNotEmpty=/etc/iroh-dns-server/config.toml"
+        - 'Environment="RUST_LOG=info,iroh_dns_server=debug"'
+        - "Environment=NO_COLOR=1"
+        - "KillSignal=SIGINT"
+        - "LimitNOFILE=65536"
+        - "DynamicUser=true"
+        - "StateDirectory=iroh-dns-server"
+        - "StateDirectoryMode=0700"
+        - "AmbientCapabilities=CAP_NET_BIND_SERVICE"
+        - "CapabilityBoundingSet=CAP_NET_BIND_SERVICE"
+        - "NoNewPrivileges=true"
+        - "ProtectSystem=strict"
+        - "ProtectHome=true"
+        - "PrivateTmp=true"
+        - "PrivateDevices=true"
+        - "MemoryDenyWriteExecute=true"
+        - "SystemCallFilter=@system-service"
+        - "UMask=0077"
+
+    - name: Parse the rendered config as TOML
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - "import json, sys, tomllib; print(json.dumps(tomllib.load(open(sys.argv[1], 'rb'))))"
+          - /etc/iroh-dns-server/config.toml
+      register: _ids_toml
+      changed_when: false
+
+    - name: Require the rendered values
+      vars:
+        _c: "{{ _ids_toml.stdout | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - _c.data_dir == '/var/lib/iroh-dns-server'
+          - _c.pkarr_put_rate_limit == 'simple'
+          - "_c.http == {'port': 9118, 'bind_addr': '127.0.0.1'}"
+          - _c.https.port == 443
+          - _c.https.bind_addr == '::'
+          - _c.https.domains == ['dns.molecule.test']
+          - _c.https.cert_mode == 'lets_encrypt'
+          - _c.https.letsencrypt_contact == 'ops@molecule.test'
+          - _c.https.letsencrypt_prod is true
+          - _c.dns.port == 53
+          - _c.dns.bind_addr == _ids_ip
+          - _c.dns.origins == ['dns.molecule.test.', 'discovery.molecule.test.', '.']
+          - _c.dns.default_soa == 'dns.molecule.test. hostmaster.dns.molecule.test. 0 10800 3600 604800 3600'
+          - _c.dns.default_ttl == 30
+          - _c.dns.rr_a == '192.0.2.10'
+          - _c.dns.rr_aaaa == '2001:db8::10'
+          - _c.dns.rr_ns == 'dns.molecule.test.'
+          - "_c.metrics == {'disabled': false, 'bind_addr': '127.0.0.1:9117'}"
+          - "_c.mainline == {'enabled': true, 'bootstrap': ['router.molecule.test:6881']}"
+          - _c.zone_store.max_batch_size == 65536
+          - _c.zone_store.max_batch_time == '1s'
+          - _c.zone_store.eviction == '7days'
+          - _c.zone_store.eviction_interval == '10s'
+          - _c.zone_store | length == 4
+        fail_msg: "Unexpected rendered config: {{ _c | to_nice_json }}"
+
+    - name: Stat the config, the state directory and the records
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: _ids_stat
+      loop:
+        - /etc/iroh-dns-server/config.toml
+        - /var/lib/private/iroh-dns-server
+        - /var/lib/private/iroh-dns-server/molecule-stub-probe
+        - /var/lib/private/iroh-dns-server/cert_cache
+        - /etc/iroh-dns-server/.server-inputs.sha256
+
+    - name: Require the files' owners and modes
+      ansible.builtin.assert:
+        that:
+          - _ids_stat.results[0].stat.mode == '0644'
+          - _ids_stat.results[0].stat.pw_name == 'root'
+          - _ids_stat.results[1].stat.isdir
+          - _ids_stat.results[1].stat.mode == '0700'
+          # The DynamicUser's uid (it may have no passwd entry, hence no pw_name).
+          - _ids_stat.results[1].stat.uid != 0
+          # The stub wrote here as the DynamicUser: the state dir is its own.
+          - _ids_stat.results[2].stat.exists
+          - _ids_stat.results[3].stat.isdir
+          - _ids_stat.results[4].stat.mode == '0600'
+        fail_msg: >-
+          config {{ _ids_stat.results[0].stat.mode | default('missing') }}/{{
+          _ids_stat.results[0].stat.pw_name | default('') }},
+          state dir {{ _ids_stat.results[1].stat.mode | default('missing') }}/uid {{
+          _ids_stat.results[1].stat.uid | default('') }},
+          stub probe {{ _ids_stat.results[2].stat.exists }},
+          cert_cache {{ _ids_stat.results[3].stat.isdir | default(false) }},
+          record {{ _ids_stat.results[4].stat.mode | default('missing') }}.
+
+    - name: Read the server's process
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          pid=$(systemctl show -p MainPID --value iroh-dns-server)
+          [ "$pid" -gt 0 ]
+          awk '/^(Uid|CapEff):/ { print $1, $2 }' /proc/"$pid"/status
+      register: _ids_proc
+      changed_when: false
+
+    # The one capability it keeps, as an unprivileged user: CAP_NET_BIND_SERVICE is
+    # bit 10 (0x400).
+    - name: Require an unprivileged process holding only CAP_NET_BIND_SERVICE
+      ansible.builtin.assert:
+        that:
+          - "'Uid: 0' not in _ids_proc.stdout"
+          - "'CapEff: 0000000000000400' in _ids_proc.stdout"
+        fail_msg: "iroh-dns-server's process: {{ _ids_proc.stdout }}"
+
+    - name: Read the listeners
+      ansible.builtin.command:
+        argv: [ss, -Hltun]
+      register: _ids_ss
+      changed_when: false
+
+    - name: Require https on every address, DNS on the host's address, the rest on loopback
+      vars:
+        _cols: "{{ _ids_ss.stdout_lines | map('split') | list }}"
+        # [proto, local address] per socket.
+        _socks: "{{ _cols | map('first') | zip(_cols | map(attribute=4)) | map('join', ' ') | list }}"
+      ansible.builtin.assert:
+        that:
+          - "'tcp *:443' in _socks or 'tcp [::]:443' in _socks"
+          - "('tcp ' ~ _ids_ip ~ ':53') in _socks"
+          - "('udp ' ~ _ids_ip ~ ':53') in _socks"
+          - _socks | select('search', ':9117$') | list == ['tcp 127.0.0.1:9117']
+          - _socks | select('search', ':9118$') | list == ['tcp 127.0.0.1:9118']
+        fail_msg: "Listeners: {{ _socks }}"
+
+    - name: Fetch /healthz over https with the trusted molecule certificate
+      ansible.builtin.command:
+        argv: [curl, -fsS, --max-time, "5", --resolve, "dns.molecule.test:443:127.0.0.1",
+               "https://dns.molecule.test/healthz"]
+      register: _ids_healthz
+      changed_when: false
+
+    # A node's record PUT (pkarr's z-base-32 key); the stub does not store it.
+    - name: PUT a record to /pkarr over https
+      ansible.builtin.command:
+        argv: [curl, -sS, -o, /dev/null, -w, "%{http_code}", --max-time, "5", -X, PUT, --data-binary, molecule,
+               --resolve, "dns.molecule.test:443:127.0.0.1",
+               "https://dns.molecule.test/pkarr/8zjxxik64fz7oroxuy1xh7g9y6soknc3qgtu4ndmdjkif6zymkhy"]
+      register: _ids_put
+      changed_when: false
+
+    - name: Require both routes to answer
+      ansible.builtin.assert:
+        that:
+          - (_ids_healthz.stdout | from_json).status == 'ok'
+          - _ids_put.stdout == '204'
+        fail_msg: "/healthz: {{ _ids_healthz.stdout }}; PUT /pkarr: {{ _ids_put.stdout }}"
+
+    - name: Ask the DNS listener for the apex records over udp and tcp
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          for transport in +notcp +tcp; do
+            for q in "SOA dns.molecule.test" "NS dns.molecule.test" "A dns.molecule.test" \
+                     "AAAA dns.molecule.test" "SOA discovery.molecule.test"; do
+              echo "$transport $q: $(dig +norecurse +short "$transport" $q @{{ _ids_ip }})"
+            done
+          done
+      register: _ids_dig
+      changed_when: false
+
+    - name: Require the apex records
+      ansible.builtin.assert:
+        that:
+          - item in _ids_dig.stdout_lines
+        fail_msg: "DNS answers lack \"{{ item }}\": {{ _ids_dig.stdout_lines }}"
+        quiet: true
+      loop: "{{ ['+notcp', '+tcp'] | product(_want) | map('join', ' ') | list }}"
+      vars:
+        _want:
+          - "SOA dns.molecule.test: dns.molecule.test. hostmaster.dns.molecule.test. 0 10800 3600 604800 3600"
+          - "NS dns.molecule.test: dns.molecule.test."
+          - "A dns.molecule.test: 192.0.2.10"
+          - "AAAA dns.molecule.test: 2001:db8::10"
+          - "SOA discovery.molecule.test: dns.molecule.test. hostmaster.dns.molecule.test. 0 10800 3600 604800 3600"
+
+    - name: Require Alloy to scrape the server and label its journal stream
+      ansible.builtin.assert:
+        that:
+          - item in _ids_alloy
+        fail_msg: "/etc/alloy/config.alloy lacks: {{ item }}"
+        quiet: true
+      loop:
+        - 'prometheus.scrape "iroh_dns_server"'
+        - '"__address__" = "127.0.0.1:9117"'
+        - 'regex         = "iroh-dns-server\\.service"'
+
+    - name: Require no node scrape on a DNS-server-only host
+      ansible.builtin.assert:
+        that:
+          - "'prometheus.scrape \"decdn_node\"' not in _ids_alloy"
+        fail_msg: The DNS-server-only host's Alloy scrapes a decdn-node that is not there.

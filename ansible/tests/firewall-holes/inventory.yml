@@ -13,6 +13,7 @@ all:
         co-located: {}
         co-located-onramp: {}
         relay-node: {}
+        dns-node: {}
     sponsord_hosts:
       hosts:
         sponsord: {}
@@ -21,6 +22,7 @@ all:
         onramp-own-proxy: {}
         co-located-onramp: {}
         relay-sponsord: {}
+        dns-sponsord: {}
     sponsord_onramp_hosts:
       hosts:
         onramp: {}
@@ -34,3 +36,8 @@ all:
           iroh_relay_enable_quic_addr_discovery: false
         relay-node: {}
         relay-sponsord: {}
+    iroh_dns_server_hosts:
+      hosts:
+        dns: {}
+        dns-node: {}
+        dns-sponsord: {}

@@ -1,0 +1,33 @@
+---
+# The server runs, and the restart-input record (roles/iroh_dns_server: config,
+# unit, binary, space-separated sha256) matches the inputs it runs on.
+- name: Read the server's unit state
+  ansible.builtin.systemd_service:
+    name: iroh-dns-server
+  register: _ids_cur_unit
+
+- name: Hash the server's restart inputs
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  register: _ids_cur_inputs
+  loop:
+    - /etc/iroh-dns-server/config.toml
+    - /etc/systemd/system/iroh-dns-server.service
+    - /usr/local/bin/iroh-dns-server
+
+- name: Read the restart-input record
+  ansible.builtin.slurp:
+    src: /etc/iroh-dns-server/.server-inputs.sha256
+  register: _ids_cur_record
+
+- name: Require a running server recorded on its current inputs
+  ansible.builtin.assert:
+    that:
+      - _ids_cur_unit.status.ActiveState == 'active'
+      - (_ids_cur_record.content | b64decode | trim)
+        == (_ids_cur_inputs.results | map(attribute='stat.checksum') | join(' '))
+    fail_msg: >-
+      iroh-dns-server is {{ _ids_cur_unit.status.ActiveState }}, and the record
+      "{{ _ids_cur_record.content | b64decode | trim }}" should be the inputs'
+      "{{ _ids_cur_inputs.results | map(attribute='stat.checksum') | join(' ') }}".

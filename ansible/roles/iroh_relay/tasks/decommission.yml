@@ -51,6 +51,7 @@
     _decom_services: >-
       {{ ((['decdn-node'] if 'decdn_nodes' in _decom_groups else [])
           + (['iroh-relay'] if 'iroh_relay_hosts' in _decom_groups else [])
+          + (['iroh-dns-server'] if 'iroh_dns_server_hosts' in _decom_groups else [])
           + (['sponsord-onramp and its Caddy'] if 'sponsord_onramp_hosts' in _decom_groups else [])
           + (['sponsord'] if 'sponsord_hosts' in _decom_groups else [])
           + ['iroh-relay']) | unique }}

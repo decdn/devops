@@ -269,7 +269,7 @@ assert_has sponsordonly.alloy 'forward_to      = [prometheus.relabel.sponsord_id
 assert_has sponsordonly.alloy 'replacement  = "sponsord"' "the sponsord metric service_name"
 assert_has sponsordonly.alloy 'regex         = "sponsord\\.service"' "the sponsord log-stream unit match"
 assert_has sponsordonly.alloy 'replacement   = "sponsord"' "the sponsord log-stream service_name"
-assert_has sponsordonly.alloy '(decdn-node|sponsord|sponsord-onramp|iroh-relay|caddy|alloy|ssh|sshd)' "sponsord, the onramp, iroh-relay and Caddy in the systemd collector's unit list"
+assert_has sponsordonly.alloy '(decdn-node|sponsord|sponsord-onramp|iroh-relay|iroh-dns-server|caddy|alloy|ssh|sshd)' "sponsord, the onramp, iroh-relay, iroh-dns-server and Caddy in the systemd collector's unit list"
 assert_has colocated.alloy 'prometheus.scrape "decdn_node"' "the node scrape on a co-located host"
 assert_has colocated.alloy 'prometheus.scrape "sponsord"' "the sponsord scrape on a co-located host"
 assert_has colocated.alloy '"__address__" = "127.0.0.1:8090"' "the default sponsord listener"
@@ -302,6 +302,28 @@ assert_has colocatedrelay.alloy '"__address__" = "127.0.0.1:9092"' "the default 
 for want in '^iroh_relay_metrics_bind: 127\.0\.0\.1([[:space:]]|$)' '^iroh_relay_metrics_port: 9092([[:space:]]|$)'; do
   grep -qE "$want" "$ansible_dir/roles/iroh_relay/defaults/main.yml" \
     || fail "iroh_relay's metrics default is not 127.0.0.1:9092: update the fallback in config.alloy.j2"
+done
+assert_lacks defaults.alloy 'prometheus.scrape "iroh_dns_server"' "a DNS server scrape while it is disabled"
+assert_lacks defaults.alloy 'iroh-dns-server\\.service' "a DNS server log rule while it is disabled"
+assert_lacks relayonly.alloy 'prometheus.scrape "iroh_dns_server"' "a DNS server scrape on a host without one"
+assert_lacks dnsonly.alloy 'prometheus.scrape "decdn_node"' "the node scrape on a DNS-server-only host"
+assert_lacks dnsonly.alloy 'prometheus.scrape "iroh_relay"' "a relay scrape on a DNS-server-only host"
+assert_has dnsonly.alloy 'prometheus.scrape "iroh_dns_server"' "the DNS server scrape"
+assert_has dnsonly.alloy '"__address__" = "127.0.0.1:19117"' "the DNS server listener from iroh_dns_server_metrics_port"
+assert_has dnsonly.alloy '"job"         = "iroh-dns-server"' "the DNS server job label"
+assert_has dnsonly.alloy 'forward_to      = [prometheus.relabel.iroh_dns_server_identity.receiver]' "the DNS server scrape feeding its own identity"
+assert_has dnsonly.alloy 'replacement  = "iroh-dns-server"' "the DNS server metric service_name"
+assert_has dnsonly.alloy 'regex         = "iroh-dns-server\\.service"' "the DNS server log-stream unit match"
+assert_has dnsonly.alloy 'replacement   = "iroh-dns-server"' "the DNS server log-stream service_name"
+assert_has dnsonly.alloy '"(?:decdn-node|iroh-dns-server)\\.service"' "the DNS server in the priority exemption"
+assert_has dnsonly.alloy '{unit=~"(iroh-dns-server)\\.service"}' "the DNS server in the plain-text level selector"
+assert_has colocateddns.alloy 'prometheus.scrape "decdn_node"' "the node scrape on a node that also runs a DNS server"
+assert_has colocateddns.alloy 'prometheus.scrape "iroh_dns_server"' "the DNS server scrape on a node that also runs one"
+assert_has colocateddns.alloy '"__address__" = "127.0.0.1:9117"' "the default DNS server listener"
+# The same fallback for the DNS server: 127.0.0.1:9117, the iroh_dns_server role's default.
+for want in '^iroh_dns_server_metrics_bind: 127\.0\.0\.1([[:space:]]|$)' '^iroh_dns_server_metrics_port: 9117([[:space:]]|$)'; do
+  grep -qE "$want" "$ansible_dir/roles/iroh_dns_server/defaults/main.yml" \
+    || fail "iroh_dns_server's metrics default is not 127.0.0.1:9117: update the fallback in config.alloy.j2"
 done
 echo "ok: per-daemon scrape toggles"
 
@@ -351,6 +373,12 @@ samples_json() { # nanosecond timestamp
     ["$1","2026-10-09T05:30:21.000004Z ERROR acme: iroh_relay::server: ir-acme error: Order(Acme(HttpRequest(url: https://SECRET-RU:SECRET-RP@acme.example/dir?SECRET-RQ=1 )))"],
     ["$1","Error: ir-raw config must be valid toml"],
     ["$1","ir-plain an unlevelled line"]]},
+  {"stream":{"journal__systemd_unit":"iroh-dns-server.service","journal_priority_keyword":"info"},"values":[
+    ["$1","2026-10-09T14:20:33.000001Z DEBUG iroh_dns_server::dns: id-debug"],
+    ["$1","2026-10-09T14:20:33.000002Z  INFO hickory_server::server: id-info"],
+    ["$1","2026-10-09T14:20:33.000003Z  WARN iroh_dns_server::http: id-warn"],
+    ["$1","Error: id-raw new authority: SOA record must be present: ."],
+    ["$1","id-plain an unlevelled line"]]},
   {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"info"},"values":[
     ["$1","{\"level\":\"ERROR\",\"fields\":{\"message\":\"m-other-info\"}}"]]},
   {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"error"},"values":[
@@ -481,8 +509,9 @@ no_secrets() {
 
 # Defaults (guardrail "debug|trace"), sponsord not enabled: its plain-text lines
 # are not re-levelled and stand at journald's info.
-run_level_harness defaults.alloy 45
+run_level_harness defaults.alloy 50
 kept ir-warn info iroh-relay.service  # relay not enabled: journald's level
+kept id-warn info iroh-dns-server.service  # DNS server not enabled: journald's level
 kept s-trace info sponsord.service
 kept s-error info sponsord.service
 kept m-warn-uc warning decdn-node.service
@@ -564,7 +593,7 @@ dropped m-other-debug
 echo "ok: daemon log level follows the JSON body (info in the guardrail)"
 
 # sponsord enabled: its level is parsed from the plain-text line.
-run_level_harness sponsordonly.alloy 43
+run_level_harness sponsordonly.alloy 48
 no_secrets
 kept s-rpcurl error sponsord.service     # the "Error: " match still sees the redacted line
 kept s-info info sponsord.service
@@ -624,7 +653,20 @@ dropped ir-info
 dropped ir-debug
 dropped s-error                           # sponsord is not enabled here
 dropped ro-warn
+dropped id-warn                           # the DNS server is not enabled here
 echo "ok: iroh-relay judged by its own level (info in the guardrail)"
+
+# iroh-dns-server: exempt, and levelled from its plain-text line like the relay.
+run_level_harness dnsonly.alloy 26
+no_secrets
+kept id-warn warning iroh-dns-server.service
+kept id-raw error iroh-dns-server.service   # its exit error: an error
+kept id-plain info iroh-dns-server.service  # exempt: no level of its own to judge by
+kept m-error error decdn-node.service       # the node's JSON stage is unaffected
+dropped id-info
+dropped id-debug
+dropped ir-warn                             # the relay is not enabled here
+echo "ok: iroh-dns-server judged by its own level (info in the guardrail)"
 
 # --- Gate 2: every ExecStart flag exists -------------------------------------
 # `alloy run` ignores nothing: an unknown flag exits non-zero, i.e. a systemd

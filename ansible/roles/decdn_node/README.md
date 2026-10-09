@@ -338,6 +338,9 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
   **on its own**, a resolve-only node that never publishes; and/or
   `decdn_discovery_peers` (a map of 64-char lowercase-hex NodeId to
   `{relay_url, addrs}`). Setting either mechanism drops the n0 discovery leg.
+  The [`iroh_dns_server`](../iroh_dns_server/README.md) role deploys the server the
+  first two point at (`https://<hostname>/pkarr` and `<hostname>`); clients resolve
+  such nodes by pkarr only with the same `dns_origin`.
   `decdn_client_region_allowlist` (a `[client]` knob) narrows which regions this
   node discovers/probes **as a client** to a list of ISO 3166-1 alpha-2 codes;
   `[]` ⇒ no filter.

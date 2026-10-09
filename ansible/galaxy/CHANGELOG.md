@@ -8,6 +8,36 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- `iroh_dns_server`: a new role for a self-hosted iroh DNS server (`iroh-dns-server`
+  from n0-computer/iroh, pinned to v1.3.0, the iroh version decdn builds against):
+  the pkarr relay deCDN nodes publish their signed address records to
+  (`decdn_discovery_pkarr_url`) and the DNS server peers resolve them through
+  (`decdn_discovery_dns_origin`), so node discovery no longer depends on n0's
+  `dns.iroh.link`. Installs the release tarball verified against a per-target
+  sha256 pin or a `manual` binary (no `--version` upstream: a `--help` smoke run,
+  and the version is checked on the running server's `/healthz` before the install
+  stamp is written). Templates `config.toml` with every key written out, the
+  origins fully qualified and `"."` always among them (1.3.0 refuses to start
+  without it, and answers no apex record for an unqualified origin). Runs it as a
+  `DynamicUser` holding only `CAP_NET_BIND_SERVICE`, its record store and Let's
+  Encrypt state in a `StateDirectory`, SIGINT shutdown. tcp/443 and udp+tcp/53
+  are public; the DNS listener binds one address, by default the host's default
+  IPv4, so systemd-resolved's stub keeps 127.0.0.53; metrics (127.0.0.1:9117) and
+  a plain-http health listener (127.0.0.1:9118) are asserted onto loopback. The
+  pkarr rate limit is `simple` or `disabled` (`smart`, meant to trust
+  `X-Forwarded-For` and in 1.3.0 the same as `simple`, is refused); the mainline DHT fallback is off. Before any change it refuses
+  ports a process outside the unit's cgroup holds, port 53 by address; after the
+  start, a fatal gate requires `/healthz` (with the pinned version), metrics, every
+  listener owned by the unit, each origin's SOA over udp and tcp, and the process
+  to stay up. The certificate check matches `iroh_relay`'s.
+  `tasks_from: decommission` keeps the config, binary and state.
+- `grafana_alloy`: `grafana_alloy_iroh_dns_server_enabled` scrapes the DNS server's
+  loopback metrics as `job="iroh-dns-server"` and labels and re-levels its journal
+  stream like the relay's; `iroh-dns-server.service` joins the systemd collector's
+  unit list.
+- `decdn_node`, `sponsord`, `sponsord_onramp`, `iroh_relay`: the decommission
+  confirmation names `iroh-dns-server` too when the run covers DNS server hosts.
+- `iroh_relay`: its metrics port must also clear the DNS server's 9117 and 9118.
 - `iroh_relay`: a new role for a self-hosted iroh relay (`iroh-relay` from
   n0-computer/iroh, pinned to v1.3.0, the iroh version decdn builds against), the
   fallback path for deCDN peers that cannot hole-punch and their QUIC address
@@ -306,6 +336,10 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `iroh_relay`: the port guard passed when a listener's process kept vanishing
+  between its two reads until the retries ran out (a holder that crash-loops fast):
+  the task's `failed_when` let the last retry's result through, and the guard then
+  saw no foreign listener. It now fails the run instead.
 - On a host in both `decdn_nodes` and `sponsord_hosts`, the sponsord play's
   baseline could not render the node's udp/4433 hole: it read `decdn_bind_port`, a
   `decdn_node` default that play does not load. The public holes are now built

@@ -35,3 +35,7 @@
 # No play for iroh_relay_hosts: a relay holds no state worth a backup. Its only
 # files are the role-written config and the ACME account and certificates, which
 # Let's Encrypt re-issues on a new host (see docs/lifecycle.md).
+
+# No play for iroh_dns_server_hosts either: its record store holds only what nodes
+# republish on their own, and its ACME state is re-issued the same way (see
+# docs/lifecycle.md).

@@ -1,0 +1,18 @@
+---
+galaxy_info:
+  role_name: iroh_dns_server
+  author: deCDN Contributors
+  description: >-
+    Self-hosted iroh DNS server (n0-computer/iroh's iroh-dns-server) for deCDN node
+    discovery — the pkarr relay nodes publish to and the DNS server peers resolve
+    them through; sha256-pinned release-tarball or manual install, built-in Let's
+    Encrypt TLS, hardened DynamicUser systemd unit, loopback metrics.
+  license: MIT
+  min_ansible_version: "2.15"
+  galaxy_tags: [decdn, iroh, dns, pkarr, systemd, debian]
+  platforms:
+    - name: Debian
+      versions: [bookworm, trixie]
+    - name: Ubuntu
+      versions: [noble, resolute]
+dependencies: []

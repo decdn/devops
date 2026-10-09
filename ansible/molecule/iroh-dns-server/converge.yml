@@ -1,0 +1,7 @@
+---
+# The real entry point: every play of playbooks/iroh_dns_server.yml (the placement
+# guard, then the server), so playbooks/group_vars/all.yml derives the Alloy toggle
+# exactly as a deploy would. Variables come from molecule.yml's inventory
+# group_vars; baseline is skipped there.
+- name: Converge
+  ansible.builtin.import_playbook: ../../playbooks/iroh_dns_server.yml

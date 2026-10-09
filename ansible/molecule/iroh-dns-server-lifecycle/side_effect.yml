@@ -1,0 +1,75 @@
+---
+# Decommission: refused without a confirmation and with a wrong one, then for real
+# through the playbook, twice. The header of molecule.yml lists what each step
+# proves; verify.yml checks the result.
+- name: Decommission refuses a missing and a wrong confirmation
+  hosts: all
+  become: true
+  tasks:
+    # Molecule has no TTY, and the 1 s timeout covers an interactive run: either way
+    # the prompt yields empty input, which must not count as confirmation.
+    - name: Decommission the DNS server with no confirmation given
+      block:
+        - name: Run the DNS server decommission without decdn_decommission_confirm
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+            tasks_from: decommission
+          vars:
+            decdn_decommission_prompt_seconds: 1
+        - name: Fail if the DNS server decommission proceeded unconfirmed
+          ansible.builtin.fail:
+            msg: the DNS server decommission proceeded without a typed confirmation.
+      rescue:
+        - name: Require the confirmation assert to be what failed (unconfirmed)
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name is match('^Require the typed confirmation')
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the confirmation check."
+
+    - name: Decommission the DNS server with the wrong confirmation
+      block:
+        - name: Run the DNS server decommission with a mistyped host list
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+            tasks_from: decommission
+          vars:
+            decdn_decommission_confirm: not-this-host
+        - name: Fail if the DNS server decommission accepted a wrong confirmation
+          ansible.builtin.fail:
+            msg: the DNS server decommission proceeded with a confirmation that did not match.
+      rescue:
+        - name: Require the confirmation assert to be what failed (mistyped)
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name is match('^Require the typed confirmation')
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the confirmation check."
+
+    - name: Read the DNS server after the rejected runs
+      ansible.builtin.systemd_service:
+        name: iroh-dns-server
+      register: _ids_unit
+
+    - name: Require the DNS server to survive the rejected runs
+      ansible.builtin.assert:
+        that:
+          - _ids_unit.status.ActiveState == 'active'
+        fail_msg: A rejected decommission stopped iroh-dns-server ({{ _ids_unit.status.ActiveState }}).
+
+    # A refusal must not leave the run-wide confirmation behind, or a later play
+    # of a real run would skip its prompt.
+    - name: Require no rejected run to have recorded a confirmation
+      ansible.builtin.assert:
+        that:
+          - _decdn_decommission_confirmed is not defined
+        fail_msg: A rejected decommission left _decdn_decommission_confirmed set.
+
+    - name: Confirm the real decommission non-interactively
+      ansible.builtin.set_fact:
+        decdn_decommission_confirm: "{{ ansible_play_hosts_all | sort | join(',') }}"
+
+- name: Decommission
+  ansible.builtin.import_playbook: ../../playbooks/decommission.yml
+
+# Re-running must be safe: the unit is gone and every removal is already done.
+- name: Decommission again
+  ansible.builtin.import_playbook: ../../playbooks/decommission.yml

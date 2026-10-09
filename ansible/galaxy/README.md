@@ -2,16 +2,17 @@
 
 Deploy and harden a **public [deCDN](https://decdn.org) node**. This collection is
 the public, reusable slice of the [`decdn/devops`](https://github.com/decdn/devops)
-repository — six roles and nothing else:
+repository — seven roles and nothing else:
 
 | Role | Purpose |
 |------|---------|
 | `decdn.node.baseline` | Debian/Ubuntu host baseline — nftables default-deny inbound, fail2ban, unattended-upgrades, chrony, an admin sudo user, then DevSec OS + SSH hardening (applied last). |
 | `decdn.node.decdn_node` | The `decdn-node` daemon under a hardened systemd unit — from a GPG-verified release tarball (the default), a build on the host from a git ref, or locally built binaries; public QUIC udp/4433, loopback metrics + admin RPC. `decdn_network` sets the chain from upstream's manifest; `tasks_from: backup` / `decommission` for day 2. |
-| `decdn.node.grafana_alloy` | Opt-in Grafana Cloud observability agent — loopback-only Alloy receiver and hardened telemetry export; scrapes the node, `sponsord`, or both (`grafana_alloy_node_enabled` / `grafana_alloy_sponsord_enabled`), labels the onramp's journal (`grafana_alloy_sponsord_onramp_enabled`), and scrapes an iroh relay (`grafana_alloy_iroh_relay_enabled`). |
+| `decdn.node.grafana_alloy` | Opt-in Grafana Cloud observability agent — loopback-only Alloy receiver and hardened telemetry export; scrapes the node, `sponsord`, or both (`grafana_alloy_node_enabled` / `grafana_alloy_sponsord_enabled`), labels the onramp's journal (`grafana_alloy_sponsord_onramp_enabled`), and scrapes an iroh relay (`grafana_alloy_iroh_relay_enabled`) and an iroh DNS server (`grafana_alloy_iroh_dns_server_enabled`). |
 | `decdn.node.sponsord` | The `sponsord` onboarding sponsor (treasury signer + PaymentPool keeper), standalone or beside a node — local binary or GPG-verified `sponsord-v*` release, `DynamicUser` unit with the API token and treasury wallet as systemd credentials, loopback-only API, `/healthz` deploy gate. `sponsord_network` sets the chain and PaymentPool from upstream's manifest. Restarts refuse while a pool top-up is held; `tasks_from: backup` / `decommission` for day 2. |
 | `decdn.node.sponsord_onramp` | `sponsord-onramp`, sponsord's public side (Turnstile gate, installers, CLI API), on the daemon's host — local binary or GPG-verified `sponsord-onramp-v*` release, `DynamicUser` unit with the daemon token and Turnstile secret as systemd credentials, loopback listener behind Caddy (distro package, ACME TLS, admin API off; or your own proxy), `/healthz` deploy gate; `tasks_from: decommission`. |
 | `decdn.node.iroh_relay` | A self-hosted [iroh relay](https://github.com/n0-computer/iroh) (`iroh-relay`) for deCDN peers that cannot hole-punch — sha256-pinned upstream release (or a local binary), its own Let's Encrypt TLS, QUIC address discovery, `DynamicUser` unit holding only `CAP_NET_BIND_SERVICE`, loopback metrics, a deploy gate on every listener, a refusal of ports another process holds; access limited to an allowlist of endpoint IDs by default (`iroh_relay_access`; `tasks_from: node-ids` reads nodes' IDs); `tasks_from: decommission`. Point nodes at it with `decdn_relay_urls`. |
+| `decdn.node.iroh_dns_server` | A self-hosted [iroh DNS server](https://github.com/n0-computer/iroh) (`iroh-dns-server`): the pkarr relay deCDN nodes publish their address records to and the DNS server peers resolve them through, in place of n0's `dns.iroh.link` — sha256-pinned upstream release (or a local binary), its own Let's Encrypt TLS, DNS on one bind address (clear of systemd-resolved's stub), `DynamicUser` unit holding only `CAP_NET_BIND_SERVICE`, loopback metrics, a deploy gate on every listener, `/healthz`'s version and an SOA answer over udp and tcp, a refusal of ports another process holds; `tasks_from: decommission`. Point nodes at it with `decdn_discovery_pkarr_url` and `decdn_discovery_dns_origin`. |
 
 ## Requirements
 
@@ -86,6 +87,7 @@ full variable list, the eth-keystore prerequisite, and day-2 ops:
 - [`roles/sponsord`](https://github.com/decdn/devops/tree/main/ansible/roles/sponsord)
 - [`roles/sponsord_onramp`](https://github.com/decdn/devops/tree/main/ansible/roles/sponsord_onramp)
 - [`roles/iroh_relay`](https://github.com/decdn/devops/tree/main/ansible/roles/iroh_relay)
+- [`roles/iroh_dns_server`](https://github.com/decdn/devops/tree/main/ansible/roles/iroh_dns_server)
 
 ## Security model
 
@@ -96,7 +98,10 @@ playbooks derive that from `sponsord_onramp_hosts`; from your own playbook, add 
 yourself). `iroh_relay` is public by design and terminates its own TLS: it binds
 tcp/80, tcp/443 and udp/7842 on every address (its metrics stay on loopback), so a
 relay host opens those three. The role refuses to deploy it where another process
-holds them.
+holds them. `iroh_dns_server` is public by design too: it terminates its own TLS on
+tcp/443 and answers DNS on udp/53 and tcp/53 at one address (its metrics and health
+listener stay on loopback), so a DNS server host opens those three, and the role
+refuses ports another process holds the same way.
 No secrets ship in the collection or are committed — the eth keystore is
 operator-provisioned on the host, and `rpc_url` (which may embed an API key) renders
 to a `0600` file. SSH hardening is applied last, after the admin key is in place, so

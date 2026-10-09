@@ -1,0 +1,134 @@
+---
+# The certificate check, on ../iroh-dns-server's converge: a certificate the host
+# does not trust fails the check in "fail" mode and only warns in "warn" mode,
+# until Let's Encrypt has issued a production one for this name (its cache file
+# exists): then warn mode fails too. Staging only warns, even with its certificate
+# cached. The host is left as converged, with the molecule CA trusted, for verify
+# (../iroh-dns-server's).
+- name: Side effect — the certificate check
+  hosts: all
+  become: true
+  vars:
+    _ids_cache_dir: /var/lib/private/iroh-dns-server/cert_cache
+  tasks:
+    - name: Distrust the molecule CA
+      ansible.builtin.file:
+        path: /usr/local/share/ca-certificates/iroh-dns-server-molecule.crt
+        state: absent
+
+    - name: Rebuild the trust store without it  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: update-ca-certificates --fresh
+      changed_when: true
+
+    - name: Converge with an untrusted certificate in fail mode
+      block:
+        - name: Run the role with an untrusted certificate
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_certificate_retries: 2
+
+        - name: Fail — the certificate check passed an untrusted certificate
+          ansible.builtin.fail:
+            msg: The role finished although the server's certificate is not trusted.
+      rescue:
+        - name: Require the certificate check to be what failed
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Fail on a DNS server without a trusted certificate'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the certificate check."
+
+    - name: Converge with an untrusted certificate in warn mode
+      ansible.builtin.include_role:
+        name: iroh_dns_server
+      vars:
+        iroh_dns_server_certificate_check: warn
+        iroh_dns_server_certificate_retries: 2
+
+    # Once Let's Encrypt has issued a production certificate for this name (its
+    # cache file exists), an untrusted one is a regression, and warn mode fails
+    # too. tokio-rustls-acme names the file after the domain and the directory URL.
+    - name: Name the production and staging certificate cache files
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import base64, hashlib
+            for d in ("https://acme-v02.api.letsencrypt.org/directory",
+                      "https://acme-staging-v02.api.letsencrypt.org/directory"):
+                h = hashlib.sha256(b"dns.molecule.test\0" + d.encode()).digest()
+                print("cached_cert_" + base64.urlsafe_b64encode(h).decode().rstrip("="))
+      register: _ids_cache_names
+      changed_when: false
+
+    # A staging certificate is never trusted, so staging only warns, even with its
+    # certificate cached (and a staging cache file never counts as a production one).
+    - name: Stage a cached Let's Encrypt staging certificate
+      ansible.builtin.copy:
+        dest: "{{ _ids_cache_dir }}/{{ _ids_cache_names.stdout_lines[1] }}"
+        content: "molecule\n"
+        mode: "0600"
+
+    - name: Converge on the staging CA with its certificate cached, in warn mode
+      ansible.builtin.include_role:
+        name: iroh_dns_server
+      vars:
+        iroh_dns_server_acme_staging: true
+        iroh_dns_server_certificate_check: warn
+        iroh_dns_server_certificate_retries: 2
+
+    - name: Converge on production with only a staging certificate cached, in warn mode
+      ansible.builtin.include_role:
+        name: iroh_dns_server
+      vars:
+        iroh_dns_server_certificate_check: warn
+        iroh_dns_server_certificate_retries: 2
+
+    - name: Stage a cached Let's Encrypt production certificate
+      ansible.builtin.copy:
+        dest: "{{ _ids_cache_dir }}/{{ _ids_cache_names.stdout_lines[0] }}"
+        content: "molecule\n"
+        mode: "0600"
+
+    - name: Converge with an untrusted certificate after a first issuance
+      block:
+        - name: Run the role in warn mode with a production certificate cached
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_certificate_check: warn
+            iroh_dns_server_certificate_retries: 2
+
+        - name: Fail — warn mode let a regressed certificate through
+          ansible.builtin.fail:
+            msg: The role finished although a certificate was issued before and is now untrusted.
+      rescue:
+        - name: Require the certificate check to be what failed (after a first issuance)
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Fail on a DNS server without a trusted certificate'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the certificate check."
+      always:
+        - name: Remove the staged certificate cache files
+          ansible.builtin.file:
+            path: "{{ _ids_cache_dir }}/{{ item }}"
+            state: absent
+          loop: "{{ _ids_cache_names.stdout_lines }}"
+
+    - name: Trust the molecule CA again
+      ansible.builtin.copy:
+        src: /etc/iroh-dns-server-molecule/ca.crt
+        dest: /usr/local/share/ca-certificates/iroh-dns-server-molecule.crt
+        remote_src: true
+        mode: "0644"
+
+    - name: Rebuild the trust store with it  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: update-ca-certificates
+      changed_when: true
+
+    - name: Leave the server as converged for verify
+      ansible.builtin.include_role:
+        name: iroh_dns_server

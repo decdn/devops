@@ -1,0 +1,40 @@
+---
+# Another process listens on _ids_squat.bind:_ids_squat.port; converging (with a
+# changed knob in the config and one in the unit, so a guard that fired after
+# either template would show) must fail at the port guard. The squatter is gone
+# afterwards.
+- name: Squat with another process on {{ _ids_squat.bind ~ ':' ~ _ids_squat.port }}
+  ansible.builtin.command:
+    argv: [systemd-run, --unit=molecule-squatter, --collect,
+           python3, -m, http.server, "{{ _ids_squat.port }}", --bind, "{{ _ids_squat.bind }}"]
+  changed_when: true
+
+- name: Wait for the squatter on {{ _ids_squat.bind ~ ':' ~ _ids_squat.port }}
+  ansible.builtin.wait_for:
+    port: "{{ _ids_squat.port }}"
+    host: "{{ '127.0.0.1' if _ids_squat.bind == '0.0.0.0' else _ids_squat.bind }}"
+    timeout: 15
+
+- name: Converge (with changed knobs) while another process holds {{ _ids_squat.bind ~ ':' ~ _ids_squat.port }}
+  block:
+    - name: Run the role while another process holds {{ _ids_squat.bind ~ ':' ~ _ids_squat.port }}
+      ansible.builtin.include_role:
+        name: iroh_dns_server
+      vars:
+        iroh_dns_server_default_ttl: 90
+        iroh_dns_server_log_level: debug
+
+    - name: Fail — the role took a port another process holds
+      ansible.builtin.fail:
+        msg: The role finished although another process held {{ _ids_squat.bind }}:{{ _ids_squat.port }}.
+  rescue:
+    - name: Require the port guard to be what failed
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name == 'Refuse ports held by another process'
+        fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the port guard."
+  always:
+    - name: Stop the squatter on {{ _ids_squat.bind ~ ':' ~ _ids_squat.port }}
+      ansible.builtin.systemd_service:
+        name: molecule-squatter
+        state: stopped
