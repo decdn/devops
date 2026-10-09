@@ -1,0 +1,80 @@
+---
+# The DNS server's decommission (playbooks/decommission.yml's play, through
+# tasks_from: decommission), split from ../iroh-dns-server so the two run side by
+# side: the same host shape, inventory and converge (that scenario's prepare and
+# converge, by path), then side_effect.yml here refuses a missing and a wrong
+# confirmation, then decommissions (twice); verify.yml here checks what is gone and what is
+# kept. Debian 12 only, no idempotence step (the converge is ../iroh-dns-server's,
+# which checks it).
+#
+# The inventory below must stay identical to ../iroh-dns-server/molecule.yml's
+# (`make test-scripts` checks); the stub is the one it names.
+driver:
+  name: docker
+platforms:
+  # Same digest-pinned images as ../sponsord (repo convention).
+  - name: dns-lifecycle-molecule
+    image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    groups:
+      - iroh_dns_server_hosts
+provisioner:
+  name: ansible
+  options:
+    skip-tags: baseline
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # Same pipelining note as ../default/molecule.yml.
+    ANSIBLE_PIPELINING: "true"
+  playbooks:
+    prepare: ../iroh-dns-server/prepare.yml
+    converge: ../iroh-dns-server/converge.yml
+  inventory:
+    group_vars:
+      iroh_dns_server_hosts:
+        iroh_dns_server_install_method: manual
+        iroh_dns_server_manual_bin_src: >-
+          ${MOLECULE_PROJECT_DIRECTORY}/molecule/iroh-dns-server/files/iroh-dns-server-stub
+        iroh_dns_server_hostname: dns.molecule.test
+        iroh_dns_server_acme_contact: ops@molecule.test
+        # The DNS listener binds the container's own address (the default), which
+        # is private, so the apex A record is set: a documentation address.
+        iroh_dns_server_rr_a: 192.0.2.10
+        # Every optional key rendered, so the stub checks each one's shape: a second
+        # origin (already qualified), the AAAA record, the DHT and its bootstrap.
+        iroh_dns_server_origins: [dns.molecule.test, discovery.molecule.test.]
+        iroh_dns_server_rr_aaaa: "2001:db8::10"
+        iroh_dns_server_mainline_enabled: true
+        iroh_dns_server_mainline_bootstrap: ["router.molecule.test:6881"]
+        iroh_dns_server_log_level: info,iroh_dns_server=debug
+        iroh_dns_server_certificate_check: fail
+        iroh_dns_server_certificate_retries: 5
+        iroh_dns_server_certificate_delay: 1
+        iroh_dns_server_readiness_retries: 10
+        iroh_dns_server_readiness_delay: 1
+        # 1s, not the default 5: the side effects run the role dozens of times. The
+        # crash-after-bind case (../iroh-dns-server-gate) sets its own.
+        iroh_dns_server_readiness_settle: 1
+        decdn_grafana_cloud_enabled: true
+        grafana_alloy_install_method: manual
+        grafana_alloy_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/grafana-cloud/files/alloy-stub"
+        grafana_alloy_region: US
+        grafana_alloy_loki_url: https://logs-prod-xx.molecule.invalid/loki/api/v1/push
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    # Leading destroy: see ../default/molecule.yml.
+    - destroy
+    - create
+    - prepare
+    - converge
+    - side_effect
+    - verify
+    - destroy

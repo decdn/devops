@@ -86,7 +86,9 @@ This is the canonical statement; the per-path READMEs add only what is specific 
   behind Caddy on tcp/80 + tcp/443 (the default on Ansible, the `caddy` profile on
   Compose; otherwise you bring the proxy and open its ports). A self-hosted iroh relay
   (Ansible) is public by design: it terminates its own TLS on tcp/80 + tcp/443 and serves
-  QUIC address discovery on udp/7842, with its metrics on loopback. On Kubernetes, metrics bind `0.0.0.0` in the pod only behind a ClusterIP
+  QUIC address discovery on udp/7842, with its metrics on loopback. So is a self-hosted
+  iroh DNS server (Ansible): its own TLS on tcp/443 and DNS on udp/53 + tcp/53, with its
+  metrics on loopback. On Kubernetes, metrics bind `0.0.0.0` in the pod only behind a ClusterIP
   Service and a NetworkPolicy.
 - **Default-deny inbound** (Ansible's `baseline`, nftables). SSH is the only
   universally open port; extra public ports are declared via `baseline_extra_inbound`.
@@ -101,7 +103,7 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 
 | Path | What it is |
 |------|------------|
-| [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `sponsord.yml`, `iroh_relay.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`, `iroh_relay`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
+| [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `sponsord.yml`, `iroh_relay.yml`, `iroh_dns_server.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`, `iroh_relay`, `iroh_dns_server`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
 | [`cloud-init/`](cloud-init/README.md) | The cloud-init deploy path: `user-data.yaml` (a node), `user-data-sponsord.yaml` (a sponsor host), the on-host `bootstrap.sh`, and the pinned ansible-core and collections it installs. |
 | [`compose/`](compose/README.md) | The Docker Compose deploy path: the node, `sponsord`, `sponsord-onramp` and Caddy, one profile each. |
 | [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart; it renders the node's dashboards and alert rules from `monitoring/`. |

@@ -7,9 +7,10 @@ hardened host baseline. The roles also ship as the `decdn.node` Galaxy collectio
 |----------|---------|-------------|
 | **`site.yml`** | Harden the host and deploy the public **deCDN node** (`decdn-node`). | `make check` / `make deploy` |
 | `backup.yml` | Encrypted backup of a node's identity or full state, and of sponsord's credentials. | `make backup` |
-| `decommission.yml` | Stop a node, an iroh relay, the onramp and sponsord and remove their services (keeps the keys; no on-chain steps). | `make decommission` |
+| `decommission.yml` | Stop a node, an iroh relay, an iroh DNS server, the onramp and sponsord and remove their services (keeps the keys; no on-chain steps). | `make decommission` |
 | `sponsord.yml` | Harden the host and deploy **sponsord**, the onboarding sponsor, on hosts in `sponsord_hosts`, with or without a node; then its public **sponsord-onramp** (behind Caddy) on hosts in `sponsord_onramp_hosts`. Also run by `site.yml`. | `make check-sponsord` / `make deploy-sponsord` |
 | `iroh_relay.yml` | Harden the host and deploy a self-hosted **iroh relay** (`iroh-relay`), the fallback path for peers that cannot hole-punch, on hosts in `iroh_relay_hosts`. Also run by `site.yml`. | `make check-relay` / `make deploy-relay` |
+| `iroh_dns_server.yml` | Harden the host and deploy a self-hosted **iroh DNS server** (`iroh-dns-server`), the pkarr relay and DNS server nodes are discovered through, on hosts in `iroh_dns_server_hosts`. Also run by `site.yml`. | `make check-dns` / `make deploy-dns` |
 
 ```
 baseline        host hardening: DevSec os/ssh, nftables default-deny inbound,
@@ -21,8 +22,10 @@ baseline        host hardening: DevSec os/ssh, nftables default-deny inbound,
    │  │               unit with systemd credentials; standalone or beside a node
    │  └─ sponsord_onramp  the public gate + installers on sponsord's host; loopback
    │                      listener behind Caddy (ACME TLS, tcp/80 + tcp/443)
-   └─ iroh_relay      self-hosted iroh relay; its own Let's Encrypt TLS on tcp/80 +
-                      tcp/443, QUIC address discovery udp/7842; loopback metrics
+   ├─ iroh_relay      self-hosted iroh relay; its own Let's Encrypt TLS on tcp/80 +
+   │                  tcp/443, QUIC address discovery udp/7842; loopback metrics
+   └─ iroh_dns_server self-hosted pkarr relay + DNS server for node discovery; its own
+                      Let's Encrypt TLS on tcp/443, DNS on udp+tcp/53; loopback metrics
 ```
 
 ## Security model
@@ -32,9 +35,11 @@ specific to this path:
 
 - **nftables is the firewall.** SSH plus the node's **udp/4433** (via
   `baseline_extra_inbound`) are the only holes, plus **tcp/80 + tcp/443** for Caddy on a
-  `sponsord_onramp_hosts` host and **tcp/80, tcp/443 + udp/7842** for the relay on an
-  `iroh_relay_hosts` host; metrics 9090, the admin RPC 9191, sponsord 8090, the
-  onramp 8080 and the relay's metrics 9092 stay loopback. Baseline turns off `os_hardening`'s ufw config template
+  `sponsord_onramp_hosts` host, **tcp/80, tcp/443 + udp/7842** for the relay on an
+  `iroh_relay_hosts` host and **tcp/443, udp/53 + tcp/53** for the DNS server on an
+  `iroh_dns_server_hosts` host; metrics 9090, the admin RPC 9191, sponsord 8090, the
+  onramp 8080, the relay's metrics 9092 and the DNS server's metrics 9117 and health
+  listener 9118 stay loopback. Baseline turns off `os_hardening`'s ufw config template
   (`ufw_manage_defaults: false`) so a misleading DROP-policy `/etc/default/ufw` is never
   written. Do not install or enable ufw: it would replace the nftables ruleset and drop
   QUIC and SSH.
@@ -330,6 +335,35 @@ each relay on a host of its own (or beside a node) in `iroh_relay_hosts`, then r
 
 Setup and variables: [`roles/iroh_relay/README.md`](roles/iroh_relay/README.md).
 
+### iroh DNS server (optional)
+
+The seventh role, `iroh_dns_server`, deploys a self-hosted
+[iroh DNS server](https://github.com/n0-computer/iroh) (`iroh-dns-server`): the
+pkarr relay nodes publish their signed address records to, and the DNS server peers
+resolve them through. Nodes use n0's `dns.iroh.link` until
+`decdn_discovery_pkarr_url` and `decdn_discovery_dns_origin` name yours. Put it on a
+host of its own (or beside a node) in `iroh_dns_server_hosts`, then run `make
+deploy-dns`; `make deploy` covers it too.
+
+- **It is authoritative for a delegated zone.** The parent zone delegates
+  `iroh_dns_server_hostname` to the host (NS + glue A record); the server answers
+  that name's NS, SOA and A itself, and Let's Encrypt resolves it through that
+  delegation. On a host behind NAT, set `iroh_dns_server_rr_a` to the public address.
+- **It terminates its own TLS** on tcp/443 and answers DNS on udp/53 and tcp/53 at
+  one address (the host's default IPv4 by default, so systemd-resolved's stub keeps
+  127.0.0.53). `iroh_dns_server_hosts` excludes `iroh_relay_hosts` and
+  `sponsord_onramp_hosts` (all want 443).
+- **You provision no secret,** and it needs no backup: nodes republish their records
+  every 5 minutes.
+- **Clients need the same origin.** Pointing nodes at it drops their n0 leg, so a
+  client resolves them by pkarr only with the same `[network.discovery] dns_origin`.
+- **One server per origin.** Upstream has no replication; the role README records
+  the single point of failure as an open question.
+- **Observability:** with Grafana Cloud on, Alloy scrapes it on hosts in
+  `iroh_dns_server_hosts`. No dashboard or alert rules yet.
+
+Setup and variables: [`roles/iroh_dns_server/README.md`](roles/iroh_dns_server/README.md).
+
 ### Backup and decommission
 
 ```bash
@@ -389,7 +423,12 @@ bad confirmation, then a real one), `iroh-relay` (the relay against a stub: rest
 the fatal gate, the port guard), `iroh-relay-certificate` and `iroh-relay-gate` (the
 same converge, then the certificate check; and the other gate refusals, QAD off, the
 bind addresses and the access modes), `iroh-relay-install` and `iroh-relay-lifecycle`
-(the same converge, then the release install and decommission), `source-build` (the
+(the same converge, then the release install and decommission), `iroh-dns-server`
+(the DNS server against a stub: restarts, the fatal gate, the port guard by address),
+`iroh-dns-server-certificate`, `iroh-dns-server-gate`, `iroh-dns-server-install` and
+`iroh-dns-server-lifecycle` (the same converge, then the certificate check, the
+other gate refusals and the wildcard DNS bind, the release install and
+decommission), `source-build` (the
 node built from source on the host: the build sandbox, stamps, a moved branch),
 `source-build-rollback` (the same converge, then a broken commit rolled back by SHA),
 `source-build-recovery` (the same converge, then the install-method switch, an

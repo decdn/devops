@@ -4,7 +4,7 @@
 #
 # This file is an OVERLAY, not the project root manifest. It is assembled into a
 # clean collection tree (with the baseline, decdn_node, grafana_alloy, sponsord,
-# sponsord_onramp and iroh_relay roles) by galaxy/build.sh;
+# sponsord_onramp, iroh_relay and iroh_dns_server roles) by galaxy/build.sh;
 # it is deliberately NOT placed at ansible/ root, so the deploy project stays a
 # plain Ansible project (bare role names, roles_path, production-profile
 # ansible-lint) rather than being reinterpreted as a collection. See galaxy/README.md.
@@ -17,8 +17,8 @@ authors:
 description: >-
   Deploy and harden a public deCDN node: DevSec host baseline, the decdn_node
   daemon and the sponsord onboarding sponsor with its public onramp (each with
-  backup and decommission), a self-hosted iroh relay, and opt-in Grafana Cloud
-  observability.
+  backup and decommission), a self-hosted iroh relay and iroh DNS server, and
+  opt-in Grafana Cloud observability.
 license:
   - MIT
 # Galaxy tags must match ^[a-z0-9]+$ (no hyphens/underscores).
@@ -41,6 +41,7 @@ tags:
 #   sponsord -> ansible.builtin only
 #   sponsord_onramp -> ansible.builtin only (Caddy comes from the distro's apt)
 #   iroh_relay -> ansible.builtin only
+#   iroh_dns_server -> ansible.builtin only
 # community.general is NOT used by any role, so it is intentionally absent here.
 dependencies:
   devsec.hardening: ">=10.0.0"

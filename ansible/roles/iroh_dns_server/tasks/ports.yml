@@ -1,0 +1,129 @@
+---
+# The server must own its ports. Anything else on them (a web server, the
+# onramp's Caddy, an iroh relay, another DNS server) would make it crash-loop
+# after the install, so look before touching the host. Its own listeners (an
+# earlier converge) are fine.
+#
+# Port 53 is checked by address: the DNS listener binds ONE address, so a resolver
+# on another one (systemd-resolved's stub on 127.0.0.53, dnsmasq on a bridge) is
+# no conflict. A holder on that address or on a wildcard is; and when the server
+# itself binds a wildcard, every holder of port 53 is. tcp/443 and the loopback
+# metrics and health ports are refused on any address, as roles/iroh_relay does.
+#
+# "Its own" is a listener every holder of which is in the unit's cgroup, read after
+# the listeners (as roles/iroh_relay/tasks/ports.yml, #113): not one held by a
+# MainPID read beforehand, which is 0 while the unit waits to be restarted. The
+# cgroup is compared whole, as /proc shows it: systemd's root (PID 1's cgroup
+# without /init.scope) plus /system.slice/<unit>. Pids are taken only from ss's
+# `,pid=N,fd=N)` fields, so a process name cannot add one. A process that exits
+# between `ss` and its /proc read makes the step read both again (5 retries, then
+# this step fails). The server's own listeners go to stderr, prefixed "own: ".
+
+- name: Read the listeners on the DNS server's ports and whose they are
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      root=$(sed -n 's|^0::||p' /proc/1/cgroup)
+      case "$root" in
+        */init.scope) unit_cg="${root%/init.scope}/system.slice/{{ _iroh_dns_server_unit | basename }}" ;;
+        *) echo "PID 1's cgroup is \"$root\", not systemd's init.scope (is this a cgroup v2 systemd host?)" >&2
+           exit 4 ;;
+      esac
+      dns_bind={{ iroh_dns_server_dns_bind_address | quote }}
+      # A port-53 listener matters if it is on the DNS bind address or a wildcard,
+      # or on anything at all when the server binds a wildcard itself.
+      dns_relevant() {
+        local local_addr addr
+        local_addr=$(awk '{print $4}' <<<"$1")
+        addr=${local_addr%:*}
+        addr=${addr#[}
+        addr=${addr%]}
+        addr=${addr%%%*}
+        case "$dns_bind" in
+          ::|0.0.0.0) return 0 ;;
+        esac
+        case "$addr" in
+          "$dns_bind"|0.0.0.0|::|'*') return 0 ;;
+        esac
+        return 1
+      }
+      tcp=$(ss -Hltnp '{{ _tcp_filter }}')
+      dns_tcp=$(ss -Hltnp 'sport = :{{ _iroh_dns_server_ports.dns }}')
+      dns_udp=$(ss -Hlunp 'sport = :{{ _iroh_dns_server_ports.dns }}')
+      dns=""
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        if dns_relevant "$line"; then dns="$dns$line"$'\n'; fi
+      done <<<"$dns_tcp"$'\n'"$dns_udp"
+      foreign=0
+      gone=""
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        pids=$(grep -oE ',pid=[0-9]+,fd=[0-9]+\)' <<<"$line" | cut -d, -f2 | cut -d= -f2 || true)
+        own=1
+        vanished=0
+        for pid in $pids; do
+          if ! cg=$(sed -n 's|^0::||p' "/proc/$pid/cgroup" 2>&1); then
+            if [ -e "/proc/$pid" ]; then
+              echo "cannot read the cgroup of pid $pid ($line): $cg" >&2
+              exit 5
+            fi
+            vanished=1
+          elif [ "$cg" != "$unit_cg" ]; then
+            own=0
+          fi
+        done
+        if [ -z "$pids" ] || { [ "$own" = 0 ] && [ "$vanished" = 0 ]; }; then
+          # A listener another process holds, or one ss names no process for.
+          printf '%s\n' "$line"
+          foreign=1
+        elif [ "$vanished" = 1 ]; then
+          gone="$gone"$'\n'"  $line"
+        else
+          printf 'own: %s\n' "$line" >&2
+        fi
+      done <<<"$tcp"$'\n'"$dns"
+      # A listener found foreign is reported by the assert, whatever else vanished.
+      if [ "$foreign" = 0 ] && [ -n "$gone" ]; then
+        echo "a listener's process exited while it was being read:$gone" >&2
+        exit 3
+      fi
+  vars:
+    _tcp_filter: >-
+      ( sport = :{{ _iroh_dns_server_ports.https }} or sport = :{{ iroh_dns_server_metrics_port }}
+      or sport = :{{ iroh_dns_server_health_port }} )
+  register: iroh_dns_server_pre_listeners
+  changed_when: false
+  check_mode: false
+  # Not `rc not in [0, 3]`: a failed_when that passes rc 3 would also pass the
+  # last retry's rc 3, and a guard that never read the listeners would let the
+  # install through.
+  failed_when: iroh_dns_server_pre_listeners.rc != 0
+  retries: 5
+  delay: 1
+  until: iroh_dns_server_pre_listeners.rc != 3
+
+- name: Refuse ports held by another process
+  ansible.builtin.assert:
+    that:
+      - _foreign | length == 0
+    fail_msg: |-
+      Another process holds a port iroh-dns-server needs (tcp/{{ _iroh_dns_server_ports.https }},
+      udp+tcp/{{ _iroh_dns_server_ports.dns }} on {{ iroh_dns_server_dns_bind_address }}, the metrics port
+      {{ iroh_dns_server_metrics_port }} or the health port {{ iroh_dns_server_health_port }}):
+        {{ _foreign | join('\n  ') }}
+      The server terminates its own TLS on 443 and cannot share it with a web server,
+      an iroh relay or the sponsord-onramp's Caddy: give it a host of its own (or move
+      the loopback ports with iroh_dns_server_metrics_port / _health_port). Another DNS
+      server on port 53 at the bind address (or on a wildcard): stop it, or bind
+      another of the host's addresses (iroh_dns_server_dns_bind_address).
+      {% if _foreign | select('search', ' 127\.0\.0\.5[34]') | list | length > 0 %}
+      That is systemd-resolved's stub listener, which a wildcard DNS bind collides
+      with: bind one of the host's own addresses (the default, its default IPv4
+      address), or turn the stub off first (DNSStubListener=no in
+      /etc/systemd/resolved.conf.d/, and point /etc/resolv.conf at a resolver).
+      {% endif %}
+      A line naming no process is one ss could not attribute: run the play as root.
+  vars:
+    _foreign: "{{ iroh_dns_server_pre_listeners.stdout_lines }}"

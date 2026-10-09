@@ -1,0 +1,35 @@
+---
+# Host architecture (ansible_facts['architecture']) -> the upstream release target
+# triple. The gnu builds, as roles/iroh_relay installs (glibc 2.34+, which every
+# supported platform has). Role vars, not defaults: the supported set is a fact
+# about upstream's release matrix, not an operator knob.
+_iroh_dns_server_arch_targets:
+  x86_64: x86_64-unknown-linux-gnu
+  aarch64: aarch64-unknown-linux-gnu
+
+# The public ports are not knobs: ACME's TLS-ALPN-01 challenge comes to 443, and
+# resolvers ask on 53. playbooks/group_vars/all.yml opens tcp/443, udp/53, tcp/53.
+_iroh_dns_server_ports:
+  https: 443
+  dns: 53
+
+# systemd's StateDirectory= (the unit runs as a DynamicUser, so it lives under
+# /var/lib/private and /var/lib/iroh-dns-server is a symlink to it). The server
+# keeps its record store there (signed-packets-1.db) and creates cert_cache/ for
+# the ACME account key and certificates.
+_iroh_dns_server_state_dir: /var/lib/iroh-dns-server
+_iroh_dns_server_cert_dir: "{{ _iroh_dns_server_state_dir }}/cert_cache"
+_iroh_dns_server_unit: /etc/systemd/system/iroh-dns-server.service
+_iroh_dns_server_stamp: /usr/local/lib/iroh-dns-server/installed-version
+
+# The archive holds one flat binary at its root.
+_iroh_dns_server_archive_member: iroh-dns-server
+
+# Let's Encrypt's production ACME directory, as tokio-rustls-acme 0.9 names it. Its
+# certificate cache file is cached_cert_<base64url(sha256(domain NUL directory))>
+# (one domain here), so the role can tell a production certificate for this
+# hostname from a staging one (or one for an old name).
+_iroh_dns_server_acme_production_directory: https://acme-v02.api.letsencrypt.org/directory
+
+# One series the server always exports, for the readiness gate.
+_iroh_dns_server_gate_metric: dns_server_dns_requests_total

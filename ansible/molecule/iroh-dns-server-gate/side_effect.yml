@@ -1,0 +1,120 @@
+---
+# The readiness gate's other refusals and the bind addresses, on
+# ../iroh-dns-server's converge. The header of molecule.yml lists what each step
+# proves. The host is left as converged for verify (../iroh-dns-server's).
+- name: Side effect — the gate's other refusals and the bind addresses
+  hosts: all
+  become: true
+  tasks:
+    # --- a server that serves everything but DNS, then one that crashes after binding
+    - name: Refuse each broken server at the readiness gate
+      ansible.builtin.include_tasks: includes/gate-refuses.yml
+      loop:
+        # No DNS sockets: the listener check and the SOA probe both miss it.
+        - {marker: stub-no-dns, settle: 1}
+        # Binds everything, then exits after 2s: the settle wait outlasts it.
+        - {marker: stub-exit-after, settle: 4}
+      loop_control:
+        loop_var: _ids_case
+
+    - name: Converge the server back up
+      ansible.builtin.include_role:
+        name: iroh_dns_server
+
+    # --- the wildcard DNS bind ---------------------------------------------------------
+    # "::" answers on every address; the gate asks on loopback.
+    - name: Converge with the DNS listener on every address
+      ansible.builtin.include_role:
+        name: iroh_dns_server
+      vars:
+        iroh_dns_server_dns_bind_address: "::"
+
+    - name: Ask the wildcard listener on loopback, over udp and tcp
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          dig +norecurse +short SOA dns.molecule.test @127.0.0.1
+          dig +norecurse +short +tcp SOA dns.molecule.test @127.0.0.1
+          ss -Hltun '( sport = :53 )' | awk '{print $1, $5}'
+      register: _ids_wild
+      changed_when: false
+
+    - name: Require the wildcard DNS listener
+      ansible.builtin.assert:
+        that:
+          - _ids_wild.stdout_lines[:2] | select('match', '^dns\.molecule\.test\. ') | list | length == 2
+          - "'tcp *:53' in _ids_wild.stdout_lines or 'tcp [::]:53' in _ids_wild.stdout_lines"
+          - "'udp *:53' in _ids_wild.stdout_lines or 'udp [::]:53' in _ids_wild.stdout_lines"
+        fail_msg: "Wildcard DNS bind: {{ _ids_wild.stdout_lines }}"
+
+    # With a wildcard bind, systemd-resolved's stub on 127.0.0.53:53 is a conflict,
+    # and the refusal says how to turn it off.
+    - name: Stop the server before the stand-in stub listener
+      ansible.builtin.systemd_service:
+        name: iroh-dns-server
+        state: stopped
+
+    - name: Listen on 127.0.0.53:53 as systemd-resolved's stub would
+      ansible.builtin.command:
+        argv: [systemd-run, --unit=molecule-resolved-stub, --collect,
+               python3, -m, http.server, "53", --bind, 127.0.0.53]
+      changed_when: true
+
+    - name: Wait for the stand-in stub listener
+      ansible.builtin.wait_for:
+        port: 53
+        host: 127.0.0.53
+        timeout: 15
+
+    - name: Converge a wildcard DNS bind beside the stand-in stub listener
+      block:
+        - name: Run the role with "::" while 127.0.0.53:53 is held
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_dns_bind_address: "::"
+
+        - name: Fail — a wildcard bind was let through beside resolved's stub
+          ansible.builtin.fail:
+            msg: The role finished although 127.0.0.53:53 is held and the DNS bind is "::".
+      rescue:
+        - name: Require the port guard to be what failed, naming systemd-resolved
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Refuse ports held by another process'
+              - "'DNSStubListener=no' in ansible_failed_result.msg"
+            fail_msg: >-
+              Failed at '{{ ansible_failed_task.name }}' with
+              "{{ ansible_failed_result.msg | default('') }}", not the port guard's
+              systemd-resolved refusal.
+      always:
+        - name: Stop the stand-in stub listener
+          ansible.builtin.systemd_service:
+            name: molecule-resolved-stub
+            state: stopped
+
+    # --- one https address -------------------------------------------------------------
+    # The certificate check then probes that address, not loopback.
+    - name: Converge with https on the host's address only
+      ansible.builtin.include_role:
+        name: iroh_dns_server
+      vars:
+        iroh_dns_server_https_bind_address: "{{ ansible_facts['default_ipv4']['address'] }}"
+
+    - name: Read the https listener
+      ansible.builtin.command:
+        argv: [ss, -Hltn, "( sport = :443 )"]
+      register: _ids_https
+      changed_when: false
+
+    - name: Require https on the host's address alone
+      ansible.builtin.assert:
+        that:
+          - _ids_https.stdout_lines | map('split') | map(attribute=3) | list
+            == [ansible_facts['default_ipv4']['address'] ~ ':443']
+        fail_msg: "https listeners: {{ _ids_https.stdout_lines }}"
+
+    - name: Leave the server as converged for verify
+      ansible.builtin.include_role:
+        name: iroh_dns_server

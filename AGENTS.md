@@ -8,7 +8,8 @@ DevOps repo.
 The official DevOps project for deploying a **deCDN node**: infrastructure, deployment,
 and operational tooling, for node operators anywhere. There are four deploy paths:
 **Ansible** (`ansible/`, VMs/bare metal, the primary path, also the `decdn.node` Galaxy
-collection, and the only path that also deploys self-hosted iroh relays), **cloud-init**
+collection, and the only path that also deploys self-hosted iroh relays and the iroh
+DNS server), **cloud-init**
 (`cloud-init/`, one VM that runs the Ansible playbook on itself, no control machine),
 **Docker Compose** (`compose/`, a single Docker host) and a **Helm chart**
 (`charts/decdn-node/`, Kubernetes).
@@ -45,6 +46,13 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
    the same certificate in-process), so it binds tcp/80, tcp/443 and udp/7842 on every
    address itself, with no proxy and no backend behind it. Its holes come from
    `iroh_relay_hosts`; its metrics are asserted onto loopback (`127.0.0.1:9092`).
+   **iroh DNS server exception (`iroh_dns_server` role):** `iroh-dns-server` is public
+   by design and terminates its own TLS (Let's Encrypt over TLS-ALPN-01), so it binds
+   tcp/443 (`::` by default) and udp/53 + tcp/53 on one address (the host's default
+   IPv4 by default, clear of systemd-resolved's `127.0.0.53`) itself, with no proxy
+   and no backend behind it. Its holes come from `iroh_dns_server_hosts`; its metrics
+   (`127.0.0.1:9117`) and a plain-http health listener (`127.0.0.1:9118`) are
+   asserted onto loopback.
    **Kubernetes exception (chart only):** the node's metrics bind `0.0.0.0` inside the pod
    so kubelet probes and Prometheus can reach them. That is allowed only behind a
    ClusterIP-only Service and the chart's NetworkPolicy (metrics ingress limited to
@@ -64,8 +72,8 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
 
 ```
 ansible/                # the deployment project (DevSec-hardened, lean roles)
-  playbooks/            # site.yml (node + sponsord + relay), sponsord.yml (+ onramp), iroh_relay.yml, backup.yml, decommission.yml
-  roles/                # baseline, decdn_node, grafana_alloy, sponsord, sponsord_onramp, iroh_relay
+  playbooks/            # site.yml (node + sponsord + relay + DNS server), sponsord.yml (+ onramp), iroh_relay.yml, iroh_dns_server.yml, backup.yml, decommission.yml
+  roles/                # baseline, decdn_node, grafana_alloy, sponsord, sponsord_onramp, iroh_relay, iroh_dns_server
   inventory/ galaxy/ molecule/    # see ansible/README.md
 cloud-init/             # user-data{,-sponsord}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
 compose/                # Docker Compose deploy path for a single host (see its README.md)
@@ -148,10 +156,10 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   role entry points (`tasks_from: backup|decommission`): backups are encrypted on the host
   to operator public keys; decommission needs `LIMIT` + typed confirmation, keeps the
   identity and never touches the chain. Both also cover `sponsord_hosts` (and the onramp),
-  with one confirmation per run, in the first play that reaches a host, whose prompt
-  lists every service it covers (`_decdn_decommission_confirmed`; the
-  `decdn_decommission_*` cap and timeout are copied into all three roles' defaults,
-  `make test-scripts` checks).
+  and decommission covers `iroh_relay_hosts` and `iroh_dns_server_hosts` too, with one
+  confirmation per run, in the first play that reaches a host, whose prompt lists every
+  service it covers (`_decdn_decommission_confirmed`; the `decdn_decommission_*` cap and
+  timeout are copied into all five roles' defaults, `make test-scripts` checks).
   Leaving `decdn_rpc_url` empty means the operator wrote `0600 /etc/decdn/decdn.env`
   on the host and the role only gates on it, so no secret transits the control machine. See `ansible/README.md`. (On-chain node
   stake/registration, ADR 019 Phase 2, is a manual operator step, driven by `decdn setup`.)
@@ -316,6 +324,46 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     `iroh-relay-install` (release mode against a local mirror), all on the same
     inventory (`make test-scripts` checks), and `validation-iroh-relay`.
 
+- **`ansible/roles/iroh_dns_server`** — a self-hosted iroh DNS server
+  (`iroh-dns-server` from n0-computer/iroh): the pkarr relay nodes publish their
+  signed address records to (`PUT https://<hostname>/pkarr/<z32>`) and the DNS
+  server peers resolve them through (`_iroh.<z32>.<origin>` TXT), in place of n0's
+  `dns.iroh.link` (ADR 001, Node Discovery). Nodes use it through
+  `decdn_discovery_pkarr_url` + `decdn_discovery_dns_origin`, which DROP the n0 leg,
+  so clients need the same `dns_origin`. `playbooks/iroh_dns_server.yml` (`make
+  deploy-dns`, also imported by `site.yml`) runs baseline → grafana_alloy →
+  iroh_dns_server on `iroh_dns_server_hosts`, after a play refusing a host also in
+  `iroh_relay_hosts` or `sponsord_onramp_hosts` (all want tcp/443; `make
+  test-scripts` runs it). One server per origin: upstream has no replication, and
+  `[mainline]` (off) is a lookup-only fallback that finds nothing for decdn nodes,
+  which never publish to the DHT. The parent zone delegates `iroh_dns_server_hostname`
+  to the host (NS + glue); the server answers that apex's NS/SOA/A itself
+  (`iroh_dns_server_rr_a` defaults to the DNS bind address only when it is public).
+  - **Install:** as `iroh_relay` (release tarball + per-target sha256, or `manual`;
+    `iroh_dns_server_version` tracks the iroh decdn pins, now 1.3.0), except that the
+    binary has **no `--version`**: a `--help` smoke run, and the stamp is written
+    only after the gate saw `/healthz` report the pinned version.
+  - **Config traps (iroh-dns-server 1.3.0):** unknown keys are ignored (the stub
+    refuses them); `"."` must be an origin or it refuses to start; an origin without
+    its trailing dot answers SOA but not its apex A/AAAA/NS, so the role qualifies
+    every origin; it shuts down gracefully on SIGINT only; `RUST_LOG` unset logs
+    errors only; `pkarr_put_rate_limit = "smart"` (X-Forwarded-For) behaves as
+    `simple` upstream and is refused here (no proxy, so the header is forgeable).
+  - **Ports:** the DNS listener takes ONE `bind_addr` for udp and tcp. The port guard
+    (`tasks/ports.yml`, the relay's cgroup test) refuses foreign holders of 443 and
+    the loopback ports on any address, and of port 53 only on the bind address or a
+    wildcard (or anywhere, for a wildcard bind, naming `DNSStubListener=no` when
+    resolved's stub is the holder). The role never touches the host's resolver.
+  - **Gate:** loopback `/healthz` (version in release mode), metrics, every listener
+    owned by `MainPID`, each origin's SOA via `dig` over udp and tcp at the bind
+    address (loopback for a wildcard bind), the settle wait; then the relay's
+    certificate check.
+  - **Molecule:** `molecule/iroh-dns-server` (stub; a molecule CA for Let's Encrypt),
+    `iroh-dns-server-gate`, `-certificate`, `-install` and `-lifecycle` on the same
+    inventory (`make test-scripts` checks), and `validation-iroh-dns-server`. The
+    real binary's record round-trip (PUT, then `dig TXT`) is a manual check, listed
+    in the role README. No `monitoring/` assets yet.
+
 - **`cloud-init/`** — the Ansible path with no control machine. Two templates,
   `user-data.yaml` (a node) and `user-data-sponsord.yaml` (sponsord + onramp), share
   stage 1 and differ only in their inventory. They carry only public material (the lint
@@ -435,6 +483,7 @@ make deps                          # vendor pinned Galaxy collections
 make check / deploy                # site.yml; fleet-wide unless LIMIT=<host>; INVENTORY=<overlay>
 make check-sponsord / deploy-sponsord   # sponsord.yml only (sponsord_hosts)
 make check-relay / deploy-relay         # iroh_relay.yml only (iroh_relay_hosts)
+make check-dns / deploy-dns             # iroh_dns_server.yml only (iroh_dns_server_hosts)
 make backup / decommission LIMIT=… # lifecycle playbooks (decommission requires LIMIT)
 make build / galaxy-check          # the decdn.node collection
 ```
@@ -444,16 +493,18 @@ make build / galaxy-check          # the decdn.node collection
 Inventory-adjacent group_vars do not load for an overlay, so anything every host needs
 regardless of inventory lives in `ansible/playbooks/group_vars/`. The public firewall holes
 (`baseline_extra_inbound`, today the node's udp/4433, plus tcp/80 + tcp/443 on
-`sponsord_onramp_hosts` with `sponsord_onramp_proxy: caddy`, and tcp/80 + tcp/443 + udp/7842
-on `iroh_relay_hosts`, the last unless `iroh_relay_enable_quic_addr_discovery` is false) are
-built from a host's groups in `all.yml` (`_baseline_service_inbound`). `decdn_nodes.yml`,
-`sponsord_hosts.yml` and `iroh_relay_hosts.yml` all set `baseline_extra_inbound` to that list, so a co-located host renders one firewall in every play.
+`sponsord_onramp_hosts` with `sponsord_onramp_proxy: caddy`, tcp/80 + tcp/443 + udp/7842
+on `iroh_relay_hosts`, the last unless `iroh_relay_enable_quic_addr_discovery` is false,
+and tcp/443 + udp/53 + tcp/53 on `iroh_dns_server_hosts`) are built from a host's groups in
+`all.yml` (`_baseline_service_inbound`). `decdn_nodes.yml`, `sponsord_hosts.yml`,
+`iroh_relay_hosts.yml` and `iroh_dns_server_hosts.yml` all set `baseline_extra_inbound`
+to that list, so a co-located host renders one firewall in every play.
 `ansible/tests/firewall-holes/` (run by `make test-scripts`) pins the result per host shape.
 The Alloy per-daemon toggles also live in `all.yml`. Don't move any of it back under
 `inventory/`.
 
-**Galaxy collection (`decdn.node`).** The six roles (`baseline` + `decdn_node` +
-`grafana_alloy` + `sponsord` + `sponsord_onramp` + `iroh_relay`) ship as a
+**Galaxy collection (`decdn.node`).** The seven roles (`baseline` + `decdn_node` +
+`grafana_alloy` + `sponsord` + `sponsord_onramp` + `iroh_relay` + `iroh_dns_server`) ship as a
 distributable collection. The overlay lives in `ansible/galaxy/` and is staged into a clean
 collection tree by `galaxy/build.sh` — there is **no** `galaxy.yml` at the `ansible/` root
 (that would make ansible-lint treat the deploy project as a collection). Build/validate with

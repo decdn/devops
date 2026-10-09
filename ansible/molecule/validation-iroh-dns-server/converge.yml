@@ -1,0 +1,813 @@
+---
+# NEGATIVE-path scenario for iroh_dns_server: proves the role's fail-loud input
+# validation REJECTS bad values (AGENTS.md hard-rule 4), so a regression that
+# weakens an assert fails CI. Same shape as ../validation-iroh-relay: each case runs
+# the role with a VALID baseline (the play vars) plus ONE broken input, wrapped in
+# block/rescue, and the rescue records a tag ONLY when the failing task is the exact
+# assert that case targets (matched on ansible_failed_task.name). A bad value that
+# slipped past validation fails later at a differently-named task, is NOT counted,
+# and the final assert catches the miss.
+#
+# Every input case aborts at an assert before any host mutation. The host-side
+# cases start a squatter on tcp/443, then on port 53 at the DNS bind address, and
+# stop it again in `always:`; they stop before the binary is installed, so no server
+# ever starts here.
+- name: Converge iroh_dns_server (expect validation failures)
+  hosts: all
+  become: true
+  vars:
+    # Valid baseline; each case overrides exactly one input. manual, because the
+    # release download is not wanted here.
+    iroh_dns_server_install_method: manual
+    iroh_dns_server_manual_bin_src: "{{ _ids_project }}/molecule/iroh-dns-server/files/iroh-dns-server-stub"
+    _ids_project: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+    _ids_ip: "{{ ansible_facts['default_ipv4']['address'] }}"
+    iroh_dns_server_hostname: dns.molecule.test
+    iroh_dns_server_acme_contact: ops@molecule.test
+    # The container's address is private, so the apex A record is set.
+    iroh_dns_server_rr_a: 192.0.2.10
+    # The target triple of the other supported architecture, for release-target.
+    _ids_other_target: >-
+      {{ (_ids_targets | dict2items | rejectattr('key', 'equalto', ansible_facts['architecture'])
+          | map(attribute='value') | first) }}
+    _ids_targets:
+      x86_64: x86_64-unknown-linux-gnu
+      aarch64: aarch64-unknown-linux-gnu
+  tasks:
+    - name: Initialize the rejected-by-validation tracker
+      ansible.builtin.set_fact:
+        decdn_rejected: []
+
+    - name: "Case install-method — an unknown install method"
+      block:
+        - name: Run iroh_dns_server with an unknown install method
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_install_method: "source"
+      rescue:
+        - name: Record install-method rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['install-method'] }}"
+          when: ansible_failed_task.name == "Require a valid install method"
+
+    - name: "Case release-version — release mode with a malformed version"
+      block:
+        - name: Run iroh_dns_server with release mode with a malformed version
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_install_method: "release"
+            iroh_dns_server_version: "1.3"
+      rescue:
+        - name: Record release-version rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['release-version'] }}"
+          when: ansible_failed_task.name == "Require a pinned release version"
+
+    - name: "Case release-sha256 — release mode with no digest for the host's target"
+      block:
+        - name: Run iroh_dns_server with release mode with no digest for the host's target
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_install_method: "release"
+            iroh_dns_server_sha256: {}
+      rescue:
+        - name: Record release-sha256 rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['release-sha256'] }}"
+          when: ansible_failed_task.name == "Require a pinned sha256 for the target"
+
+    - name: "Case release-target — release mode with a target for another architecture"
+      block:
+        - name: Run iroh_dns_server with release mode with a target for another architecture
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_install_method: "release"
+            iroh_dns_server_target: "{{ _ids_other_target }}"
+      rescue:
+        - name: Record release-target rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['release-target'] }}"
+          when: ansible_failed_task.name == "Require the target triple to match the host architecture"
+
+    - name: "Case release-target-unsupported — release mode for a target the role does not install"
+      block:
+        - name: Run iroh_dns_server with release mode for a target the role does not install
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_install_method: "release"
+            iroh_dns_server_target: "riscv64gc-unknown-linux-gnu"
+      rescue:
+        - name: Record release-target-unsupported rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['release-target-unsupported'] }}"
+          when: ansible_failed_task.name == "Require a supported target triple"
+
+    - name: "Case manual-src — manual mode with no binary source"
+      block:
+        - name: Run iroh_dns_server with manual mode with no binary source
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_manual_bin_src: ""
+      rescue:
+        - name: Record manual-src rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['manual-src'] }}"
+          when: ansible_failed_task.name == "Require a manual binary source"
+
+    - name: "Case hostname-url — a URL as the hostname"
+      block:
+        - name: Run iroh_dns_server with a URL as the hostname
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_hostname: "https://dns.molecule.test"
+      rescue:
+        - name: Record hostname-url rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['hostname-url'] }}"
+          when: ansible_failed_task.name == "Validate the DNS server hostname"
+
+    - name: "Case hostname-ip — an IP address as the hostname"
+      block:
+        - name: Run iroh_dns_server with an IP address as the hostname
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_hostname: "192.0.2.1"
+      rescue:
+        - name: Record hostname-ip rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['hostname-ip'] }}"
+          when: ansible_failed_task.name == "Validate the DNS server hostname"
+
+    - name: "Case hostname-empty — no hostname"
+      block:
+        - name: Run iroh_dns_server with no hostname
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_hostname: ""
+      rescue:
+        - name: Record hostname-empty rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['hostname-empty'] }}"
+          when: ansible_failed_task.name == "Validate the DNS server hostname"
+
+    - name: "Case contact-mailto — a mailto URI as the contact"
+      block:
+        - name: Run iroh_dns_server with a mailto URI as the contact
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_acme_contact: "mailto:ops@molecule.test"
+      rescue:
+        - name: Record contact-mailto rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['contact-mailto'] }}"
+          when: ansible_failed_task.name == "Validate the ACME contact"
+
+    - name: "Case contact-empty — no ACME contact"
+      block:
+        - name: Run iroh_dns_server with no ACME contact
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_acme_contact: ""
+      rescue:
+        - name: Record contact-empty rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['contact-empty'] }}"
+          when: ansible_failed_task.name == "Validate the ACME contact"
+
+    - name: "Case bool-staging — a string for acme_staging"
+      block:
+        - name: Run iroh_dns_server with a string for acme_staging
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_acme_staging: "true"
+      rescue:
+        - name: Record bool-staging rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['bool-staging'] }}"
+          when: ansible_failed_task.name == "Validate the boolean knobs"
+
+    - name: "Case bool-mainline — a string for mainline_enabled"
+      block:
+        - name: Run iroh_dns_server with a string for mainline_enabled
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_mainline_enabled: "yes"
+      rescue:
+        - name: Record bool-mainline rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['bool-mainline'] }}"
+          when: ansible_failed_task.name == "Validate the boolean knobs"
+
+    - name: "Case origins-string — the origins as one string"
+      block:
+        - name: Run iroh_dns_server with the origins as one string
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_origins: "dns.molecule.test"
+      rescue:
+        - name: Record origins-string rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['origins-string'] }}"
+          when: ansible_failed_task.name == "Validate the origins"
+
+    - name: "Case origins-empty — no origin"
+      block:
+        - name: Run iroh_dns_server with no origin
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_origins: []
+      rescue:
+        - name: Record origins-empty rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['origins-empty'] }}"
+          when: ansible_failed_task.name == "Validate the origins"
+
+    - name: "Case origins-dup — one origin twice, once qualified"
+      block:
+        - name: Run iroh_dns_server with one origin twice, once qualified
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_origins: ["dns.molecule.test", "DNS.molecule.test."]
+      rescue:
+        - name: Record origins-dup rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['origins-dup'] }}"
+          when: ansible_failed_task.name == "Validate the origins"
+
+    - name: "Case origins-url — a URL as an origin"
+      block:
+        - name: Run iroh_dns_server with a URL as an origin
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_origins: ["https://dns.molecule.test"]
+      rescue:
+        - name: Record origins-url rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['origins-url'] }}"
+          when: ansible_failed_task.name == "Validate the origins"
+
+    - name: "Case origins-root-only — the root as the only origin"
+      block:
+        - name: Run iroh_dns_server with the root as the only origin
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_origins: ["."]
+      rescue:
+        - name: Record origins-root-only rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['origins-root-only'] }}"
+          when: ansible_failed_task.name == "Validate the origins"
+
+    - name: "Case soa-fields — an SOA with five fields"
+      block:
+        - name: Run iroh_dns_server with an SOA with five fields
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_default_soa: "dns.molecule.test. hostmaster.dns.molecule.test. 0 10800 3600"
+      rescue:
+        - name: Record soa-fields rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['soa-fields'] }}"
+          when: ansible_failed_task.name == "Validate the SOA and the TTL"
+
+    - name: "Case soa-serial — an SOA serial past 32 bits"
+      block:
+        - name: Run iroh_dns_server with an SOA serial past 32 bits
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_default_soa: >-
+              dns.molecule.test. hostmaster.dns.molecule.test. 4294967296 10800 3600 604800 3600
+      rescue:
+        - name: Record soa-serial rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['soa-serial'] }}"
+          when: ansible_failed_task.name == "Validate the SOA and the TTL"
+
+    - name: "Case ttl-zero — a zero record TTL"
+      block:
+        - name: Run iroh_dns_server with a zero record TTL
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_default_ttl: 0
+      rescue:
+        - name: Record ttl-zero rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['ttl-zero'] }}"
+          when: ansible_failed_task.name == "Validate the SOA and the TTL"
+
+    - name: "Case ns-relative — an NS name without its trailing dot"
+      block:
+        - name: Run iroh_dns_server with an NS name without its trailing dot
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_rr_ns: "dns.molecule.test"
+      rescue:
+        - name: Record ns-relative rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['ns-relative'] }}"
+          when: ansible_failed_task.name == "Validate the NS record"
+
+    - name: "Case ns-below-origin — an NS name below an origin"
+      block:
+        - name: Run iroh_dns_server with an NS name below an origin
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_rr_ns: "ns1.dns.molecule.test."
+      rescue:
+        - name: Record ns-below-origin rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['ns-below-origin'] }}"
+          when: ansible_failed_task.name == "Validate the NS record"
+
+    - name: "Case https-bind-loopback — a loopback https bind"
+      block:
+        - name: Run iroh_dns_server with a loopback https bind
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_https_bind_address: "127.0.0.1"
+      rescue:
+        - name: Record https-bind-loopback rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['https-bind-loopback'] }}"
+          when: ansible_failed_task.name == "Validate the https bind address"
+
+    - name: "Case https-bind-brackets — a bracketed https bind"
+      block:
+        - name: Run iroh_dns_server with a bracketed https bind
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_https_bind_address: "[::]"
+      rescue:
+        - name: Record https-bind-brackets rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['https-bind-brackets'] }}"
+          when: ansible_failed_task.name == "Validate the https bind address"
+
+    - name: "Case dns-bind-port — a DNS bind with a port"
+      block:
+        - name: Run iroh_dns_server with a DNS bind with a port
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_dns_bind_address: "192.0.2.5:53"
+      rescue:
+        - name: Record dns-bind-port rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['dns-bind-port'] }}"
+          when: ansible_failed_task.name == "Validate the DNS bind address"
+
+    - name: "Case dns-bind-empty — no DNS bind address (no default IPv4 fact)"
+      block:
+        - name: Run iroh_dns_server with no DNS bind address (no default IPv4 fact)
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_dns_bind_address: ""
+      rescue:
+        - name: Record dns-bind-empty rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['dns-bind-empty'] }}"
+          when: ansible_failed_task.name == "Validate the DNS bind address"
+
+    - name: "Case dns-bind-mapped — an IPv4-mapped DNS bind"
+      block:
+        - name: Run iroh_dns_server with an IPv4-mapped DNS bind
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_dns_bind_address: "::ffff:192.0.2.5"
+      rescue:
+        - name: Record dns-bind-mapped rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['dns-bind-mapped'] }}"
+          when: ansible_failed_task.name == "Validate the DNS bind address"
+
+    - name: "Case rr-a-v6 — an IPv6 address as the A record"
+      block:
+        - name: Run iroh_dns_server with an IPv6 address as the A record
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_rr_a: "2001:db8::1"
+      rescue:
+        - name: Record rr-a-v6 rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['rr-a-v6'] }}"
+          when: ansible_failed_task.name == "Validate the apex address records"
+
+    - name: "Case rr-aaaa-v4 — an IPv4 address as the AAAA record"
+      block:
+        - name: Run iroh_dns_server with an IPv4 address as the AAAA record
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_rr_aaaa: "192.0.2.1"
+      rescue:
+        - name: Record rr-aaaa-v4 rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['rr-aaaa-v4'] }}"
+          when: ansible_failed_task.name == "Validate the apex address records"
+
+    - name: "Case ns-no-address — an apex NS name and no address for it (wildcard DNS bind)"
+      block:
+        - name: Run iroh_dns_server with an apex NS name and no address for it (wildcard DNS bind)
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_dns_bind_address: "::"
+            iroh_dns_server_rr_a: ""
+      rescue:
+        - name: Record ns-no-address rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['ns-no-address'] }}"
+          when: ansible_failed_task.name == "Require an address for the NS name and the hostname"
+
+    - name: "Case ns-no-address-private — an apex NS name and a private DNS bind as its only address"
+      block:
+        - name: Run iroh_dns_server with an apex NS name and a private DNS bind as its only address
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_rr_a: ""
+      rescue:
+        - name: Record ns-no-address-private rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['ns-no-address-private'] }}"
+          when: ansible_failed_task.name == "Require an address for the NS name and the hostname"
+
+    - name: "Case hostname-no-address — no NS record, and no address for the apex hostname"
+      block:
+        - name: Run iroh_dns_server with no NS record, and no address for the apex hostname
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_rr_ns: ""
+            iroh_dns_server_rr_a: ""
+      rescue:
+        - name: Record hostname-no-address rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['hostname-no-address'] }}"
+          when: ansible_failed_task.name == "Require an address for the NS name and the hostname"
+
+    - name: "Case dns-bind-noncanonical — an IPv6 DNS bind in upper case"
+      block:
+        - name: Run iroh_dns_server with an IPv6 DNS bind in upper case
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_dns_bind_address: "2001:DB8::1"
+      rescue:
+        - name: Record dns-bind-noncanonical rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['dns-bind-noncanonical'] }}"
+          when: ansible_failed_task.name == "Validate the DNS bind address"
+
+    - name: "Case metrics-public — metrics on a public address"
+      block:
+        - name: Run iroh_dns_server with metrics on a public address
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_metrics_bind: "0.0.0.0"
+      rescue:
+        - name: Record metrics-public rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['metrics-public'] }}"
+          when: ansible_failed_task.name == "Require the metrics and health listeners on loopback"
+
+    - name: "Case metrics-port-relay — metrics on the relay's metrics port"
+      block:
+        - name: Run iroh_dns_server with metrics on the relay's metrics port
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_metrics_port: 9092
+      rescue:
+        - name: Record metrics-port-relay rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['metrics-port-relay'] }}"
+          when: ansible_failed_task.name == "Require the metrics and health listeners on loopback"
+
+    - name: "Case health-port-metrics — the health listener on the metrics port"
+      block:
+        - name: Run iroh_dns_server with the health listener on the metrics port
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_health_port: 9117
+      rescue:
+        - name: Record health-port-metrics rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['health-port-metrics'] }}"
+          when: ansible_failed_task.name == "Require the metrics and health listeners on loopback"
+
+    - name: "Case rate-smart — the X-Forwarded-For rate limit"
+      block:
+        - name: Run iroh_dns_server with the X-Forwarded-For rate limit
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_pkarr_put_rate_limit: "smart"
+      rescue:
+        - name: Record rate-smart rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['rate-smart'] }}"
+          when: ansible_failed_task.name == "Validate the pkarr PUT rate limit"
+
+    - name: "Case mainline-bootstrap-off — bootstrap nodes with the DHT off"
+      block:
+        - name: Run iroh_dns_server with bootstrap nodes with the DHT off
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_mainline_bootstrap: ["router.molecule.test:6881"]
+      rescue:
+        - name: Record mainline-bootstrap-off rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['mainline-bootstrap-off'] }}"
+          when: ansible_failed_task.name == "Validate the mainline DHT bootstrap nodes"
+
+    - name: "Case mainline-bootstrap-shape — a bootstrap node without a port"
+      block:
+        - name: Run iroh_dns_server with a bootstrap node without a port
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_mainline_enabled: true
+            iroh_dns_server_mainline_bootstrap: ["router.molecule.test"]
+      rescue:
+        - name: Record mainline-bootstrap-shape rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['mainline-bootstrap-shape'] }}"
+          when: ansible_failed_task.name == "Validate the mainline DHT bootstrap nodes"
+
+    - name: "Case limit-nofile — an open-files limit under 1024"
+      block:
+        - name: Run iroh_dns_server with an open-files limit under 1024
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_limit_nofile: 100
+      rescue:
+        - name: Record limit-nofile rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['limit-nofile'] }}"
+          when: ansible_failed_task.name == "Validate the open-files limit"
+
+    - name: "Case log-space — a log filter with a space"
+      block:
+        - name: Run iroh_dns_server with a log filter with a space
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_log_level: "info debug"
+      rescue:
+        - name: Record log-space rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['log-space'] }}"
+          when: ansible_failed_task.name == "Validate iroh_dns_server_log_level"
+
+    - name: "Case cert-check — an unknown certificate-check mode"
+      block:
+        - name: Run iroh_dns_server with an unknown certificate-check mode
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_certificate_check: "maybe"
+      rescue:
+        - name: Record cert-check rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['cert-check'] }}"
+          when: ansible_failed_task.name == "Validate the readiness and certificate-check knobs"
+
+    # Host-side: "::" (the https default) on a kernel that binds IPv6 only, where it
+    # would serve no IPv4 client. The setting is per network namespace.
+    - name: "Case bindv6only — the wildcard https bind with net.ipv6.bindv6only=1"
+      block:
+        - name: Make this namespace bind IPv6 only
+          ansible.builtin.command:
+            argv: [sysctl, -w, net.ipv6.bindv6only=1]
+          changed_when: true
+
+        - name: Run iroh_dns_server on a kernel that binds IPv6 only
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+      rescue:
+        - name: Record bindv6only rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['bindv6only'] }}"
+          when: ansible_failed_task.name == 'Refuse "::" on a host that binds IPv6 only'
+      always:
+        - name: Bind both families again
+          ansible.builtin.command:
+            argv: [sysctl, -w, net.ipv6.bindv6only=0]
+          changed_when: true
+
+    # Host-side: valid inputs, but another process holds a port the server needs.
+    - name: "Case port-squatter-https — another process on tcp/443"
+      block:
+        - name: Squat on tcp/443 with another process
+          ansible.builtin.command:
+            argv: [systemd-run, --unit=molecule-squatter-443, --collect,
+                   python3, -m, http.server, "443", --bind, "0.0.0.0"]
+          changed_when: true
+
+        - name: Wait for the squatter on tcp/443 to listen
+          ansible.builtin.wait_for:
+            port: 443
+            host: "127.0.0.1"
+            timeout: 15
+
+        - name: Run iroh_dns_server while another process holds tcp/443
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+      rescue:
+        - name: Record port-squatter-https rejection (only if its guard failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['port-squatter-https'] }}"
+          when: ansible_failed_task.name == "Refuse ports held by another process"
+      always:
+        - name: Stop the squatter on tcp/443
+          ansible.builtin.systemd_service:
+            name: molecule-squatter-443
+            state: stopped
+          failed_when: false
+
+    - name: "Case port-squatter-dns — another process on port 53 at the DNS bind address"
+      block:
+        - name: Squat on port 53 at the DNS bind address with another process
+          ansible.builtin.command:
+            argv: [systemd-run, --unit=molecule-squatter-53, --collect,
+                   python3, -m, http.server, "53", --bind, "{{ _ids_ip }}"]
+          changed_when: true
+
+        - name: Wait for the squatter on port 53 at the DNS bind address to listen
+          ansible.builtin.wait_for:
+            port: 53
+            host: "{{ _ids_ip }}"
+            timeout: 15
+
+        - name: Run iroh_dns_server while another process holds port 53 at the DNS bind address
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+      rescue:
+        - name: Record port-squatter-dns rejection (only if its guard failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['port-squatter-dns'] }}"
+          when: ansible_failed_task.name == "Refuse ports held by another process"
+      always:
+        - name: Stop the squatter on port 53 at the DNS bind address
+          ansible.builtin.systemd_service:
+            name: molecule-squatter-53
+            state: stopped
+          failed_when: false
+
+    # Host-side: a holder of port 53 on every address (dnsmasq or bind's usual way)
+    # while the server binds one: the wildcard covers the bind address too.
+    - name: "Case port-squatter-dns-wildcard — another process on port 53 on every address"
+      block:
+        - name: Squat on port 53 on every address with another process
+          ansible.builtin.command:
+            argv: [systemd-run, --unit=molecule-squatter-53-any, --collect,
+                   python3, -m, http.server, "53", --bind, 0.0.0.0]
+          changed_when: true
+
+        - name: Wait for the wildcard squatter on port 53 to listen
+          ansible.builtin.wait_for:
+            port: 53
+            host: 127.0.0.1
+            timeout: 15
+
+        - name: Run iroh_dns_server while another process holds port 53 on every address
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+      rescue:
+        - name: Record port-squatter-dns-wildcard rejection (only if its guard failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['port-squatter-dns-wildcard'] }}"
+          when: ansible_failed_task.name == "Refuse ports held by another process"
+      always:
+        - name: Stop the wildcard squatter on port 53
+          ansible.builtin.systemd_service:
+            name: molecule-squatter-53-any
+            state: stopped
+          failed_when: false
+
+    # Host-side: a udp-only holder of port 53 at the DNS bind address (the tcp
+    # squatters above do not exercise the guard's udp read).
+    - name: "Case port-squatter-dns-udp — another process on udp/53 at the DNS bind address"
+      block:
+        - name: Hold udp/53 at the DNS bind address with another process
+          ansible.builtin.command:
+            argv: [systemd-run, --unit=molecule-squatter-udp53, --collect, python3, -c,
+                   "import socket, sys, time; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM);
+                   s.bind((sys.argv[1], 53)); time.sleep(600)", "{{ _ids_ip }}"]
+          changed_when: true
+
+        - name: Wait for the udp squatter to bind
+          ansible.builtin.command:
+            argv: [ss, -Hlun, "( sport = :53 )"]
+          register: _ids_udp_squat
+          changed_when: false
+          retries: 30
+          delay: 1
+          until: _ids_udp_squat.stdout | length > 0
+
+        - name: Run iroh_dns_server while another process holds udp/53
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+      rescue:
+        - name: Record port-squatter-dns-udp rejection (only if its guard failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['port-squatter-dns-udp'] }}"
+          when: ansible_failed_task.name == "Refuse ports held by another process"
+      always:
+        - name: Stop the udp squatter
+          ansible.builtin.systemd_service:
+            name: molecule-squatter-udp53
+            state: stopped
+          failed_when: false
+
+    - name: Require every bad input to have been rejected by its own assert
+      ansible.builtin.assert:
+        that:
+          - decdn_rejected | sort == _decdn_expected | sort
+        fail_msg: >-
+          Expected {{ _decdn_expected | sort }}, got {{ decdn_rejected | sort }} — a
+          missing tag means that bad value slipped past validation (it would reach
+          the server and crash-loop it, or open what must stay closed).
+      vars:
+        _decdn_expected:
+          - install-method
+          - release-version
+          - release-sha256
+          - release-target
+          - release-target-unsupported
+          - manual-src
+          - hostname-url
+          - hostname-ip
+          - hostname-empty
+          - contact-mailto
+          - contact-empty
+          - bool-staging
+          - bool-mainline
+          - origins-string
+          - origins-empty
+          - origins-dup
+          - origins-url
+          - soa-fields
+          - soa-serial
+          - ttl-zero
+          - ns-relative
+          - ns-below-origin
+          - https-bind-loopback
+          - https-bind-brackets
+          - dns-bind-port
+          - dns-bind-empty
+          - dns-bind-mapped
+          - rr-a-v6
+          - rr-aaaa-v4
+          - ns-no-address
+          - ns-no-address-private
+          - hostname-no-address
+          - dns-bind-noncanonical
+          - metrics-public
+          - metrics-port-relay
+          - health-port-metrics
+          - rate-smart
+          - mainline-bootstrap-off
+          - mainline-bootstrap-shape
+          - limit-nofile
+          - log-space
+          - cert-check
+          - port-squatter-https
+          - port-squatter-dns
+          - port-squatter-dns-wildcard
+          - port-squatter-dns-udp
+          - origins-root-only
+          - bindv6only

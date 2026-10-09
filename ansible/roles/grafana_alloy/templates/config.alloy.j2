@@ -155,6 +155,39 @@ prometheus.relabel "iroh_relay_identity" {
 }
 
 {% endif %}
+{% if grafana_alloy_iroh_dns_server_enabled | bool %}
+{# iroh-dns-server's metrics (pkarr publishes, DNS lookups, record store) on its
+   loopback listener (roles/iroh_dns_server; the fallbacks match its defaults). It
+   answers on any path. Its own relabel, as the relay's. #}
+prometheus.scrape "iroh_dns_server" {
+  targets = [
+    { "__address__" = {{ (iroh_dns_server_metrics_bind | default('127.0.0.1') ~ ':' ~ iroh_dns_server_metrics_port | default(9117)) | tojson }},
+      "instance"    = "{{ _ga_instance_id }}",
+      "job"         = {{ grafana_alloy_iroh_dns_server_job | tojson }} },
+  ]
+  forward_to      = [prometheus.relabel.iroh_dns_server_identity.receiver]
+  scrape_interval = {{ grafana_alloy_scrape_interval | to_json }}
+}
+
+{% set ga_iroh_dns_server_labels = [
+     ["service_name", grafana_alloy_iroh_dns_server_service_name],
+     ["service_namespace", grafana_alloy_service_namespace],
+     ["service_instance_id", _ga_instance_id],
+     ["deployment_environment", grafana_alloy_deployment_environment],
+     ["region", grafana_alloy_region],
+   ] %}
+prometheus.relabel "iroh_dns_server_identity" {
+  forward_to = [prometheus.remote_write.cloud.receiver]
+{% for name, value in ga_iroh_dns_server_labels if value | length > 0 %}
+
+  rule {
+    target_label = {{ name | tojson }}
+    replacement  = {{ value | tojson }}
+  }
+{% endfor %}
+}
+
+{% endif %}
 prometheus.remote_write "cloud" {
   endpoint {
     url = {{ ga_endpoint(grafana_alloy_prom_url, 'GC_PROM_REMOTE_WRITE_URL') }}
@@ -335,10 +368,12 @@ loki.relabel "journal_rules" {
     target_label  = "boot_id"
   }
 {# The units that log tracing-subscriber's plain text (the sponsord daemon, its
-   onramp and iroh-relay), parsed for a level by loki.process "daemon_level" below. #}
+   onramp, iroh-relay and iroh-dns-server), parsed for a level by loki.process
+   "daemon_level" below. #}
 {% set ga_text_units = (['sponsord'] if grafana_alloy_sponsord_enabled | bool else [])
      + (['sponsord-onramp'] if grafana_alloy_sponsord_onramp_enabled | bool else [])
-     + (['iroh-relay'] if grafana_alloy_iroh_relay_enabled | bool else []) %}
+     + (['iroh-relay'] if grafana_alloy_iroh_relay_enabled | bool else [])
+     + (['iroh-dns-server'] if grafana_alloy_iroh_dns_server_enabled | bool else []) %}
 {% if grafana_alloy_logs_drop_priority_regex | length > 0 %}
 
   // Cost guardrail: the regex is anchored to the WHOLE value by Prometheus
@@ -601,6 +636,17 @@ loki.relabel "journal_identity" {
     regex         = "iroh-relay\\.service"
     target_label  = "service_name"
     replacement   = {{ grafana_alloy_iroh_relay_service_name | tojson }}
+  }
+{% endif %}
+{% if grafana_alloy_iroh_dns_server_enabled | bool and grafana_alloy_iroh_dns_server_service_name | length > 0 %}
+{# iroh-dns-server's stream (the unit roles/iroh_dns_server installs; also named in
+   the journal_rules exemption and the daemon_level selector above). #}
+
+  rule {
+    source_labels = ["unit"]
+    regex         = "iroh-dns-server\\.service"
+    target_label  = "service_name"
+    replacement   = {{ grafana_alloy_iroh_dns_server_service_name | tojson }}
   }
 {% endif %}
 }

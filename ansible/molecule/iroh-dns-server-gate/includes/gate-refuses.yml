@@ -1,0 +1,41 @@
+---
+# With the stub's _ids_case.marker in place, a converge must fail at the readiness
+# gate's final assert. The marker is gone afterwards.
+- name: Stage the stub's marker {{ _ids_case.marker }}
+  ansible.builtin.copy:
+    dest: "/etc/iroh-dns-server/{{ _ids_case.marker }}"
+    content: ""
+    mode: "0644"
+
+# The marker is read at start: restart so the running server is the broken one.
+- name: Restart the server with {{ _ids_case.marker }}  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: systemctl restart iroh-dns-server
+  changed_when: true
+
+- name: Converge against the server broken by {{ _ids_case.marker }}
+  block:
+    - name: Run the role with a short readiness window ({{ _ids_case.marker }})
+      ansible.builtin.include_role:
+        name: iroh_dns_server
+      vars:
+        iroh_dns_server_readiness_retries: 3
+        iroh_dns_server_readiness_delay: 1
+        iroh_dns_server_readiness_settle: "{{ _ids_case.settle }}"
+
+    - name: Fail — the readiness gate let a broken server through, {{ _ids_case.marker }}
+      ansible.builtin.fail:
+        msg: The role finished although the server is broken ({{ _ids_case.marker }}).
+  rescue:
+    - name: Require the readiness gate to be what failed ({{ _ids_case.marker }})
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name == 'Require iroh-dns-server to be up on all its listeners'
+        fail_msg: >-
+          Expected the role to fail at its readiness assert, but it failed at
+          "{{ ansible_failed_task.name }}".
+  always:
+    - name: Remove the stub's marker {{ _ids_case.marker }}
+      ansible.builtin.file:
+        path: "/etc/iroh-dns-server/{{ _ids_case.marker }}"
+        state: absent

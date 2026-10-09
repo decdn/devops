@@ -143,8 +143,8 @@ make decommission LIMIT=<host>    # LIMIT is required; you type the host name to
 
 It stops `decdn-node` with `systemctl` (SIGTERM, which is the daemon's graceful drain
 path), disables it and removes the unit, and tears down the Grafana Alloy agent this
-repo installed, if any. On a host that also runs an iroh relay it removes the relay
-too ([iroh relay](#iroh-relay)). On a host that also runs sponsord it removes sponsord and its
+repo installed, if any. On a host that also runs an iroh relay or an iroh DNS server
+it removes that too ([iroh relay](#iroh-relay), [iroh DNS server](#iroh-dns-server)). On a host that also runs sponsord it removes sponsord and its
 onramp as well, after checking for a held top-up
 ([sponsord](#sponsord-the-onboarding-sponsor)); the one confirmation prompt lists every
 service it covers. `-e decdn_decommission_purge_cache=true` also deletes the
@@ -311,6 +311,30 @@ under `/var/lib/private/iroh-relay` (`0700`), which a new host re-issues for its
   [`*Down` alerts](../monitoring/README.md#the-down-alerts) fire on a series that went
   silent, for up to a day. The same goes for a migration to a host with a new
   inventory name.
+
+## iroh DNS server
+
+A self-hosted iroh DNS server ([`roles/iroh_dns_server`](../ansible/roles/iroh_dns_server/README.md))
+holds no identity and no operator-provisioned secret, so it has **no backup**. Its
+state under `/var/lib/private/iroh-dns-server` (`0700`) is the record store, which
+nodes repopulate by republishing every 5 minutes, and the Let's Encrypt account key
+and certificate, which a new host re-issues for itself.
+
+- **Migration:** deploy on the new host with the same `iroh_dns_server_hostname`
+  (and `iroh_dns_server_rr_a` set to the new public address), then update the parent
+  zone's glue record. Until the glue moves, resolvers and Let's Encrypt still reach
+  the old host, and the deploy's certificate check warns; re-run `make deploy-dns
+  LIMIT=<new host>` once it has moved. Nodes keep their `decdn_discovery_pkarr_url`.
+  Mind Let's Encrypt's rate limits as for the relay.
+- **Decommission:** point every node's `decdn_discovery_pkarr_url` and
+  `decdn_discovery_dns_origin` elsewhere (or clear them, back to n0's discovery) and
+  re-deploy them first: peers resolving under the origin find nothing once the
+  server is gone. Then `make decommission LIMIT=<host>` stops `iroh-dns-server`
+  (SIGINT, its graceful shutdown), disables it, removes the unit and its
+  restart-inputs record, and tears down the Alloy agent. It keeps the binary, the
+  config and the state directory. tcp/443 and udp+tcp/53 stay open until the host leaves
+  `iroh_dns_server_hosts` and baseline runs again. Remove the delegation (NS and glue)
+  at the parent zone afterwards.
 
 ## Compose and Kubernetes
 

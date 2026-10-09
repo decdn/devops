@@ -1,0 +1,442 @@
+#!/usr/bin/env python3
+"""Stub iroh-dns-server binary for the Molecule scenarios.
+
+Stands in for the real `iroh-dns-server` so the role can be exercised end to end
+without Let's Encrypt or a delegated zone (a container has neither):
+
+  * `--help` -> print a usage line naming --config and exit 0 (the role's smoke
+    check). The real binary has no --version; neither has the stub.
+  * `--config <file>` -> enforce the startup contract, then serve until SIGINT
+    (the unit's KillSignal) or SIGTERM:
+      - the file exists and parses as TOML holding ONLY keys iroh-dns-server
+        1.3.0's Config knows (iroh-dns-server/src/config.rs, http.rs, dns.rs:
+        Config, HttpConfig, HttpsConfig, DnsConfig, MetricsConfig, MainlineConfig,
+        StoreConfig), with the keys it requires. The real binary ignores an
+        unknown key, so a typo in the role's template would silently drop a
+        setting; here it fails the start;
+      - the values the role must set: https by lets_encrypt with a contact and
+        letsencrypt_prod; a writable data_dir (a probe file is written there,
+        which also proves the unit's StateDirectory); metrics on and on loopback;
+        the plain-http listener on loopback; every origin fully qualified, "."
+        among them (1.3.0 refuses to start without it, and answers no apex record
+        for an unqualified origin); a seven-field SOA; the rate limit "simple" or
+        "disabled"; the zone store's four keys;
+      - RUST_LOG and NO_COLOR are set (the unit must set both).
+    Any violation exits 1 with the reason on stderr (the journal). Marker files
+    break it on purpose, so the scenario can prove each part of the readiness
+    gate is fatal:
+      - UNHEALTHY_MARKER: exit 1 on start, before anything answers;
+      - NO_DNS_MARKER: serve everything but never bind the DNS sockets;
+      - EXIT_AFTER_MARKER: serve everything, then exit 1 after EXIT_AFTER_SECONDS.
+    Then it binds metrics, http, https and DNS (udp and tcp), in the real binary's
+    order, and exits if any bind fails (as the real one does). Routes: metrics
+    serves four of the real series names (values 0, made-up HELP text) on any
+    path; http and https serve /healthz (JSON, as the real server) and PUT
+    /pkarr/<key> (204), https with the molecule certificate for the domain. DNS
+    answers SOA (and NS, A, AAAA at an apex) for the configured origins, NXDOMAIN
+    below them and REFUSED elsewhere.
+  * anything else -> exit 2 (clap's usage error).
+"""
+import ipaddress
+import json
+import os
+import re
+import signal
+import socket
+import socketserver
+import ssl
+import struct
+import sys
+import threading
+import time
+import tomllib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+STUB_VERSION = "0.0.0-molecule-stub"
+UNHEALTHY_MARKER = "/etc/iroh-dns-server/stub-unhealthy"
+NO_DNS_MARKER = "/etc/iroh-dns-server/stub-no-dns"
+EXIT_AFTER_MARKER = "/etc/iroh-dns-server/stub-exit-after"
+EXIT_AFTER_SECONDS = 2
+# The molecule certificate for the server's domain (prepare.yml), readable by the
+# unit's DynamicUser.
+CERT = "/etc/iroh-dns-server-molecule/dns.crt"
+KEY = "/etc/iroh-dns-server-molecule/dns.key"
+# The exact key sets iroh-dns-server 1.3.0 deserialises, and the ones it requires.
+TOP_KEYS = {"http", "https", "dns", "metrics", "mainline", "zone_store",
+            "pkarr_put_rate_limit", "data_dir"}
+HTTP_KEYS = {"port", "bind_addr"}
+HTTPS_KEYS = {"port", "bind_addr", "domains", "cert_mode", "letsencrypt_contact", "letsencrypt_prod"}
+DNS_KEYS = {"port", "bind_addr", "default_soa", "default_ttl", "origins", "rr_a", "rr_aaaa", "rr_ns"}
+METRICS_KEYS = {"disabled", "bind_addr"}
+MAINLINE_KEYS = {"enabled", "bootstrap"}
+STORE_KEYS = {"max_batch_size", "max_batch_time", "eviction", "eviction_interval"}
+REQUIRED = {"http": {"port"}, "https": {"port", "domains", "cert_mode"},
+            "dns": {"port", "default_soa", "default_ttl", "origins"},
+            "metrics": {"disabled"}, "mainline": {"enabled"}, "zone_store": STORE_KEYS}
+METRICS = b"""# HELP dns_server_dns_requests Number of DNS requests (stub).
+# TYPE dns_server_dns_requests counter
+dns_server_dns_requests_total 0
+# HELP dns_server_pkarr_publish_update Number of pkarr relay puts that updated the stored packet (stub).
+# TYPE dns_server_pkarr_publish_update counter
+dns_server_pkarr_publish_update_total 0
+# HELP dns_server_dns_lookup_success Number of DNS lookups that returned at least one answer (stub).
+# TYPE dns_server_dns_lookup_success counter
+dns_server_dns_lookup_success_total 0
+# HELP dns_server_cache_zones Number of zones in the cache (stub).
+# TYPE dns_server_cache_zones gauge
+dns_server_cache_zones 0
+# EOF
+"""
+NAME = re.compile(r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+")
+DURATION = re.compile(r"[0-9]+(?:ns|us|ms|s|sec|m|min|h|hr|d|day|days|w|week|weeks)")
+
+
+def die(msg):
+    print(f"iroh-dns-server-stub: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def table(cfg, name, allowed):
+    t = cfg.get(name)
+    if t is None:
+        die(f"no [{name}] table: the role always writes it")
+    if not isinstance(t, dict):
+        die(f"{name} must be a table")
+    extra = set(t) - allowed
+    if extra:
+        die(f"unknown key(s) in [{name}]: {sorted(extra)} (iroh-dns-server would silently ignore them)")
+    missing = REQUIRED.get(name, set()) - set(t)
+    if missing:
+        die(f"[{name}] lacks {sorted(missing)}, which iroh-dns-server requires")
+    return t
+
+
+def port(value, what):
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 < value < 65536:
+        die(f"{what} must be a port number, got {value!r}")
+    return value
+
+
+def ip(value, what):
+    if not isinstance(value, str):
+        die(f"{what} must be a string, got {value!r}")
+    try:
+        return ipaddress.ip_address(value)
+    except ValueError:
+        die(f"{what} is not an IP address: {value!r}")
+
+
+def check_config(path):
+    if os.path.exists(UNHEALTHY_MARKER):
+        die(f"{UNHEALTHY_MARKER} exists: refusing to start")
+    for var in ("RUST_LOG", "NO_COLOR"):
+        if not os.environ.get(var):
+            die(f"{var} is not set")
+    if not os.path.isfile(path):
+        die(f"failed to read {path}")
+    try:
+        with open(path, "rb") as f:
+            cfg = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        die(f"config must be valid toml: {e}")
+    extra = set(cfg) - TOP_KEYS
+    if extra:
+        die(f"unknown key(s) at the top level: {sorted(extra)} (iroh-dns-server would silently ignore them)")
+
+    if cfg.get("pkarr_put_rate_limit") not in ("simple", "disabled"):
+        die(f"pkarr_put_rate_limit must be simple or disabled, got {cfg.get('pkarr_put_rate_limit')!r}")
+    data_dir = cfg.get("data_dir")
+    if not isinstance(data_dir, str) or not data_dir.startswith("/"):
+        die(f"data_dir must be an absolute path, got {data_dir!r}")
+    try:
+        with open(os.path.join(data_dir, "molecule-stub-probe"), "w") as f:
+            f.write("written by the iroh-dns-server stub\n")
+        # As the real server: the ACME cache directory, whenever https is configured.
+        os.makedirs(os.path.join(data_dir, "cert_cache"), exist_ok=True)
+    except OSError as e:
+        die(f"cannot write to data_dir {data_dir}: {e}")
+
+    http = table(cfg, "http", HTTP_KEYS)
+    http_addr = ip(http.get("bind_addr"), "http.bind_addr")
+    if not http_addr.is_loopback:
+        die(f"http.bind_addr {http_addr} is not loopback: the role's plain-http listener is the gate's")
+
+    https = table(cfg, "https", HTTPS_KEYS)
+    if https["cert_mode"] != "lets_encrypt":
+        die(f"https.cert_mode must be lets_encrypt, got {https['cert_mode']!r}")
+    domains = https["domains"]
+    if not isinstance(domains, list) or len(domains) != 1 or not isinstance(domains[0], str) or not domains[0]:
+        die(f"https.domains must be one domain, got {domains!r}")
+    contact = https.get("letsencrypt_contact")
+    if not isinstance(contact, str) or "@" not in contact or contact.startswith("mailto:"):
+        die(f"contact is required for letsencrypt cert mode (an email), got {contact!r}")
+    if not isinstance(https.get("letsencrypt_prod"), bool):
+        die("https.letsencrypt_prod must be a boolean (unset means staging)")
+
+    dns = table(cfg, "dns", DNS_KEYS)
+    origins = dns["origins"]
+    if not isinstance(origins, list) or not all(isinstance(o, str) for o in origins):
+        die(f"dns.origins must be a list of names, got {origins!r}")
+    if "." not in origins:
+        die('new authority: SOA record must be present: . ("." must be an origin)')
+    for o in origins:
+        if o != "." and not NAME.fullmatch(o):
+            die(f"dns origin {o!r} is not fully qualified: 1.3.0 answers no apex record for it")
+    soa = dns["default_soa"]
+    if not isinstance(soa, str) or len(soa.split()) != 7 or not all(f.isdigit() for f in soa.split()[2:]):
+        die(f"Couldn't parse SOA: {soa!r}")
+    ttl = dns["default_ttl"]
+    if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl <= 0:
+        die(f"dns.default_ttl must be a positive integer, got {ttl!r}")
+    rr_a = ip(dns["rr_a"], "dns.rr_a") if "rr_a" in dns else None
+    rr_aaaa = ip(dns["rr_aaaa"], "dns.rr_aaaa") if "rr_aaaa" in dns else None
+    if rr_a is not None and rr_a.version != 4 or rr_aaaa is not None and rr_aaaa.version != 6:
+        die("dns.rr_a must be IPv4 and dns.rr_aaaa IPv6")
+    rr_ns = dns.get("rr_ns")
+    if rr_ns is not None and not (isinstance(rr_ns, str) and NAME.fullmatch(rr_ns)):
+        die(f"dns.rr_ns must be an absolute name, got {rr_ns!r}")
+
+    metrics = table(cfg, "metrics", METRICS_KEYS)
+    if metrics["disabled"] is not False:
+        die("metrics.disabled must be false")
+    m = re.fullmatch(r"([0-9.]+):(\d+)", str(metrics.get("bind_addr")))
+    if not m or not ipaddress.ip_address(m.group(1)).is_loopback:
+        die(f"metrics.bind_addr {metrics.get('bind_addr')!r} is not a loopback ip:port")
+
+    mainline = table(cfg, "mainline", MAINLINE_KEYS)
+    if not isinstance(mainline["enabled"], bool):
+        die("mainline.enabled must be a boolean")
+    boot = mainline.get("bootstrap", [])
+    if not isinstance(boot, list) or not all(isinstance(b, str) and re.fullmatch(r"[A-Za-z0-9.-]+:\d+", b) for b in boot):
+        die(f"mainline.bootstrap must be host:port strings, got {boot!r}")
+
+    store = table(cfg, "zone_store", STORE_KEYS)
+    if not isinstance(store["max_batch_size"], int) or store["max_batch_size"] <= 0:
+        die("zone_store.max_batch_size must be a positive integer")
+    for k in ("max_batch_time", "eviction", "eviction_interval"):
+        if not isinstance(store[k], str) or not DURATION.fullmatch(store[k]):
+            die(f"zone_store.{k} must be a humantime duration, got {store[k]!r}")
+
+    def bind(t, what):
+        return str(ip(t["bind_addr"], f"{what}.bind_addr")) if "bind_addr" in t else "::"
+
+    return {
+        "domain": domains[0],
+        "metrics": (m.group(1), int(m.group(2))),
+        "http": (str(http_addr), port(http["port"], "http.port")),
+        "https": (bind(https, "https"), port(https["port"], "https.port")),
+        "dns": (bind(dns, "dns"), port(dns["port"], "dns.port")),
+        "origins": [o.lower() for o in origins if o != "."],
+        "soa": soa,
+        "rr_a": rr_a,
+        "rr_aaaa": rr_aaaa,
+        "rr_ns": rr_ns,
+    }
+
+
+def family(host):
+    return socket.AF_INET6 if ":" in host else socket.AF_INET
+
+
+def bind_or_die(server, addr):
+    """Bind and listen a server built with bind_and_activate=False, or exit."""
+    if server.address_family == socket.AF_INET6:
+        server.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    try:
+        server.server_bind()
+        server.server_activate()
+    except OSError as e:
+        die(f"Address already in use? cannot bind {addr}: {e}")
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, addr, handler):
+        self.address_family = family(addr[0])
+        super().__init__(addr, handler, bind_and_activate=False)
+        bind_or_die(self, addr)
+
+
+def http_handler(health):
+    class H(BaseHTTPRequestHandler):
+        def reply(self, status, ctype, body):
+            self.send_response(status)
+            if ctype:
+                self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path == "/healthz":
+                self.reply(200, "application/json", health)
+            elif self.path == "/":
+                self.reply(200, "text/plain", b"Hi!")
+            else:
+                self.reply(404, None, b"")
+
+        def do_PUT(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            if re.fullmatch(r"/pkarr/[a-z0-9]{52}", self.path):
+                self.reply(204, None, b"")
+            else:
+                self.reply(400, None, b"")
+
+        def log_message(self, *args):
+            pass
+    return H
+
+
+def metrics_handler():
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(METRICS)))
+            self.end_headers()
+            self.wfile.write(METRICS)
+
+        def log_message(self, *args):
+            pass
+    return H
+
+
+# --- A minimal authoritative DNS responder --------------------------------------
+def encode_name(name):
+    out = b""
+    for label in name.rstrip(".").split("."):
+        if label:
+            out += bytes([len(label)]) + label.encode()
+    return out + b"\0"
+
+
+def decode_name(msg, off):
+    labels = []
+    while True:
+        n = msg[off]
+        if n == 0:
+            return ".".join(labels).lower() + ".", off + 1
+        if n & 0xC0:
+            raise ValueError("compressed question name")
+        labels.append(msg[off + 1:off + 1 + n].decode("ascii", "replace"))
+        off += 1 + n
+
+
+def answer(cfg, query):
+    """The response to one DNS query, as bytes."""
+    qid, flags, qd = struct.unpack(">HHH", query[:6])
+    name, off = decode_name(query, 12)
+    qtype, qclass = struct.unpack(">HH", query[off:off + 4])
+    question = query[12:off + 4]
+    zone = next((o for o in cfg["origins"] if name == o or name.endswith("." + o)), None)
+    rd = flags & 0x0100
+
+    def rr(rtype, ttl, rdata):
+        return encode_name(zone) + struct.pack(">HHIH", rtype, 1, ttl, len(rdata)) + rdata
+
+    answers, authority, rcode = [], [], 0
+    if zone is None:
+        header = struct.pack(">HHHHHH", qid, 0x8000 | rd | 5, 1, 0, 0, 0)  # REFUSED
+        return header + question
+    soa_fields = cfg["soa"].split()
+    soa = rr(6, 1209600, encode_name(soa_fields[0]) + encode_name(soa_fields[1])
+             + struct.pack(">IIIII", *(int(f) for f in soa_fields[2:])))
+    if name != zone:
+        rcode, authority = 3, [soa]  # NXDOMAIN: no record was published in the stub
+    elif qtype == 6:
+        answers = [soa]
+    elif qtype == 2 and cfg["rr_ns"]:
+        answers = [rr(2, 43200, encode_name(cfg["rr_ns"]))]
+    elif qtype == 1 and cfg["rr_a"]:
+        answers = [rr(1, 3600, cfg["rr_a"].packed)]
+    elif qtype == 28 and cfg["rr_aaaa"]:
+        answers = [rr(28, 3600, cfg["rr_aaaa"].packed)]
+    else:
+        authority = [soa]
+    header = struct.pack(">HHHHHH", qid, 0x8000 | 0x0400 | rd | rcode, 1, len(answers), len(authority), 0)
+    return header + question + b"".join(answers + authority)
+
+
+def dns_servers(cfg):
+    host, p = cfg["dns"]
+
+    class Udp(socketserver.BaseRequestHandler):
+        def handle(self):
+            data, sock = self.request
+            try:
+                sock.sendto(answer(cfg, data), self.client_address)
+            except (ValueError, struct.error, IndexError):
+                pass
+
+    class Tcp(socketserver.BaseRequestHandler):
+        def handle(self):
+            try:
+                n = struct.unpack(">H", self.request.recv(2))[0]
+                data = b""
+                while len(data) < n:
+                    chunk = self.request.recv(n - len(data))
+                    if not chunk:
+                        return
+                    data += chunk
+                resp = answer(cfg, data)
+                self.request.sendall(struct.pack(">H", len(resp)) + resp)
+            except (ValueError, struct.error, IndexError, OSError):
+                pass
+
+    servers = []
+    # SO_REUSEADDR on the tcp listener only, as tokio's TcpListener sets it: a
+    # restart right after a tcp query must not wait out TIME_WAIT. Never on udp,
+    # where it would let a second process share the port.
+    for base, handler, reuse in ((socketserver.ThreadingUDPServer, Udp, False),
+                                 (socketserver.ThreadingTCPServer, Tcp, True)):
+        cls = type(base.__name__, (base,), {"address_family": family(host), "daemon_threads": True,
+                                             "allow_reuse_address": reuse})
+        srv = cls((host, p), handler, bind_and_activate=False)
+        bind_or_die(srv, (host, p))
+        servers.append(srv)
+    return servers
+
+
+def serve(server):
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+
+def main():
+    if sys.argv[1:] in (["--help"], ["-h"]):
+        print("Usage: iroh-dns-server [OPTIONS]\n\nOptions:\n"
+              "  -c, --config <CONFIG>  Path to config file\n  -h, --help             Print help")
+        return
+    if len(sys.argv) != 3 or sys.argv[1] not in ("--config", "-c"):
+        print(f"error: unexpected argument {sys.argv[1:]}\n\nUsage: iroh-dns-server [OPTIONS]", file=sys.stderr)
+        sys.exit(2)
+    cfg = check_config(sys.argv[2])
+    # Exit at once on the unit's stop signal, so the ports are free as soon as
+    # `systemctl stop` returns.
+    signal.signal(signal.SIGINT, lambda *_: os._exit(0))
+    signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
+
+    health = json.dumps({"status": "ok", "version": STUB_VERSION, "git_hash": "unknown"}).encode()
+    serve(Server(cfg["metrics"], metrics_handler()))
+    serve(Server(cfg["http"], http_handler(health)))
+    https = Server(cfg["https"], http_handler(health))
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    try:
+        ctx.load_cert_chain(CERT, KEY)
+    except OSError as e:
+        die(f"cannot load the molecule certificate: {e}")
+    https.socket = ctx.wrap_socket(https.socket, server_side=True)
+    serve(https)
+    if not os.path.exists(NO_DNS_MARKER):
+        for srv in dns_servers(cfg):
+            serve(srv)
+    print(f"iroh-dns-server-stub: serving {cfg['domain']}", file=sys.stderr)
+    if os.path.exists(EXIT_AFTER_MARKER):
+        time.sleep(EXIT_AFTER_SECONDS)
+        die(f"{EXIT_AFTER_MARKER} exists: exiting after {EXIT_AFTER_SECONDS}s")
+    threading.Event().wait()
+
+
+if __name__ == "__main__":
+    main()

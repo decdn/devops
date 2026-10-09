@@ -1,0 +1,872 @@
+---
+# Provision iroh-dns-server: validate, refuse ports another service holds, install,
+# configure, start, gate on the listeners and a DNS answer, then look for the
+# certificate. Every pure-input assert runs before the first host mutation. The
+# DNS name, the delegation and the ACME contact are operator inputs — see
+# roles/iroh_dns_server/README.md.
+
+# --- Install method + target ----------------------------------------------------
+- name: Require a valid install method
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_install_method in ["release", "manual"]
+    fail_msg: >-
+      iroh_dns_server_install_method must be "release" (the pinned, sha256-verified
+      GitHub Release tarball) or "manual" (copy a binary from the control machine);
+      got "{{ iroh_dns_server_install_method }}".
+
+- name: Require a pinned release version
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_version is string
+      - iroh_dns_server_version is match('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$')
+    fail_msg: >-
+      iroh_dns_server_version must be an iroh release version such as "1.3.0" (the
+      v<version> tag of n0-computer/iroh); got "{{ iroh_dns_server_version }}". Keep
+      it on the iroh version decdn builds against.
+  when: iroh_dns_server_install_method == "release"
+
+- name: Resolve the iroh-dns-server target triple
+  when: iroh_dns_server_install_method == "release"
+  block:
+    - name: Require a supported target triple
+      ansible.builtin.assert:
+        that:
+          - iroh_dns_server_target in _iroh_dns_server_arch_targets.values()
+        fail_msg: >-
+          iroh_dns_server_target resolved to "{{ iroh_dns_server_target }}", which is
+          not one of the Linux targets this role installs
+          ({{ _iroh_dns_server_arch_targets.values() | join(', ') }}). It is derived
+          from the host's gathered architecture
+          ("{{ ansible_facts.get('architecture', 'not gathered') }}"): gather facts or
+          set iroh_dns_server_target explicitly.
+
+    - name: Require the target triple to match the host architecture
+      ansible.builtin.assert:
+        that:
+          - _iroh_dns_server_arch_targets[ansible_facts['architecture']] == iroh_dns_server_target
+        fail_msg: >-
+          iroh_dns_server_target is {{ iroh_dns_server_target }}, but this host is
+          {{ ansible_facts['architecture'] }} and needs
+          {{ _iroh_dns_server_arch_targets[ansible_facts['architecture']] }}. Drop the
+          explicit iroh_dns_server_target (it is derived from the host) or fix it.
+      when: ansible_facts.get('architecture', '') in _iroh_dns_server_arch_targets
+
+    # Upstream signs nothing; this digest is the only thing that vouches for the
+    # binary, so never install without one.
+    - name: Require a pinned sha256 for the target
+      ansible.builtin.assert:
+        that:
+          - iroh_dns_server_sha256 is mapping
+          - (iroh_dns_server_sha256[iroh_dns_server_target] | default('') | string) is match('^[0-9a-f]{64}$')
+        fail_msg: >-
+          No sha256 pin for iroh-dns-server {{ iroh_dns_server_version }} on
+          {{ iroh_dns_server_target }} under iroh_dns_server_sha256. Copy the asset's
+          digest from the release (gh release view v{{ iroh_dns_server_version }}
+          -R n0-computer/iroh --json assets) whenever you bump iroh_dns_server_version.
+
+- name: Require a manual binary source
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_manual_bin_src is string
+      - iroh_dns_server_manual_bin_src | length > 0
+    fail_msg: >-
+      iroh_dns_server_install_method "manual" needs iroh_dns_server_manual_bin_src, a
+      control-machine path to the iroh-dns-server binary.
+  when: iroh_dns_server_install_method == "manual"
+
+# --- Public name + certificate ------------------------------------------------------
+- name: Validate the DNS server hostname
+  ansible.builtin.assert:
+    that:
+      # A DNS name: labels of letters, digits and inner hyphens, at least one dot,
+      # no scheme, port, path or trailing dot. An IP address cannot get a Let's
+      # Encrypt certificate here (TLS-ALPN-01 needs a name).
+      - iroh_dns_server_hostname is string
+      - iroh_dns_server_hostname is match('^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$')
+    fail_msg: >-
+      iroh_dns_server_hostname is required: the DNS name of the zone this server
+      answers for and of its https listener, such as dns.example.org, with no
+      https://, port or trailing dot (got "{{ iroh_dns_server_hostname }}").
+
+- name: Validate the ACME contact
+  ansible.builtin.assert:
+    that:
+      # iroh-dns-server prefixes mailto: itself.
+      - iroh_dns_server_acme_contact is string
+      - iroh_dns_server_acme_contact is match('^[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,63}$')
+    fail_msg: >-
+      iroh_dns_server_acme_contact is required: an email address for the Let's
+      Encrypt account, without mailto: (got "{{ iroh_dns_server_acme_contact }}").
+
+- name: Validate the boolean knobs
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_acme_staging is boolean
+      - iroh_dns_server_mainline_enabled is boolean
+    fail_msg: >-
+      iroh_dns_server_acme_staging and iroh_dns_server_mainline_enabled must be real
+      booleans (true/false), not strings (got "{{ iroh_dns_server_acme_staging }}" and
+      "{{ iroh_dns_server_mainline_enabled }}"). Pass them as JSON on the command line
+      (-e '{"iroh_dns_server_acme_staging": true}').
+
+# --- DNS zone ---------------------------------------------------------------------
+- name: Validate the origins
+  ansible.builtin.assert:
+    that:
+      - _origins is sequence
+      - _origins is not string
+      - _origins is not mapping
+      - _origins | reject('string') | list | length == 0
+      # The role adds "." itself; a list of nothing else serves no zone, and the
+      # gate's SOA probe would then ask nothing.
+      - _origins | reject('equalto', '.') | list | length > 0
+      - >-
+        _origins | reject('equalto', '.')
+        | reject('match', '^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}\.?$')
+        | list | length == 0
+      - _normalised | unique | length == _normalised | length
+    fail_msg: >-
+      iroh_dns_server_origins must be a list of distinct DNS names with at least one
+      besides "." (which the role adds itself), such as ["dns.example.org"]: the
+      zones records are served under (_iroh.<z32>.<origin>).
+      Got {{ iroh_dns_server_origins | to_json }}.
+  vars:
+    _origins: "{{ iroh_dns_server_origins }}"
+    _normalised: "{{ _origins | map('regex_replace', '\\.$', '') | map('lower') | list }}"
+
+- name: Qualify the origins
+  ansible.builtin.set_fact:
+    # "." (the root) is always there and last: iroh-dns-server 1.3.0 roots its
+    # static zone there and refuses to start without an SOA for it.
+    _iroh_dns_server_effective_origins: >-
+      {{ (iroh_dns_server_origins | reject('equalto', '.')
+          | map('regex_replace', '^(.*?)\.?$', '\1.') | list) + ['.'] }}
+    _iroh_dns_server_apexes: >-
+      {{ iroh_dns_server_origins | reject('equalto', '.')
+         | map('regex_replace', '\.$', '') | map('lower') | list }}
+
+- name: Validate the SOA and the TTL
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_default_soa is string
+      - _soa | length == 7
+      - _soa[:2] | reject('match', _name) | list | length == 0
+      - _soa[2:] | reject('match', '^[0-9]{1,10}$') | list | length == 0
+      - _soa[2:] | map('int') | select('gt', 4294967295) | list | length == 0
+      - iroh_dns_server_default_ttl | string is match('^[1-9][0-9]{0,9}$')
+      - iroh_dns_server_default_ttl | int <= 2147483647
+    fail_msg: >-
+      iroh_dns_server_default_soa must be zone-file SOA data, "<mname> <rname>
+      <serial> <refresh> <retry> <expire> <minimum>" (two DNS names, then five
+      numbers up to 4294967295), such as "dns.example.org.
+      hostmaster.dns.example.org. 0 10800 3600 604800 3600"; and
+      iroh_dns_server_default_ttl a positive number of seconds. Got
+      "{{ iroh_dns_server_default_soa }}" and "{{ iroh_dns_server_default_ttl }}".
+  vars:
+    _soa: "{{ (iroh_dns_server_default_soa | string).split() }}"
+    _name: '^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+([A-Za-z]{2,63}\.?)$'
+
+# The server answers A/AAAA/NS only at an origin's apex; a name below an origin is
+# parsed as a node key. So the NS name is either an apex (and this server answers
+# its address: rr_a/rr_aaaa below) or a name outside every origin.
+- name: Validate the NS record
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_rr_ns is string
+      - >-
+        iroh_dns_server_rr_ns == ''
+        or iroh_dns_server_rr_ns is match('^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}\.$')
+      - >-
+        iroh_dns_server_rr_ns == '' or _iroh_dns_server_apexes | length == 0
+        or _ns is not match('^.+\.(' ~ (_iroh_dns_server_apexes | map('regex_escape') | join('|')) ~ ')$')
+    fail_msg: >-
+      iroh_dns_server_rr_ns must be "" or an absolute DNS name with its trailing dot,
+      either an origin's apex (the default, "{{ iroh_dns_server_hostname }}.") or a
+      name outside every origin: the server cannot answer a name below an origin
+      (it reads it as a node key). Got "{{ iroh_dns_server_rr_ns }}" with origins
+      {{ _iroh_dns_server_apexes | to_json }}.
+  vars:
+    _ns: "{{ iroh_dns_server_rr_ns | regex_replace('\\.$', '') | lower }}"
+
+# --- Listeners and addresses ----------------------------------------------------------
+# Parsed with Python's ipaddress on the control machine (no ansible.utils here),
+# as roles/iroh_relay does. Prints one JSON object: an error (or "ok") per input,
+# and the DNS bind address when it is a public IPv4 one (the rr_a default).
+- name: Parse the bind addresses and the apex records
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -I
+      - -c
+      - |
+        import ipaddress, json, sys
+        def bind(raw):
+            try:
+                a = ipaddress.ip_address(raw)
+            except ValueError:
+                return "not a bare IP address (no brackets, port or zone)", None
+            if a.is_unspecified and raw not in ("::", "0.0.0.0"):
+                return 'write the wildcard as "::" or "0.0.0.0"', None
+            if getattr(a, "ipv4_mapped", None) is not None:
+                return "an IPv4-mapped IPv6 address; use the IPv4 address itself", None
+            if a.is_loopback or a.is_link_local or a.is_multicast:
+                return "a loopback, link-local or multicast address serves no peer", None
+            # ss prints the canonical form, and the port guard compares against it.
+            if raw != str(a):
+                return 'write it in its canonical form, "%s"' % a, None
+            return "ok", a
+        def record(raw, version):
+            if raw == "":
+                return "ok"
+            try:
+                a = ipaddress.ip_address(raw)
+            except ValueError:
+                return "not a bare IP address"
+            if a.version != version:
+                return "not an IPv%d address" % version
+            if getattr(a, "ipv4_mapped", None) is not None:
+                return "an IPv4-mapped IPv6 address"
+            if a.is_unspecified or a.is_loopback or a.is_multicast or a.is_link_local:
+                return "an unspecified, loopback, multicast or link-local address"
+            return "ok"
+        https, _ = bind(sys.argv[1])
+        dns, d = bind(sys.argv[2])
+        public_v4 = str(d) if d is not None and d.version == 4 and d.is_global else ""
+        print(json.dumps({"https": https, "dns": dns, "dns_public_v4": public_v4,
+                          "rr_a": record(sys.argv[3], 4), "rr_aaaa": record(sys.argv[4], 6)}))
+      - "{{ iroh_dns_server_https_bind_address | string }}"
+      - "{{ iroh_dns_server_dns_bind_address | string }}"
+      - "{{ iroh_dns_server_rr_a | string }}"
+      - "{{ iroh_dns_server_rr_aaaa | string }}"
+  register: iroh_dns_server_addr_parse
+  changed_when: false
+  check_mode: false
+  delegate_to: localhost
+  become: false
+
+- name: Read the parsed addresses
+  ansible.builtin.set_fact:
+    _iroh_dns_server_addrs: "{{ iroh_dns_server_addr_parse.stdout | from_json }}"
+
+- name: Validate the https bind address
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_https_bind_address is string
+      - _iroh_dns_server_addrs.https == 'ok'
+    fail_msg: >-
+      iroh_dns_server_https_bind_address must be "::" (every address), "0.0.0.0" (an
+      IPv4-only host) or one of the host's own unicast addresses, as a bare IP with no
+      brackets or port (got "{{ iroh_dns_server_https_bind_address }}":
+      {{ _iroh_dns_server_addrs.https }}).
+
+- name: Validate the DNS bind address
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_dns_bind_address is string
+      - iroh_dns_server_dns_bind_address | length > 0
+      - _iroh_dns_server_addrs.dns == 'ok'
+    fail_msg: >-
+      iroh_dns_server_dns_bind_address must be one of the host's own unicast
+      addresses (the default is its default IPv4 address, which facts did not give
+      here), or "::" / "0.0.0.0" with nothing else on port 53, as a bare IP (got
+      "{{ iroh_dns_server_dns_bind_address }}": {{ _iroh_dns_server_addrs.dns
+      if iroh_dns_server_dns_bind_address | length > 0 else 'empty' }}).
+
+- name: Validate the apex address records
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_rr_a is string
+      - iroh_dns_server_rr_aaaa is string
+      - _iroh_dns_server_addrs.rr_a == 'ok'
+      - _iroh_dns_server_addrs.rr_aaaa == 'ok'
+    fail_msg: >-
+      iroh_dns_server_rr_a must be "" or an IPv4 address and iroh_dns_server_rr_aaaa
+      "" or an IPv6 address, the host's public addresses (got
+      "{{ iroh_dns_server_rr_a }}": {{ _iroh_dns_server_addrs.rr_a }};
+      "{{ iroh_dns_server_rr_aaaa }}": {{ _iroh_dns_server_addrs.rr_aaaa }}).
+
+- name: Resolve the apex A record
+  ansible.builtin.set_fact:
+    _iroh_dns_server_effective_rr_a: >-
+      {{ iroh_dns_server_rr_a if iroh_dns_server_rr_a | length > 0
+         else _iroh_dns_server_addrs.dns_public_v4 }}
+
+# With the NS name or the https name at an apex, resolvers ask this server for its
+# address: without one the delegation, or the https name (and so the certificate
+# and every node's PUT), does not resolve.
+- name: Require an address for the NS name and the hostname
+  ansible.builtin.assert:
+    that:
+      - _iroh_dns_server_effective_rr_a | length > 0 or iroh_dns_server_rr_aaaa | length > 0
+    fail_msg: >-
+      This server is authoritative for {{ _iroh_dns_server_apexes | join(', ') }}, which
+      includes the https name ("{{ iroh_dns_server_hostname }}") or the NS name
+      ("{{ iroh_dns_server_rr_ns }}"), so it must answer that name's address, and none
+      is set: the DNS bind address {{ iroh_dns_server_dns_bind_address }} is not a
+      public IPv4 address (a host behind NAT, or a wildcard bind). Set
+      iroh_dns_server_rr_a (and iroh_dns_server_rr_aaaa) to the host's public address,
+      the one the parent zone's glue names.
+  when: >-
+    iroh_dns_server_rr_ns | regex_replace('\.$', '') | lower in _iroh_dns_server_apexes
+    or iroh_dns_server_hostname | lower in _iroh_dns_server_apexes
+
+# AGENTS.md hard rule 2: the server itself is public, its metrics and health
+# listener are not. The ports must also stay clear of this repo's other listeners,
+# so a co-located node, sponsord or Alloy keeps its own.
+- name: Require the metrics and health listeners on loopback
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_metrics_bind is match('^127(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$')
+      - iroh_dns_server_metrics_port | string is match('^[0-9]+$')
+      - iroh_dns_server_metrics_port | int >= 1024
+      - iroh_dns_server_metrics_port | int <= 65535
+      - iroh_dns_server_metrics_port | int not in _iroh_dns_server_reserved_ports
+      - iroh_dns_server_health_port | string is match('^[0-9]+$')
+      - iroh_dns_server_health_port | int >= 1024
+      - iroh_dns_server_health_port | int <= 65535
+      - iroh_dns_server_health_port | int not in _iroh_dns_server_reserved_ports
+      - iroh_dns_server_health_port | int != iroh_dns_server_metrics_port | int
+    fail_msg: >-
+      iroh_dns_server_metrics_bind must be an IPv4 loopback address (got
+      "{{ iroh_dns_server_metrics_bind }}"), and iroh_dns_server_metrics_port and
+      iroh_dns_server_health_port two different TCP ports from 1024 to 65535 that are
+      none of {{ _iroh_dns_server_reserved_ports | join(', ') }} (the server's public
+      ports and this repo's other listeners; got "{{ iroh_dns_server_metrics_port }}"
+      and "{{ iroh_dns_server_health_port }}"). Metrics are never public (AGENTS.md
+      hard rule 2).
+  vars:
+    _iroh_dns_server_reserved_ports: >-
+      {{ (_iroh_dns_server_ports.values() | list)
+         + [decdn_metrics_port | default(9090), decdn_admin_port | default(9191),
+            sponsord_port | default(8090), sponsord_onramp_port | default(8080),
+            iroh_relay_metrics_port | default(9092),
+            grafana_alloy_otlp_grpc_port | default(4317),
+            grafana_alloy_otlp_http_port | default(4318),
+            (grafana_alloy_server_http_addr | default('127.0.0.1:12345')).split(':') | last]
+         | map('int') | list }}
+
+# --- Behaviour ------------------------------------------------------------------------
+- name: Validate the pkarr PUT rate limit
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_pkarr_put_rate_limit in ['simple', 'disabled']
+    fail_msg: >-
+      iroh_dns_server_pkarr_put_rate_limit must be "simple" (per client address) or
+      "disabled"; got "{{ iroh_dns_server_pkarr_put_rate_limit }}".{{
+      ' "smart" is meant to key the limit on X-Forwarded-For, which a client of a
+      server with no proxy in front could forge to escape it (in 1.3.0 it behaves as
+      "simple").'
+      if iroh_dns_server_pkarr_put_rate_limit == 'smart' else '' }}
+
+# A list set while the DHT is off is refused, not ignored, as roles/iroh_relay
+# refuses a list for an access mode that does not read it.
+- name: Validate the mainline DHT bootstrap nodes
+  ansible.builtin.assert:
+    that:
+      - _nodes is sequence
+      - _nodes is not string
+      - _nodes is not mapping
+      - _nodes | reject('string') | list | length == 0
+      - _nodes | reject('match', '^[A-Za-z0-9.-]+:[1-9][0-9]{0,4}$') | list | length == 0
+      - iroh_dns_server_mainline_enabled or _nodes | length == 0
+    fail_msg: >-
+      iroh_dns_server_mainline_bootstrap must be a list of "host:port" strings
+      (a DNS name or an IPv4 address), set only with iroh_dns_server_mainline_enabled;
+      got {{ _nodes | to_json }} with mainline
+      {{ 'on' if iroh_dns_server_mainline_enabled else 'off' }}.
+  vars:
+    _nodes: "{{ iroh_dns_server_mainline_bootstrap }}"
+
+- name: Validate the open-files limit
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_limit_nofile | string is match('^[1-9][0-9]*$')
+      - iroh_dns_server_limit_nofile | int >= 1024
+    fail_msg: >-
+      iroh_dns_server_limit_nofile must be an integer of at least 1024; got
+      "{{ iroh_dns_server_limit_nofile }}".
+
+# RUST_LOG goes into the unit as Environment="RUST_LOG=...", where a quote, a
+# backslash or a % (a systemd specifier) would change the line.
+- name: Validate iroh_dns_server_log_level
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_log_level is string
+      - iroh_dns_server_log_level | length > 0
+      - iroh_dns_server_log_level is match('^[A-Za-z0-9_:=,.\[\]{}-]+$')
+    fail_msg: >-
+      iroh_dns_server_log_level must be a RUST_LOG filter: a level (info) or
+      comma-separated target=level directives (info,iroh_dns_server=debug), with no
+      spaces, quotes, backslashes or %; got "{{ iroh_dns_server_log_level }}".
+
+- name: Validate the readiness and certificate-check knobs
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_certificate_check in ['warn', 'fail', 'skip']
+      - iroh_dns_server_readiness_retries | string is match('^[1-9][0-9]*$')
+      - iroh_dns_server_readiness_delay | string is match('^[1-9][0-9]*$')
+      - iroh_dns_server_readiness_settle | string is match('^[0-9]+$')
+      - iroh_dns_server_certificate_retries | string is match('^[1-9][0-9]*$')
+      - iroh_dns_server_certificate_delay | string is match('^[1-9][0-9]*$')
+    fail_msg: >-
+      iroh_dns_server_certificate_check must be "warn", "fail" or "skip", and the
+      readiness and certificate retries and delays positive integers
+      (iroh_dns_server_readiness_settle a number of seconds, 0 allowed).
+
+# --- Ports (before any change) ------------------------------------------------------
+# Whether the server was running before this run touches it, for the
+# restart-inputs decision below. The port guard does not use it (#113).
+- name: Read whether iroh-dns-server is already running
+  ansible.builtin.systemd_service:
+    name: iroh-dns-server
+  register: iroh_dns_server_pre_state
+
+- name: Refuse ports another process holds
+  ansible.builtin.import_tasks: ports.yml
+
+# "::" serves IPv4 too only while the kernel maps it (net.ipv6.bindv6only=0, the
+# default). With 1, every listener would still belong to the unit, so the gate
+# would pass a server no IPv4 client can reach.
+- name: Read the kernel's IPv6-only bind default
+  ansible.builtin.slurp:
+    src: /proc/sys/net/ipv6/bindv6only
+  register: iroh_dns_server_bindv6only
+  failed_when: false
+  when: "'::' in [iroh_dns_server_https_bind_address, iroh_dns_server_dns_bind_address]"
+
+- name: Refuse "::" on a host that binds IPv6 only
+  ansible.builtin.assert:
+    that:
+      - (iroh_dns_server_bindv6only.content | default('MA==') | b64decode | trim) != '1'
+    fail_msg: >-
+      iroh_dns_server_https_bind_address or iroh_dns_server_dns_bind_address is "::",
+      but net.ipv6.bindv6only is 1 on this host, so the server would serve no IPv4
+      client. Bind "0.0.0.0" or the host's address instead, or set
+      net.ipv6.bindv6only=0.
+  when: "'::' in [iroh_dns_server_https_bind_address, iroh_dns_server_dns_bind_address]"
+
+# --- Install, configure, start ------------------------------------------------------
+# dig, for the readiness gate's DNS answer; curl, for the certificate check.
+- name: Install the gate's tools
+  ansible.builtin.package:
+    name: "{{ ['bind9-dnsutils'] + (['curl'] if iroh_dns_server_certificate_check != 'skip' else []) }}"
+    state: present
+
+- name: Install the iroh-dns-server binary
+  ansible.builtin.import_tasks: install.yml
+
+- name: Create the iroh-dns-server config directory
+  ansible.builtin.file:
+    path: "{{ iroh_dns_server_etc }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Template the iroh-dns-server config
+  ansible.builtin.template:
+    src: config.toml.j2
+    dest: "{{ iroh_dns_server_config_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart iroh-dns-server
+
+- name: Install the iroh-dns-server systemd unit
+  ansible.builtin.template:
+    src: iroh-dns-server.service.j2
+    dest: "{{ _iroh_dns_server_unit }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart iroh-dns-server
+
+# --- Restart inputs -----------------------------------------------------------------
+# As roles/iroh_relay: hashes of everything the server starts from, recorded once
+# it is up, so a restart lost to a failed run (the handler never fired) is caught
+# on the next converge.
+- name: Hash the restart inputs
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: iroh_dns_server_inputs_stat
+  loop:
+    - "{{ iroh_dns_server_config_file }}"
+    - "{{ _iroh_dns_server_unit }}"
+    - "{{ iroh_dns_server_bin }}"
+
+- name: Read the restart-input checksums this role last recorded
+  ansible.builtin.slurp:
+    src: "{{ iroh_dns_server_inputs_checksum_file }}"
+  register: iroh_dns_server_inputs_recorded
+  failed_when: >-
+    iroh_dns_server_inputs_recorded.failed
+    and 'not found' not in (iroh_dns_server_inputs_recorded.msg | default(''))
+  changed_when: false
+
+- name: Summarise the restart-input checksums
+  ansible.builtin.set_fact:
+    iroh_dns_server_inputs_sums: >-
+      {{ iroh_dns_server_inputs_stat.results | map(attribute='stat') | map('default', {}, true)
+         | map(attribute='checksum', default='') | join(' ') }}
+    iroh_dns_server_inputs_recorded_sums: >-
+      {{ iroh_dns_server_inputs_recorded.content | default('') | b64decode | trim }}
+
+- name: Note restart inputs that changed since the server last started
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'The config, the unit or the binary differs from what iroh-dns-server was last
+      confirmed up on' if iroh_dns_server_inputs_recorded_sums | length > 0
+      else 'iroh-dns-server is running but was never confirmed up on its current inputs' }}
+      — restarting iroh-dns-server.
+  changed_when: true
+  notify: Restart iroh-dns-server
+  when: >-
+    (iroh_dns_server_inputs_recorded_sums | length > 0
+     and iroh_dns_server_inputs_sums != iroh_dns_server_inputs_recorded_sums)
+    or (iroh_dns_server_inputs_recorded_sums | length == 0
+        and iroh_dns_server_pre_state.status.ActiveState | default('') == 'active')
+
+- name: Apply pending iroh-dns-server changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start iroh-dns-server
+  ansible.builtin.systemd:
+    name: iroh-dns-server
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# --- Readiness (fatal) ------------------------------------------------------------
+# The server parses its config, opens its store, then binds metrics, http, https
+# and DNS, in that order, all before it has a certificate; a bad config or a lost
+# port makes it exit. So the gate is: /healthz answers on the loopback http
+# listener with the pinned version, metrics answer, every listener belongs to the
+# unit, the DNS listener answers each origin's SOA over udp and tcp, and the unit
+# did not restart in between. ACME runs afterwards (see the certificate check).
+# KICS flags plain HTTP here; the targets are the loopback listeners asserted above.
+- name: Wait for iroh-dns-server /healthz
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ iroh_dns_server_health_port }}/healthz"
+    status_code: 200
+    return_content: true
+    timeout: 5
+  register: iroh_dns_server_health
+  retries: "{{ iroh_dns_server_readiness_retries }}"
+  delay: "{{ iroh_dns_server_readiness_delay }}"
+  until: iroh_dns_server_health.status | default(-1) != -1
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Fetch iroh-dns-server metrics
+  ansible.builtin.uri:
+    url: "http://{{ iroh_dns_server_metrics_bind }}:{{ iroh_dns_server_metrics_port }}/metrics"
+    status_code: 200
+    return_content: true
+    timeout: 5
+  register: iroh_dns_server_metrics
+  retries: "{{ iroh_dns_server_readiness_retries }}"
+  delay: "{{ iroh_dns_server_readiness_delay }}"
+  until: iroh_dns_server_metrics.status | default(-1) != -1
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Read the iroh-dns-server unit state
+  ansible.builtin.systemd_service:
+    name: iroh-dns-server
+  register: iroh_dns_server_unit_before
+  when: not ansible_check_mode
+
+# Retried: the server binds its listeners one after another. Prints the listeners
+# for the report, and the ones the unit's MainPID does not hold.
+- name: Wait for every listener to belong to the iroh-dns-server unit
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -u
+      pid={{ iroh_dns_server_unit_before.status.MainPID | default('0') | int }}
+      missing=""
+      check() {
+        if [ "$1" = tcp ]; then flags=-Hltnp; else flags=-Hlunp; fi
+        out=$(ss "$flags" "sport = :$2")
+        printf '%s\n' "$out"
+        grep -qF "pid=$pid," <<<"$out" || missing="$missing $1/$2"
+      }
+      check tcp {{ _iroh_dns_server_ports.https }}
+      check tcp {{ _iroh_dns_server_ports.dns }}
+      check udp {{ _iroh_dns_server_ports.dns }}
+      check tcp {{ iroh_dns_server_health_port }}
+      check tcp {{ iroh_dns_server_metrics_port }}
+      echo "not held by pid $pid:${missing:- none}"
+      [ "$pid" != 0 ] && [ -z "$missing" ]
+  register: iroh_dns_server_listeners
+  changed_when: false
+  failed_when: false
+  retries: "{{ iroh_dns_server_readiness_retries }}"
+  delay: "{{ iroh_dns_server_readiness_delay }}"
+  until: iroh_dns_server_listeners.rc == 0
+  when: not ansible_check_mode
+
+# Every origin's SOA, over udp and tcp, from the address resolvers will ask
+# (loopback for a wildcard bind). The answer's first field is the SOA's mname.
+# The root is skipped: an SOA query for "." returns the first origin's SOA.
+- name: Wait for the DNS listener to answer each origin's SOA
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -u
+      want={{ _mname | quote }}
+      rc=0
+      for origin in {{ _iroh_dns_server_effective_origins | reject('equalto', '.') | map('quote') | join(' ') }}; do
+        for transport in +notcp +tcp; do
+          got=$(dig +norecurse +time=2 +tries=1 +short "$transport" SOA "$origin" @{{ _probe_addr | quote }} \
+                  -p {{ _iroh_dns_server_ports.dns }} 2>&1)
+          echo "$origin ${transport#+}: ${got:-no answer}"
+          [ "$(awk 'NR==1 {print tolower($1)}' <<<"$got")" = "$want" ] || rc=1
+        done
+      done
+      exit $rc
+  vars:
+    _mname: "{{ iroh_dns_server_default_soa.split() | first | lower | regex_replace('^(.*?)\\.?$', '\\1.') }}"
+    _probe_addr: >-
+      {{ '127.0.0.1' if iroh_dns_server_dns_bind_address in ['::', '0.0.0.0']
+         else iroh_dns_server_dns_bind_address }}
+  register: iroh_dns_server_soa
+  changed_when: false
+  failed_when: false
+  retries: "{{ iroh_dns_server_readiness_retries }}"
+  delay: "{{ iroh_dns_server_readiness_delay }}"
+  until: iroh_dns_server_soa.rc == 0
+  when: not ansible_check_mode
+
+- name: Let iroh-dns-server run before the final check
+  ansible.builtin.wait_for:
+    timeout: "{{ iroh_dns_server_readiness_settle | int }}"
+  when:
+    - not ansible_check_mode
+    - iroh_dns_server_readiness_settle | int > 0
+
+- name: Read the iroh-dns-server unit state again
+  ansible.builtin.systemd_service:
+    name: iroh-dns-server
+  register: iroh_dns_server_unit_after
+  when: not ansible_check_mode
+
+- name: Read the version /healthz reports
+  ansible.builtin.set_fact:
+    iroh_dns_server_healthz: >-
+      {{ iroh_dns_server_health.json
+         if iroh_dns_server_health.json is defined and iroh_dns_server_health.json is mapping
+         else {} }}
+  when: not ansible_check_mode
+
+- name: Require iroh-dns-server to be up on all its listeners
+  ansible.builtin.assert:
+    that:
+      - iroh_dns_server_unit_after.status.ActiveState == 'active'
+      - iroh_dns_server_unit_after.status.SubState == 'running'
+      - iroh_dns_server_unit_after.status.MainPID == iroh_dns_server_unit_before.status.MainPID
+      - >-
+        iroh_dns_server_unit_after.status.NRestarts | default('0')
+        == iroh_dns_server_unit_before.status.NRestarts | default('0')
+      - iroh_dns_server_health.status | default(-1) == 200
+      - iroh_dns_server_healthz.status | default('') == 'ok'
+      - >-
+        iroh_dns_server_install_method != 'release'
+        or iroh_dns_server_healthz.version | default('') == iroh_dns_server_version
+      - iroh_dns_server_metrics.status | default(-1) == 200
+      - _iroh_dns_server_gate_metric in (iroh_dns_server_metrics.content | default(''))
+      - iroh_dns_server_listeners.rc == 0
+      - iroh_dns_server_soa.rc == 0
+    fail_msg: |-
+      iroh-dns-server is not up: state
+      {{ iroh_dns_server_unit_after.status.ActiveState }}/{{ iroh_dns_server_unit_after.status.SubState }},
+      MainPID {{ iroh_dns_server_unit_before.status.MainPID }} -> {{ iroh_dns_server_unit_after.status.MainPID }},
+      restarts {{ iroh_dns_server_unit_before.status.NRestarts | default('?') }} ->
+      {{ iroh_dns_server_unit_after.status.NRestarts | default('?') }},
+      /healthz status {{ iroh_dns_server_health.status | default('none') }}
+      ({{ iroh_dns_server_healthz | to_json }}{{ (', expected version "' ~ iroh_dns_server_version ~ '"')
+      if iroh_dns_server_install_method == 'release' else '' }}),
+      metrics status {{ iroh_dns_server_metrics.status | default('none') }}. Listeners:
+        {{ iroh_dns_server_listeners.stdout | default('none', true) | indent(2) }}
+      SOA answers:
+        {{ iroh_dns_server_soa.stdout | default('none', true) | indent(2) }}
+      It exits at start on a config it cannot parse or a port it cannot bind (the
+      DNS bind address must be one of this host's). Read the reason on the host:
+        sudo journalctl -u iroh-dns-server -e
+  when: not ansible_check_mode
+
+- name: Record the restart-input checksums
+  ansible.builtin.copy:
+    dest: "{{ iroh_dns_server_inputs_checksum_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ iroh_dns_server_inputs_sums }}\n"
+  when: not ansible_check_mode
+
+# Written only once the gate saw the pinned version on /healthz (the binary has no
+# --version), so a tarball that installed a wrong or broken binary is fetched again
+# next run instead of being trusted via the stamp.
+- name: Record what was installed
+  when:
+    - iroh_dns_server_install_method == "release"
+    - iroh_dns_server_need_install | default(false)
+    - not ansible_check_mode
+  block:
+    - name: Ensure the stamp directory exists
+      ansible.builtin.file:
+        path: "{{ _iroh_dns_server_stamp | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Hash the binary just installed
+      ansible.builtin.stat:
+        path: "{{ iroh_dns_server_bin }}"
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: iroh_dns_server_bin_post
+
+    - name: Record the installed version, target, pin and binary checksum
+      ansible.builtin.copy:
+        dest: "{{ _iroh_dns_server_stamp }}"
+        content: "{{ iroh_dns_server_stamp_prefix }} {{ iroh_dns_server_bin_post.stat.checksum }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+
+# --- Certificate ----------------------------------------------------------------------
+# Not part of the gate: a fresh server has no certificate until Let's Encrypt has
+# reached it from the internet, which this host cannot force. Curl with the real
+# name, pinned to the address the server listens on (loopback for a wildcard
+# bind), against the system trust store, so the answer is the server's own
+# certificate, as nodes will see it.
+- name: Fetch /healthz over https with the server's certificate
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --fail
+      - --silent
+      - --show-error
+      - --max-time
+      - "5"
+      - --resolve
+      - "{{ iroh_dns_server_hostname }}:{{ _iroh_dns_server_ports.https }}:{{ _probe_addr }}"
+      - "https://{{ iroh_dns_server_hostname }}/healthz"
+  vars:
+    _probe_addr: >-
+      {{ '127.0.0.1' if iroh_dns_server_https_bind_address in ['::', '0.0.0.0']
+         else ('[' ~ iroh_dns_server_https_bind_address ~ ']') if ':' in iroh_dns_server_https_bind_address
+         else iroh_dns_server_https_bind_address }}
+  register: iroh_dns_server_cert_probe
+  changed_when: false
+  failed_when: false
+  retries: "{{ iroh_dns_server_certificate_retries }}"
+  delay: "{{ iroh_dns_server_certificate_delay }}"
+  until: iroh_dns_server_cert_probe.rc == 0
+  when:
+    - not ansible_check_mode
+    - iroh_dns_server_certificate_check != 'skip'
+
+# Let's Encrypt's production certificate, once issued, is cached in the state
+# directory under a name derived from the hostname and the ACME directory (see
+# vars/main.yml). Only before that is a failed probe expected; afterwards it is a
+# regression (expired, or no longer reachable), and "warn" fails too. A staging
+# certificate is never trusted, so staging never escalates, and its cache file
+# (another ACME directory URL, so another file name) does not count.
+- name: Name the production certificate's cache file
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -I
+      - -c
+      - |
+        import base64, hashlib, sys
+        digest = hashlib.sha256(sys.argv[1].encode() + b"\0" + sys.argv[2].encode()).digest()
+        print("cached_cert_" + base64.urlsafe_b64encode(digest).decode().rstrip("="))
+      - "{{ iroh_dns_server_hostname }}"
+      - "{{ _iroh_dns_server_acme_production_directory }}"
+  register: iroh_dns_server_cert_cache_name
+  changed_when: false
+  check_mode: false
+  delegate_to: localhost
+  become: false
+  when:
+    - not ansible_check_mode
+    - iroh_dns_server_certificate_check == 'warn'
+    - iroh_dns_server_cert_probe.rc != 0
+    - not iroh_dns_server_acme_staging
+
+- name: Look for a production certificate Let's Encrypt already issued
+  ansible.builtin.stat:
+    path: "{{ _iroh_dns_server_cert_dir }}/{{ iroh_dns_server_cert_cache_name.stdout | trim }}"
+    get_checksum: false
+  register: iroh_dns_server_cached_cert
+  when: iroh_dns_server_cert_cache_name.stdout is defined
+
+# changed, not ok: it then shows in the play recap, not only in the task output.
+- name: Report a DNS server still waiting for its first certificate
+  ansible.builtin.debug:
+    msg: &iroh_dns_server_cert_msg |-
+      {{ 'FAILED' if _iroh_dns_server_cert_fatal | default(true) else 'WARNING' }}: iroh-dns-server is up,
+      but https://{{ iroh_dns_server_hostname }}/healthz did not answer with a trusted certificate
+      within ~{{ (iroh_dns_server_certificate_retries | int) * (iroh_dns_server_certificate_delay | int) }}s
+      (curl: {{ iroh_dns_server_cert_probe.stderr | default('') | trim }}). Nodes cannot publish
+      their records until it has one.{{ " Let's Encrypt has issued a certificate for it before, so
+      this is a regression, not a first issuance still pending."
+      if (iroh_dns_server_cached_cert.stat.exists | default(false)) else "" }} Let's Encrypt must
+      reach this host on tcp/443:
+        - the parent zone delegates {{ iroh_dns_server_hostname }} to this server (NS + glue),
+          and dig A {{ iroh_dns_server_hostname }} answers this host's public address;
+        - tcp/443 is open from the internet (the provider's firewall too);
+        - Let's Encrypt's rate limits have not been hit;
+        - iroh_dns_server_acme_staging is {{ iroh_dns_server_acme_staging }} (staging certificates are never trusted).
+      The ACME log on the host: sudo journalctl -u iroh-dns-server | grep -i acme
+  vars:
+    _iroh_dns_server_cert_fatal: false
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - iroh_dns_server_certificate_check == 'warn'
+    - iroh_dns_server_cert_probe.rc != 0
+    - not (iroh_dns_server_cached_cert.stat.exists | default(false))
+
+- name: Fail on a DNS server without a trusted certificate
+  ansible.builtin.fail:
+    msg: *iroh_dns_server_cert_msg
+  vars:
+    _iroh_dns_server_cert_fatal: true
+  when:
+    - not ansible_check_mode
+    - iroh_dns_server_certificate_check != 'skip'
+    - iroh_dns_server_cert_probe.rc != 0
+    - >-
+      iroh_dns_server_certificate_check == 'fail'
+      or (iroh_dns_server_cached_cert.stat.exists | default(false))
+
+- name: Require the https name to be served by this server
+  ansible.builtin.assert:
+    that:
+      - _healthz.status | default('') == 'ok'
+      - >-
+        iroh_dns_server_install_method != 'release'
+        or _healthz.version | default('') == iroh_dns_server_version
+    fail_msg: >-
+      https://{{ iroh_dns_server_hostname }}/healthz on this host answered
+      {{ iroh_dns_server_cert_probe.stdout }}, expected status "ok"{{
+      (' and version "' ~ iroh_dns_server_version ~ '"') if iroh_dns_server_install_method == 'release' else '' }}.
+      Something other than this role's iroh-dns-server serves the name.
+  vars:
+    _healthz: >-
+      {{ (iroh_dns_server_cert_probe.stdout | from_json)
+         if (iroh_dns_server_cert_probe.stdout | trim).startswith('{') else {} }}
+  when:
+    - not ansible_check_mode
+    - iroh_dns_server_certificate_check != 'skip'
+    - iroh_dns_server_cert_probe.rc == 0

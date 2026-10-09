@@ -25,3 +25,8 @@
 # iroh relays on hosts in iroh_relay_hosts (none unless the inventory defines the group).
 - name: Provision iroh relays
   ansible.builtin.import_playbook: iroh_relay.yml
+
+# iroh DNS servers on hosts in iroh_dns_server_hosts (none unless the inventory
+# defines the group).
+- name: Provision iroh DNS servers
+  ansible.builtin.import_playbook: iroh_dns_server.yml

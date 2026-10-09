@@ -146,6 +146,7 @@ decdn_relay_urls: []
 # dns_origin alone is legal — a resolve-only node that does not publish. Static
 # peers are an independent, combinable mechanism: a map of 64-char lowercase-hex
 # NodeId => {relay_url, addrs}. Setting either mechanism drops the n0 leg.
+# roles/iroh_dns_server deploys the server: https://<hostname>/pkarr and <hostname>.
 decdn_discovery_pkarr_url: ""
 decdn_discovery_dns_origin: ""
 decdn_discovery_peers: {}

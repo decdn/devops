@@ -81,3 +81,17 @@ decdn_nodes:
 #     relay-1:
 #       ansible_host: REPLACE_WITH_RELAY_VPS_IP_OR_DNS
 #       iroh_relay_hostname: relay1.example.org
+#
+# OPTIONAL: a self-hosted iroh DNS server, the pkarr relay nodes publish their
+# address records to and the DNS server peers resolve them through (in place of
+# n0's dns.iroh.link) — provisioned by playbooks/iroh_dns_server.yml (`make
+# deploy-dns`) and by site.yml. Public by design: it terminates its own Let's
+# Encrypt TLS on tcp/443 and answers DNS on udp+tcp/53, so it cannot share a host
+# with an iroh relay or sponsord-onramp. The parent zone must delegate its hostname
+# to it (NS + glue). Its knobs are in group_vars/iroh_dns_server_hosts.yml
+# (roles/iroh_dns_server/README.md).
+# iroh_dns_server_hosts:
+#   hosts:
+#     dns-1:
+#       ansible_host: REPLACE_WITH_DNS_VPS_IP_OR_DNS
+#       iroh_dns_server_hostname: dns.example.org
