@@ -14,8 +14,8 @@
 #      sponsord_hosts, and in sponsord_hosts whenever it is in sponsord_onramp_hosts.
 #      Without that membership the plays match no host and exit 0, and the firewall
 #      holes in playbooks/group_vars/ never load. Then check that, under
-#      `--tags baseline`, each of those groups' plays still selects the baseline role
-#      (baseline-plays.awk), since phase 1 relies on it.
+#      `--tags baseline`, each decdn_nodes and sponsord_hosts play the host is in still
+#      selects the baseline role (baseline-plays.sh), since phase 1 relies on it.
 #   3. Pick the phase. Each of the host's groups needs its secrets on the host (SECRETS
 #      below):
 #      - any missing: run `baseline` only (SSH, firewall, patching, the admin account),
@@ -150,17 +150,16 @@ done
   || die "$INVENTORY puts localhost in sponsord_onramp_hosts but not in sponsord_hosts (the onramp runs beside the daemon)"
 echo "decdn-bootstrap: localhost is in ${groups_in[*]}"
 
-# Phase 1 below relies on every play for the host's groups tagging the baseline role
-# `baseline`. If a play lost the role or its tag, --tags baseline would skip it and
-# exit 0, and the host would be reported hardened without being so. The check is per
-# play: --list-tasks lists every play, hostless ones too, so another group's play
-# would satisfy a check over the whole output.
+# Phase 1 below relies on every decdn_nodes and sponsord_hosts play the host is in
+# tagging the baseline role `baseline`. If one lost the role or its tag,
+# --tags baseline would skip it and exit 0, and the host would be reported hardened
+# without being so. The check is per play: --list-tasks lists every play, hostless
+# ones too, so another group's play would satisfy a check over the whole output.
 base_groups=()
 for g in decdn_nodes sponsord_hosts; do
   [[ -z ${member[$g]:-} ]] || base_groups+=("$g")
 done
-plays=$(ansible-playbook -i "$INVENTORY" playbooks/site.yml --tags baseline --list-hosts --list-tasks)
-awk -v groups="${base_groups[*]}" -f "$repo/cloud-init/baseline-plays.awk" <<<"$plays" \
+"$repo/cloud-init/baseline-plays.sh" "$INVENTORY" "${base_groups[@]}" \
   || die "--tags baseline would not harden this host (see above; was the baseline role or its tag removed from a play?)"
 
 # --- 3. Converge ----------------------------------------------------------------

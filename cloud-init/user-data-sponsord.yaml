@@ -99,9 +99,10 @@ write_files:
           sponsord_onramp_turnstile_sitekey: "CHANGE_ME"   # MUST-EDIT: the widget's public sitekey
           # The releases the installers install default to the role's pins at DEVOPS_REF
           # (sponsord_onramp_decdn_release / _cli_release, each with the SHA-256 of that
-          # release's SHA256SUMS). Only decdn-sponsored's tag and digest are printed in
-          # a release's notes (decdn/sponsord, under "Onramp pin"); for decdn, take the
-          # SHA-256 of its release's SHA256SUMS file. Override all four together, e.g.:
+          # release's SHA256SUMS). decdn/sponsord's release notes print the CLI pin
+          # (its vX.Y.Z tag and digest, under "Onramp pin"); decdn/decdn's do not, so
+          # take `sha256sum SHA256SUMS` once its SHA256SUMS.asc verifies. Override all
+          # four together, e.g.:
           # sponsord_onramp_decdn_release: "v0.0.1"
           # sponsord_onramp_decdn_sums_sha256: "<64 lowercase hex>"
           # sponsord_onramp_cli_release: "v0.0.2"

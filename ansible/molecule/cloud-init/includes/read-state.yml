@@ -1,29 +1,32 @@
 ---
 # Read the bootstrap's state and its list of missing secrets, into `bootstrap_state` and
-# `awaiting` (slurp results), after checking both exist and are 0644. The login hint
-# reads them as the admin account, and these tests read them as root, which would
-# hide a file the admin cannot read. A gate that stopped writing the list then fails
-# here, with this message, instead of at the slurp with "file not found".
+# `awaiting` (slurp results), after checking both exist and that an unprivileged
+# account can read them. The login hint reads them as the admin account, and these
+# tests read them as root, which would hide a file (or a directory) the admin cannot
+# read. A gate that stopped writing the list then fails here, with this message,
+# instead of at the slurp with "file not found".
 - name: Stat the bootstrap's state and list of missing secrets
   ansible.builtin.stat:
     path: "/var/lib/decdn-bootstrap/{{ item }}"
   register: state_files
   loop: [state, awaiting]
 
-- name: Assert both exist, root-owned 0644 (the login hint reads them as the admin)
+- name: Assert both exist
   ansible.builtin.assert:
     that:
       - item.stat.exists
-      - item.stat.mode == '0644'
-      - item.stat.pw_name == 'root'
-    fail_msg: >-
-      /var/lib/decdn-bootstrap/{{ item.item }}:
-      {{ ('mode ' ~ item.stat.mode ~ ', owner ' ~ item.stat.pw_name) if item.stat.exists else 'missing' }}
-      (want root 0644)
+    fail_msg: /var/lib/decdn-bootstrap/{{ item.item }} is missing
     quiet: true
   loop: "{{ state_files.results }}"
   loop_control:
     label: "{{ item.item }}"
+
+- name: Read both as an unprivileged account, as the login hint does
+  ansible.builtin.command:
+    cmd: runuser -u nobody -- cat /var/lib/decdn-bootstrap/state /var/lib/decdn-bootstrap/awaiting
+  register: state_unprivileged
+  changed_when: false
+  failed_when: state_unprivileged.rc != 0
 
 - name: Read the bootstrap state
   ansible.builtin.slurp:

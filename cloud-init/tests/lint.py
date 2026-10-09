@@ -6,6 +6,9 @@ user-data.yaml, the node, and user-data-sponsord.yaml, the sponsor host)
 
 `cloud-init schema` checks the file's shape, including the `#cloud-config` header. This
 script checks what the schema cannot:
+  * only the templates' top-level modules (package_update, packages, write_files,
+    runcmd, final_message), and no YAML anchors or aliases in the file or its
+    inventory, so what this reads is what cloud-init and Ansible read;
   * no secret anywhere:
     - write_files writes only the bootstrap's own four files, once each, as plain
       `content` (no encoding, append, source or defer);
@@ -21,9 +24,9 @@ script checks what the schema cannot:
     group's vars would override them. Nor may a user-data move the signing keys or the
     secret files bootstrap.sh's gate looks for;
   * the inventory holds only localhost, in decdn_nodes and/or sponsord_hosts (and
-    sponsord_onramp_hosts only beside sponsord_hosts), with a local connection in every
-    group that sets one, and names a keyed admin account (baseline's lockout guard). A
-    malformed shape is a violation, not a traceback;
+    sponsord_onramp_hosts only beside sponsord_hosts), with `ansible_connection: local`
+    set at least once and nothing else anywhere, and names a keyed admin account
+    (baseline's lockout guard). A malformed shape is a violation, not a traceback;
   * stage 1 and the login hint pass shellcheck, and runcmd runs exactly stage 1;
   * cloud-init/collections.lock.yml pins every collection in ansible/requirements.yml,
     at a version inside its range.
@@ -53,6 +56,10 @@ FILE_PATHS = {ENV_PATH, INVENTORY_PATH, STAGE1_PATH, HINT_PATH}
 # earlier entry or a file already there), source (fetched from a URL) and defer.
 FILE_KEYS = {"path", "owner", "permissions", "content"}
 ENV_KEYS = {"DEVOPS_REPO", "DEVOPS_REF"}
+# The only top-level cloud-config keys a user-data may use: the templates' own. Every
+# other module runs commands or writes files (bootcmd, apt, salt_minion, ...) outside
+# what this checks, or carries free-form YAML a check could be hidden in.
+TOP_LEVEL_KEYS = {"package_update", "packages", "write_files", "runcmd", "final_message"}
 # The molecule scenarios' switch for skipping baseline in a container (bootstrap.sh).
 # A user-data that creates it, by write_files or a command, ships an unhardened host.
 TEST_ONLY_MARKER = "TEST-ONLY-skip-baseline"
@@ -134,7 +141,25 @@ def load_yaml(text):
                        capture_output=True, check=False)
     if r.returncode != 0:
         raise ParseError(r.stderr.strip())
-    return json.loads(r.stdout) if r.stdout.strip() else None
+    try:
+        return json.loads(r.stdout) if r.stdout.strip() else None
+    except json.JSONDecodeError:
+        # yq prints one JSON value per YAML document.
+        raise ParseError("more than one YAML document") from None
+
+
+def yaml_aliases(text):
+    """How many anchors and aliases a YAML text holds. yq resolves a merge key (`<<: *x`)
+    so that the alias beats a key written before it, where cloud-init's PyYAML and
+    Ansible let the written key win: the same file would read one way here and
+    another on the host. So none are allowed."""
+    r = subprocess.run(["yq", "-p=yaml", '[.. | select(anchor != "" or kind == "alias")] | length'],
+                       input=text, text=True, capture_output=True, check=False)
+    if r.returncode != 0:
+        print(f"lint.py: yq cannot list YAML anchors (needs mikefarah yq v4.38 or later): {r.stderr.strip()}",
+              file=sys.stderr)
+        sys.exit(2)
+    return int(r.stdout.strip() or 0)
 
 
 def violation(msg):
@@ -357,6 +382,11 @@ def main():
     if not isinstance(doc, dict):
         print(f"lint.py: {path} is not a YAML mapping", file=sys.stderr)
         sys.exit(2)
+    for k in sorted(set(doc) - TOP_LEVEL_KEYS, key=str):
+        violation(f"{k}: only the top-level keys {', '.join(sorted(TOP_LEVEL_KEYS))} are allowed; "
+                  "other modules run commands or write files that this does not check")
+    if yaml_aliases(raw):
+        violation("the user-data uses YAML anchors or aliases; yq and cloud-init can resolve them differently")
 
     entries = doc.get("write_files") or []
     if not isinstance(entries, list):
@@ -398,6 +428,8 @@ def main():
     except ParseError as e:
         print(f"lint.py: the embedded {INVENTORY_PATH} does not parse: {e}", file=sys.stderr)
         sys.exit(2)
+    if yaml_aliases(files.get(INVENTORY_PATH, {}).get("content", "")):
+        violation("inventory: uses YAML anchors or aliases; yq and Ansible can resolve them differently")
     for where, tree in (("user-data", doc), ("inventory", inventory)):
         for p, k in walk_keys(tree):
             if SECRET_KEY.search(k) and k not in SECRET_KEY_ALLOW:

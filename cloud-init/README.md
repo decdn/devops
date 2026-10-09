@@ -63,8 +63,8 @@ The bootstrap then waits for both sets of secrets.
    It then syntax-checks the playbook. It also checks that the inventory puts localhost
    in `decdn_nodes` or `sponsord_hosts` (and in `sponsord_hosts` whenever it is in
    `sponsord_onramp_hosts`). Last, it checks that `--tags baseline` still selects the
-   baseline role in the play of each of those groups that localhost is in
-   ([`baseline-plays.awk`](baseline-plays.awk)). Another group's play does not count,
+   baseline role in every `decdn_nodes` and `sponsord_hosts` play that localhost is in
+   ([`baseline-plays.sh`](baseline-plays.sh)). Another group's play does not count,
    so a play that lost the role or its tag stops the run before it reports a host
    hardened that is not.
 4. Each of the host's groups needs its secrets on the host: `decdn.env` for the node,
@@ -255,8 +255,9 @@ Day 2 is in the role READMEs. Rotate a secret by replacing its file and running
   an inventory on your workstation with the same groups and variables and use
   `make backup`, `make decommission` and the rest
   ([`docs/lifecycle.md`](../docs/lifecycle.md)). Both cover a sponsor host too: its
-  backup carries the treasury keystore and password and the API token, and
-  decommission keeps `/etc/sponsord` and never touches the pool on chain. From then on,
+  backup carries the treasury keystore and password, the API token and the Turnstile
+  secret, and decommission keeps `/etc/sponsord` and never touches the pool on chain.
+  From then on,
   manage it from one place: either `decdn-bootstrap` on the host or `make deploy` from
   the workstation, never both.
 
@@ -268,9 +269,14 @@ Day 2 is in the role READMEs. Rotate a secret by replacing its file and running
   the onramp's public RPC URL and Turnstile sitekey. The secrets are written over SSH,
   and the node's wallet and sponsord's API token are generated on the host.
   `make lint-cloud-init` checks both templates and fails on:
-  - any file written besides the bootstrap's own four, a path written twice, and any
-    `write_files` key besides `path`, `owner`, `permissions` and `content` (so no
-    encoded, appended, fetched or deferred content);
+  - any top-level module besides the templates' own (`package_update`, `packages`,
+    `write_files`, `runcmd`, `final_message`), since the others (`bootcmd`, `apt`, …)
+    run commands or write files outside these checks;
+  - YAML anchors or aliases, in the file or its inventory: the lint reads YAML through
+    yq, which can resolve a merge key (`<<: *x`) differently from cloud-init and Ansible;
+  - any file written besides the bootstrap's own four, a path written twice, empty
+    content, and any `write_files` key besides `path`, `owner`, `permissions` and
+    `content` (so no encoded, appended, fetched or deferred content);
   - any secret-looking key (RPC URL, password, token, private key, keystore,
     `decdn_extra_env`), except `sponsord_onramp_rpc_url`, which is public by design.
     That one is accepted only in `sponsord_onramp_hosts.vars`, and only in the role's
@@ -281,10 +287,12 @@ Day 2 is in the role READMEs. Rotate a secret by replacing its file and running
   - a URL with embedded credentials;
   - an unknown `bootstrap.env` key;
   - any mention of the test-only switch that skips hardening;
-  - any override of a signing key, or of the paths the bootstrap's secret gate
-    checks (`decdn_env_file`, `sponsord_etc` and sponsord's secret, treasury and
-    API-token files, `sponsord_onramp_etc` and the onramp's token and Turnstile
-    files), since the gate looks for the secrets at the roles' defaults;
+  - any override of a signing key; of a secret's path (`decdn_env_file`,
+    `sponsord_etc` and sponsord's secret, treasury and API-token files,
+    `sponsord_onramp_etc` and the onramp's token and Turnstile files), since the gate
+    looks for the secrets at the roles' defaults; or of sponsord's API-token and
+    treasury-wallet generation, since the token is always generated on the host and
+    the wallet is the operator's;
   - an inventory group other than `decdn_nodes`, `sponsord_hosts` and
     `sponsord_onramp_hosts`, a group holding anything but `hosts` and `vars` (no
     `children:`), a host other than localhost, or the onramp without `sponsord_hosts`;
@@ -317,8 +325,8 @@ What CI proves:
 - `make lint-cloud-init` (CI job `cloud-init`) checks the schema and the invariants
   above, and `make test-scripts` checks that it rejects broken variants.
 - The molecule `cloud-init` scenario boots `user-data.yaml` with cloud-init in Debian
-  12 and Ubuntu 26.04 containers. It covers the secret gate first. It then checks that stage 1
-  refuses a branch name, the placeholder ref, an unknown key and a loose file mode,
+  12 and Ubuntu 26.04 containers. It covers the secret gate first. It then checks that
+  stage 1 refuses a branch name, the placeholder ref, an unknown key and a loose file mode,
   each recording `failed`. Finally, after an upgrade to a tag and `decdn.env`, it
   covers a running node installed from a locally signed mirror.
 - The molecule `cloud-init-sponsord` scenario boots `user-data-sponsord.yaml` in an

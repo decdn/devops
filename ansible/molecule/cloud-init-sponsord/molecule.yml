@@ -20,7 +20,8 @@
 #               token generated on the host, https through Caddy, no hint left.
 #
 # The release download and verify path of sponsord-onramp runs here and nowhere else
-# in the suite; sponsord's also runs in ../sponsord.
+# in the suite (../validation-sponsord sets its release mode, but stops at its
+# asserts); sponsord's also runs in ../sponsord-install.
 #
 # One platform: Ubuntu 26.04, the newest supported release, so systemd >= 255 (which
 # writes credentials 0440, see roles/sponsord/README.md) and Caddy from universe. The

@@ -375,10 +375,28 @@ if command -v cloud-init >/dev/null; then
   ci_variant "onramp pin in another group" 'set sponsord_onramp_install_method only in sponsord_onramp_hosts.vars' "s#$spnet#&\\n\\1sponsord_onramp_install_method: release#" "$sponsorud"
   ci_variant "sponsord signature off in its group" 'sponsord_verify_release_signature must not be turned off' "s#$spnet#&\\n\\1sponsord_verify_release_signature: false#" "$sponsorud"
   ci_variant "onramp signature off in its group" 'sponsord_onramp_verify_release_signature must not be turned off' "s#$onproxy#&\\n\\1sponsord_onramp_verify_release_signature: false#" "$sponsorud"
-  # Every knob lint.py forbids: a signing key, or a path the bootstrap's secret gate
-  # does not look at. Read from lint.py, so a new entry is covered here too.
+  # Every knob lint.py forbids: a signing key, a secret's path (the bootstrap's gate
+  # looks for each at its default), or a generation knob the gate makes moot. Read
+  # from lint.py, so a new entry is covered here too.
   forbidden="$(cd "$repo/cloud-init/tests" && python3 -B -c 'import lint; print(*sorted(lint.FORBIDDEN_VARS))')"
   [[ -n $forbidden ]] || fail "could not read FORBIDDEN_VARS from cloud-init/tests/lint.py"
+  # The loop below cannot notice an entry dropped from lint.py, so the knobs that must
+  # be there are found independently: every role's *_release_keyring, every role
+  # default holding a path in bootstrap.sh's SECRETS, and the directories and the
+  # templated Turnstile path those paths derive from.
+  must=(sponsord_etc sponsord_onramp_etc sponsord_onramp_turnstile_secret_file)
+  mapfile -t -O "${#must[@]}" must < <(grep -ohE '^[a-z_]+_release_keyring:' "$repo"/ansible/roles/*/defaults/main.yml | tr -d :)
+  # shellcheck disable=SC2013 # SECRETS values are space-separated paths, split on purpose
+  for f in $(sed -nE 's/^  \[[a-z_]+\]="?([^"]*)"?$/\1/p' "$repo/cloud-init/bootstrap.sh"); do
+    k="$(grep -ohE "^[a-z_]+: \"?$f\"?([[:space:]]|$)" "$repo"/ansible/roles/*/defaults/main.yml | cut -d: -f1 || true)"
+    [[ -n $k || $f == */turnstile-secret ]] || fail "no role default holds bootstrap.sh's secret path $f"
+    [[ -z $k ]] || must+=("$k")
+  done
+  ((${#must[@]} >= 9)) || fail "found only ${#must[@]} knobs lint.py must forbid: ${must[*]}"
+  for k in "${must[@]}"; do
+    [[ " $forbidden " == *" $k "* ]] || fail "cloud-init/tests/lint.py FORBIDDEN_VARS is missing $k"
+  done
+  pass "lint.py forbids every release keyring and every secret path the bootstrap gate checks"
   for v in $forbidden; do
     if [[ $v == decdn_* ]]; then
       ci_variant "forbidden $v" "$v may not be overridden" "s#$net#&\\n\\1$v: /tmp/x#"
@@ -390,6 +408,14 @@ if command -v cloud-init >/dev/null; then
   ci_variant "a second connection"         "sponsord_onramp_hosts.hosts.localhost.ansible_connection is 'ssh'" '/^\s*sponsord_onramp_hosts:$/,/^\s*vars:$/ s/^(\s*)localhost:$/&\n\1  ansible_connection: ssh/' "$sponsorud"
   ci_variant "hosts as a list"             'sponsord_onramp_hosts must hold exactly localhost' '/^\s*sponsord_onramp_hosts:$/,/^\s*vars:$/ {s/^(\s*)hosts:$/\1hosts: [localhost]/; /^\s*localhost:$/d}' "$sponsorud"
   ci_variant "the inventory as a list"     'inventory: must be a mapping of groups, not a list' 's/^(\s*)decdn_nodes:$/\1- decdn_nodes:/'
+  ci_variant "no connection at all"         'localhost needs ansible_connection: local' '/^\s*ansible_connection: local$/d'
+  # The lint reads YAML through yq, cloud-init through PyYAML and Ansible its own way:
+  # an anchor merged into a mapping (`<<: *x`) can read one way here and another on
+  # the host. And any module besides the templates' own runs code this never sees,
+  # e.g. a bootcmd that writes the test-only switch from pieces.
+  ci_variant "a bootcmd"                    'bootcmd: only the top-level keys' 's#^runcmd:$#bootcmd:\n  - [sh, -c, "true"]\n&#'
+  ci_variant "an anchor in the user-data"   'the user-data uses YAML anchors or aliases' 's#^(\s*)- path: /etc/decdn-bootstrap/bootstrap.env$#\1- \&env\n\1  path: /etc/decdn-bootstrap/bootstrap.env#'
+  ci_variant "an alias in the inventory"   'inventory: uses YAML anchors or aliases' "s#$net#&\\n\\1x: \\&r 1\\n\\1y: *r#"
   ci_variant "another host in the onramp group" 'sponsord_onramp_hosts must hold exactly localhost' '/^\s*sponsord_onramp_hosts:$/,/^\s*vars:$/ s/^(\s*)localhost:$/&\n\1other.example:/' "$sponsorud"
   # A node and a sponsor on one host: the node template plus the sponsord groups.
   sed -E 's/^(\s*)decdn_region: .*$/&\n      sponsord_hosts:\n        hosts:\n          localhost:\n        vars:\n          sponsord_install_method: release\n          sponsord_version: "0.1.0"\n      sponsord_onramp_hosts:\n        hosts:\n          localhost:\n        vars:\n          sponsord_onramp_install_method: release\n          sponsord_onramp_version: "0.1.0"/' \
@@ -432,14 +458,14 @@ fi
 plays_out() { # <sponsord play's task lines>
   printf '\nplaybook: playbooks/site.yml\n\n'
   printf "  play #1 (decdn_nodes): Provision a hardened deCDN node\tTAGS: []\n    pattern: ['decdn_nodes']\n    hosts (0):\n    tasks:\n"
-  printf '      baseline : Validate the admin accounts\tTAGS: [baseline]\n\n'
+  printf '      baseline : Install base packages\tTAGS: [baseline]\n\n'
   printf "  play #2 (sponsord_onramp_hosts): Require every sponsord-onramp host to be a sponsord host\tTAGS: []\n    pattern: ['sponsord_onramp_hosts']\n    hosts (1):\n      localhost\n    tasks:\n\n"
   printf "  play #3 (sponsord_hosts): Provision sponsord\tTAGS: []\n    pattern: ['sponsord_hosts']\n    hosts (1):\n      localhost\n    tasks:\n%b\n" "$1"
 }
 guard_plays() { # <groups> <sponsord play's task lines>
   plays_out "$2" | awk -v groups="$1" -f "$repo/cloud-init/baseline-plays.awk"
 }
-hardened='      baseline : Validate the admin accounts\tTAGS: [baseline]\n      Apply DevSec OS hardening\tTAGS: [baseline]'
+hardened='      baseline : Install base packages\tTAGS: [baseline]\n      Apply DevSec OS hardening\tTAGS: [baseline]'
 expect 0 "baseline guard accepts a sponsor host whose play selects baseline" guard_plays sponsord_hosts "$hardened"
 expect 1 "baseline guard refuses a sponsord play without baseline (another play's tasks do not count)" \
   guard_plays sponsord_hosts '      Apply DevSec OS hardening\tTAGS: [baseline]'
@@ -462,19 +488,49 @@ for g in $host_groups; do
   grep -qE "^    $g\)$" "$boot" || fail "cloud-init/bootstrap.sh: the hint has no case arm for $g"
 done
 pass "bootstrap.sh's groups match lint.py's, each with its secrets and its hint"
-# The same contract, read from the playbooks: the cloud-init molecule scenarios skip
-# baseline, so nothing at boot would notice it gone from one group's play.
+# The same contract, read from the playbooks with nothing booted. The molecule boots
+# run the guard too, but in Docker and only for the groups their inventories use.
+# `hosts` and `tags` may each be a string or a list; tags match exactly.
 if command -v yq >/dev/null; then
   for g in decdn_nodes sponsord_hosts; do
     n=0
     for pb in site.yml sponsord.yml; do
-      n=$((n + $(yq "[.[] | select(.hosts == \"$g\")] | length" "$repo/ansible/playbooks/$pb")))
-      [[ "$(yq "[.[] | select(.hosts == \"$g\") | select((.roles // []) | map(select(.role == \"baseline\" and ((.tags // []) | contains([\"baseline\"])))) | length == 0)] | length" "$repo/ansible/playbooks/$pb")" == 0 ]] \
+      plays="[.[] | select([.hosts] | flatten | any_c(. == \"$g\"))]"
+      n=$((n + $(yq "$plays | length" "$repo/ansible/playbooks/$pb")))
+      [[ "$(yq "$plays | map(select((.roles // []) | map(select(.role == \"baseline\" and ([.tags // []] | flatten | any_c(. == \"baseline\")))) | length == 0)) | length" "$repo/ansible/playbooks/$pb")" == 0 ]] \
         || fail "playbooks/$pb: a $g play lacks the baseline role tagged baseline (cloud-init's phase 1 relies on it)"
     done
     ((n >= 1)) || fail "no play in site.yml or sponsord.yml targets $g"
   done
   pass "every decdn_nodes and sponsord_hosts play runs baseline under the baseline tag"
+  # baseline-plays.sh, the command bootstrap.sh runs, against the real playbooks and the
+  # templates' inventories, then against a copy whose sponsord play lost the tag (#90).
+  # Listing tasks needs ansible-core only, not the collections.
+  if command -v ansible-playbook >/dev/null; then
+    for t in user-data:decdn_nodes user-data-sponsord:sponsord_hosts; do
+      yq '.write_files[] | select(.path == "/etc/decdn-bootstrap/inventory.yml") | .content' \
+        "$repo/cloud-init/${t%%:*}.yaml" > "$work/${t%%:*}-inventory.yml"
+    done
+    bplays() { # <ansible dir> <inventory> <group>...
+      local dir=$1; shift
+      (cd "$dir" && HOME="$work" ANSIBLE_DEPRECATION_WARNINGS=0 "$repo/cloud-init/baseline-plays.sh" "$@" </dev/null)
+    }
+    expect 0 "baseline-plays.sh accepts the node template's host" bplays "$repo/ansible" "$work/user-data-inventory.yml" decdn_nodes
+    expect 0 "baseline-plays.sh accepts the sponsor template's host" bplays "$repo/ansible" "$work/user-data-sponsord-inventory.yml" sponsord_hosts
+    mkdir -p "$work/notag"
+    cp -r "$repo/ansible/playbooks" "$repo/ansible/ansible.cfg" "$work/notag/"
+    ln -s "$repo/ansible/roles" "$work/notag/roles"
+    yq -i '(.[] | select(.hosts == "sponsord_hosts") | .roles[] | select(.role == "baseline")) |= del(.tags)' \
+      "$work/notag/playbooks/sponsord.yml"
+    expect 1 "baseline-plays.sh refuses a sponsord play that lost its baseline tag (#90)" \
+      bplays "$work/notag" "$work/user-data-sponsord-inventory.yml" sponsord_hosts
+    grep -q 'a play for sponsord_hosts selects no baseline task' "$work/out" \
+      || { cat "$work/out" >&2; fail "baseline-plays.sh refused, but not for sponsord_hosts' play"; }
+  elif [[ -n ${CI:-} ]]; then
+    fail "ansible-playbook is not on PATH in CI; the baseline-plays.sh cases would be skipped"
+  else
+    skipped+=("baseline-plays.sh against the real playbooks (needs ansible-core)")
+  fi
   # The two templates differ only in their inventory: stage 1, the login hint and the
   # final message are the same bytes in both.
   shared='{"files": [.write_files[] | select(.path == "/usr/local/sbin/decdn-bootstrap" or .path == "/etc/profile.d/decdn-bootstrap.sh")], "final_message": .final_message}'

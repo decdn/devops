@@ -54,7 +54,7 @@
         loop_var: refusal
         label: "{{ refusal.name }}"
 
-    # Stage 2 clears the list before it checks anything, so a failed run leaves no
+    # Stage 2 clears the list before its group checks, so a run they refuse leaves no
     # stale list for final_message to point at.
     - name: Stat the list of missing secrets after the refusals
       ansible.builtin.stat:
@@ -66,6 +66,28 @@
         that:
           - not refused_awaiting.stat.exists
         fail_msg: /var/lib/decdn-bootstrap/awaiting survived a failed run
+
+    # A host whose DEVOPS_REF predates the list records awaiting-secret without it.
+    - name: Record awaiting-secret with no list (an older bootstrap's state)
+      ansible.builtin.copy:
+        dest: /var/lib/decdn-bootstrap/state
+        content: "awaiting-secret\n"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Run the login hint with no list
+      ansible.builtin.command:
+        cmd: sh /etc/profile.d/decdn-bootstrap.sh
+      register: listless_hint
+      changed_when: false
+
+    - name: Assert the hint says the list is missing instead of printing nothing
+      ansible.builtin.assert:
+        that:
+          - listless_hint.stdout is search('waiting for these secrets')
+          - listless_hint.stdout is search('[(]no list found; see /var/log/cloud-init-output[.]log[)]')
+        fail_msg: "hint: {{ listless_hint.stdout | to_json }}"
 
     - name: Restore the working inventory
       ansible.builtin.copy:

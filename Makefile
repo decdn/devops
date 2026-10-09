@@ -140,8 +140,9 @@ lint-cloud-init:     ## schema-check the cloud-init/ user-data templates and the
 	@echo "cloud-init invariants hold: $(strip $(CLOUD_INIT_FILE))"
 
 # The guard rails nothing else exercises: ansible/Makefile's scoping guards, the
-# release gate, the lint-compose and lint-cloud-init negative cases, and (with
-# UPSTREAM=<decdn checkout>) the upstream-mirror generators' exit codes. CI job `scripts`.
+# release gate, the lint-compose and lint-cloud-init negative cases, the cloud-init
+# bootstrap's baseline guard and template contracts, and (with UPSTREAM=<decdn
+# checkout>) the upstream-mirror generators' exit codes. CI job `scripts`.
 test-scripts:        ## test the Makefile and molecule-driver guards, release gate, lint-compose and lint-cloud-init negatives (needs docker, jq, cloud-init, yq)
 	tests/scripts-test.sh
 
