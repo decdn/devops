@@ -14,7 +14,9 @@ enable_quic_addr_discovery = {{ iroh_relay_enable_quic_addr_discovery | bool | l
 # Loopback only: iroh-relay's default is the public address on :9090.
 enable_metrics = true
 metrics_bind_addr = {{ sock(iroh_relay_metrics_bind, iroh_relay_metrics_port) | tojson }}
-{% if iroh_relay_denylist | length > 0 %}
+{% if iroh_relay_access == 'allowlist' %}
+access = { allowlist = {{ _iroh_relay_effective_allowlist | tojson }} }
+{% elif iroh_relay_access == 'denylist' and iroh_relay_denylist | length > 0 %}
 access = { denylist = {{ iroh_relay_denylist | list | tojson }} }
 {% else %}
 access = "everyone"

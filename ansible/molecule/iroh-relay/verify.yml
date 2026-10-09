@@ -62,7 +62,9 @@
     - name: Require the rendered values
       vars:
         _c: "{{ _ir_toml.stdout | from_json }}"
-        _ir_denied: 81d82536cb4c96ddbeab1f6bf4495d126c1942fb90b9ffb433d91d23314801e7
+        # The inventory's allowlist entry, and the ID read from the stand-in node.
+        _ir_listed: 81d82536cb4c96ddbeab1f6bf4495d126c1942fb90b9ffb433d91d23314801e7
+        _ir_node: e8a601ca5aea34a904990dcc03e2c46a7b39d6a23b395dd669ceba0c0aa1077e
       ansible.builtin.assert:
         that:
           - _c.enable_relay is true
@@ -70,7 +72,7 @@
           - _c.enable_quic_addr_discovery is true
           - _c.enable_metrics is true
           - _c.metrics_bind_addr == '127.0.0.1:9092'
-          - "_c.access == {'denylist': [_ir_denied]}"
+          - "_c.access == {'allowlist': [_ir_listed, _ir_node] | sort}"
           - _c.tls.https_bind_addr == '[::]:443'
           - _c.tls.quic_bind_addr == '[::]:7842'
           - _c.tls.hostname == 'relay.molecule.test'

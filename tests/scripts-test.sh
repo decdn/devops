@@ -430,6 +430,17 @@ for r in decdn_node sponsord sponsord_onramp iroh_relay; do
   done
 done
 pass "the decommission defaults and the confirmation's service list agree across all four roles"
+# iroh_relay's tasks_from node-ids runs `decdn whoami` on the inventory's nodes, where
+# decdn_node's defaults are not loaded: its fallbacks must be those defaults.
+ids="$repo/ansible/roles/iroh_relay/tasks/node-ids.yml"
+node_defaults="$repo/ansible/roles/decdn_node/defaults/main.yml"
+for key in decdn_user decdn_cli_bin decdn_config_file; do
+  want="$(sed -nE "s/^$key: ([^[:space:]#]+).*/\1/p" "$node_defaults")"
+  [ -n "$want" ] || fail "decdn_node/defaults/main.yml: no $key"
+  grep -qF "hostvars[item].$key | default('$want')" "$ids" \
+    || fail "iroh_relay/tasks/node-ids.yml: the $key fallback is not decdn_node's default ($want)"
+done
+pass "iroh_relay's node-ID fallbacks match decdn_node's defaults"
 
 # decommission.yml must check every sponsord host for a held top-up before any play
 # stops a service: a refusal after the node and onramp plays would leave the host

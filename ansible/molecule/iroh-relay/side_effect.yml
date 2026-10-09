@@ -1,7 +1,7 @@
 ---
 # What a green converge + idempotence cannot prove:
 #   1. A re-run with nothing changed leaves the relay alone, and a changed knob (a
-#      second denylist entry) restarts it.
+#      second allowlist entry) restarts it.
 #   2. The readiness gate is FATAL, and a failed run records nothing: the
 #      restart-input record keeps the last good inputs until a run succeeds.
 #   3. Another process on tcp/80 is refused BEFORE anything changes.
@@ -19,6 +19,10 @@
 #      is no conflict, until QAD is on again (the port guard's UDP half).
 #  10. 0.0.0.0 and a specific IPv4 address: rendered, bound, and probed there (the
 #      certificate check is "fail" in this inventory).
+#  11. The allowlist: a node whose ID cannot be read fails tasks_from node-ids; the
+#      "everyone" and "denylist" modes render as such.
+# The role is run with include_role here, so the inventory nodes' IDs (which the
+# converge's playbook read) are read first, as playbooks/iroh_relay.yml does.
 # Decommission runs in ../iroh-relay-lifecycle. The host is left as converged, with
 # the molecule CA trusted, for verify.
 - name: Side effect — restarts, the fatal gate, the port guard, the certificate check
@@ -26,10 +30,16 @@
   become: true
   vars:
     _ir_record: /etc/iroh-relay/.relay-inputs.sha256
-    # The inventory's denylist entry, and a second one.
+    # The inventory's allowlist entry, and a second one (the stand-in node's ID,
+    # e8a6…077e, is added from the inventory).
     _ir_first_id: 81d82536cb4c96ddbeab1f6bf4495d126c1942fb90b9ffb433d91d23314801e7
-    _ir_second_id: e8a601ca5aea34a904990dcc03e2c46a7b39d6a23b395dd669ceba0c0aa1077e
+    _ir_second_id: 08ebd644cd0bd76975a53e7ff96b1eacd14dd4f61672f3f54c7c8bb19fbf2a08
   tasks:
+    - name: Read the inventory nodes' endpoint IDs, as the playbook does
+      ansible.builtin.include_role:
+        name: iroh_relay
+        tasks_from: node-ids
+
     - name: Read the relay before anything changes
       ansible.builtin.systemd_service:
         name: iroh-relay
@@ -62,11 +72,11 @@
           - _ir_noop.status.MainPID == _ir_before.status.MainPID
         fail_msg: A re-run with no input changed restarted iroh-relay.
 
-    - name: Converge with a second denylist entry
+    - name: Converge with a second allowlist entry
       ansible.builtin.include_role:
         name: iroh_relay
       vars:
-        iroh_relay_denylist: ["{{ _ir_first_id }}", "{{ _ir_second_id }}"]
+        iroh_relay_allowlist: ["{{ _ir_first_id }}", "{{ _ir_second_id }}"]
 
     - name: Read the relay after the knob change
       ansible.builtin.systemd_service:
@@ -85,7 +95,7 @@
           - _ir_knob.status.MainPID != _ir_before.status.MainPID
           - _ir_second_id in (_ir_config_knob.content | b64decode)
         fail_msg: >-
-          After a denylist entry was added the relay's PID went
+          After an allowlist entry was added the relay's PID went
           {{ _ir_before.status.MainPID }} -> {{ _ir_knob.status.MainPID }} (must change),
           or the entry is not in the config.
 
@@ -106,7 +116,7 @@
         content: ""
         mode: "0644"
 
-    # A changed input on the failing run (the original denylist): the record must
+    # A changed input on the failing run (the original allowlist): the record must
     # not take it.
     - name: Converge against a relay that never comes up
       block:
@@ -581,6 +591,53 @@
         - "{{ ansible_facts['default_ipv4']['address'] }}"
       loop_control:
         loop_var: _ir_bind
+
+    # --- 11. the access modes ----------------------------------------------------------
+    - name: Read the node IDs with a node that has no identity yet
+      block:
+        - name: Stage the stand-in node's no-identity marker
+          ansible.builtin.copy:
+            dest: /etc/decdn/molecule-no-identity
+            content: ""
+            mode: "0644"
+
+        - name: Read the inventory nodes' IDs
+          ansible.builtin.include_role:
+            name: iroh_relay
+            tasks_from: node-ids
+
+        - name: Fail — a node without an identity was left out silently
+          ansible.builtin.fail:
+            msg: The node IDs were read although a node has no identity.
+      rescue:
+        - name: Require the ID check to be what failed
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require an endpoint ID from every deCDN node'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the node ID check."
+      always:
+        - name: Remove the no-identity marker
+          ansible.builtin.file:
+            path: /etc/decdn/molecule-no-identity
+            state: absent
+
+    # The failed read left no fact behind it would have been wrong to trust; read
+    # them again before converging.
+    - name: Read the inventory nodes' IDs again
+      ansible.builtin.include_role:
+        name: iroh_relay
+        tasks_from: node-ids
+
+    - name: Converge in each other access mode
+      ansible.builtin.include_tasks: includes/access-mode.yml
+      loop:
+        - {access: everyone, allowlist: [], denylist: [], want: '"everyone"'}
+        - access: denylist
+          allowlist: []
+          denylist: [08ebd644cd0bd76975a53e7ff96b1eacd14dd4f61672f3f54c7c8bb19fbf2a08]
+          want: '{ denylist = ["08ebd644cd0bd76975a53e7ff96b1eacd14dd4f61672f3f54c7c8bb19fbf2a08"] }'
+      loop_control:
+        loop_var: _ir_mode
 
     - name: Converge back on the inventory's settings
       ansible.builtin.include_role:

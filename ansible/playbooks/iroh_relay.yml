@@ -27,6 +27,24 @@
           The relay terminates its own TLS on tcp/80 and tcp/443, which the onramp's
           proxy needs as well: give the relay a host of its own.
 
+# The relay admits only listed endpoint IDs by default (iroh_relay_access:
+# allowlist). Read the ID of every deCDN node in this inventory, on the node, so the
+# allowlist follows the fleet; a node whose ID cannot be read fails the run here,
+# before the relay is touched. Skipped for the other modes, or with
+# iroh_relay_allowlist_from_inventory: false.
+- name: Read the deCDN nodes' endpoint IDs for the relay allowlist
+  hosts: iroh_relay_hosts
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read every deCDN node's endpoint ID
+      ansible.builtin.include_role:
+        name: iroh_relay
+        tasks_from: node-ids
+      when:
+        - iroh_relay_access | default('allowlist') == 'allowlist'
+        - iroh_relay_allowlist_from_inventory | default(true) | bool
+
 - name: Provision iroh relays
   hosts: iroh_relay_hosts
   become: true

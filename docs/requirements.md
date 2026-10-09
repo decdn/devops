@@ -59,7 +59,9 @@ On Ubuntu 25.10 and later, `sudo` is sudo-rs; see the `ansible_become_exe` note 
   Let's Encrypt. A relay cannot share a host with sponsord-onramp (both want 80 and
   443). It carries the traffic of every peer pair it relays, so size its bandwidth
   for that, and set rate limits (`iroh_relay_client_rx_bytes_per_second`) on a
-  metered link.
+  metered link. By default it admits only the inventory's deCDN nodes and the IDs in
+  `iroh_relay_allowlist`, so its deploy reads each node's ID on the node and needs
+  every node deployed first.
 - **Outbound:** HTTPS to your RPC provider and to any cache origin; QUIC/UDP to peers;
   HTTPS to the iroh relays (n0's public relays unless `decdn_relay_urls` names
   your own; see [`roles/iroh_relay`](../ansible/roles/iroh_relay/README.md)).

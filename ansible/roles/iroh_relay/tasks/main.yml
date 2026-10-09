@@ -181,18 +181,88 @@
          | map('int') | list }}
 
 # --- Access + limits --------------------------------------------------------------
+# A list set for a mode that does not read it is refused, not ignored: an operator
+# who fills in iroh_relay_denylist under the default allowlist mode means something
+# the relay would never do.
+- name: Validate the access mode
+  ansible.builtin.assert:
+    that:
+      - iroh_relay_access in ['allowlist', 'denylist', 'everyone']
+      - iroh_relay_access == 'allowlist' or (iroh_relay_allowlist | default([]) | length) == 0
+      - iroh_relay_access == 'denylist' or (iroh_relay_denylist | default([]) | length) == 0
+      - iroh_relay_allowlist_from_inventory is boolean
+    fail_msg: >-
+      iroh_relay_access must be "allowlist" (the default: only listed endpoint IDs),
+      "denylist" or "everyone", and only that mode's list may be set (got access
+      "{{ iroh_relay_access }}", allowlist {{ iroh_relay_allowlist | default([]) | to_json }},
+      denylist {{ iroh_relay_denylist | default([]) | to_json }}).
+      iroh_relay_allowlist_from_inventory must be a boolean.
+
+# Both lists, and the IDs playbooks/iroh_relay.yml read from the inventory's nodes,
+# must be what iroh-relay parses: 64 lowercase hex, as `decdn whoami` prints them.
+- name: Validate the allowlist
+  ansible.builtin.assert:
+    that:
+      - _ids is sequence
+      - _ids is not string
+      - _ids is not mapping
+      - _ids | map('string') | reject('match', '^[0-9a-f]{64}$') | list | length == 0
+      - _ids | unique | length == _ids | length
+    fail_msg: >-
+      iroh_relay_allowlist must be a list of distinct endpoint IDs, each 64 lowercase hex
+      characters, as `decdn whoami` prints them ("node id: <hex>"). Got
+      {{ _ids | to_json }}.
+  vars:
+    _ids: "{{ iroh_relay_allowlist }}"
+
 - name: Validate the denylist
   ansible.builtin.assert:
     that:
-      - iroh_relay_denylist is sequence
-      - iroh_relay_denylist is not string
-      - iroh_relay_denylist is not mapping
-      - iroh_relay_denylist | map('string') | reject('match', '^[0-9a-f]{64}$') | list | length == 0
-      - iroh_relay_denylist | unique | length == iroh_relay_denylist | length
+      - _ids is sequence
+      - _ids is not string
+      - _ids is not mapping
+      - _ids | map('string') | reject('match', '^[0-9a-f]{64}$') | list | length == 0
+      - _ids | unique | length == _ids | length
     fail_msg: >-
-      iroh_relay_denylist must be a list of distinct endpoint IDs, each 64 lowercase
-      hex characters (iroh's hex form of the public key; the z-base32 form decdn's CLI
-      takes, as in `decdn probe --node-id`, must be converted first). Got {{ iroh_relay_denylist | to_json }}.
+      iroh_relay_denylist must be a list of distinct endpoint IDs, each 64 lowercase hex
+      characters, as `decdn whoami` prints them ("node id: <hex>"). Got
+      {{ _ids | to_json }}.
+  vars:
+    _ids: "{{ iroh_relay_denylist }}"
+
+- name: Validate the inventory nodes' IDs
+  ansible.builtin.assert:
+    that:
+      - _ids is sequence
+      - _ids is not string
+      - _ids is not mapping
+      - _ids | map('string') | reject('match', '^[0-9a-f]{64}$') | list | length == 0
+      - _ids | unique | length == _ids | length
+    fail_msg: >-
+      The IDs read from the inventory's deCDN nodes must be a list of distinct endpoint IDs, each 64 lowercase hex
+      characters, as `decdn whoami` prints them ("node id: <hex>"). Got
+      {{ _ids | to_json }}.
+  vars:
+    _ids: "{{ _iroh_relay_inventory_node_ids | default([]) }}"
+
+- name: Merge the allowlist
+  ansible.builtin.set_fact:
+    # Sorted, so the same set of nodes renders the same config (no restart).
+    _iroh_relay_effective_allowlist: >-
+      {{ ((iroh_relay_allowlist | list) + (_iroh_relay_inventory_node_ids | default([]) | list))
+         | unique | sort }}
+
+- name: Require a non-empty allowlist
+  ansible.builtin.assert:
+    that:
+      - _iroh_relay_effective_allowlist | length > 0
+    fail_msg: >-
+      iroh_relay_access is "allowlist" (the default), but no endpoint ID is listed, so
+      the relay would admit nobody. Deploy the deCDN nodes in decdn_nodes first (this
+      repo's playbooks/iroh_relay.yml reads their IDs), list IDs in
+      iroh_relay_allowlist (`decdn whoami` on a node prints its "node id"), or set
+      iroh_relay_access to "everyone" or "denylist" deliberately.
+  when: iroh_relay_access == 'allowlist'
 
 # The shapes iroh-relay parses (Limits in iroh-relay/src/main.rs: an f64, then
 # usize/u32 counts), checked here so a bad value fails before the relay restarts.
@@ -499,8 +569,8 @@
       {{ iroh_relay_unit_after.status.NRestarts | default('?') }},
       metrics status {{ iroh_relay_metrics.status | default('none') }}. Listeners:
         {{ iroh_relay_listeners.stdout | default('none', true) | indent(2) }}
-      It exits at start on a config it cannot parse (an endpoint ID in
-      iroh_relay_denylist that is not a valid key, for one) or a port it cannot bind.
+      It exits at start on a config it cannot parse (an endpoint ID in the allow- or
+      denylist that is not a valid key, for one) or a port it cannot bind.
       Read the reason on the host:
         sudo journalctl -u iroh-relay -e
   when: not ansible_check_mode

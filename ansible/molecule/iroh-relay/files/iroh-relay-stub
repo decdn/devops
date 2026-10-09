@@ -18,7 +18,7 @@ without Let's Encrypt (a container has no public DNS name):
         contact and a writable cert_dir (a probe file is written there, which also
         proves the unit's StateDirectory), metrics on and on loopback, QUIC
         address discovery only with TLS, the access and limit shapes iroh-relay
-        parses (denylist entries are 64 hex; a max burst only with a rate);
+        parses (allow- and denylist entries are 64 hex; a max burst only with a rate);
       - RUST_LOG and NO_COLOR are set (the unit must set both).
     Any violation exits 1 with the reason on stderr (the journal). Three marker
     files break it on purpose, so the scenario can prove each part of the
@@ -153,11 +153,11 @@ def check_config(path):
         die("enable_quic_addr_discovery must be a boolean")
     access = cfg.get("access", "everyone")
     if access != "everyone":
-        if not isinstance(access, dict) or list(access) != ["denylist"]:
-            die(f"access must be \"everyone\" or a denylist, got {access!r}")
-        ids = access["denylist"]
+        if not isinstance(access, dict) or list(access) not in (["allowlist"], ["denylist"]):
+            die(f"access must be \"everyone\", an allowlist or a denylist, got {access!r}")
+        kind, ids = next(iter(access.items()))
         if not isinstance(ids, list) or not ids or not all(isinstance(i, str) and re.fullmatch(r"[0-9a-f]{64}", i) for i in ids):
-            die(f"access.denylist must be a list of 64-hex endpoint ids, got {ids!r}")
+            die(f"access.{kind} must be a non-empty list of 64-hex endpoint ids, got {ids!r}")
     if "key_cache_capacity" in cfg:
         positive_int(cfg["key_cache_capacity"], "key_cache_capacity")
     limits = cfg.get("limits")

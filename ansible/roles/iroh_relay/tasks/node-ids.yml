@@ -1,0 +1,69 @@
+---
+# Read the endpoint ID of every deCDN node in the inventory, for the relay's
+# allowlist: `include_role: {name: iroh_relay, tasks_from: node-ids}`, run by
+# playbooks/iroh_relay.yml before the relay is provisioned. It sets
+# _iroh_relay_inventory_node_ids, which tasks/main.yml merges with
+# iroh_relay_allowlist.
+#
+# `decdn whoami` reads the node's key file offline (the daemon need not run) and
+# prints "node id: <64 lowercase hex>", the form iroh-relay parses. It runs on the
+# node as the node's own user (the key directory is 0700, owned by it), through
+# systemd-run as the decdn_node role's README does. delegate_to ignores --limit, so
+# `make deploy-relay LIMIT=<relay>` still reads every node. Any node whose ID cannot
+# be read fails the deploy: a relay that silently drops a node from its allowlist
+# would refuse that node's peers.
+#
+# The fallbacks are roles/decdn_node/defaults/main.yml's (tests/scripts-test.sh
+# checks): that role's defaults are not loaded for the node hosts here.
+
+- name: Name the deCDN nodes to read
+  ansible.builtin.set_fact:
+    _iroh_relay_node_hosts: "{{ iroh_relay_allowlist_node_hosts | default(groups['decdn_nodes'] | default([])) }}"
+
+- name: Read each deCDN node's endpoint ID
+  ansible.builtin.command:
+    argv:
+      - systemd-run
+      - --pipe
+      - --wait
+      - --collect
+      - --quiet
+      - "--property=User={{ hostvars[item].decdn_user | default('decdn') }}"
+      - "{{ hostvars[item].decdn_cli_bin | default('/usr/local/bin/decdn') }}"
+      - --config
+      - "{{ hostvars[item].decdn_config_file | default('/etc/decdn/node.toml') }}"
+      - whoami
+  delegate_to: "{{ item }}"
+  loop: "{{ _iroh_relay_node_hosts }}"
+  register: _iroh_relay_whoami
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Require an endpoint ID from every deCDN node
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+      - _id is match('^[0-9a-f]{64}$')
+    fail_msg: |-
+      Could not read the endpoint ID of deCDN node {{ item.item }} for the relay's
+      allowlist (`decdn whoami` exited {{ item.rc | default('?') }}):
+        {{ (item.stdout | default('') ~ '\n' ~ item.stderr | default('')) | trim | indent(2) }}
+      Deploy that node first (its identity is created then), or set
+      iroh_relay_allowlist_from_inventory: false and list the IDs in
+      iroh_relay_allowlist yourself.
+    quiet: true
+  vars:
+    _id: >-
+      {{ (item.stdout_lines | default([]) | select('match', '^node id: ') | first | default(''))
+         | regex_replace('^node id: ', '') | trim }}
+  loop: "{{ _iroh_relay_whoami.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Record the inventory nodes' endpoint IDs
+  ansible.builtin.set_fact:
+    _iroh_relay_inventory_node_ids: >-
+      {{ _iroh_relay_whoami.results | default([]) | map(attribute='stdout_lines')
+         | map('select', 'match', '^node id: ') | map('first')
+         | map('regex_replace', '^node id: ', '') | map('trim') | list }}

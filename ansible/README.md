@@ -315,6 +315,11 @@ each relay on a host of its own (or beside a node) in `iroh_relay_hosts`, then r
 - **You provision no secret,** and it needs no backup: the relay generates its
   ACME account key and TLS key itself, and Let's Encrypt re-issues on a new host.
 - **Pointing nodes at it** replaces n0's relays, so deploy at least two first.
+- **It admits only listed endpoint IDs by default** (`iroh_relay_access: allowlist`):
+  the playbook reads every `decdn_nodes` host's ID with `decdn whoami` and adds
+  `iroh_relay_allowlist`. A node whose ID cannot be read, or an empty list, fails the
+  deploy. Clients not on the list cannot reach a node homed on the relay; use
+  `iroh_relay_access: everyone` for a relay that serves clients.
 - **Observability:** with Grafana Cloud on, Alloy scrapes the relay on hosts in
   `iroh_relay_hosts`; the dashboard and alert rules are in
   [`monitoring/iroh-relay/`](../monitoring/iroh-relay/).

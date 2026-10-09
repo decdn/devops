@@ -3,7 +3,11 @@
 #   1. a molecule CA, trusted by the host, and a certificate it signed for
 #      relay.molecule.test, which the stub serves on https (the real relay would
 #      fetch one from Let's Encrypt into its state directory);
-#   2. the Grafana Cloud credential env file (as ../grafana-cloud/prepare.yml).
+#   2. the Grafana Cloud credential env file (as ../grafana-cloud/prepare.yml);
+#   3. a stand-in deCDN node on the same host (the inventory names it in
+#      iroh_relay_allowlist_node_hosts): a decdn user, /etc/decdn/node.toml and a
+#      `decdn` that prints a fixed "node id: <hex>" for `whoami`, or the real CLI's
+#      "(none — …)" line while /etc/decdn/molecule-no-identity exists.
 - name: Prepare
   hosts: all
   become: true
@@ -68,3 +72,41 @@
           GC_OTLP_USERNAME=999888779
           GC_LOKI_USERNAME=999888778
           GC_API_TOKEN=molecule-test-token
+
+    - name: Create the stand-in node's decdn user
+      ansible.builtin.user:
+        name: decdn
+        system: true
+        shell: /usr/sbin/nologin
+        create_home: false
+
+    - name: Create the stand-in node's config directory
+      ansible.builtin.file:
+        path: /etc/decdn
+        state: directory
+        mode: "0755"
+
+    - name: Stage the stand-in node's config
+      ansible.builtin.copy:
+        dest: /etc/decdn/node.toml
+        content: "# molecule stand-in: read by nothing but the fake decdn below\n"
+        mode: "0644"
+
+    # The real CLI prints "node id: <hex>" then "key path: …" (crates/cli/src/
+    # commands/whoami.rs), or "node id: (none — …)" with no key.
+    - name: Stage the stand-in `decdn` CLI
+      ansible.builtin.copy:
+        dest: /usr/local/bin/decdn
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          set -eu
+          [ "${1:-}" = --config ] && [ -r "${2:-}" ] && [ "${3:-}" = whoami ] \
+            || { echo "decdn stand-in: unexpected arguments: $*" >&2; exit 2; }
+          [ "$(id -un)" = decdn ] || { echo "decdn stand-in: run as $(id -un), not decdn" >&2; exit 1; }
+          if [ -e /etc/decdn/molecule-no-identity ]; then
+            echo "node id: (none — no node.secret in /var/lib/decdn; run decdn key-gen)"
+          else
+            echo "node id: e8a601ca5aea34a904990dcc03e2c46a7b39d6a23b395dd669ceba0c0aa1077e"
+            echo "key path: /var/lib/decdn/node.secret"
+          fi
