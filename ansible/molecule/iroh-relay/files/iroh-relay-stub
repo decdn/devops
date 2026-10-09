@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""Stub iroh-relay binary for the Molecule scenarios.
+
+Stands in for the real `iroh-relay` so the role can be exercised end to end
+without Let's Encrypt (a container has no public DNS name):
+
+  * `--version` -> print a version line and exit 0 (the role's version backstop).
+  * `--config-path <file>` -> enforce the startup contract, then serve until
+    SIGINT (the unit's KillSignal) or SIGTERM:
+      - the file exists (the real binary silently falls back to its defaults when
+        it does not, which is why the unit asserts it; this stub fails instead,
+        so a unit that lost the assert is caught);
+      - it parses as TOML and holds ONLY keys iroh-relay 1.3.0's Config knows
+        (iroh-relay/src/main.rs: Config, TlsConfig, Limits). The real binary
+        ignores an unknown key, so a typo in the role's template would silently
+        drop a setting; here it fails the start;
+      - the values the role must set: TLS by LetsEncrypt with a hostname, a
+        contact and a writable cert_dir (a probe file is written there, which also
+        proves the unit's StateDirectory), metrics on and on loopback, QUIC
+        address discovery only with TLS, the access and limit shapes iroh-relay
+        parses (denylist entries are 64 hex; a max burst only with a rate);
+      - RUST_LOG and NO_COLOR are set (the unit must set both).
+    Any violation exits 1 with the reason on stderr (the journal). Three marker
+    files break it on purpose, so the scenario can prove each part of the
+    readiness gate is fatal:
+      - UNHEALTHY_MARKER: exit 1 on start, before metrics answer;
+      - NO_QUIC_MARKER: serve everything but never bind the QUIC socket (a
+        listener the unit does not hold);
+      - EXIT_AFTER_MARKER: serve everything, then exit 1 after EXIT_AFTER_SECONDS
+        (a relay that binds and then crash-loops).
+    Then it binds metrics first, as the real binary does, then https, http and QUIC
+    (the real one binds http before https; the gate does not depend on it), and
+    exits if any bind fails (as the real one does). Routes: metrics serves
+    three of the real series names (values 0, made-up HELP text); https serves /healthz (JSON, as the real relay) with
+    the molecule certificate for the hostname; http serves /generate_204.
+  * anything else -> exit 2.
+"""
+import ipaddress
+import json
+import os
+import re
+import signal
+import socket
+import ssl
+import sys
+import threading
+import tomllib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+STUB_VERSION = "0.0.0-molecule-stub"
+UNHEALTHY_MARKER = "/etc/iroh-relay/stub-unhealthy"
+NO_QUIC_MARKER = "/etc/iroh-relay/stub-no-quic"
+EXIT_AFTER_MARKER = "/etc/iroh-relay/stub-exit-after"
+EXIT_AFTER_SECONDS = 2
+# The molecule certificate for the relay's hostname (prepare.yml), readable by the
+# unit's DynamicUser.
+CERT = "/etc/iroh-relay-molecule/relay.crt"
+KEY = "/etc/iroh-relay-molecule/relay.key"
+# The exact key sets iroh-relay 1.3.0 deserialises.
+TOP_KEYS = {"enable_relay", "http_bind_addr", "tls", "enable_quic_addr_discovery", "limits",
+            "enable_metrics", "metrics_bind_addr", "key_cache_capacity", "access"}
+TLS_KEYS = {"https_bind_addr", "quic_bind_addr", "hostname", "cert_mode", "cert_dir",
+            "manual_cert_path", "manual_key_path", "prod_tls", "contact", "dangerous_http_only"}
+LIMIT_KEYS = {"accept_conn_limit", "accept_conn_burst", "client"}
+RX_KEYS = {"bytes_per_second", "max_burst_bytes"}
+# Three series names the real relay exports (monitoring/iroh-relay/exported-metrics.txt),
+# one of them the role's gate metric; the HELP text is the stub's own.
+METRICS = b"""# HELP relayserver_accepts_total Number of accepted 'iroh relay' connections.
+# TYPE relayserver_accepts_total counter
+relayserver_accepts_total 0
+# HELP relayserver_disconnects_total Number of connections closed.
+# TYPE relayserver_disconnects_total counter
+relayserver_disconnects_total 0
+# HELP relayserver_bytes_sent_total Number of bytes sent.
+# TYPE relayserver_bytes_sent_total counter
+relayserver_bytes_sent_total 0
+# EOF
+"""
+
+
+def die(msg):
+    print(f"iroh-relay-stub: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def unknown(section, table, allowed):
+    extra = set(table) - allowed
+    if extra:
+        die(f"unknown key(s) in {section}: {sorted(extra)} (iroh-relay would silently ignore them)")
+
+
+def sockaddr(value, what):
+    if not isinstance(value, str):
+        die(f"{what} must be a string, got {value!r}")
+    m = re.fullmatch(r"\[([0-9A-Fa-f:.]+)\]:(\d+)|([0-9.]+):(\d+)", value)
+    if not m:
+        die(f"{what} is not a socket address: {value!r}")
+    host, port = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+    ipaddress.ip_address(host)
+    return host, int(port)
+
+
+def positive_int(value, what, bound=None):
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0 or (bound and value > bound):
+        die(f"{what} must be a positive integer{f' up to {bound}' if bound else ''}, got {value!r}")
+
+
+def check_config(path):
+    if os.path.exists(UNHEALTHY_MARKER):
+        die(f"{UNHEALTHY_MARKER} exists: refusing to start")
+    for var in ("RUST_LOG", "NO_COLOR"):
+        if not os.environ.get(var):
+            die(f"{var} is not set")
+    if not os.path.isfile(path):
+        die(f"config-path {path} is not a file (the real relay would run on its defaults)")
+    try:
+        with open(path, "rb") as f:
+            cfg = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        die(f"config must be valid toml: {e}")
+    unknown("the top level", cfg, TOP_KEYS)
+    tls = cfg.get("tls")
+    if not isinstance(tls, dict):
+        die("no [tls] section: the role always configures TLS")
+    unknown("[tls]", tls, TLS_KEYS)
+    if tls.get("cert_mode") != "LetsEncrypt":
+        die(f"tls.cert_mode must be LetsEncrypt, got {tls.get('cert_mode')!r}")
+    hostnames = tls.get("hostname")
+    hostnames = [hostnames] if isinstance(hostnames, str) else hostnames
+    if not hostnames or not all(isinstance(h, str) and h for h in hostnames):
+        die("LetsEncrypt needs at least one hostname")
+    if not isinstance(tls.get("contact"), str) or "@" not in tls["contact"] or tls["contact"].startswith("mailto:"):
+        die(f"LetsEncrypt needs a contact email, got {tls.get('contact')!r}")
+    if not isinstance(tls.get("prod_tls"), bool):
+        die("tls.prod_tls must be a boolean")
+    if "dangerous_http_only" in tls or "manual_cert_path" in tls or "manual_key_path" in tls:
+        die("the role must not set dangerous_http_only or manual cert paths")
+    cert_dir = tls.get("cert_dir")
+    if not isinstance(cert_dir, str) or not cert_dir.startswith("/"):
+        die(f"tls.cert_dir must be an absolute path, got {cert_dir!r}")
+    try:
+        with open(os.path.join(cert_dir, "molecule-stub-probe"), "w") as f:
+            f.write("written by the iroh-relay stub\n")
+    except OSError as e:
+        die(f"cannot write to tls.cert_dir {cert_dir}: {e}")
+    if cfg.get("enable_metrics") is not True:
+        die("enable_metrics must be true")
+    metrics = sockaddr(cfg.get("metrics_bind_addr"), "metrics_bind_addr")
+    if not ipaddress.ip_address(metrics[0]).is_loopback:
+        die(f"metrics_bind_addr {cfg['metrics_bind_addr']} is not loopback")
+    qad = cfg.get("enable_quic_addr_discovery", False)
+    if not isinstance(qad, bool):
+        die("enable_quic_addr_discovery must be a boolean")
+    access = cfg.get("access", "everyone")
+    if access != "everyone":
+        if not isinstance(access, dict) or list(access) != ["denylist"]:
+            die(f"access must be \"everyone\" or a denylist, got {access!r}")
+        ids = access["denylist"]
+        if not isinstance(ids, list) or not ids or not all(isinstance(i, str) and re.fullmatch(r"[0-9a-f]{64}", i) for i in ids):
+            die(f"access.denylist must be a list of 64-hex endpoint ids, got {ids!r}")
+    if "key_cache_capacity" in cfg:
+        positive_int(cfg["key_cache_capacity"], "key_cache_capacity")
+    limits = cfg.get("limits")
+    if limits is not None:
+        unknown("[limits]", limits, LIMIT_KEYS)
+        if "accept_conn_limit" in limits and not (isinstance(limits["accept_conn_limit"], float) and limits["accept_conn_limit"] > 0):
+            die(f"limits.accept_conn_limit must be a positive float, got {limits['accept_conn_limit']!r}")
+        if "accept_conn_burst" in limits:
+            positive_int(limits["accept_conn_burst"], "limits.accept_conn_burst")
+        client = limits.get("client")
+        if client is not None:
+            unknown("[limits.client]", client, {"rx"})
+            rx = client.get("rx", {})
+            unknown("[limits.client.rx]", rx, RX_KEYS)
+            if "max_burst_bytes" in rx and "bytes_per_second" not in rx:
+                die("limits.client.rx.max_burst_bytes without bytes_per_second")
+            for k in rx:
+                positive_int(rx[k], f"limits.client.rx.{k}", 2**32 - 1)
+    return {
+        "hostname": hostnames[0],
+        "metrics": metrics,
+        "http": sockaddr(cfg.get("http_bind_addr"), "http_bind_addr"),
+        "https": sockaddr(tls.get("https_bind_addr"), "tls.https_bind_addr"),
+        "quic": sockaddr(tls.get("quic_bind_addr"), "tls.quic_bind_addr") if qad else None,
+    }
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, addr, handler):
+        self.address_family = socket.AF_INET6 if ":" in addr[0] else socket.AF_INET
+        super().__init__(addr, handler, bind_and_activate=False)
+        if self.address_family == socket.AF_INET6:
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        try:
+            self.server_bind()
+            self.server_activate()
+        except OSError as e:
+            die(f"cannot bind {addr}: {e}")
+
+
+def handler(routes):
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            route = routes.get(self.path) or routes.get("*")
+            if route is None:
+                self.send_error(404)
+                return
+            status, ctype, body = route
+            self.send_response(status)
+            if ctype:
+                self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+    return H
+
+
+def serve(server):
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+
+def main():
+    if sys.argv[1:] == ["--version"]:
+        print(f"iroh-relay {STUB_VERSION}")
+        return
+    if len(sys.argv) != 3 or sys.argv[1] != "--config-path":
+        print(f"iroh-relay-stub: unexpected arguments {sys.argv[1:]}", file=sys.stderr)
+        sys.exit(2)
+    cfg = check_config(sys.argv[2])
+    stop = threading.Event()
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+
+    serve(Server(cfg["metrics"], handler({"*": (200, "text/plain; version=0.0.4", METRICS)})))
+    health = json.dumps({"status": "ok", "version": STUB_VERSION, "git_hash": "unknown"}).encode()
+    https = Server(cfg["https"], handler({"/healthz": (200, "application/json", health)}))
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    try:
+        ctx.load_cert_chain(CERT, KEY)
+    except OSError as e:
+        die(f"cannot load the molecule certificate: {e}")
+    https.socket = ctx.wrap_socket(https.socket, server_side=True)
+    serve(https)
+    serve(Server(cfg["http"], handler({"/generate_204": (204, None, b"")})))
+    if cfg["quic"] and not os.path.exists(NO_QUIC_MARKER):
+        host, port = cfg["quic"]
+        udp = socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_DGRAM)
+        if ":" in host:
+            udp.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        try:
+            udp.bind((host, port))
+        except OSError as e:
+            die(f"cannot bind udp {host}:{port}: {e}")
+    print(f"iroh-relay-stub: serving {cfg['hostname']}", file=sys.stderr)
+    if os.path.exists(EXIT_AFTER_MARKER):
+        if not stop.wait(EXIT_AFTER_SECONDS):
+            die(f"{EXIT_AFTER_MARKER} exists: exiting after {EXIT_AFTER_SECONDS}s")
+        return
+    stop.wait()
+
+
+if __name__ == "__main__":
+    main()

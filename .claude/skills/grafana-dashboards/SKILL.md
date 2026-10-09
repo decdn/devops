@@ -26,7 +26,8 @@ targets. `decdn-node` exports ~200 of its own `decdn_*` series, and this repo ma
 four-dashboard suite and alert rules that go with them. `decdn/decdn` ships none; this is
 their only home.
 
-**The files** (the node's in `monitoring/decdn-node/`, sponsord's in `monitoring/sponsord/`):
+**The files** (the node's in `monitoring/decdn-node/`, sponsord's in `monitoring/sponsord/`,
+the iroh relay's in `monitoring/iroh-relay/`):
 
 - `grafana-dashboard.json` — "deCDN — fleet overview", uid `decdn-poc-overview`.
   Fleet status, delivery funnel, slash safety, logs and traces.
@@ -48,6 +49,16 @@ their only home.
   not JSON: select `{unit="sponsord.service"}` and filter on the `level` label the
   `grafana_alloy` role parses. The rules have promtool unit tests in
   `monitoring/sponsord/prometheus-alerts_test.yml`: keep them in step.
+
+- `monitoring/iroh-relay/` — the self-hosted iroh relay's pair: `dashboard-iroh-relay.json`
+  (uid `decdn-iroh-relay`) and `prometheus-alerts.yml` (group `iroh-relay`,
+  `job="iroh-relay"`), Ansible path only, not rendered by the chart. Every series is a
+  `relayserver_*_total` counter (no gauges: "connected" is `accepts − disconnects`).
+  `exported-metrics.txt` is the pinned binary's `/metrics`, and `make lint-helm` fails on
+  any `relayserver_*` name not in it — so this pair, unlike the others, IS name-checked
+  in CI. Re-capture it on an `iroh_relay_version` bump (the command is in its header).
+  Logs: `{unit="iroh-relay.service"}` with the parsed `level`. Unit tests in
+  `prometheus-alerts_test.yml`.
 
 Add a row to an existing dashboard before starting a fifth node one. The Helm chart renders
 the node's files as-is (`templates/prometheusrule.yaml`, `templates/dashboards-configmap.yaml`)

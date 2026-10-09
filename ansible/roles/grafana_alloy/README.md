@@ -197,8 +197,9 @@ Binary/package removal is manual.
 | --- | --- | --- |
 | Node `/metrics` | `decdn-node` | your own dashboards/queries (`grafana_alloy_node_enabled`) |
 | sponsord `/metrics` | `sponsord` | pool balance, top-ups, keeper failures, issued capabilities (`grafana_alloy_sponsord_enabled`); `service_name=sponsord` |
+| iroh-relay `/metrics` | `iroh-relay` | relayed bytes and packets, client connects, QUIC address discovery (`grafana_alloy_iroh_relay_enabled`); `service_name=iroh-relay` |
 | Machine metrics | `integrations/node_exporter` | Grafana Cloud's **Linux Server** integration dashboards + alerts, unmodified |
-| journald | `integrations/node_exporter` | the same integration's logs dashboards (correlated by `instance`); the daemon's own unit (`decdn-node.service`) also carries `service_name=<grafana_alloy_service_name>` (default `decdn-node`), `sponsord.service` carries `service_name=sponsord` when that scrape is on, and `sponsord-onramp.service` carries `service_name=sponsord-onramp` when `grafana_alloy_sponsord_onramp_enabled` is |
+| journald | `integrations/node_exporter` | the same integration's logs dashboards (correlated by `instance`); the daemon's own unit (`decdn-node.service`) also carries `service_name=<grafana_alloy_service_name>` (default `decdn-node`), `sponsord.service` carries `service_name=sponsord` when that scrape is on, `sponsord-onramp.service` carries `service_name=sponsord-onramp` when `grafana_alloy_sponsord_onramp_enabled` is, and `iroh-relay.service` carries `service_name=iroh-relay` when `grafana_alloy_iroh_relay_enabled` is |
 | Alloy self-metrics | `integrations/alloy` | agent health |
 | Traces | — | Application Observability |
 
@@ -271,6 +272,9 @@ deliberately lean and every lever is a variable:
 - sponsord-onramp, when `grafana_alloy_sponsord_onramp_enabled` is on, logs the same
   plain-text format and is treated exactly like sponsord. It has no `/metrics`, so
   that toggle adds no scrape.
+- iroh-relay, when `grafana_alloy_iroh_relay_enabled` is on, logs the same
+  plain-text format (its unit sets `NO_COLOR=1`) and is treated exactly like
+  sponsord, scrape included.
 
 ## Hardening: the two relaxations machine monitoring requires
 
@@ -306,7 +310,7 @@ upstream version/sha256). Highlights:
 | `grafana_alloy_host_metrics_enabled` | `true` | Machine metrics (Alloy's in-process `node_exporter`) |
 | `grafana_alloy_host_collectors` | 13 collectors | Replacement set; `_host_extra_collectors` adds, `_host_disable_collectors` vetoes |
 | `grafana_alloy_host_scrape_interval` | `60s` | Host metrics only; the node keeps `30s` |
-| `grafana_alloy_host_systemd_unit_include` | `(decdn-node\|sponsord\|sponsord-onramp\|caddy\|alloy\|ssh\|sshd)\.service` | Scope of the per-unit `systemd` collector |
+| `grafana_alloy_host_systemd_unit_include` | `(decdn-node\|sponsord\|sponsord-onramp\|iroh-relay\|caddy\|alloy\|ssh\|sshd)\.service` | Scope of the per-unit `systemd` collector |
 | `grafana_alloy_logs_enabled` | `true` | journald → Grafana Cloud Loki |
 | `grafana_alloy_logs_max_age` | `12h` | Bounds the catch-up burst after an outage |
 | `grafana_alloy_self_metrics_enabled` | `true` | Alloy's own health |
@@ -320,6 +324,8 @@ upstream version/sha256). Highlights:
 | `grafana_alloy_sponsord_job` / `_sponsord_service_name` | `sponsord` / `sponsord` | sponsord's job label and `service_name` |
 | `grafana_alloy_sponsord_onramp_enabled` | `false` | Label and re-level sponsord-onramp's journald stream (no scrape: it has no `/metrics`). Set from membership of `sponsord_onramp_hosts` by the same file |
 | `grafana_alloy_sponsord_onramp_service_name` | `sponsord-onramp` | The onramp stream's `service_name` |
+| `grafana_alloy_iroh_relay_enabled` | `false` | Scrape iroh-relay's `/metrics`, label and re-level its journald stream. Set from membership of `iroh_relay_hosts` by the same file |
+| `grafana_alloy_iroh_relay_job` / `_iroh_relay_service_name` | `iroh-relay` / `iroh-relay` | iroh-relay's job label and `service_name` |
 
 Label variables (`service_name`, `service_namespace`, `instance_id`,
 `deployment_environment`, `region`) ship on most series, spans and log lines —
@@ -370,11 +376,11 @@ Three layers, because the first one cannot prove correctness on its own:
    container with no D-Bus and no real journal, so the `systemd` collector and
    journald collect nothing there — expected, and not what this layer proves.
 2. **`make lint-alloy`** (CI job `alloy-config`) — renders these templates in
-   thirteen variable combinations (defaults, minimal identity, fully overridden,
+   fifteen variable combinations (defaults, minimal identity, fully overridden,
    host-metrics-only, logs-only, every sub-knob off, inventory-supplied
    endpoints, OTLP username fallback, vetoed collector + blanked node job,
-   info-dropping guardrail, sponsord-only, node + sponsord co-located, and the
-   same with the onramp) and feeds them to the REAL pinned Alloy binary: `alloy validate`
+   info-dropping guardrail, sponsord-only, node + sponsord co-located, the
+   same with the onramp, relay-only, and node + relay co-located) and feeds them to the REAL pinned Alloy binary: `alloy validate`
    (component graph, not just syntax), a check that every `ExecStart` flag exists
    in `alloy run --help`, and greps proving each Jinja branch actually switched —
    including that "every sub-knob off" reproduces the pre-machine-monitoring

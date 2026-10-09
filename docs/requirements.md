@@ -50,8 +50,19 @@ On Ubuntu 25.10 and later, `sudo` is sudo-rs; see the `ansible_become_exe` note 
   Compose, the `caddy` profile runs the official image and you open both ports in the
   host firewall. Either way, open them in the provider's firewall too, and point the
   domain's A/AAAA records at the host.
+- **An iroh relay host (Ansible only) needs inbound tcp/80, tcp/443 and udp/7842**
+  from anywhere: 443 carries the relay and Let's Encrypt's TLS-ALPN-01 challenge, 80
+  iroh's captive-portal probe, and 7842 QUIC address discovery (unless
+  `iroh_relay_enable_quic_addr_discovery` is `false`). `baseline` opens them for hosts
+  in `iroh_relay_hosts`; open them in the provider's firewall too, and point
+  `iroh_relay_hostname`'s A/AAAA records at the host. It also needs outbound HTTPS to
+  Let's Encrypt. A relay cannot share a host with sponsord-onramp (both want 80 and
+  443). It carries the traffic of every peer pair it relays, so size its bandwidth
+  for that, and set rate limits (`iroh_relay_client_rx_bytes_per_second`) on a
+  metered link.
 - **Outbound:** HTTPS to your RPC provider and to any cache origin; QUIC/UDP to peers;
-  HTTPS to the iroh relays (upstream's defaults unless you set your own).
+  HTTPS to the iroh relays (n0's public relays unless `decdn_relay_urls` names
+  your own; see [`roles/iroh_relay`](../ansible/roles/iroh_relay/README.md)).
 - **NAT:** a node without direct inbound reachability still works through iroh relays,
   at a latency cost. A node that serves paid traffic should be directly reachable, and
   the multiaddr it registers on-chain must be its public address

@@ -8,9 +8,10 @@ DevOps repo.
 The official DevOps project for deploying a **deCDN node**: infrastructure, deployment,
 and operational tooling, for node operators anywhere. There are four deploy paths:
 **Ansible** (`ansible/`, VMs/bare metal, the primary path, also the `decdn.node` Galaxy
-collection), **cloud-init** (`cloud-init/`, one VM that runs the Ansible playbook on
-itself, no control machine), **Docker Compose** (`compose/`, a single Docker host) and a
-**Helm chart** (`charts/decdn-node/`, Kubernetes).
+collection, and the only path that also deploys self-hosted iroh relays), **cloud-init**
+(`cloud-init/`, one VM that runs the Ansible playbook on itself, no control machine),
+**Docker Compose** (`compose/`, a single Docker host) and a **Helm chart**
+(`charts/decdn-node/`, Kubernetes).
 
 This repo is **infrastructure only**. It is *not* a source of truth for protocol or
 economic claims — those trace to the deCDN ADRs. If something here states a protocol fact
@@ -39,6 +40,11 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
    backend stays on loopback. Never bind a *backend* to `0.0.0.0` or expose its raw port.
    `sponsord-onramp` is public by design: its Turnstile gate guards the one action that
    spends (`POST /v1/fund`), and per-address rate limits cover the rest.
+   **iroh relay exception (`iroh_relay` role):** `iroh-relay` is public by design and
+   terminates its own TLS (Let's Encrypt over TLS-ALPN-01; QUIC address discovery needs
+   the same certificate in-process), so it binds tcp/80, tcp/443 and udp/7842 on every
+   address itself, with no proxy and no backend behind it. Its holes come from
+   `iroh_relay_hosts`; its metrics are asserted onto loopback (`127.0.0.1:9092`).
    **Kubernetes exception (chart only):** the node's metrics bind `0.0.0.0` inside the pod
    so kubelet probes and Prometheus can reach them. That is allowed only behind a
    ClusterIP-only Service and the chart's NetworkPolicy (metrics ingress limited to
@@ -58,8 +64,8 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
 
 ```
 ansible/                # the deployment project (DevSec-hardened, lean roles)
-  playbooks/            # site.yml (decdn node + sponsord), sponsord.yml (+ onramp), backup.yml, decommission.yml (node + sponsord)
-  roles/                # baseline, decdn_node, grafana_alloy, sponsord, sponsord_onramp
+  playbooks/            # site.yml (node + sponsord + relay), sponsord.yml (+ onramp), iroh_relay.yml, backup.yml, decommission.yml
+  roles/                # baseline, decdn_node, grafana_alloy, sponsord, sponsord_onramp, iroh_relay
   inventory/ galaxy/ molecule/    # see ansible/README.md
 cloud-init/             # user-data{,-sponsord}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
 compose/                # Docker Compose deploy path for a single host (see its README.md)
@@ -74,6 +80,7 @@ charts/
 monitoring/             # Grafana dashboards + Prometheus alert rules (maintained here)
   decdn-node/           # the node's, rendered by the chart
   sponsord/             # sponsord's (+ promtool unit tests), Ansible/Compose only
+  iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible only
 docs/                   # cross-path operator docs: requirements.md, lifecycle.md
 scripts/                # upstream-mirror generators, the release gate, the molecule driver (molecule.sh)
 ```
@@ -98,7 +105,10 @@ rule that never fires. See `.claude/skills/grafana-dashboards/SKILL.md`. sponsor
 lives in `monitoring/sponsord/`, which the chart does not render; its `sponsord_*`
 names must be ones upstream `decdn/sponsord` `crates/sponsord/src/metrics.rs` exports,
 and its rules have promtool unit tests (`monitoring/sponsord/prometheus-alerts_test.yml`,
-run by `make lint-helm`).
+run by `make lint-helm`). The relay's pair lives in `monitoring/iroh-relay/`, also not
+rendered by the chart, with its own promtool unit tests; there CI does check the names:
+every `relayserver_*` series must appear in `exported-metrics.txt`, the `/metrics` of
+the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
 
 ## Current services
 
@@ -244,6 +254,50 @@ run by `make lint-helm`).
     client address; `molecule/sponsord-onramp-caddy` runs the proxy side effects
     (ACME, `none`, a foreign Caddyfile) on the same converge.
 
+- **`ansible/roles/iroh_relay`** — a self-hosted iroh relay (`iroh-relay` from
+  n0-computer/iroh), the fallback path for deCDN peers that cannot hole-punch and their
+  QUIC address discovery. The ADRs make relays operator-run infrastructure, not an
+  incentivized role (`decdn/adr/architecture.md`, Trust Assumptions); nodes use them
+  through `decdn_relay_urls`, which REPLACES n0's relays (so deploy at least two).
+  `playbooks/iroh_relay.yml` (`make deploy-relay`, also imported by `site.yml`) runs
+  baseline → grafana_alloy → iroh_relay on `iroh_relay_hosts`, after a play refusing a
+  host also in `sponsord_onramp_hosts` (both want 80/443; `make test-scripts` runs it).
+  - **Install:** the release tarball pinned to the iroh version decdn builds against
+    (`iroh_relay_version`, now 1.3.0), verified against a per-target sha256 in defaults
+    (upstream signs nothing; the gnu triples, glibc 2.34+), or `manual`. Bump the
+    version and every digest together.
+  - **Config traps (iroh-relay 1.3.0 `main.rs`):** unknown TOML keys are ignored and a
+    missing config file means built-in defaults (metrics on public `[::]:9090`, no
+    TLS), so the template writes every key and the unit has
+    `AssertPathExists=`/`AssertFileNotEmpty=` on it; QAD (udp/7842) is off unless
+    `enable_quic_addr_discovery = true`; without `RUST_LOG` it logs errors only; it
+    shuts down gracefully on SIGINT only (`KillSignal=SIGINT`). The molecule stub
+    refuses keys `main.rs` does not define, which is what catches a template typo.
+  - **Unit:** `DynamicUser`, `CAP_NET_BIND_SERVICE` only (ambient + bounding),
+    `StateDirectory=iroh-relay iroh-relay/acme` for the Let's Encrypt account and
+    certificates, `LimitNOFILE`.
+  - **Gates:** the bind address is parsed with Python's `ipaddress` on the control
+    machine (no `ansible.utils`), and `::` is refused where `net.ipv6.bindv6only=1`.
+    Before any change, ports 80/443/metrics (and udp/7842 with QAD on) held by any
+    process but the relay are refused. After start, a fatal gate wants loopback
+    `/metrics` answering, every listener owned by `MainPID`, and the same process
+    still up after `iroh_relay_readiness_settle` seconds (the relay binds before it has
+    a certificate, and an ACME failure does not stop it). Then a separate certificate
+    check (`iroh_relay_certificate_check` warn/fail/skip) curls
+    `https://<hostname>/healthz` on the relay's address (loopback for a wildcard bind)
+    against the host trust store; `warn` fails too once the PRODUCTION certificate
+    for this hostname is cached in the ACME dir (tokio-rustls-acme names it after the
+    domain and the ACME directory URL, `vars/main.yml`), never in staging mode, whose
+    certificates are never trusted. Restarts come from the templates' and the binary
+    install's notifies and the restart-inputs record (config, unit, binary). The
+    release stamp is `<version> <target> <pinned archive sha256> <binary sha256>`, so a
+    corrected pin or a binary replaced in place is downloaded and verified again.
+  - **Molecule:** `molecule/iroh-relay` (a molecule CA in place of Let's Encrypt; the
+    stub's markers break each part of the gate), `iroh-relay-lifecycle`
+    (decommission) and `iroh-relay-install` (release mode against a local mirror),
+    both with the same inventory (`make test-scripts` checks), and
+    `validation-iroh-relay`.
+
 - **`cloud-init/`** — the Ansible path with no control machine. Two templates,
   `user-data.yaml` (a node) and `user-data-sponsord.yaml` (sponsord + onramp), share
   stage 1 and differ only in their inventory. They carry only public material (the lint
@@ -362,6 +416,7 @@ make security         # KICS over ansible/, the rendered chart and compose/
 make deps                          # vendor pinned Galaxy collections
 make check / deploy                # site.yml; fleet-wide unless LIMIT=<host>; INVENTORY=<overlay>
 make check-sponsord / deploy-sponsord   # sponsord.yml only (sponsord_hosts)
+make check-relay / deploy-relay         # iroh_relay.yml only (iroh_relay_hosts)
 make backup / decommission LIMIT=… # lifecycle playbooks (decommission requires LIMIT)
 make build / galaxy-check          # the decdn.node collection
 ```
@@ -371,15 +426,16 @@ make build / galaxy-check          # the decdn.node collection
 Inventory-adjacent group_vars do not load for an overlay, so anything every host needs
 regardless of inventory lives in `ansible/playbooks/group_vars/`. The public firewall holes
 (`baseline_extra_inbound`, today the node's udp/4433, plus tcp/80 + tcp/443 on
-`sponsord_onramp_hosts` with `sponsord_onramp_proxy: caddy`) are built from a host's groups in
-`all.yml` (`_baseline_service_inbound`). `decdn_nodes.yml` and `sponsord_hosts.yml` both set
-`baseline_extra_inbound` to that list, so a co-located host renders one firewall in every play.
+`sponsord_onramp_hosts` with `sponsord_onramp_proxy: caddy`, and tcp/80 + tcp/443 + udp/7842
+on `iroh_relay_hosts`, the last unless `iroh_relay_enable_quic_addr_discovery` is false) are
+built from a host's groups in `all.yml` (`_baseline_service_inbound`). `decdn_nodes.yml`,
+`sponsord_hosts.yml` and `iroh_relay_hosts.yml` all set `baseline_extra_inbound` to that list, so a co-located host renders one firewall in every play.
 `ansible/tests/firewall-holes/` (run by `make test-scripts`) pins the result per host shape.
 The Alloy per-daemon toggles also live in `all.yml`. Don't move any of it back under
 `inventory/`.
 
-**Galaxy collection (`decdn.node`).** The five roles (`baseline` + `decdn_node` +
-`grafana_alloy` + `sponsord` + `sponsord_onramp`) ship as a
+**Galaxy collection (`decdn.node`).** The six roles (`baseline` + `decdn_node` +
+`grafana_alloy` + `sponsord` + `sponsord_onramp` + `iroh_relay`) ship as a
 distributable collection. The overlay lives in `ansible/galaxy/` and is staged into a clean
 collection tree by `galaxy/build.sh` — there is **no** `galaxy.yml` at the `ansible/` root
 (that would make ansible-lint treat the deploy project as a collection). Build/validate with

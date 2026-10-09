@@ -21,3 +21,7 @@
 # sponsord on hosts in sponsord_hosts (none unless the inventory defines the group).
 - name: Provision sponsord
   ansible.builtin.import_playbook: sponsord.yml
+
+# iroh relays on hosts in iroh_relay_hosts (none unless the inventory defines the group).
+- name: Provision iroh relays
+  ansible.builtin.import_playbook: iroh_relay.yml

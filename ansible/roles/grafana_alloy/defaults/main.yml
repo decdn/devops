@@ -155,6 +155,13 @@ grafana_alloy_sponsord_service_name: sponsord
 # sponsord_onramp_hosts.
 grafana_alloy_sponsord_onramp_enabled: false
 grafana_alloy_sponsord_onramp_service_name: sponsord-onramp
+# iroh-relay's loopback /metrics (roles/iroh_relay: iroh_relay_metrics_bind:
+# iroh_relay_metrics_port, default 127.0.0.1:9092), with its own job and
+# service_name, and its journald stream labelled and level-parsed as sponsord's.
+# playbooks/group_vars/all.yml derives it from iroh_relay_hosts.
+grafana_alloy_iroh_relay_enabled: false
+grafana_alloy_iroh_relay_job: iroh-relay
+grafana_alloy_iroh_relay_service_name: iroh-relay
 
 # --- Host (machine) metrics ---------------------------------------------------
 # Alloy's built-in node_exporter. Runs IN-PROCESS: no extra listener, no extra
@@ -217,7 +224,8 @@ grafana_alloy_host_disk_device_exclude: '^(ram|loop|fd|(h|s|v|xv)d[a-z]|nvme\d+n
 # Per-unit state, deliberately scoped: one series set per unit on the box is a
 # real cost, and only these units matter. Units must match include AND NOT match
 # exclude.
-grafana_alloy_host_systemd_unit_include: '(decdn-node|sponsord|sponsord-onramp|caddy|alloy|ssh|sshd)\.service'
+grafana_alloy_host_systemd_unit_include: "(decdn-node|sponsord|sponsord-onramp|iroh-relay|\
+  caddy|alloy|ssh|sshd)\\.service"
 grafana_alloy_host_systemd_unit_exclude: '.+\.(automount|device|mount|scope|slice)'
 
 # --- Agent self-monitoring ----------------------------------------------------

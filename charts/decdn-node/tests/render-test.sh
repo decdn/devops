@@ -90,9 +90,9 @@ if not want:
 got = sorted(m.name[len(prefix):] for m in mon)
 if got != want:
     sys.exit(f"packaged files/monitoring {got}\n  != dashboards and rules in monitoring/decdn-node {want}")
-leak = [m.name for m in members if "sponsord" in m.name.lower()]
+leak = [m.name for m in members if "sponsord" in m.name.lower() or "iroh-relay" in m.name.lower()]
 if leak:
-    sys.exit(f"sponsord files in the chart package: {leak}")
+    sys.exit(f"sponsord or iroh-relay files in the chart package: {leak}")
 PY
 }
 out="$(check_monitoring_link "$chart" "$monitoring" "$(mktemp -d "$work/pkg.XXXX")")" || fail "$out"
@@ -129,7 +129,10 @@ touch "$neg/monitoring/decdn-node/README.md"
 expect_link_fail "a stray file in monitoring/decdn-node" "!= dashboards and rules"
 rm "$neg/monitoring/decdn-node/README.md"
 cp "$neg/monitoring/sponsord/dashboard-sponsord.json" "$neg/monitoring/decdn-node/"
-expect_link_fail "the sponsord dashboard copied into monitoring/decdn-node" "sponsord files in the chart package"
+expect_link_fail "the sponsord dashboard copied into monitoring/decdn-node" "sponsord or iroh-relay files in the chart package"
+rm "$neg/monitoring/decdn-node/dashboard-sponsord.json"
+cp "$neg/monitoring/iroh-relay/dashboard-iroh-relay.json" "$neg/monitoring/decdn-node/"
+expect_link_fail "the iroh-relay dashboard copied into monitoring/decdn-node" "sponsord or iroh-relay files in the chart package"
 
 # --- positive renders -----------------------------------------------------------
 for values in "$chart"/ci/*.yaml; do
@@ -225,40 +228,50 @@ if [ -n "$promtool" ]; then
   $promtool check rules < "$monitoring/sponsord/prometheus-alerts.yml" > "$work/promtool.out" 2>&1 \
     || { cat "$work/promtool.out" >&2; fail "promtool check rules (monitoring/sponsord/prometheus-alerts.yml)"; }
   pass "promtool check rules (sponsord): $(grep -o '[0-9]* rules found' "$work/promtool.out")"
+  $promtool check rules < "$monitoring/iroh-relay/prometheus-alerts.yml" > "$work/promtool.out" 2>&1 \
+    || { cat "$work/promtool.out" >&2; fail "promtool check rules (monitoring/iroh-relay/prometheus-alerts.yml)"; }
+  pass "promtool check rules (iroh-relay): $(grep -o '[0-9]* rules found' "$work/promtool.out")"
 
-  # The sponsord rules do time arithmetic on unix-time gauges, which only a unit
-  # test catches. promtool compares annotations exactly and they are prose, so the
-  # test runs against a copy with them stripped
-  # (monitoring/sponsord/prometheus-alerts_test.yml).
+  # The sponsord rules do time arithmetic on unix-time gauges, and the iroh-relay
+  # rules divide one counter's rate by another's, which only a unit test catches.
+  # promtool compares annotations exactly and they are prose, so each test runs
+  # against a copy with them stripped (monitoring/<service>/prometheus-alerts_test.yml).
   mkdir "$work/rules-test"
-  yq 'del(.groups[].rules[].annotations)' "$monitoring/sponsord/prometheus-alerts.yml" \
-    > "$work/rules-test/sponsord-alerts.yml"
-  cp "$monitoring/sponsord/prometheus-alerts_test.yml" "$work/rules-test/sponsord-alerts_test.yml"
+  for svc in sponsord iroh-relay; do
+    yq 'del(.groups[].rules[].annotations)' "$monitoring/$svc/prometheus-alerts.yml" \
+      > "$work/rules-test/$svc-alerts.yml"
+    cp "$monitoring/$svc/prometheus-alerts_test.yml" "$work/rules-test/$svc-alerts_test.yml"
+  done
   chmod -R a+rX "$work/rules-test"
-  if [ -n "${PROMTOOL_IMAGE:-}" ]; then
-    docker run --rm -v "$work/rules-test:/w:ro" -w /w --entrypoint promtool "$PROMTOOL_IMAGE" \
-      test rules sponsord-alerts_test.yml > "$work/promtool.out" 2>&1
-  else
-    (cd "$work/rules-test" && $promtool test rules sponsord-alerts_test.yml) > "$work/promtool.out" 2>&1
-  fi || { cat "$work/promtool.out" >&2; fail "promtool test rules (monitoring/sponsord/prometheus-alerts_test.yml)"; }
-  pass "promtool test rules: sponsord alerts"
+  for svc in sponsord iroh-relay; do
+    if [ -n "${PROMTOOL_IMAGE:-}" ]; then
+      docker run --rm -v "$work/rules-test:/w:ro" -w /w --entrypoint promtool "$PROMTOOL_IMAGE" \
+        test rules "$svc-alerts_test.yml" > "$work/promtool.out" 2>&1
+    else
+      (cd "$work/rules-test" && $promtool test rules "$svc-alerts_test.yml") > "$work/promtool.out" 2>&1
+    fi || { cat "$work/promtool.out" >&2; fail "promtool test rules (monitoring/$svc/prometheus-alerts_test.yml)"; }
+    pass "promtool test rules: $svc alerts"
+  done
 else
-  skipped+=("promtool (PROMTOOL is empty): alert rule syntax and the sponsord rule tests are NOT checked")
+  skipped+=("promtool (PROMTOOL is empty): alert rule syntax and the sponsord and iroh-relay rule tests are NOT checked")
 fi
 
-# The sponsord dashboard lives outside the chart (monitoring/sponsord/), so the
-# chart never renders it (the monitoring-link check above keeps it out of the
-# package). It must still parse and carry a uid no node dashboard uses: Grafana
-# imports by uid.
-python3 - "$monitoring" <<'PY' || fail "sponsord dashboard"
+# The sponsord and iroh-relay dashboards live outside the chart (monitoring/<service>/),
+# so the chart never renders them (the monitoring-link check above keeps them out of
+# the package). They must still parse and carry a uid no other dashboard uses:
+# Grafana imports by uid.
+python3 - "$monitoring" <<'PY' || fail "sponsord / iroh-relay dashboards"
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 uids = [json.load(open(p)).get("uid") for p in sorted((root / "decdn-node").glob("*.json"))]
 if not uids:
     sys.exit("no dashboard in monitoring/decdn-node/")
-dash = sorted((root / "sponsord").glob("*.json"))
-if not dash:
-    sys.exit("no dashboard in monitoring/sponsord/")
+dash = []
+for svc in ("sponsord", "iroh-relay"):
+    found = sorted((root / svc).glob("*.json"))
+    if not found:
+        sys.exit(f"no dashboard in monitoring/{svc}/")
+    dash += found
 for p in dash:
     uid = json.load(open(p)).get("uid")
     if not (isinstance(uid, str) and 0 < len(uid) <= 40):
@@ -267,7 +280,47 @@ for p in dash:
 if len(uids) != len(set(uids)):
     sys.exit(f"duplicate dashboard uids: {sorted(uids)}")
 PY
-pass "sponsord dashboard parses with its own uid"
+pass "sponsord and iroh-relay dashboards parse with their own uids"
+
+# iroh-relay's metric names are checked against what the pinned release exports
+# (monitoring/iroh-relay/exported-metrics.txt, captured from the real binary): a
+# typo would render "no data" or a rule that never fires. Every metric an expr
+# selects (an identifier before `{`) is checked, whatever its prefix, and so is
+# every series the rule tests feed in; only `up` comes from the scraper itself.
+yq -o=json '.' "$monitoring/iroh-relay/prometheus-alerts.yml" > "$work/relay-alerts.json"
+yq -o=json '.' "$monitoring/iroh-relay/prometheus-alerts_test.yml" > "$work/relay-alerts-test.json"
+python3 - "$monitoring/iroh-relay" "$work/relay-alerts.json" "$work/relay-alerts-test.json" <<'PY' \
+  || fail "iroh-relay metric names"
+import json, pathlib, re, sys
+d = pathlib.Path(sys.argv[1])
+have = set(re.findall(r"^([a-z_]+)\s", (d / "exported-metrics.txt").read_text(), re.M)) | {"up"}
+if not any(n.startswith("relayserver_") for n in have):
+    sys.exit("exported-metrics.txt lists no relayserver_* series")
+def strings(node, key):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == key and isinstance(v, str):
+                yield v
+            else:
+                yield from strings(v, key)
+    elif isinstance(node, list):
+        for v in node:
+            yield from strings(v, key)
+metric = re.compile(r"([A-Za-z_:][A-Za-z0-9_:]*)\s*\{")
+sources = [(p.name, json.load(open(p)), "expr") for p in sorted(d.glob("*.json"))]
+sources += [("prometheus-alerts.yml", json.load(open(sys.argv[2])), "expr"),
+            ("prometheus-alerts_test.yml", json.load(open(sys.argv[3])), "series")]
+seen = 0
+for name, doc, key in sources:
+    for expr in strings(doc, key):
+        for m in metric.findall(expr):
+            seen += 1
+            if m not in have:
+                sys.exit(f"{name}: {m} is not exported by the pinned iroh-relay (in {expr!r})")
+if not seen:
+    sys.exit("no metric selector found in monitoring/iroh-relay/ (the check would be vacuous)")
+PY
+pass "iroh-relay dashboard and rules name only exported series"
 
 # The monitoring files the ci-values render must carry in full.
 yq -o=json '.' "$chart/files/monitoring/prometheus-alerts.yml" > "$work/alerts.json"

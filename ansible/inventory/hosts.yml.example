@@ -69,3 +69,15 @@ decdn_nodes:
 # sponsord_onramp_hosts:
 #   hosts:
 #     sponsord-1:
+#
+# OPTIONAL: self-hosted iroh relays, the fallback path for peers that cannot
+# hole-punch — provisioned by playbooks/iroh_relay.yml (`make deploy-relay`) and by
+# site.yml. Public by design: each terminates its own Let's Encrypt TLS on tcp/80 +
+# tcp/443 and serves QUIC address discovery on udp/7842, so it cannot share a host
+# with sponsord-onramp. Deploy at least two before pointing nodes' decdn_relay_urls
+# at them. Its knobs are in group_vars/iroh_relay_hosts.yml (roles/iroh_relay/README.md).
+# iroh_relay_hosts:
+#   hosts:
+#     relay-1:
+#       ansible_host: REPLACE_WITH_RELAY_VPS_IP_OR_DNS
+#       iroh_relay_hostname: relay1.example.org

@@ -1,0 +1,206 @@
+---
+# Install the iroh-relay binary. Two methods, selected by iroh_relay_install_method:
+#   "release" (default): download the pinned iroh-relay-v<version>-<target>.tar.gz
+#     from n0-computer/iroh's GitHub Release, verified against the sha256 pinned in
+#     defaults (upstream publishes no signature), then extract. Idempotent and
+#     upgrade-aware via a stamp that also records the pinned archive digest and the
+#     installed binary's sha256, so a corrected pin, or a binary replaced in place
+#     (same version string, other bytes), is downloaded and verified again.
+#   "manual": copy a binary from the control machine.
+# Every method clears the stamp before it replaces the binary, so an interrupted
+# install leaves no stamp vouching for it.
+
+- name: Install from the pinned GitHub Release tarball
+  when: iroh_relay_install_method == "release"
+  block:
+    - name: Name the release archive
+      ansible.builtin.set_fact:
+        iroh_relay_release_archive: "iroh-relay-v{{ iroh_relay_version }}-{{ iroh_relay_target }}.tar.gz"
+        # The stamp names the target and the pinned archive digest too, so a host
+        # whose triple changed (an override, a re-imaged host) or a pin corrected
+        # without a version bump is not trusted on the version alone.
+        iroh_relay_stamp_prefix: >-
+          {{ iroh_relay_version }} {{ iroh_relay_target }} {{ iroh_relay_sha256[iroh_relay_target] }}
+
+    - name: Read the installed-version stamp
+      ansible.builtin.slurp:
+        src: "{{ _iroh_relay_stamp }}"
+      register: iroh_relay_stamp
+      failed_when: false
+      changed_when: false
+
+    - name: Hash the installed binary
+      ansible.builtin.stat:
+        path: "{{ iroh_relay_bin }}"
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: iroh_relay_bin_pre
+
+    # "<version> <target> <pinned archive sha256> <sha256 of the installed binary>".
+    - name: Decide whether (re)install is needed
+      ansible.builtin.set_fact:
+        iroh_relay_need_install: >-
+          {{ (iroh_relay_stamp.content is not defined)
+             or not (iroh_relay_bin_pre.stat.exists | default(false))
+             or ((iroh_relay_stamp.content | b64decode | trim)
+                 != iroh_relay_stamp_prefix ~ ' ' ~ (iroh_relay_bin_pre.stat.checksum | default(''))) }}
+
+    - name: Report that the release download is not simulated in check mode
+      ansible.builtin.debug:
+        msg: >-
+          check mode: skipping the download + verification of iroh-relay
+          {{ iroh_relay_version }}. The config and unit below still diff normally.
+      when:
+        - iroh_relay_need_install
+        - ansible_check_mode
+
+    - name: Install iroh-relay {{ iroh_relay_version }}
+      when:
+        - iroh_relay_need_install
+        - not ansible_check_mode
+      block:
+        # A private staging directory, not a fixed /tmp path: these bytes are trusted
+        # on the strength of the pinned digest alone.
+        - name: Create a private download staging directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: iroh-relay-install-
+          register: iroh_relay_stage
+          changed_when: false
+
+        - name: Restrict the staging directory to root
+          ansible.builtin.file:
+            path: "{{ iroh_relay_stage.path }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: Create the extraction directory
+          ansible.builtin.file:
+            path: "{{ iroh_relay_stage.path }}/x"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        # get_url verifies the checksum before it keeps the file.
+        - name: Download the release tarball and verify its sha256
+          ansible.builtin.get_url:
+            url: "{{ iroh_relay_release_base }}/v{{ iroh_relay_version }}/{{ iroh_relay_release_archive }}"
+            dest: "{{ iroh_relay_stage.path }}/{{ iroh_relay_release_archive }}"
+            owner: root
+            group: root
+            mode: "0600"
+            checksum: "sha256:{{ iroh_relay_sha256[iroh_relay_target] }}"
+
+        # Dropped before installing, so a release that then fails the version
+        # check leaves no stamp and the next run downloads again.
+        - name: Clear the install stamp before installing
+          ansible.builtin.file:
+            path: "{{ _iroh_relay_stamp }}"
+            state: absent
+
+        - name: Extract the release tarball
+          ansible.builtin.unarchive:
+            src: "{{ iroh_relay_stage.path }}/{{ iroh_relay_release_archive }}"
+            dest: "{{ iroh_relay_stage.path }}/x"
+            remote_src: true
+            owner: root
+            group: root
+
+        # Only the one binary leaves the staging directory.
+        - name: Install the binary
+          ansible.builtin.copy:
+            src: "{{ iroh_relay_stage.path }}/x/{{ _iroh_relay_archive_member }}"
+            dest: "{{ iroh_relay_bin }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+          notify: Restart iroh-relay
+
+      always:
+        - name: Remove the download staging directory
+          ansible.builtin.file:
+            path: "{{ iroh_relay_stage.path }}"
+            state: absent
+          when: iroh_relay_stage.path is defined
+
+- name: Install a binary from the control machine
+  when: iroh_relay_install_method == "manual"
+  block:
+    - name: Clear the install stamp before copying
+      ansible.builtin.file:
+        path: "{{ _iroh_relay_stamp }}"
+        state: absent
+
+    - name: Copy the iroh-relay binary from the control machine
+      ansible.builtin.copy:
+        src: "{{ iroh_relay_manual_bin_src }}"
+        dest: "{{ iroh_relay_bin }}"
+        owner: root
+        group: root
+        mode: "0755"
+      notify: Restart iroh-relay
+
+# Runs every converge. An exact match on clap's `iroh-relay <version>` line in
+# release mode, so a 1.3.0 pin does not accept 11.3.0 or 1.3.0-rc.1 (a binary
+# replaced with the same version string is caught by the stamp's sha256 above); a
+# liveness check for a manual binary.
+- name: Run the installed iroh-relay --version (version backstop)
+  ansible.builtin.command:
+    argv: ["{{ iroh_relay_bin }}", --version]
+  register: iroh_relay_installed_version
+  changed_when: false
+  failed_when: false
+  # The binary only exists once the copy/extract above really ran.
+  when: not ansible_check_mode
+
+- name: Require the installed iroh-relay to run and match the pinned version
+  ansible.builtin.assert:
+    that:
+      - iroh_relay_installed_version.rc == 0
+      - (iroh_relay_installed_version.stdout | trim) is match('^iroh-relay ')
+      - >-
+        iroh_relay_install_method != 'release'
+        or (iroh_relay_installed_version.stdout | trim) == 'iroh-relay ' ~ iroh_relay_version
+    fail_msg: >-
+      {{ iroh_relay_bin }} --version exited {{ iroh_relay_installed_version.rc }} with
+      "{{ iroh_relay_installed_version.stdout | trim }}"{{
+      (', expected "iroh-relay ' ~ iroh_relay_version ~ '"')
+        if iroh_relay_install_method == 'release' else '' }}.
+      The binary on the host is broken or is not the pinned release. In release mode,
+      remove {{ _iroh_relay_stamp }} to force a fresh download.
+  when: not ansible_check_mode
+
+# Written only once the version check passed, so a tarball that installed a wrong
+# or broken binary is fetched again next run instead of being trusted via the stamp.
+- name: Record what was installed
+  when:
+    - iroh_relay_install_method == "release"
+    - iroh_relay_need_install | default(false)
+    - not ansible_check_mode
+  block:
+    - name: Ensure the stamp directory exists
+      ansible.builtin.file:
+        path: "{{ _iroh_relay_stamp | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Hash the binary just installed
+      ansible.builtin.stat:
+        path: "{{ iroh_relay_bin }}"
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: iroh_relay_bin_post
+
+    - name: Record the installed version, target, pin and binary checksum
+      ansible.builtin.copy:
+        dest: "{{ _iroh_relay_stamp }}"
+        content: "{{ iroh_relay_stamp_prefix }} {{ iroh_relay_bin_post.stat.checksum }}\n"
+        owner: root
+        group: root
+        mode: "0644"

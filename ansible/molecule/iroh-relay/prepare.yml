@@ -1,0 +1,70 @@
+---
+# Stage what Let's Encrypt and the operator would provide:
+#   1. a molecule CA, trusted by the host, and a certificate it signed for
+#      relay.molecule.test, which the stub serves on https (the real relay would
+#      fetch one from Let's Encrypt into its state directory);
+#   2. the Grafana Cloud credential env file (as ../grafana-cloud/prepare.yml).
+- name: Prepare
+  hosts: all
+  become: true
+  vars:
+    _ir_pki: /etc/iroh-relay-molecule
+  tasks:
+    - name: Install openssl and the CA tooling
+      ansible.builtin.apt:
+        name: [openssl, ca-certificates]
+        state: present
+        update_cache: true
+
+    - name: Create the molecule PKI directory
+      ansible.builtin.file:
+        path: "{{ _ir_pki }}"
+        state: directory
+        mode: "0755"
+
+    # The leaf key is world-readable on purpose: the stub runs as the unit's
+    # DynamicUser. A throwaway key for a name that resolves nowhere.
+    - name: Generate the molecule CA and the relay's certificate
+      ansible.builtin.shell:
+        executable: /bin/bash
+        chdir: "{{ _ir_pki }}"
+        creates: "{{ _ir_pki }}/relay.crt"
+        cmd: |
+          set -euo pipefail
+          openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=iroh-relay molecule CA" \
+            -keyout ca.key -out ca.crt
+          openssl req -newkey rsa:2048 -nodes -subj "/CN=relay.molecule.test" \
+            -keyout relay.key -out relay.csr
+          printf 'subjectAltName=DNS:relay.molecule.test\n' > relay.ext
+          openssl x509 -req -in relay.csr -CA ca.crt -CAkey ca.key -CAcreateserial -days 30 \
+            -extfile relay.ext -out relay.crt
+          chmod 0644 relay.key relay.crt ca.crt
+          chmod 0600 ca.key
+
+    - name: Trust the molecule CA
+      ansible.builtin.copy:
+        src: "{{ _ir_pki }}/ca.crt"
+        dest: /usr/local/share/ca-certificates/iroh-relay-molecule.crt
+        remote_src: true
+        mode: "0644"
+      register: _ir_ca
+
+    - name: Rebuild the trust store  # noqa: no-handler
+      ansible.builtin.command:
+        cmd: update-ca-certificates
+      changed_when: true
+      when: _ir_ca.changed
+
+    - name: Stage the Grafana Cloud credential fixture on the host
+      ansible.builtin.copy:
+        dest: /etc/grafana-alloy.env
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          GC_PROM_REMOTE_WRITE_URL=https://prometheus-prod-xx.molecule.invalid/api/prom/push
+          GC_OTLP_ENDPOINT=https://otlp-gateway-prod-xx.molecule.invalid/otlp
+          GC_PROM_USERNAME=999888777
+          GC_OTLP_USERNAME=999888779
+          GC_LOKI_USERNAME=999888778
+          GC_API_TOKEN=molecule-test-token

@@ -1,0 +1,590 @@
+---
+# What a green converge + idempotence cannot prove:
+#   1. A re-run with nothing changed leaves the relay alone, and a changed knob (a
+#      second denylist entry) restarts it.
+#   2. The readiness gate is FATAL, and a failed run records nothing: the
+#      restart-input record keeps the last good inputs until a run succeeds.
+#   3. Another process on tcp/80 is refused BEFORE anything changes.
+#   4. Without its config the unit refuses to start (the real binary would run
+#      on its defaults, metrics on a public port).
+#   5. A certificate the host does not trust fails the check in "fail" mode and
+#      only warns in "warn" mode, until Let's Encrypt has issued a production one
+#      for this name (its cache file exists): then warn mode fails too. Staging
+#      only warns, even with its certificate cached.
+#   6. A listener the unit does not hold (no QUIC socket) fails the gate.
+#   7. A relay that binds and then crashes fails the gate (the settle period).
+#   8. A running relay whose record is gone is restarted and recorded again; after
+#      a failed run, the recovery leaves the record on the current inputs.
+#   9. QAD off: rendered off, no udp/7842 listener, and another process on udp/7842
+#      is no conflict, until QAD is on again (the port guard's UDP half).
+#  10. 0.0.0.0 and a specific IPv4 address: rendered, bound, and probed there (the
+#      certificate check is "fail" in this inventory).
+# Decommission runs in ../iroh-relay-lifecycle. The host is left as converged, with
+# the molecule CA trusted, for verify.
+- name: Side effect — restarts, the fatal gate, the port guard, the certificate check
+  hosts: all
+  become: true
+  vars:
+    _ir_record: /etc/iroh-relay/.relay-inputs.sha256
+    # The inventory's denylist entry, and a second one.
+    _ir_first_id: 81d82536cb4c96ddbeab1f6bf4495d126c1942fb90b9ffb433d91d23314801e7
+    _ir_second_id: e8a601ca5aea34a904990dcc03e2c46a7b39d6a23b395dd669ceba0c0aa1077e
+  tasks:
+    - name: Read the relay before anything changes
+      ansible.builtin.systemd_service:
+        name: iroh-relay
+      register: _ir_before
+
+    - name: Assert the relay was running cleanly
+      ansible.builtin.assert:
+        that:
+          - _ir_before.status.ActiveState == 'active'
+          - _ir_before.status.MainPID | int > 0
+        fail_msg: >-
+          Expected iroh-relay active (got ActiveState={{ _ir_before.status.ActiveState }}):
+          journalctl -u iroh-relay -e
+
+    # include_role here, import_playbook in the converge: if the two contexts
+    # resolved any input differently, the relay would restart for that alone, and
+    # the knob check below would pass for the wrong reason.
+    - name: Re-run the relay with nothing changed
+      ansible.builtin.include_role:
+        name: iroh_relay
+
+    - name: Read the relay after the no-op run
+      ansible.builtin.systemd_service:
+        name: iroh-relay
+      register: _ir_noop
+
+    - name: Require the no-op run to have left the relay alone
+      ansible.builtin.assert:
+        that:
+          - _ir_noop.status.MainPID == _ir_before.status.MainPID
+        fail_msg: A re-run with no input changed restarted iroh-relay.
+
+    - name: Converge with a second denylist entry
+      ansible.builtin.include_role:
+        name: iroh_relay
+      vars:
+        iroh_relay_denylist: ["{{ _ir_first_id }}", "{{ _ir_second_id }}"]
+
+    - name: Read the relay after the knob change
+      ansible.builtin.systemd_service:
+        name: iroh-relay
+      register: _ir_knob
+
+    - name: Read the rendered config
+      ansible.builtin.slurp:
+        src: /etc/iroh-relay/iroh-relay.toml
+      register: _ir_config_knob
+
+    - name: Require the knob change to be rendered and to have restarted the relay
+      ansible.builtin.assert:
+        that:
+          - _ir_knob.status.ActiveState == 'active'
+          - _ir_knob.status.MainPID != _ir_before.status.MainPID
+          - _ir_second_id in (_ir_config_knob.content | b64decode)
+        fail_msg: >-
+          After a denylist entry was added the relay's PID went
+          {{ _ir_before.status.MainPID }} -> {{ _ir_knob.status.MainPID }} (must change),
+          or the entry is not in the config.
+
+    - name: Read the restart-input record the relay is now up on
+      ansible.builtin.slurp:
+        src: "{{ _ir_record }}"
+      register: _ir_rec_good
+
+    # --- 2. the fatal gate ---------------------------------------------------------
+    - name: Stop the relay, then make it refuse to start
+      ansible.builtin.systemd_service:
+        name: iroh-relay
+        state: stopped
+
+    - name: Stage the stub's refuse-to-start marker
+      ansible.builtin.copy:
+        dest: /etc/iroh-relay/stub-unhealthy
+        content: ""
+        mode: "0644"
+
+    # A changed input on the failing run (the original denylist): the record must
+    # not take it.
+    - name: Converge against a relay that never comes up
+      block:
+        - name: Run the role with a short readiness window
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_readiness_retries: 3
+            iroh_relay_readiness_delay: 1
+
+        - name: Fail — the readiness gate let a relay that is down through
+          ansible.builtin.fail:
+            msg: The role finished although iroh-relay never came up.
+      rescue:
+        - name: Require the failure to come from the readiness gate itself
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require iroh-relay to be up on all its listeners'
+            fail_msg: >-
+              Expected the role to fail at its readiness assert, but it failed at
+              "{{ ansible_failed_task.name }}".
+
+        - name: Read the restart-input record after the failed run
+          ansible.builtin.slurp:
+            src: "{{ _ir_record }}"
+          register: _ir_rec_failed
+
+        - name: Require the failed run to have left the record on the good inputs
+          ansible.builtin.assert:
+            that:
+              - _ir_rec_failed.content == _ir_rec_good.content
+            fail_msg: The failed run rewrote the restart-input record.
+
+    - name: Remove the refuse-to-start marker
+      ansible.builtin.file:
+        path: /etc/iroh-relay/stub-unhealthy
+        state: absent
+
+    # The relay is crash-looping on the marker until this run restarts it: the
+    # record differs from the inputs, so the role restarts it, and it comes up.
+    - name: Converge the relay back up
+      ansible.builtin.include_role:
+        name: iroh_relay
+
+    - name: Check that the recovery left a running relay and a current record
+      ansible.builtin.include_tasks: includes/record-is-current.yml
+
+    # --- 3. another process on the relay's ports --------------------------------------
+    - name: Stop the relay before squatting on tcp/80
+      ansible.builtin.systemd_service:
+        name: iroh-relay
+        state: stopped
+
+    - name: Squat on tcp/80 with another process
+      ansible.builtin.command:
+        argv: [systemd-run, --unit=molecule-squatter, --collect,
+               python3, -m, http.server, "80", --bind, 0.0.0.0]
+      changed_when: true
+
+    - name: Wait for the squatter to listen
+      ansible.builtin.wait_for:
+        port: 80
+        host: 127.0.0.1
+        timeout: 15
+
+    - name: Hash the config and the unit before the refused run
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        checksum_algorithm: sha256
+      register: _ir_cfg_pre
+      loop: [/etc/iroh-relay/iroh-relay.toml, /etc/systemd/system/iroh-relay.service]
+
+    # Knobs that land in the config (the burst) and in the unit (the log level), so
+    # a guard that fired after either template would show below.
+    - name: Converge with tcp/80 taken (and changed knobs)
+      block:
+        - name: Run the role while another process holds tcp/80
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_accept_conn_burst: 200
+            iroh_relay_log_level: debug
+
+        - name: Fail — the role took a port another process holds
+          ansible.builtin.fail:
+            msg: The role finished although another process held tcp/80.
+      rescue:
+        - name: Require the port guard to be what failed
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Refuse public ports held by another process'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the port guard."
+
+    - name: Hash the config and the unit after the refused run
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        checksum_algorithm: sha256
+      register: _ir_cfg_post
+      loop: [/etc/iroh-relay/iroh-relay.toml, /etc/systemd/system/iroh-relay.service]
+
+    - name: Require the refused run to have changed nothing
+      ansible.builtin.assert:
+        that:
+          - _ir_cfg_post.results | map(attribute='stat.checksum') | list
+            == _ir_cfg_pre.results | map(attribute='stat.checksum') | list
+        fail_msg: The port guard fired after the config or the unit was already rewritten.
+
+    - name: Stop the squatter
+      ansible.builtin.systemd_service:
+        name: molecule-squatter
+        state: stopped
+
+    - name: Converge the relay back up after the squatter
+      ansible.builtin.include_role:
+        name: iroh_relay
+
+    # --- 4. no config, no start --------------------------------------------------------
+    - name: Remove the config behind the role's back
+      ansible.builtin.file:
+        path: /etc/iroh-relay/iroh-relay.toml
+        state: absent
+
+    - name: Restart the relay without its config  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: systemctl restart iroh-relay
+      register: _ir_noconfig
+      changed_when: true
+      failed_when: false
+
+    - name: Read the relay without its config
+      ansible.builtin.systemd_service:
+        name: iroh-relay
+      register: _ir_noconfig_state
+
+    - name: Require the unit to refuse to start without its config
+      ansible.builtin.assert:
+        that:
+          - _ir_noconfig.rc != 0
+          - _ir_noconfig_state.status.ActiveState != 'active'
+        fail_msg: >-
+          iroh-relay started without /etc/iroh-relay/iroh-relay.toml (rc
+          {{ _ir_noconfig.rc }}, {{ _ir_noconfig_state.status.ActiveState }}): the
+          real binary would have run on its defaults.
+
+    - name: Converge the config and the relay back
+      ansible.builtin.include_role:
+        name: iroh_relay
+
+    # --- 5. the certificate check ---------------------------------------------------
+    - name: Distrust the molecule CA
+      ansible.builtin.file:
+        path: /usr/local/share/ca-certificates/iroh-relay-molecule.crt
+        state: absent
+
+    - name: Rebuild the trust store without it  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: update-ca-certificates --fresh
+      changed_when: true
+
+    - name: Converge with an untrusted certificate in fail mode
+      block:
+        - name: Run the role with an untrusted certificate
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_certificate_retries: 2
+
+        - name: Fail — the certificate check passed an untrusted certificate
+          ansible.builtin.fail:
+            msg: The role finished although the relay's certificate is not trusted.
+      rescue:
+        - name: Require the certificate check to be what failed
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Fail on a relay without a trusted certificate'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the certificate check."
+
+    - name: Converge with an untrusted certificate in warn mode
+      ansible.builtin.include_role:
+        name: iroh_relay
+      vars:
+        iroh_relay_certificate_check: warn
+        iroh_relay_certificate_retries: 2
+
+    # Once Let's Encrypt has issued a production certificate for this name (its
+    # cache file exists), an untrusted one is a regression, and warn mode fails
+    # too. tokio-rustls-acme names the file after the domain and the directory URL.
+    - name: Name the production and staging certificate cache files
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import base64, hashlib
+            for d in ("https://acme-v02.api.letsencrypt.org/directory",
+                      "https://acme-staging-v02.api.letsencrypt.org/directory"):
+                h = hashlib.sha256(b"relay.molecule.test\0" + d.encode()).digest()
+                print("cached_cert_" + base64.urlsafe_b64encode(h).decode().rstrip("="))
+      register: _ir_cache_names
+      changed_when: false
+
+    # A staging certificate is never trusted, so staging only warns, even with its
+    # certificate cached (and a staging cache file never counts as a production one).
+    - name: Stage a cached Let's Encrypt staging certificate
+      ansible.builtin.copy:
+        dest: "/var/lib/private/iroh-relay/acme/{{ _ir_cache_names.stdout_lines[1] }}"
+        content: "molecule\n"
+        mode: "0600"
+
+    - name: Converge on the staging CA with its certificate cached, in warn mode
+      ansible.builtin.include_role:
+        name: iroh_relay
+      vars:
+        iroh_relay_acme_staging: true
+        iroh_relay_certificate_check: warn
+        iroh_relay_certificate_retries: 2
+
+    - name: Converge on production with only a staging certificate cached, in warn mode
+      ansible.builtin.include_role:
+        name: iroh_relay
+      vars:
+        iroh_relay_certificate_check: warn
+        iroh_relay_certificate_retries: 2
+
+    - name: Stage a cached Let's Encrypt production certificate
+      ansible.builtin.copy:
+        dest: "/var/lib/private/iroh-relay/acme/{{ _ir_cache_names.stdout_lines[0] }}"
+        content: "molecule\n"
+        mode: "0600"
+
+    - name: Converge with an untrusted certificate after a first issuance
+      block:
+        - name: Run the role in warn mode with a production certificate cached
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_certificate_check: warn
+            iroh_relay_certificate_retries: 2
+
+        - name: Fail — warn mode let a regressed certificate through
+          ansible.builtin.fail:
+            msg: The role finished although a certificate was issued before and is now untrusted.
+      rescue:
+        - name: Require the certificate check to be what failed (after a first issuance)
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Fail on a relay without a trusted certificate'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the certificate check."
+      always:
+        - name: Remove the staged certificate cache files
+          ansible.builtin.file:
+            path: "/var/lib/private/iroh-relay/acme/{{ item }}"
+            state: absent
+          loop: "{{ _ir_cache_names.stdout_lines }}"
+
+    - name: Trust the molecule CA again
+      ansible.builtin.copy:
+        src: /etc/iroh-relay-molecule/ca.crt
+        dest: /usr/local/share/ca-certificates/iroh-relay-molecule.crt
+        remote_src: true
+        mode: "0644"
+
+    - name: Rebuild the trust store with it  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: update-ca-certificates
+      changed_when: true
+
+    - name: Leave the relay as converged for verify
+      ansible.builtin.include_role:
+        name: iroh_relay
+
+# The gate's other refusals, the restart-input record's other branch, QUIC address
+# discovery switched off (and the UDP half of the port guard), and the non-wildcard
+# bind addresses. Ends converged on the inventory's settings, for verify.
+- name: Side effect — gate variants, QAD off, bind addresses
+  hosts: all
+  become: true
+  tasks:
+    # --- 6. a listener the unit does not hold ------------------------------------
+    - name: Stop the relay, then make it skip its QUIC socket
+      ansible.builtin.systemd_service:
+        name: iroh-relay
+        state: stopped
+
+    - name: Stage the stub's no-QUIC marker
+      ansible.builtin.copy:
+        dest: /etc/iroh-relay/stub-no-quic
+        content: ""
+        mode: "0644"
+
+    - name: Converge against a relay that never binds udp/7842
+      block:
+        - name: Run the role with a short readiness window
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_readiness_retries: 3
+            iroh_relay_readiness_delay: 1
+
+        - name: Fail — the gate passed a relay without its QUIC listener
+          ansible.builtin.fail:
+            msg: The role finished although iroh-relay never bound udp/7842.
+      rescue:
+        - name: Require the gate to be what failed (no QUIC listener)
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require iroh-relay to be up on all its listeners'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the readiness gate."
+      always:
+        - name: Remove the no-QUIC marker
+          ansible.builtin.file:
+            path: /etc/iroh-relay/stub-no-quic
+            state: absent
+
+    # --- 7. a relay that binds, then crashes ----------------------------------------
+    - name: Stop the relay, then make it exit shortly after binding
+      ansible.builtin.systemd_service:
+        name: iroh-relay
+        state: stopped
+
+    - name: Stage the stub's exit-after marker
+      ansible.builtin.copy:
+        dest: /etc/iroh-relay/stub-exit-after
+        content: ""
+        mode: "0644"
+
+    - name: Converge against a relay that exits after binding
+      block:
+        - name: Run the role with a settle period longer than the relay lives
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_readiness_retries: 3
+            iroh_relay_readiness_delay: 1
+            iroh_relay_readiness_settle: 5
+
+        - name: Fail — the gate passed a relay that crashed after binding
+          ansible.builtin.fail:
+            msg: The role finished although iroh-relay exited right after binding.
+      rescue:
+        - name: Require the gate to be what failed (a crash after binding)
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require iroh-relay to be up on all its listeners'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the readiness gate."
+      always:
+        - name: Remove the exit-after marker
+          ansible.builtin.file:
+            path: /etc/iroh-relay/stub-exit-after
+            state: absent
+
+    - name: Converge the relay back up after the crash
+      ansible.builtin.include_role:
+        name: iroh_relay
+
+    # --- 8. a running relay with no record ------------------------------------------
+    - name: Read the relay before its record goes missing
+      ansible.builtin.systemd_service:
+        name: iroh-relay
+      register: _ir_norec_before
+
+    - name: Remove the restart-input record
+      ansible.builtin.file:
+        path: /etc/iroh-relay/.relay-inputs.sha256
+        state: absent
+
+    - name: Converge with no record
+      ansible.builtin.include_role:
+        name: iroh_relay
+
+    - name: Read the relay after the converge with no record
+      ansible.builtin.systemd_service:
+        name: iroh-relay
+      register: _ir_norec_after
+
+    - name: Require a relay never confirmed on its inputs to be restarted
+      ansible.builtin.assert:
+        that:
+          - _ir_norec_after.status.MainPID != _ir_norec_before.status.MainPID
+        fail_msg: >-
+          With its record gone, a running relay must be restarted (it was never
+          confirmed up on its current inputs); its PID stayed
+          {{ _ir_norec_before.status.MainPID }}.
+
+    - name: Check that the record is back on the current inputs
+      ansible.builtin.include_tasks: includes/record-is-current.yml
+
+    # --- 9. QUIC address discovery off ----------------------------------------------
+    - name: Converge with QUIC address discovery off
+      ansible.builtin.include_role:
+        name: iroh_relay
+      vars:
+        iroh_relay_enable_quic_addr_discovery: false
+
+    - name: Read the config and the UDP listeners with QAD off
+      ansible.builtin.command:
+        argv: [ss, -Hlun, "sport = :7842"]
+      register: _ir_qad_off_udp
+      changed_when: false
+
+    - name: Read the rendered config with QAD off
+      ansible.builtin.slurp:
+        src: /etc/iroh-relay/iroh-relay.toml
+      register: _ir_qad_off_cfg
+
+    - name: Require QAD off in the config and on the wire
+      ansible.builtin.assert:
+        that:
+          - "'enable_quic_addr_discovery = false' in (_ir_qad_off_cfg.content | b64decode)"
+          - _ir_qad_off_udp.stdout | trim | length == 0
+        fail_msg: "QAD off: udp/7842 listeners {{ _ir_qad_off_udp.stdout }}"
+
+    - name: Squat on udp/7842 with another process
+      ansible.builtin.command:
+        argv:
+          - systemd-run
+          - --unit=molecule-udp-squatter
+          - --collect
+          - python3
+          - -c
+          - >-
+            import socket, time;
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM);
+            s.bind(('0.0.0.0', 7842)); time.sleep(3600)
+      changed_when: true
+
+    - name: Wait for the UDP squatter to bind
+      ansible.builtin.command:
+        argv: [ss, -Hlun, "sport = :7842"]
+      register: _ir_udp_squat
+      changed_when: false
+      retries: 10
+      delay: 1
+      until: _ir_udp_squat.stdout | trim | length > 0
+
+    # With QAD off the relay does not want udp/7842: the squatter is no conflict.
+    - name: Converge with QAD off beside the UDP squatter
+      ansible.builtin.include_role:
+        name: iroh_relay
+      vars:
+        iroh_relay_enable_quic_addr_discovery: false
+
+    - name: Converge with QAD on while another process holds udp/7842
+      block:
+        - name: Run the role with QAD on beside the UDP squatter
+          ansible.builtin.include_role:
+            name: iroh_relay
+
+        - name: Fail — the role took a UDP port another process holds
+          ansible.builtin.fail:
+            msg: The role finished although another process held udp/7842.
+      rescue:
+        - name: Require the port guard to be what failed (udp/7842)
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Refuse public ports held by another process'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the port guard."
+      always:
+        - name: Stop the UDP squatter
+          ansible.builtin.systemd_service:
+            name: molecule-udp-squatter
+            state: stopped
+          failed_when: false
+
+    # --- 10. non-wildcard bind addresses -----------------------------------------------
+    # The certificate check is "fail" in this inventory, so a probe aimed at the
+    # wrong address fails these converges.
+    - name: Converge on each IPv4 bind address
+      ansible.builtin.include_tasks: includes/bind-address.yml
+      loop:
+        - 0.0.0.0
+        - "{{ ansible_facts['default_ipv4']['address'] }}"
+      loop_control:
+        loop_var: _ir_bind
+
+    - name: Converge back on the inventory's settings
+      ansible.builtin.include_role:
+        name: iroh_relay
+
+    - name: Check the relay is back on a current record
+      ansible.builtin.include_tasks: includes/record-is-current.yml

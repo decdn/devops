@@ -2,15 +2,16 @@
 
 Deploy and harden a **public [deCDN](https://decdn.org) node**. This collection is
 the public, reusable slice of the [`decdn/devops`](https://github.com/decdn/devops)
-repository — five roles and nothing else:
+repository — six roles and nothing else:
 
 | Role | Purpose |
 |------|---------|
 | `decdn.node.baseline` | Debian/Ubuntu host baseline — nftables default-deny inbound, fail2ban, unattended-upgrades, chrony, an admin sudo user, then DevSec OS + SSH hardening (applied last). |
 | `decdn.node.decdn_node` | The `decdn-node` daemon under a hardened systemd unit — from a GPG-verified release tarball (the default), a build on the host from a git ref, or locally built binaries; public QUIC udp/4433, loopback metrics + admin RPC. `decdn_network` sets the chain from upstream's manifest; `tasks_from: backup` / `decommission` for day 2. |
-| `decdn.node.grafana_alloy` | Opt-in Grafana Cloud observability agent — loopback-only Alloy receiver and hardened telemetry export; scrapes the node, `sponsord`, or both (`grafana_alloy_node_enabled` / `grafana_alloy_sponsord_enabled`), and labels the onramp's journal (`grafana_alloy_sponsord_onramp_enabled`). |
+| `decdn.node.grafana_alloy` | Opt-in Grafana Cloud observability agent — loopback-only Alloy receiver and hardened telemetry export; scrapes the node, `sponsord`, or both (`grafana_alloy_node_enabled` / `grafana_alloy_sponsord_enabled`), labels the onramp's journal (`grafana_alloy_sponsord_onramp_enabled`), and scrapes an iroh relay (`grafana_alloy_iroh_relay_enabled`). |
 | `decdn.node.sponsord` | The `sponsord` onboarding sponsor (treasury signer + PaymentPool keeper), standalone or beside a node — local binary or GPG-verified `sponsord-v*` release, `DynamicUser` unit with the API token and treasury wallet as systemd credentials, loopback-only API, `/healthz` deploy gate. `sponsord_network` sets the chain and PaymentPool from upstream's manifest. Restarts refuse while a pool top-up is held; `tasks_from: backup` / `decommission` for day 2. |
 | `decdn.node.sponsord_onramp` | `sponsord-onramp`, sponsord's public side (Turnstile gate, installers, CLI API), on the daemon's host — local binary or GPG-verified `sponsord-onramp-v*` release, `DynamicUser` unit with the daemon token and Turnstile secret as systemd credentials, loopback listener behind Caddy (distro package, ACME TLS, admin API off; or your own proxy), `/healthz` deploy gate; `tasks_from: decommission`. |
+| `decdn.node.iroh_relay` | A self-hosted [iroh relay](https://github.com/n0-computer/iroh) (`iroh-relay`) for deCDN peers that cannot hole-punch — sha256-pinned upstream release (or a local binary), its own Let's Encrypt TLS, QUIC address discovery, `DynamicUser` unit holding only `CAP_NET_BIND_SERVICE`, loopback metrics, a deploy gate on every listener, a refusal of ports another process holds; `tasks_from: decommission`. Point nodes at it with `decdn_relay_urls`. |
 
 ## Requirements
 
@@ -84,6 +85,7 @@ full variable list, the eth-keystore prerequisite, and day-2 ops:
 - [`roles/grafana_alloy`](https://github.com/decdn/devops/tree/main/ansible/roles/grafana_alloy)
 - [`roles/sponsord`](https://github.com/decdn/devops/tree/main/ansible/roles/sponsord)
 - [`roles/sponsord_onramp`](https://github.com/decdn/devops/tree/main/ansible/roles/sponsord_onramp)
+- [`roles/iroh_relay`](https://github.com/decdn/devops/tree/main/ansible/roles/iroh_relay)
 
 ## Security model
 
@@ -91,7 +93,10 @@ Backends bind `127.0.0.1`; the node opens exactly one public hole (QUIC udp/4433
 `sponsord_onramp` also listens on loopback: Caddy is its public side, so a host that
 runs it opens tcp/80 and tcp/443 for Caddy in `baseline_extra_inbound` (this repo's
 playbooks derive that from `sponsord_onramp_hosts`; from your own playbook, add them
-yourself).
+yourself). `iroh_relay` is public by design and terminates its own TLS: it binds
+tcp/80, tcp/443 and udp/7842 on every address (its metrics stay on loopback), so a
+relay host opens those three. The role refuses to deploy it where another process
+holds them.
 No secrets ship in the collection or are committed — the eth keystore is
 operator-provisioned on the host, and `rpc_url` (which may embed an API key) renders
 to a `0600` file. SSH hardening is applied last, after the admin key is in place, so

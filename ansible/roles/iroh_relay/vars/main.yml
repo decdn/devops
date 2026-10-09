@@ -1,0 +1,38 @@
+---
+# Host architecture (ansible_facts['architecture']) -> the upstream release target
+# triple. iroh's releases also carry musl builds; the gnu ones need glibc 2.34+,
+# which every supported platform has (Debian 12: 2.36), and glibc's allocator
+# serves a busy relay better than musl's. Role vars, not defaults: the supported
+# set is a fact about upstream's release matrix, not an operator knob.
+_iroh_relay_arch_targets:
+  x86_64: x86_64-unknown-linux-gnu
+  aarch64: aarch64-unknown-linux-gnu
+
+# The ports are not knobs: ACME's TLS-ALPN-01 challenge comes to 443, iroh's
+# captive-portal probe to 80, and iroh clients assume 7842 for QUIC address
+# discovery. playbooks/group_vars/all.yml opens the same three.
+_iroh_relay_ports:
+  http: 80
+  https: 443
+  quic: 7842
+
+# systemd's StateDirectory= (the unit runs as a DynamicUser, so it lives under
+# /var/lib/private and /var/lib/iroh-relay is a symlink to it). The ACME account
+# key and certificates live in acme/.
+_iroh_relay_state_dir: /var/lib/iroh-relay
+_iroh_relay_cert_dir: /var/lib/iroh-relay/acme
+_iroh_relay_unit: /etc/systemd/system/iroh-relay.service
+_iroh_relay_stamp: /usr/local/lib/iroh-relay/installed-version
+
+# The archive holds one flat binary at its root.
+_iroh_relay_archive_member: iroh-relay
+
+# Let's Encrypt's production ACME directory, as tokio-rustls-acme 0.9 names it. Its
+# certificate cache file is cached_cert_<base64url(sha256(domain NUL directory))>,
+# so the role can tell a production certificate for this hostname from a staging
+# one (or one for an old name).
+_iroh_relay_acme_production_directory: https://acme-v02.api.letsencrypt.org/directory
+
+# One series the relay always exports, for the readiness gate (the full list:
+# monitoring/iroh-relay/exported-metrics.txt).
+_iroh_relay_gate_metric: relayserver_accepts_total

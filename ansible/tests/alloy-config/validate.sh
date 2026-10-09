@@ -269,7 +269,7 @@ assert_has sponsordonly.alloy 'forward_to      = [prometheus.relabel.sponsord_id
 assert_has sponsordonly.alloy 'replacement  = "sponsord"' "the sponsord metric service_name"
 assert_has sponsordonly.alloy 'regex         = "sponsord\\.service"' "the sponsord log-stream unit match"
 assert_has sponsordonly.alloy 'replacement   = "sponsord"' "the sponsord log-stream service_name"
-assert_has sponsordonly.alloy '(decdn-node|sponsord|sponsord-onramp|caddy|alloy|ssh|sshd)' "sponsord, the onramp and Caddy in the systemd collector's unit list"
+assert_has sponsordonly.alloy '(decdn-node|sponsord|sponsord-onramp|iroh-relay|caddy|alloy|ssh|sshd)' "sponsord, the onramp, iroh-relay and Caddy in the systemd collector's unit list"
 assert_has colocated.alloy 'prometheus.scrape "decdn_node"' "the node scrape on a co-located host"
 assert_has colocated.alloy 'prometheus.scrape "sponsord"' "the sponsord scrape on a co-located host"
 assert_has colocated.alloy '"__address__" = "127.0.0.1:8090"' "the default sponsord listener"
@@ -280,6 +280,29 @@ assert_has colocatedonramp.alloy 'regex         = "sponsord-onramp\\.service"' "
 assert_has colocatedonramp.alloy 'replacement   = "sponsord-onramp"' "the onramp log-stream service_name"
 assert_has colocatedonramp.alloy '"(?:decdn-node|sponsord|sponsord-onramp)\\.service"' "the onramp in the priority exemption"
 assert_has colocatedonramp.alloy '{unit=~"(sponsord|sponsord-onramp)\\.service"}' "the onramp in the plain-text level selector"
+assert_lacks defaults.alloy 'prometheus.scrape "iroh_relay"' "a relay scrape while it is disabled"
+assert_lacks defaults.alloy 'iroh-relay\\.service' "a relay log rule while it is disabled"
+assert_lacks colocatedonramp.alloy 'prometheus.scrape "iroh_relay"' "a relay scrape on a host without a relay"
+assert_lacks relayonly.alloy 'prometheus.scrape "decdn_node"' "the node scrape on a relay-only host"
+assert_lacks relayonly.alloy 'prometheus.scrape "sponsord"' "a sponsord scrape on a relay-only host"
+assert_has relayonly.alloy 'prometheus.scrape "iroh_relay"' "the relay scrape"
+assert_has relayonly.alloy '"__address__" = "127.0.0.1:19092"' "the relay listener from iroh_relay_metrics_port"
+assert_has relayonly.alloy '"job"         = "iroh-relay"' "the relay job label"
+assert_has relayonly.alloy 'forward_to      = [prometheus.relabel.iroh_relay_identity.receiver]' "the relay scrape feeding its own identity"
+assert_has relayonly.alloy 'replacement  = "iroh-relay"' "the relay metric service_name"
+assert_has relayonly.alloy 'regex         = "iroh-relay\\.service"' "the relay log-stream unit match"
+assert_has relayonly.alloy 'replacement   = "iroh-relay"' "the relay log-stream service_name"
+assert_has relayonly.alloy '"(?:decdn-node|iroh-relay)\\.service"' "the relay in the priority exemption"
+assert_has relayonly.alloy '{unit=~"(iroh-relay)\\.service"}' "the relay in the plain-text level selector"
+assert_has colocatedrelay.alloy 'prometheus.scrape "decdn_node"' "the node scrape on a node that also runs a relay"
+assert_has colocatedrelay.alloy 'prometheus.scrape "iroh_relay"' "the relay scrape on a node that also runs a relay"
+assert_has colocatedrelay.alloy '"__address__" = "127.0.0.1:9092"' "the default relay listener"
+# config.alloy.j2 falls back to 127.0.0.1:9092 where the iroh_relay role's defaults
+# are not loaded (a node play on a node + relay host): it must be that role's default.
+for want in '^iroh_relay_metrics_bind: 127\.0\.0\.1([[:space:]]|$)' '^iroh_relay_metrics_port: 9092([[:space:]]|$)'; do
+  grep -qE "$want" "$ansible_dir/roles/iroh_relay/defaults/main.yml" \
+    || fail "iroh_relay's metrics default is not 127.0.0.1:9092: update the fallback in config.alloy.j2"
+done
 echo "ok: per-daemon scrape toggles"
 
 # --- Gate 1c: URLs are redacted, and the daemon's level comes from its line ----
@@ -321,6 +344,13 @@ samples_json() { # nanosecond timestamp
     ["$1","2026-10-05T07:59:11.000003Z  WARN sponsord_onramp::gate::turnstile: ro-warn"],
     ["$1","Error: ro-raw the daemon at http://127.0.0.1:8090 is unreachable"],
     ["$1","ro-plain an unlevelled line"]]},
+  {"stream":{"journal__systemd_unit":"iroh-relay.service","journal_priority_keyword":"info"},"values":[
+    ["$1","2026-10-09T05:30:21.000001Z DEBUG iroh_relay::server::client: ir-debug"],
+    ["$1","2026-10-09T05:30:21.000002Z  INFO iroh_relay::server: ir-info"],
+    ["$1","2026-10-09T05:30:21.000003Z  WARN iroh_relay::server::http_server: ir-warn"],
+    ["$1","2026-10-09T05:30:21.000004Z ERROR acme: iroh_relay::server: ir-acme error: Order(Acme(HttpRequest(url: https://SECRET-RU:SECRET-RP@acme.example/dir?SECRET-RQ=1 )))"],
+    ["$1","Error: ir-raw config must be valid toml"],
+    ["$1","ir-plain an unlevelled line"]]},
   {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"info"},"values":[
     ["$1","{\"level\":\"ERROR\",\"fields\":{\"message\":\"m-other-info\"}}"]]},
   {"stream":{"journal__systemd_unit":"other.service","journal_priority_keyword":"error"},"values":[
@@ -451,7 +481,8 @@ no_secrets() {
 
 # Defaults (guardrail "debug|trace"), sponsord not enabled: its plain-text lines
 # are not re-levelled and stand at journald's info.
-run_level_harness defaults.alloy 39
+run_level_harness defaults.alloy 45
+kept ir-warn info iroh-relay.service  # relay not enabled: journald's level
 kept s-trace info sponsord.service
 kept s-error info sponsord.service
 kept m-warn-uc warning decdn-node.service
@@ -524,6 +555,7 @@ kept m-weird info decdn-node.service
 kept m-text info decdn-node.service
 kept m-other-error error other.service
 dropped ro-warn                           # onramp not enabled: judged at journald's info
+dropped ir-acme                           # relay not enabled: judged at journald's info
 dropped m-info
 dropped m-trace
 dropped m-debug
@@ -532,7 +564,7 @@ dropped m-other-debug
 echo "ok: daemon log level follows the JSON body (info in the guardrail)"
 
 # sponsord enabled: its level is parsed from the plain-text line.
-run_level_harness sponsordonly.alloy 37
+run_level_harness sponsordonly.alloy 43
 no_secrets
 kept s-rpcurl error sponsord.service     # the "Error: " match still sees the redacted line
 kept s-info info sponsord.service
@@ -578,6 +610,21 @@ kept m-error error decdn-node.service
 dropped ro-info
 dropped ro-debug
 echo "ok: the onramp judged by its own level (info in the guardrail)"
+
+# iroh-relay: exempt, and levelled from its plain-text line like sponsord.
+run_level_harness relayonly.alloy 27
+no_secrets
+redacted ir-acme 'https://<redacted>@acme.example/<redacted>'
+kept ir-warn warning iroh-relay.service
+kept ir-acme error iroh-relay.service     # ACME failures (the "acme:" span prefix) are errors
+kept ir-raw error iroh-relay.service      # its exit error: an error
+kept ir-plain info iroh-relay.service     # exempt: no level of its own to judge by
+kept m-error error decdn-node.service     # the node's JSON stage is unaffected
+dropped ir-info
+dropped ir-debug
+dropped s-error                           # sponsord is not enabled here
+dropped ro-warn
+echo "ok: iroh-relay judged by its own level (info in the guardrail)"
 
 # --- Gate 2: every ExecStart flag exists -------------------------------------
 # `alloy run` ignores nothing: an unknown flag exits non-zero, i.e. a systemd

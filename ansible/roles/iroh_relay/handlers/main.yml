@@ -1,0 +1,8 @@
+---
+# The handler reloads systemd itself rather than relying on a separate "Reload
+# systemd" handler running first (see roles/sponsord/handlers/main.yml).
+- name: Restart iroh-relay
+  ansible.builtin.systemd:
+    name: iroh-relay
+    state: restarted
+    daemon_reload: true

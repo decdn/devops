@@ -84,7 +84,9 @@ This is the canonical statement; the per-path READMEs add only what is specific 
   public traffic declares its port explicitly, and the node declares exactly one:
   udp/4433. The sponsor's public onramp (Ansible and Compose) stays on loopback too,
   behind Caddy on tcp/80 + tcp/443 (the default on Ansible, the `caddy` profile on
-  Compose; otherwise you bring the proxy and open its ports). On Kubernetes, metrics bind `0.0.0.0` in the pod only behind a ClusterIP
+  Compose; otherwise you bring the proxy and open its ports). A self-hosted iroh relay
+  (Ansible) is public by design: it terminates its own TLS on tcp/80 + tcp/443 and serves
+  QUIC address discovery on udp/7842, with its metrics on loopback. On Kubernetes, metrics bind `0.0.0.0` in the pod only behind a ClusterIP
   Service and a NetworkPolicy.
 - **Default-deny inbound** (Ansible's `baseline`, nftables). SSH is the only
   universally open port; extra public ports are declared via `baseline_extra_inbound`.
@@ -99,11 +101,11 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 
 | Path | What it is |
 |------|------------|
-| [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `sponsord.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
+| [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `sponsord.yml`, `iroh_relay.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`, `iroh_relay`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
 | [`cloud-init/`](cloud-init/README.md) | The cloud-init deploy path: `user-data.yaml` (a node), `user-data-sponsord.yaml` (a sponsor host), the on-host `bootstrap.sh`, and the pinned ansible-core and collections it installs. |
 | [`compose/`](compose/README.md) | The Docker Compose deploy path: the node, `sponsord`, `sponsord-onramp` and Caddy, one profile each. |
 | [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart; it renders the node's dashboards and alert rules from `monitoring/`. |
-| [`monitoring/`](monitoring/README.md) | The deCDN Grafana dashboards and Prometheus alert rules, for the node (`decdn-node/`) and sponsord (`sponsord/`), on every deploy path. |
+| [`monitoring/`](monitoring/README.md) | The deCDN Grafana dashboards and Prometheus alert rules, for the node (`decdn-node/`, every deploy path), sponsord (`sponsord/`, Ansible and Compose) and the iroh relay (`iroh-relay/`, Ansible). |
 | [`docs/`](docs/requirements.md) | Cross-path operator docs: requirements, lifecycle. |
 | `scripts/` | Generators for the upstream mirrors (network profiles) and the release gate. |
 | `Makefile` | Lint, test and security targets; CI runs the same ones. `make help` lists them. |

@@ -8,6 +8,36 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- `iroh_relay`: a new role for a self-hosted iroh relay (`iroh-relay` from
+  n0-computer/iroh, pinned to v1.3.0, the iroh version decdn builds against), the
+  fallback path for deCDN peers that cannot hole-punch and their QUIC address
+  discovery. Installs the release tarball verified against a per-target sha256 pin
+  (upstream signs nothing) or a `manual` binary; templates `iroh-relay.toml` with
+  every key written out (iroh-relay ignores unknown keys and runs on its defaults
+  without the file, so the unit asserts the file exists); runs it as a
+  `DynamicUser` holding only `CAP_NET_BIND_SERVICE`, with its Let's Encrypt
+  account and certificates in a `StateDirectory`, SIGINT shutdown and a raised
+  `LimitNOFILE`. tcp/80, tcp/443 and udp/7842 (QUIC address discovery,
+  `iroh_relay_enable_quic_addr_discovery`) are public; metrics are asserted onto
+  loopback (127.0.0.1:9092, clear of the node's 9090). Open access by default, with
+  an optional hex endpoint-ID denylist and rate limits. The bind address is parsed
+  as an IP (no port, loopback, link-local or mapped forms), and `::` is refused
+  where `net.ipv6.bindv6only=1`. Before any change it refuses ports another process
+  holds; after the start, a fatal gate requires metrics to answer, every listener
+  to belong to the unit and the process to stay up for `iroh_relay_readiness_settle`
+  seconds. A separate certificate check (`iroh_relay_certificate_check`: warn, fail
+  or skip) fetches `https://<hostname>/healthz` on the relay's address (loopback for
+  a wildcard bind) against the host's trust store; `warn` also fails once Let's
+  Encrypt has issued a production certificate for the hostname before (never in
+  staging mode). The release stamp records the pinned archive digest and the
+  binary's sha256, so a corrected pin or a binary replaced in place is downloaded
+  and verified again.
+  `tasks_from: decommission` keeps the config, binary and ACME state.
+- `grafana_alloy`: `grafana_alloy_iroh_relay_enabled` scrapes the relay's loopback
+  `/metrics` as `job="iroh-relay"` and labels and re-levels its journal stream like
+  sponsord's; `iroh-relay.service` joins the systemd collector's unit list.
+- `decdn_node`, `sponsord`, `sponsord_onramp`: the decommission confirmation names
+  `iroh-relay` too when the run covers relay hosts.
 - `decdn_node`, `sponsord`, `sponsord_onramp`: a `source` install method that
   clones `*_source_repo` (the upstream GitHub repo by default) at `*_source_ref`
   (any tag, branch or SHA) on the target and builds it there with `cargo build

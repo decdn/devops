@@ -1,0 +1,100 @@
+# promtool unit tests for prometheus-alerts.yml beside it, run by the chart's
+# tests/render-test.sh (`make lint-helm`). The rules divide one counter's rate by
+# another's, which promtool check cannot catch. The test clock starts at 0.
+#
+# It does not run in place: render-test.sh copies it into a scratch directory as
+# iroh-relay-alerts_test.yml, beside a copy of prometheus-alerts.yml with the
+# annotations stripped (promtool compares annotations exactly, and they are prose)
+# named iroh-relay-alerts.yml, the name rule_files below expects.
+rule_files:
+  - iroh-relay-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # Down for 2m fires; a healthy target does not.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="iroh-relay", instance="a"}'
+        values: '0x10'
+      - series: 'up{job="iroh-relay", instance="b"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: IrohRelayDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: IrohRelayDown
+        exp_alerts:
+          - exp_labels: {job: iroh-relay, instance: a, component: relay, severity: critical}
+
+  # a: 9 of every 10 https connections error out; b: 1 in 10; c: no traffic at
+  # all (0/0 is NaN, which never fires). The same shapes for QAD.
+  - interval: 1m
+    input_series:
+      - series: 'relayserver_http_connections_total{job="iroh-relay", instance="a"}'
+        values: '0+10x60'
+      - series: 'relayserver_http_connections_errored_total{job="iroh-relay", instance="a"}'
+        values: '0+9x60'
+      - series: 'relayserver_http_connections_total{job="iroh-relay", instance="b"}'
+        values: '0+10x60'
+      - series: 'relayserver_http_connections_errored_total{job="iroh-relay", instance="b"}'
+        values: '0+1x60'
+      - series: 'relayserver_http_connections_total{job="iroh-relay", instance="c"}'
+        values: '0x60'
+      - series: 'relayserver_http_connections_errored_total{job="iroh-relay", instance="c"}'
+        values: '0x60'
+      - series: 'relayserver_qad_incoming_total{job="iroh-relay", instance="a"}'
+        values: '0+10x60'
+      - series: 'relayserver_qad_incoming_error_total{job="iroh-relay", instance="a"}'
+        values: '0+8x60'
+      - series: 'relayserver_qad_incoming_total{job="iroh-relay", instance="b"}'
+        values: '0+10x60'
+      - series: 'relayserver_qad_incoming_error_total{job="iroh-relay", instance="b"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: IrohRelayHTTPSErrors
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: IrohRelayHTTPSErrors
+        exp_alerts:
+          - exp_labels: {job: iroh-relay, instance: a, component: relay, severity: warning}
+      - eval_time: 40m
+        alertname: IrohRelayQADHandshakeErrors
+        exp_alerts:
+          - exp_labels: {job: iroh-relay, instance: a, component: relay, severity: warning}
+
+  # a drops 10% of relayed packets, b 1%.
+  - interval: 1m
+    input_series:
+      - series: 'relayserver_send_packets_recv_total{job="iroh-relay", instance="a"}'
+        values: '0+100x60'
+      - series: 'relayserver_send_packets_dropped_total{job="iroh-relay", instance="a"}'
+        values: '0+10x60'
+      - series: 'relayserver_send_packets_recv_total{job="iroh-relay", instance="b"}'
+        values: '0+100x60'
+      - series: 'relayserver_send_packets_dropped_total{job="iroh-relay", instance="b"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: IrohRelayDroppingPackets
+        exp_alerts:
+          - exp_labels: {job: iroh-relay, instance: a, component: relay, severity: warning}
+
+  # Rate limiting fires while the counter rises and resolves 15m after it stops.
+  - interval: 1m
+    input_series:
+      - series: 'relayserver_conns_rx_ratelimited_total{job="iroh-relay", instance="a"}'
+        values: '0 0 0 1 2 2x40'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: IrohRelayRateLimiting
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: IrohRelayRateLimiting
+        exp_alerts:
+          - exp_labels: {job: iroh-relay, instance: a, component: relay, severity: info}
+      - eval_time: 30m
+        alertname: IrohRelayRateLimiting
+        exp_alerts: []

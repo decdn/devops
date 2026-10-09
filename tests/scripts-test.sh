@@ -37,6 +37,10 @@ mk decommission LIMIT=h | grep -q -- "playbooks/decommission.yml --limit 'h'" \
 pass "decommission LIMIT=h scopes playbooks/decommission.yml"
 mk backup | grep -q -- "playbooks/backup.yml" || fail "backup does not run playbooks/backup.yml"
 pass "backup runs playbooks/backup.yml fleet-wide by default"
+expect 2 "deploy-relay refuses LIMIT from the environment"  env LIMIT=h make -s -C "$repo/ansible" -n deploy-relay
+mk deploy-relay LIMIT=h | grep -q -- "playbooks/iroh_relay.yml --limit 'h'" \
+  || fail "deploy-relay LIMIT=h does not run playbooks/iroh_relay.yml scoped to h"
+pass "deploy-relay LIMIT=h scopes playbooks/iroh_relay.yml"
 
 # --- molecule driver (scripts/molecule.sh): selection, guards, locks ------------------
 # Against a throwaway ansible/ layout, so nothing here can start a container or touch
@@ -167,7 +171,8 @@ want="$(cd "$repo/ansible/molecule" && for d in */molecule.yml; do echo "${d%/mo
 # Split scenarios share one converge, so their inventories must not drift apart.
 if command -v yq >/dev/null; then
   for pair in sponsord:sponsord-install sponsord-onramp:sponsord-onramp-caddy \
-      sponsord-onramp:sponsord-onramp-source sponsord-onramp:sponsord-onramp-lifecycle; do
+      sponsord-onramp:sponsord-onramp-source sponsord-onramp:sponsord-onramp-lifecycle \
+      iroh-relay:iroh-relay-lifecycle iroh-relay:iroh-relay-install; do
     a="$repo/ansible/molecule/${pair%%:*}/molecule.yml" b="$repo/ansible/molecule/${pair##*:}/molecule.yml"
     [[ "$(yq -o=json '.provisioner.inventory' "$a")" == "$(yq -o=json '.provisioner.inventory' "$b")" ]] \
       || fail "molecule ${pair%%:*} and ${pair##*:} inventories differ (they share one converge)"
@@ -408,13 +413,30 @@ cmp -s "$repo/ansible/roles/decdn_node/files/install-build-output.py" \
        "$repo/ansible/roles/sponsord/files/install-build-output.py" \
   || fail "decdn_node and sponsord files/install-build-output.py differ"
 pass "source-build and decommission defaults, and the installer, identical across roles"
+# iroh_relay has no source build (and its own per-triple sha256 pins), so only its
+# decommission keys are compared.
+decom_keys() { grep -E '^decdn_decommission_(max_hosts|prompt_seconds):' "$1" || true; }
+want_decom="$(decom_keys "$repo/ansible/roles/decdn_node/defaults/main.yml")"
+[ "$(grep -c . <<<"$want_decom")" -eq 2 ] \
+  || fail "decdn_node/defaults/main.yml: expected both decdn_decommission_* keys, found: $want_decom"
+[ "$(decom_keys "$repo/ansible/roles/iroh_relay/defaults/main.yml")" = "$want_decom" ] \
+  || fail "iroh_relay/defaults/main.yml: decdn_decommission_* differ from decdn_node's"
+# One confirmation names every service the run stops, so each role's prompt must
+# know every group decommission.yml covers.
+for r in decdn_node sponsord sponsord_onramp iroh_relay; do
+  for g in decdn_nodes iroh_relay_hosts sponsord_onramp_hosts sponsord_hosts; do
+    grep -qF "if '$g' in _decom_groups" "$repo/ansible/roles/$r/tasks/decommission.yml" \
+      || fail "$r/tasks/decommission.yml: the confirmation prompt does not name $g's service"
+  done
+done
+pass "the decommission defaults and the confirmation's service list agree across all four roles"
 
 # decommission.yml must check every sponsord host for a held top-up before any play
 # stops a service: a refusal after the node and onramp plays would leave the host
 # half decommissioned. The role checks again right before its own stop.
 if command -v yq >/dev/null; then
   pb="$repo/ansible/playbooks/decommission.yml"
-  [[ "$(yq '.[0].hosts' "$pb")" == decdn_nodes:sponsord_onramp_hosts:sponsord_hosts \
+  [[ "$(yq '.[0].hosts' "$pb")" == decdn_nodes:sponsord_onramp_hosts:sponsord_hosts:iroh_relay_hosts \
      && "$(yq '.[0].tasks[0]["ansible.builtin.assert"] | has("that")' "$pb")" == true \
      && "$(yq '.[0].tasks[1]["ansible.builtin.include_role"].tasks_from' "$pb")" == topup-hold ]] \
     || fail "playbooks/decommission.yml: the first play must check the host cap, then sponsord's top-up hold"
@@ -468,6 +490,18 @@ if command -v ansible >/dev/null; then
     expect 2 "decommission.yml refuses a node host plus a sponsord host" guard node-only,both
     grep -q "This run decommissions 2 hosts" "$work/out" \
       || { cat "$work/out" >&2; fail "the two-host refusal did not come from the run-wide host cap"; }
+    expect 2 "decommission.yml refuses a node host plus a relay host" guard node-only,relay-only
+    grep -q "This run decommissions 2 hosts" "$work/out" \
+      || { cat "$work/out" >&2; fail "the node + relay refusal did not come from the run-wide host cap"; }
+    # playbooks/iroh_relay.yml refuses a relay on an onramp host (both want 80/443).
+    yq '[.[] | select(.name == "Refuse an iroh relay on a sponsord-onramp host")]' \
+      "$repo/ansible/playbooks/iroh_relay.yml" > "$work/guard.yml"
+    [[ "$(yq 'length' "$work/guard.yml")" == 1 ]] \
+      || fail "playbooks/iroh_relay.yml has no single relay/onramp placement play"
+    expect 0 "iroh_relay.yml accepts a relay host of its own" guard relay-only
+    expect 2 "iroh_relay.yml refuses a relay on a sponsord-onramp host" guard relay-onramp
+    grep -q "is in both iroh_relay_hosts and sponsord_onramp_hosts" "$work/out" \
+      || { cat "$work/out" >&2; fail "the relay-onramp refusal did not come from the placement check"; }
   elif [[ -n ${CI:-} ]]; then
     fail "yq is not on PATH in CI; the playbook-guard cases would be skipped"
   else
