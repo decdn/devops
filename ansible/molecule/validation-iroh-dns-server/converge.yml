@@ -433,6 +433,32 @@
             decdn_rejected: "{{ decdn_rejected + ['rr-aaaa-v4'] }}"
           when: ansible_failed_task.name == "Validate the apex address records"
 
+    - name: "Case rr-a-private — a private (RFC 1918) address as the A record"
+      block:
+        - name: Run iroh_dns_server with a private (RFC 1918) address as the A record
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_rr_a: "10.0.0.1"
+      rescue:
+        - name: Record rr-a-private rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['rr-a-private'] }}"
+          when: ansible_failed_task.name == "Validate the apex address records"
+
+    - name: "Case rr-aaaa-ula — a ULA address as the AAAA record"
+      block:
+        - name: Run iroh_dns_server with a ULA address as the AAAA record
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_rr_aaaa: "fd00::1"
+      rescue:
+        - name: Record rr-aaaa-ula rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['rr-aaaa-ula'] }}"
+          when: ansible_failed_task.name == "Validate the apex address records"
+
     - name: "Case ns-no-address — an apex NS name and no address for it (wildcard DNS bind)"
       block:
         - name: Run iroh_dns_server with an apex NS name and no address for it (wildcard DNS bind)
@@ -564,6 +590,20 @@
         - name: Record mainline-bootstrap-shape rejection (only if its assert failed)
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['mainline-bootstrap-shape'] }}"
+          when: ansible_failed_task.name == "Validate the mainline DHT bootstrap nodes"
+
+    - name: "Case mainline-bootstrap-port — a bootstrap node port past 65535"
+      block:
+        - name: Run iroh_dns_server with a bootstrap node port past 65535
+          ansible.builtin.include_role:
+            name: iroh_dns_server
+          vars:
+            iroh_dns_server_mainline_enabled: true
+            iroh_dns_server_mainline_bootstrap: ["router.molecule.test:70000"]
+      rescue:
+        - name: Record mainline-bootstrap-port rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['mainline-bootstrap-port'] }}"
           when: ansible_failed_task.name == "Validate the mainline DHT bootstrap nodes"
 
     - name: "Case limit-nofile — an open-files limit under 1024"
@@ -811,3 +851,6 @@
           - port-squatter-dns-udp
           - origins-root-only
           - bindv6only
+          - rr-a-private
+          - rr-aaaa-ula
+          - mainline-bootstrap-port

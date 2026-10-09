@@ -216,6 +216,8 @@
             if raw != str(a):
                 return 'write it in its canonical form, "%s"' % a, None
             return "ok", a
+        PRIVATE = {4: ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"),
+                   6: ("fc00::/7",)}
         def record(raw, version):
             if raw == "":
                 return "ok"
@@ -229,6 +231,12 @@
                 return "an IPv4-mapped IPv6 address"
             if a.is_unspecified or a.is_loopback or a.is_multicast or a.is_link_local:
                 return "an unspecified, loopback, multicast or link-local address"
+            # The hostname must reach this host from the internet (Let's Encrypt's
+            # TLS-ALPN-01, every node's PUT): a private apex record never works, and it
+            # is the likely mistake (the host's own address behind NAT). Named ranges,
+            # not is_global, so documentation addresses (molecule's) still pass.
+            if any(a in ipaddress.ip_network(n) for n in PRIVATE[version]):
+                return "a private address (RFC 1918, shared CGNAT or ULA) no resolver on the internet reaches"
             return "ok"
         https, _ = bind(sys.argv[1])
         dns, d = bind(sys.argv[2])
@@ -282,7 +290,7 @@
       - _iroh_dns_server_addrs.rr_aaaa == 'ok'
     fail_msg: >-
       iroh_dns_server_rr_a must be "" or an IPv4 address and iroh_dns_server_rr_aaaa
-      "" or an IPv6 address, the host's public addresses (got
+      "" or an IPv6 address, the host's public (not private) addresses (got
       "{{ iroh_dns_server_rr_a }}": {{ _iroh_dns_server_addrs.rr_a }};
       "{{ iroh_dns_server_rr_aaaa }}": {{ _iroh_dns_server_addrs.rr_aaaa }}).
 
@@ -369,10 +377,11 @@
       - _nodes is not mapping
       - _nodes | reject('string') | list | length == 0
       - _nodes | reject('match', '^[A-Za-z0-9.-]+:[1-9][0-9]{0,4}$') | list | length == 0
+      - _nodes | map('regex_replace', '^.*:', '') | map('int') | select('gt', 65535) | list | length == 0
       - iroh_dns_server_mainline_enabled or _nodes | length == 0
     fail_msg: >-
       iroh_dns_server_mainline_bootstrap must be a list of "host:port" strings
-      (a DNS name or an IPv4 address), set only with iroh_dns_server_mainline_enabled;
+      (a DNS name or an IPv4 address, a port from 1 to 65535), set only with iroh_dns_server_mainline_enabled;
       got {{ _nodes | to_json }} with mainline
       {{ 'on' if iroh_dns_server_mainline_enabled else 'off' }}.
   vars:
