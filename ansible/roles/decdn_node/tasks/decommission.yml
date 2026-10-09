@@ -61,6 +61,7 @@
     _decom_groups: "{{ ansible_play_hosts_all | map('extract', hostvars, 'group_names') | flatten | unique }}"
     _decom_services: >-
       {{ ((['decdn-node'] if 'decdn_nodes' in _decom_groups else [])
+          + (['iroh-relay'] if 'iroh_relay_hosts' in _decom_groups else [])
           + (['sponsord-onramp and its Caddy'] if 'sponsord_onramp_hosts' in _decom_groups else [])
           + (['sponsord'] if 'sponsord_hosts' in _decom_groups else [])
           + ['decdn-node']) | unique }}

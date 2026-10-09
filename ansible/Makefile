@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN Ansible project.
 # Always run from the ansible/ directory.
-.PHONY: deps lint check deploy check-sponsord deploy-sponsord backup decommission molecule molecule-serial molecule-list build galaxy-check
+.PHONY: deps lint check deploy check-sponsord deploy-sponsord check-relay deploy-relay backup decommission molecule molecule-serial molecule-list build galaxy-check
 SHELL := /bin/bash
 
 # Install the required Galaxy collections (>= constraints in requirements.yml)
@@ -44,20 +44,20 @@ INVENTORY ?= inventory/hosts.yml
 # A missing or unparseable inventory fails the run. Ansible's default only warns,
 # skips the `hosts: decdn_nodes` play and exits 0, so a mistyped INVENTORY= would
 # report a successful deploy that did nothing. This applies to the playbook targets
-# (check/deploy/check-sponsord/deploy-sponsord/backup/decommission) only:
+# (check/deploy/check-sponsord/deploy-sponsord/check-relay/deploy-relay/backup/decommission) only:
 # ansible.cfg can't set it globally, because ansible-lint's own syntax checks run
 # with no inventory present.
 strict_inventory = ANSIBLE_INVENTORY_UNPARSED_FAILED=True
 
 # Fail loud on the two ways a run can look scoped but silently be fleet-wide. Scoped to
-# the playbook targets (check/deploy[-sponsord]/backup/decommission) via MAKECMDGOALS so an
+# the playbook targets (check/deploy[-sponsord|-relay]/backup/decommission) via MAKECMDGOALS so an
 # unrelated `make lint` is never blocked. NOTE: this
 # does not catch an argument that is well-formed but selects nothing — `--tags` with a
 # typo (decdn-node vs decdn_node) runs zero tasks and still exits 0. See ansible/README.md.
-ifneq ($(filter check deploy check-sponsord deploy-sponsord backup decommission,$(MAKECMDGOALS)),)
+ifneq ($(filter check deploy check-sponsord deploy-sponsord check-relay deploy-relay backup decommission,$(MAKECMDGOALS)),)
   # Echo back the goal the operator actually typed, so the hint never nudges a
   # `make check` dry-run toward the mutating `make deploy`.
-  scoped_goal := $(firstword $(filter check deploy check-sponsord deploy-sponsord backup decommission,$(MAKECMDGOALS)))
+  scoped_goal := $(firstword $(filter check deploy check-sponsord deploy-sponsord check-relay deploy-relay backup decommission,$(MAKECMDGOALS)))
   ifeq ($(origin LIMIT),environment)
     $(error LIMIT is set in your environment ($(LIMIT)) and would silently scope this run. Unset it or pass it on the command line: make $(scoped_goal) LIMIT=<host>)
   endif
@@ -101,6 +101,14 @@ check-sponsord:
 deploy-sponsord:
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/sponsord.yml $(limit_arg) $(ANSIBLE_ARGS)
 
+# iroh relays alone (playbooks/iroh_relay.yml, hosts in iroh_relay_hosts). check/deploy
+# above already include them via site.yml; these leave every other host untouched.
+check-relay:
+	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/iroh_relay.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
+
+deploy-relay:
+	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/iroh_relay.yml $(limit_arg) $(ANSIBLE_ARGS)
+
 # Encrypted backup of each node (identity by default; -e decdn_backup_scope=full for
 # the whole data dir, which stops the node for the copy). One host at a time.
 # Needs decdn_backup_age_recipients. See docs/lifecycle.md.
@@ -129,7 +137,11 @@ decommission:
 # and sponsord-onramp-caddy (the onramp beside its daemon, behind the real distro
 # Caddy; the proxy side effects run in sponsord-onramp-caddy), sponsord-onramp-source
 # (that converge, then both sponsord roles built from source), sponsord-onramp-lifecycle
-# (that converge, then sponsord's backup and decommission), source-build (the
+# (that converge, then sponsord's backup and decommission), iroh-relay and
+# iroh-relay-lifecycle and iroh-relay-install (the relay through
+# playbooks/iroh_relay.yml against a stub on Debian 12 and Ubuntu 24.04: gate,
+# certificate check, port guard; then its decommission, and its release install
+# from a local mirror), validation-iroh-relay (the relay's bad knobs), source-build (the
 # node built from source on the host: sandbox, stamps, rollback), and cloud-init and
 # cloud-init-sponsord (the cloud-init/ templates, booted for real). The glob in
 # scripts/molecule.sh is the authority; this list is a guide.
@@ -181,8 +193,8 @@ molecule-list:
 	@$(molecule_env) ../scripts/molecule.sh list
 
 # --- Galaxy collection (decdn.node) ------------------------------------------
-# Stage baseline + decdn_node + grafana_alloy + sponsord + sponsord_onramp into a clean collection tree and
-# build the artifact under build/. Only the five roles ship; see galaxy/README.md. Publishing
+# Stage baseline + decdn_node + grafana_alloy + sponsord + sponsord_onramp + iroh_relay into a clean
+# collection tree and build the artifact under build/. Only the six roles ship; see galaxy/README.md. Publishing
 # runs from a vX.Y.Z tag in .github/workflows/release.yml (see RELEASING.md).
 build:
 	./galaxy/build.sh

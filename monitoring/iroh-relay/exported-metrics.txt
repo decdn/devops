@@ -1,0 +1,85 @@
+# The /metrics exposition of iroh-relay 1.3.0 (n0-computer/iroh, x86_64-unknown-linux-gnu
+# release asset), captured from a fresh process with no traffic, so every value is 0.
+# Every relayserver_* name a dashboard or rule in this directory uses must appear
+# here (`make lint-helm` checks). Re-capture on an iroh_relay_version bump:
+#   iroh-relay --config-path <config with metrics_bind_addr = "127.0.0.1:9092">
+#   curl -s 127.0.0.1:9092/metrics
+# HELP relayserver_bytes_sent Number of bytes sent.
+# TYPE relayserver_bytes_sent counter
+relayserver_bytes_sent_total 0
+# HELP relayserver_bytes_recv Number of bytes received.
+# TYPE relayserver_bytes_recv counter
+relayserver_bytes_recv_total 0
+# HELP relayserver_send_packets_sent Number of 'send' packets relayed.
+# TYPE relayserver_send_packets_sent counter
+relayserver_send_packets_sent_total 0
+# HELP relayserver_send_packets_recv Number of 'send' packets received.
+# TYPE relayserver_send_packets_recv counter
+relayserver_send_packets_recv_total 0
+# HELP relayserver_send_packets_dropped Number of 'send' packets dropped.
+# TYPE relayserver_send_packets_dropped counter
+relayserver_send_packets_dropped_total 0
+# HELP relayserver_other_packets_sent Number of packets sent that were not 'send' packets.
+# TYPE relayserver_other_packets_sent counter
+relayserver_other_packets_sent_total 0
+# HELP relayserver_other_packets_recv Number of packets received that were not 'send' packets.
+# TYPE relayserver_other_packets_recv counter
+relayserver_other_packets_recv_total 0
+# HELP relayserver_other_packets_dropped Number of times, non-send packet was dropped.
+# TYPE relayserver_other_packets_dropped counter
+relayserver_other_packets_dropped_total 0
+# HELP relayserver_got_ping Number of times the server has received a Ping from a client.
+# TYPE relayserver_got_ping counter
+relayserver_got_ping_total 0
+# HELP relayserver_sent_pong Number of times the server has sent a Pong to a client.
+# TYPE relayserver_sent_pong counter
+relayserver_sent_pong_total 0
+# HELP relayserver_unknown_frames Number of unknown frames sent to this server.
+# TYPE relayserver_unknown_frames counter
+relayserver_unknown_frames_total 0
+# HELP relayserver_bytes_rx_ratelimited_total Number of bytes received from client connection which have been rate-limited.
+# TYPE relayserver_bytes_rx_ratelimited_total counter
+relayserver_bytes_rx_ratelimited_total 0
+# HELP relayserver_conns_rx_ratelimited_total Number of client connections which have had any frames rate-limited.
+# TYPE relayserver_conns_rx_ratelimited_total counter
+relayserver_conns_rx_ratelimited_total 0
+# HELP relayserver_accepts Number of times this server has accepted a connection.
+# TYPE relayserver_accepts counter
+relayserver_accepts_total 0
+# HELP relayserver_disconnects Number of clients that have then disconnected.
+# TYPE relayserver_disconnects counter
+relayserver_disconnects_total 0
+# HELP relayserver_unique_client_keys Number of unique client keys per day.
+# TYPE relayserver_unique_client_keys counter
+relayserver_unique_client_keys_total 0
+# HELP relayserver_clients_inactive_added Number of times a client was moved into the inactive state.
+# TYPE relayserver_clients_inactive_added counter
+relayserver_clients_inactive_added_total 0
+# HELP relayserver_clients_inactive_removed Number of times a client was removed from the inactive state.
+# TYPE relayserver_clients_inactive_removed counter
+relayserver_clients_inactive_removed_total 0
+# HELP relayserver_qad_incoming Number of incoming QAD connections.
+# TYPE relayserver_qad_incoming counter
+relayserver_qad_incoming_total 0
+# HELP relayserver_qad_incoming_error Number of QAD QUIC connections that aborted before completing the handshake.
+# TYPE relayserver_qad_incoming_error counter
+relayserver_qad_incoming_error_total 0
+# HELP relayserver_qad_connections Number of accepted QAD QUIC connections.
+# TYPE relayserver_qad_connections counter
+relayserver_qad_connections_total 0
+# HELP relayserver_qad_connections_closed Number of QAD QUIC connections that disconnected after being accepted.
+# TYPE relayserver_qad_connections_closed counter
+relayserver_qad_connections_closed_total 0
+# HELP relayserver_qad_connections_errored Number of QAD QUIC connections that disconnected after being accepted, with an error.
+# TYPE relayserver_qad_connections_errored counter
+relayserver_qad_connections_errored_total 0
+# HELP relayserver_http_connections Number of accepted HTTP(S) connections.
+# TYPE relayserver_http_connections counter
+relayserver_http_connections_total 0
+# HELP relayserver_http_connections_closed Number of terminated HTTP(S) connections.
+# TYPE relayserver_http_connections_closed counter
+relayserver_http_connections_closed_total 0
+# HELP relayserver_http_connections_errored Number of HTTP(S) connections that terminated with an error.
+# TYPE relayserver_http_connections_errored counter
+relayserver_http_connections_errored_total 0
+# EOF

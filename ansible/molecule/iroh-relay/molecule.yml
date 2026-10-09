@@ -1,0 +1,104 @@
+---
+# iroh-relay on a host of its own (iroh_relay_hosts), converged through the real
+# playbooks/iroh_relay.yml against a stub relay (files/iroh-relay-stub), with a
+# molecule CA standing in for Let's Encrypt (no public DNS in a container).
+#
+#   converge     the relay: config, hardened unit (DynamicUser, CAP_NET_BIND_SERVICE
+#                only, StateDirectory), the readiness gate (metrics + every
+#                listener owned by the unit) and the certificate check, in "fail"
+#                mode, against the molecule CA the host trusts; Alloy scraping the
+#                relay and labelling its journal stream.
+#   idempotence  an unchanged host must not restart anything.
+#   side_effect  a no-op re-run leaves the relay alone; a changed knob restarts it;
+#                a relay that will not start, skips its QUIC socket or crashes
+#                after binding FAILS the gate and leaves the restart-input record
+#                alone; a missing record restarts a running relay; squatters on
+#                tcp/80 and udp/7842 are refused before anything changes (the UDP
+#                one only with QAD on); a missing config fails the start (the
+#                unit's assert); an untrusted certificate fails in "fail" mode,
+#                and in "warn" mode once a certificate was issued; 0.0.0.0 and a
+#                specific IPv4 bind are rendered, bound and probed.
+#   verify       files, modes, unit hardening, effective capabilities, the
+#                listeners (metrics on loopback only), /healthz over https with the
+#                trusted certificate, /generate_204, the Alloy blocks.
+#
+# The release install (download, sha256 pin, stamp, version backstop) runs in
+# ../iroh-relay-install against a local mirror, and decommission in
+# ../iroh-relay-lifecycle, both on the same converge (their inventories must stay
+# identical to this one: `make test-scripts` checks); the broken-input matrix lives in
+# ../validation-iroh-relay. `baseline` is skipped (real-host-only — see
+# ../default/molecule.yml), so the tcp/80, tcp/443 and udp/7842 holes are covered by
+# tests/firewall-holes instead.
+driver:
+  name: docker
+platforms:
+  - name: relay-molecule
+    # Same digest-pinned images as ../sponsord (repo convention).
+    image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    groups:
+      - iroh_relay_hosts
+  # systemd 255: StateDirectory= and the ambient capability on a newer systemd.
+  - name: relay-molecule-u2404
+    image: geerlingguy/docker-ubuntu2404-ansible@sha256:3394e335df58c961c00b78ae601ef30cdd7463b112f21b0c5f78674a70526302
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    groups:
+      - iroh_relay_hosts
+provisioner:
+  name: ansible
+  options:
+    skip-tags: baseline
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # Same pipelining note as ../default/molecule.yml.
+    ANSIBLE_PIPELINING: "true"
+  inventory:
+    group_vars:
+      iroh_relay_hosts:
+        iroh_relay_install_method: manual
+        iroh_relay_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/iroh-relay/files/iroh-relay-stub"
+        iroh_relay_hostname: relay.molecule.test
+        iroh_relay_acme_contact: ops@molecule.test
+        # A real ed25519 public key in iroh's hex form.
+        iroh_relay_denylist:
+          - 81d82536cb4c96ddbeab1f6bf4495d126c1942fb90b9ffb433d91d23314801e7
+        # Every optional key rendered, so the stub checks each one's shape.
+        iroh_relay_accept_conn_limit: 50
+        iroh_relay_accept_conn_burst: 100
+        iroh_relay_client_rx_bytes_per_second: 4194304
+        iroh_relay_client_rx_max_burst_bytes: 8388608
+        iroh_relay_log_level: info,iroh_relay=debug
+        iroh_relay_certificate_check: fail
+        iroh_relay_certificate_retries: 5
+        iroh_relay_certificate_delay: 1
+        iroh_relay_readiness_retries: 10
+        iroh_relay_readiness_delay: 1
+        decdn_grafana_cloud_enabled: true
+        grafana_alloy_install_method: manual
+        grafana_alloy_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/grafana-cloud/files/alloy-stub"
+        grafana_alloy_region: US
+        grafana_alloy_loki_url: https://logs-prod-xx.molecule.invalid/loki/api/v1/push
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    # Leading destroy: see ../default/molecule.yml.
+    - destroy
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - side_effect
+    - verify
+    - destroy

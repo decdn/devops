@@ -1,8 +1,9 @@
 # Monitoring assets
 
 The deCDN Grafana dashboards and reference Prometheus alert rules, maintained here:
-`decdn-node/` for the node, on every deploy path, and `sponsord/` for the onboarding
-sponsor, on the Ansible and Compose paths. The node's metric surface is documented in
+`decdn-node/` for the node, on every deploy path, `sponsord/` for the onboarding
+sponsor, on the Ansible and Compose paths, and `iroh-relay/` for the self-hosted iroh
+relay, on the Ansible path. The node's metric surface is documented in
 upstream `decdn/decdn`'s `adr/appendix-observability.md`. The node's assets were
 imported from `decdn/decdn` (MIT OR Apache-2.0) at `20db95ef`; distributed here under
 this repo's MIT license. sponsord's were written here.
@@ -15,6 +16,7 @@ this repo's MIT license. sponsord's were written here.
 | `decdn-node/dashboard-node.json` | Single-node drilldown (`uid: decdn-node`): host, process, iroh transport, DHT and probe, logs, traces. |
 | `decdn-node/prometheus-alerts.yml` | Rule groups `decdn-slash-safety`, `decdn-liveness`, `decdn-delivery`. A rule with a matching runbook section carries a `runbook_url` into upstream's `docs/runbook.md`. |
 | `sponsord/` | The onboarding sponsor's dashboard and alert rules ([below](#sponsord)). Not rendered by the chart. |
+| `iroh-relay/` | The iroh relay's dashboard and alert rules ([below](#iroh-relay)). Not rendered by the chart. |
 
 **Editing.** Every `decdn_*` series a panel or rule names must be one `decdn-node`
 exports; nothing in CI checks this. See
@@ -73,3 +75,25 @@ in `sponsord/prometheus-alerts_test.yml`, and checks the dashboard's uid.
 The treasury wallet's own USDC and gas balance, which pays every top-up, is not
 covered: sponsord does not export it. Watch that address with a balance exporter of
 your own; `SponsordKeeperFailing` is the symptom when it runs dry.
+
+## iroh relay
+
+`iroh-relay/` holds the same pair for the self-hosted iroh relays
+([`roles/iroh_relay`](../ansible/roles/iroh_relay/README.md)), which run on the Ansible
+path only. The chart never renders it.
+
+| File | What it is |
+|------|------------|
+| `iroh-relay/dashboard-iroh-relay.json` | `uid: decdn-iroh-relay`: up, connected clients, connections per day, open QAD connections, relayed bandwidth and packets (and drops), connects, https connections and errors, QUIC address discovery, rate limiting, the relay's log. |
+| `iroh-relay/prometheus-alerts.yml` | Rule group `iroh-relay`: down, most https connections erroring, most QAD handshakes failing (both point at the certificate), dropping relayed packets, rate limiting (info). |
+| `iroh-relay/exported-metrics.txt` | The `/metrics` of the pinned `iroh-relay` release. `make lint-helm` fails on a `relayserver_*` name the dashboard or rules use that is not in it. |
+
+They select `job="iroh-relay"`, which the `grafana_alloy` role stamps on the relay's
+`/metrics` (`grafana_alloy_iroh_relay_job`); the log panel selects
+`unit="iroh-relay.service"` with the parsed `level`. Import them as above, e.g.
+`mimirtool rules load iroh-relay/prometheus-alerts.yml`. `make lint-helm` also runs
+`promtool check rules` and the unit tests in `iroh-relay/prometheus-alerts_test.yml`.
+
+The certificate's expiry is not covered: iroh-relay renews it itself but exports
+nothing about it. Watch `https://<hostname>/healthz` with a blackbox or synthetic check
+of your own.

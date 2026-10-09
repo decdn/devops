@@ -3,8 +3,8 @@
 # slice of this DevOps repo: deploy + harden a deCDN node.
 #
 # This file is an OVERLAY, not the project root manifest. It is assembled into a
-# clean collection tree (with the baseline, decdn_node, grafana_alloy, sponsord and
-# sponsord_onramp roles) by galaxy/build.sh;
+# clean collection tree (with the baseline, decdn_node, grafana_alloy, sponsord,
+# sponsord_onramp and iroh_relay roles) by galaxy/build.sh;
 # it is deliberately NOT placed at ansible/ root, so the deploy project stays a
 # plain Ansible project (bare role names, roles_path, production-profile
 # ansible-lint) rather than being reinterpreted as a collection. See galaxy/README.md.
@@ -17,7 +17,8 @@ authors:
 description: >-
   Deploy and harden a public deCDN node: DevSec host baseline, the decdn_node
   daemon and the sponsord onboarding sponsor with its public onramp (each with
-  backup and decommission), and opt-in Grafana Cloud observability.
+  backup and decommission), a self-hosted iroh relay, and opt-in Grafana Cloud
+  observability.
 license:
   - MIT
 # Galaxy tags must match ^[a-z0-9]+$ (no hyphens/underscores).
@@ -30,6 +31,7 @@ tags:
   - debian
   - ubuntu
   - devsec
+  - iroh
   - web3
 # Collection-level dependencies — only what the SHIPPED roles use:
 #   baseline -> devsec.hardening (os_hardening + ssh_hardening), ansible.posix
@@ -38,6 +40,7 @@ tags:
 #   grafana_alloy -> ansible.builtin only
 #   sponsord -> ansible.builtin only
 #   sponsord_onramp -> ansible.builtin only (Caddy comes from the distro's apt)
+#   iroh_relay -> ansible.builtin only
 # community.general is NOT used by any role, so it is intentionally absent here.
 dependencies:
   devsec.hardening: ">=10.0.0"

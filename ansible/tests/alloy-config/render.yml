@@ -336,6 +336,44 @@
         grafana_alloy_sponsord_onramp_enabled: true
         grafana_alloy_logs_drop_priority_regex: 'info|debug|trace'
 
+    # A host that runs only an iroh relay (iroh_relay_hosts): no decdn-node scrape,
+    # the relay's scrape on a non-default port with its own identity, and an
+    # info-dropping guardrail so the level harness proves its plain-text levels.
+    - name: Render the relay-only configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/relayonly.{{ item.ext }}"
+        mode: "0644"
+      loop: *ga_render_pair
+      loop_control:
+        label: "relayonly.{{ item.ext }}"
+      vars:
+        _ga_instance_id: relay-1
+        _ga_journal_groups: [systemd-journal, adm]
+        grafana_alloy_bin_effective: /usr/bin/alloy
+        grafana_alloy_deployment_environment: production
+        grafana_alloy_region: US
+        grafana_alloy_node_enabled: false
+        grafana_alloy_iroh_relay_enabled: true
+        iroh_relay_metrics_port: 19092
+        grafana_alloy_logs_drop_priority_regex: 'info|debug|trace'
+
+    # A node that also runs a relay: both scrapes, both identities, the relay on
+    # its default port.
+    - name: Render the co-located node + relay configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/{{ item.src }}"
+        dest: "{{ _ga_render_dir }}/colocatedrelay.{{ item.ext }}"
+        mode: "0644"
+      loop: *ga_render_pair
+      loop_control:
+        label: "colocatedrelay.{{ item.ext }}"
+      vars:
+        _ga_instance_id: decdn-node-1
+        _ga_journal_groups: [systemd-journal, adm]
+        grafana_alloy_bin_effective: /usr/bin/alloy
+        grafana_alloy_iroh_relay_enabled: true
+
     - name: Export the pinned release for the validation script
       ansible.builtin.copy:
         dest: "{{ _ga_render_dir }}/pin.env"

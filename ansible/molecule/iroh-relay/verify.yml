@@ -1,0 +1,192 @@
+---
+# The converged relay: files, modes, unit hardening, capabilities, listeners, the
+# https and http routes, and the Alloy blocks that scrape and label it.
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read the unit, the config and the Alloy config
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: _ir_files
+      loop:
+        - /etc/systemd/system/iroh-relay.service
+        - /etc/iroh-relay/iroh-relay.toml
+        - /etc/alloy/config.alloy
+
+    - name: Name the file contents
+      ansible.builtin.set_fact:
+        _ir_unit: "{{ _ir_files.results[0].content | b64decode }}"
+        _ir_config: "{{ _ir_files.results[1].content | b64decode }}"
+        _ir_alloy: "{{ _ir_files.results[2].content | b64decode }}"
+
+    - name: Require the unit's hardening and lifecycle directives
+      ansible.builtin.assert:
+        that:
+          - item in _ir_unit.splitlines()
+        fail_msg: "/etc/systemd/system/iroh-relay.service lacks the line: {{ item }}"
+        quiet: true
+      loop:
+        - "ExecStart=/usr/local/bin/iroh-relay --config-path /etc/iroh-relay/iroh-relay.toml"
+        - "AssertPathExists=/etc/iroh-relay/iroh-relay.toml"
+        - "AssertFileNotEmpty=/etc/iroh-relay/iroh-relay.toml"
+        - 'Environment="RUST_LOG=info,iroh_relay=debug"'
+        - "Environment=NO_COLOR=1"
+        - "KillSignal=SIGINT"
+        - "LimitNOFILE=65536"
+        - "DynamicUser=true"
+        - "StateDirectory=iroh-relay iroh-relay/acme"
+        - "StateDirectoryMode=0700"
+        - "AmbientCapabilities=CAP_NET_BIND_SERVICE"
+        - "CapabilityBoundingSet=CAP_NET_BIND_SERVICE"
+        - "NoNewPrivileges=true"
+        - "ProtectSystem=strict"
+        - "ProtectHome=true"
+        - "PrivateTmp=true"
+        - "PrivateDevices=true"
+        - "MemoryDenyWriteExecute=true"
+        - "SystemCallFilter=@system-service"
+        - "UMask=0077"
+
+    - name: Parse the rendered config as TOML
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - "import json, sys, tomllib; print(json.dumps(tomllib.load(open(sys.argv[1], 'rb'))))"
+          - /etc/iroh-relay/iroh-relay.toml
+      register: _ir_toml
+      changed_when: false
+
+    - name: Require the rendered values
+      vars:
+        _c: "{{ _ir_toml.stdout | from_json }}"
+        _ir_denied: 81d82536cb4c96ddbeab1f6bf4495d126c1942fb90b9ffb433d91d23314801e7
+      ansible.builtin.assert:
+        that:
+          - _c.enable_relay is true
+          - _c.http_bind_addr == '[::]:80'
+          - _c.enable_quic_addr_discovery is true
+          - _c.enable_metrics is true
+          - _c.metrics_bind_addr == '127.0.0.1:9092'
+          - "_c.access == {'denylist': [_ir_denied]}"
+          - _c.tls.https_bind_addr == '[::]:443'
+          - _c.tls.quic_bind_addr == '[::]:7842'
+          - _c.tls.hostname == 'relay.molecule.test'
+          - _c.tls.cert_mode == 'LetsEncrypt'
+          - _c.tls.cert_dir == '/var/lib/iroh-relay/acme'
+          - _c.tls.prod_tls is true
+          - _c.tls.contact == 'ops@molecule.test'
+          - _c.limits.accept_conn_limit == 50.0
+          - _c.limits.accept_conn_burst == 100
+          - _c.limits.client.rx.bytes_per_second == 4194304
+          - _c.limits.client.rx.max_burst_bytes == 8388608
+        fail_msg: "Unexpected rendered config: {{ _c | to_nice_json }}"
+
+    - name: Stat the config and the state directory
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: _ir_stat
+      loop:
+        - /etc/iroh-relay/iroh-relay.toml
+        - /var/lib/private/iroh-relay/acme
+        - /var/lib/private/iroh-relay/acme/molecule-stub-probe
+        - /etc/iroh-relay/.relay-inputs.sha256
+
+    - name: Require the files' owners and modes
+      ansible.builtin.assert:
+        that:
+          - _ir_stat.results[0].stat.mode == '0644'
+          - _ir_stat.results[0].stat.pw_name == 'root'
+          - _ir_stat.results[1].stat.isdir
+          - _ir_stat.results[1].stat.mode == '0700'
+          # The DynamicUser's uid (it may have no passwd entry, hence no pw_name).
+          - _ir_stat.results[1].stat.uid != 0
+          # The stub wrote here as the DynamicUser: the cert dir is its own.
+          - _ir_stat.results[2].stat.exists
+          - _ir_stat.results[3].stat.mode == '0600'
+        fail_msg: >-
+          config {{ _ir_stat.results[0].stat.mode | default('missing') }}/{{
+          _ir_stat.results[0].stat.pw_name | default('') }},
+          acme dir {{ _ir_stat.results[1].stat.mode | default('missing') }}/uid {{
+          _ir_stat.results[1].stat.uid | default('') }},
+          stub probe {{ _ir_stat.results[2].stat.exists }},
+          record {{ _ir_stat.results[3].stat.mode | default('missing') }}.
+
+    - name: Read the relay's process
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          pid=$(systemctl show -p MainPID --value iroh-relay)
+          [ "$pid" -gt 0 ]
+          awk '/^(Uid|CapEff):/ { print $1, $2 }' /proc/"$pid"/status
+      register: _ir_proc
+      changed_when: false
+
+    # The one capability it keeps, as an unprivileged user: CAP_NET_BIND_SERVICE is
+    # bit 10 (0x400).
+    - name: Require an unprivileged process holding only CAP_NET_BIND_SERVICE
+      ansible.builtin.assert:
+        that:
+          - "'Uid: 0' not in _ir_proc.stdout"
+          - "'CapEff: 0000000000000400' in _ir_proc.stdout"
+        fail_msg: "iroh-relay's process: {{ _ir_proc.stdout }}"
+
+    - name: Read the listeners
+      ansible.builtin.command:
+        argv: [ss, -Hltun]
+      register: _ir_ss
+      changed_when: false
+
+    - name: Require the public listeners on every address and metrics on loopback only
+      vars:
+        _cols: "{{ _ir_ss.stdout_lines | map('split') | list }}"
+        # [proto, local address] per socket.
+        _socks: "{{ _cols | map('first') | zip(_cols | map(attribute=4)) | map('join', ' ') | list }}"
+      ansible.builtin.assert:
+        that:
+          - "'tcp *:80' in _socks or 'tcp [::]:80' in _socks"
+          - "'tcp *:443' in _socks or 'tcp [::]:443' in _socks"
+          - "'udp *:7842' in _socks or 'udp [::]:7842' in _socks"
+          - "'tcp 127.0.0.1:9092' in _socks"
+          - _socks | select('search', ':9092$') | list == ['tcp 127.0.0.1:9092']
+        fail_msg: "Listeners: {{ _socks }}"
+
+    - name: Fetch /healthz over https with the trusted molecule certificate
+      ansible.builtin.command:
+        argv: [curl, -fsS, --max-time, "5", --resolve, "relay.molecule.test:443:127.0.0.1",
+               "https://relay.molecule.test/healthz"]
+      register: _ir_healthz
+      changed_when: false
+
+    - name: Fetch the captive-portal probe over http
+      ansible.builtin.command:
+        argv: [curl, -sS, -o, /dev/null, -w, "%{http_code}", --max-time, "5", "http://127.0.0.1/generate_204"]
+      register: _ir_204
+      changed_when: false
+
+    - name: Require both routes to answer
+      ansible.builtin.assert:
+        that:
+          - (_ir_healthz.stdout | from_json).status == 'ok'
+          - _ir_204.stdout == '204'
+        fail_msg: "/healthz: {{ _ir_healthz.stdout }}; /generate_204: {{ _ir_204.stdout }}"
+
+    - name: Require Alloy to scrape the relay and label its journal stream
+      ansible.builtin.assert:
+        that:
+          - item in _ir_alloy
+        fail_msg: "/etc/alloy/config.alloy lacks: {{ item }}"
+        quiet: true
+      loop:
+        - 'prometheus.scrape "iroh_relay"'
+        - '"__address__" = "127.0.0.1:9092"'
+        - 'regex         = "iroh-relay\\.service"'
+
+    - name: Require no node scrape on a relay-only host
+      ansible.builtin.assert:
+        that:
+          - "'prometheus.scrape \"decdn_node\"' not in _ir_alloy"
+        fail_msg: The relay-only host's Alloy scrapes a decdn-node that is not there.

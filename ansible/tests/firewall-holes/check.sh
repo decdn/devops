@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The baseline firewall's public holes are derived from a host's groups in
-# playbooks/group_vars/ (all.yml builds the list; decdn_nodes.yml and
-# sponsord_hosts.yml both point baseline_extra_inbound at it). Resolve them for
+# playbooks/group_vars/ (all.yml builds the list; decdn_nodes.yml,
+# sponsord_hosts.yml and iroh_relay_hosts.yml all point baseline_extra_inbound at it). Resolve them for
 # every host shape in inventory.yml, outside any role, which is how the sponsord
 # play sees a co-located node, and compare with expected.json.
 # Needs ansible-core and jq. tests/scripts-test.sh runs it.
@@ -32,11 +32,13 @@ if [[ "$got" != "$want" ]]; then
   diff <(echo "$want") <(echo "$got") >&2 || true
   exit 1
 fi
-# all.yml falls back to two role defaults outside the roles' plays; they must agree.
+# all.yml falls back to three role defaults outside the roles' plays; they must agree.
 roles="$here/../../roles"
 grep -qE '^decdn_bind_port: 4433([[:space:]]|$)' "$roles/decdn_node/defaults/main.yml" \
   || { echo "decdn_bind_port's default is not 4433: update the fallback in playbooks/group_vars/all.yml" >&2; exit 1; }
 grep -qE '^sponsord_onramp_proxy: caddy([[:space:]]|$)' "$roles/sponsord_onramp/defaults/main.yml" \
   || { echo "sponsord_onramp_proxy's default is not caddy: update the fallback in playbooks/group_vars/all.yml" >&2; exit 1; }
+grep -qE '^iroh_relay_enable_quic_addr_discovery: true([[:space:]]|$)' "$roles/iroh_relay/defaults/main.yml" \
+  || { echo "iroh_relay_enable_quic_addr_discovery's default is not true: update the fallback in playbooks/group_vars/all.yml" >&2; exit 1; }
 
 echo "baseline_extra_inbound matches for $(jq -r 'keys | join(", ")' <<<"$want")"

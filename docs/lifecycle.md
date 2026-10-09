@@ -140,7 +140,8 @@ make decommission LIMIT=<host>    # LIMIT is required; you type the host name to
 
 It stops `decdn-node` with `systemctl` (SIGTERM, which is the daemon's graceful drain
 path), disables it and removes the unit, and tears down the Grafana Alloy agent this
-repo installed, if any. On a host that also runs sponsord it removes sponsord and its
+repo installed, if any. On a host that also runs an iroh relay it removes the relay
+too ([iroh relay](#iroh-relay)). On a host that also runs sponsord it removes sponsord and its
 onramp as well, after checking for a held top-up
 ([sponsord](#sponsord-the-onboarding-sponsor)); the one confirmation prompt lists every
 service it covers. `-e decdn_decommission_purge_cache=true` also deletes the
@@ -276,6 +277,26 @@ It keeps `/etc/sponsord` (the treasury owns the pool), the binaries and the cadd
 package, and does not touch the chain: the pool and its USDC stay with the treasury
 wallet until you withdraw them with the `decdn` CLI. tcp/80 and tcp/443 stay open
 until the host leaves `sponsord_onramp_hosts` and baseline runs again.
+
+## iroh relay
+
+A self-hosted iroh relay ([`roles/iroh_relay`](../ansible/roles/iroh_relay/README.md))
+holds no identity and no operator-provisioned secret, so it has **no backup**. Its
+only state is the Let's Encrypt account key and certificate (with its private key)
+under `/var/lib/private/iroh-relay` (`0700`), which a new host re-issues for itself.
+
+- **Migration:** deploy the relay on the new host with the same `iroh_relay_hostname`,
+  then move the name's A/AAAA records. Until the records move, Let's Encrypt cannot
+  reach the new host and the deploy's certificate check warns; re-run `make
+  deploy-relay LIMIT=<new host>` once DNS has moved. Mind Let's Encrypt's rate limits
+  (five certificates per exact name per week): do not re-image a relay in a loop.
+- **Decommission:** take the relay's URL out of every node's `decdn_relay_urls` and
+  re-deploy them first. A node keeps trying a relay it was told to use, and the list
+  replaces n0's relays, so keep at least one other relay in it. Then `make
+  decommission LIMIT=<host>` stops `iroh-relay` (SIGINT, its graceful shutdown),
+  disables it and removes the unit, and tears down the Alloy agent. It keeps the
+  binary, `/etc/iroh-relay` and the ACME state. tcp/80, tcp/443 and udp/7842 stay
+  open until the host leaves `iroh_relay_hosts` and baseline runs again.
 
 ## Compose and Kubernetes
 

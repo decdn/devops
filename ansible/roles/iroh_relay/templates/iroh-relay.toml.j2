@@ -1,0 +1,50 @@
+# MANAGED BY the iroh_relay role — do not edit by hand.
+#
+# iroh-relay's configuration (iroh-relay/src/main.rs, Config). iroh-relay ignores
+# keys it does not know and falls back to its defaults when this file is missing
+# (the unit refuses to start without it), so every key is written out.
+{% macro sock(addr, port) -%}
+{{ (('[' ~ addr ~ ']') if ':' in addr else addr) ~ ':' ~ port }}
+{%- endmacro %}
+
+enable_relay = true
+# The captive-portal probe (and nothing else: the relay itself is on https).
+http_bind_addr = {{ sock(iroh_relay_bind_address, _iroh_relay_ports.http) | tojson }}
+enable_quic_addr_discovery = {{ iroh_relay_enable_quic_addr_discovery | bool | lower }}
+# Loopback only: iroh-relay's default is the public address on :9090.
+enable_metrics = true
+metrics_bind_addr = {{ sock(iroh_relay_metrics_bind, iroh_relay_metrics_port) | tojson }}
+{% if iroh_relay_denylist | length > 0 %}
+access = { denylist = {{ iroh_relay_denylist | list | tojson }} }
+{% else %}
+access = "everyone"
+{% endif %}
+
+[tls]
+https_bind_addr = {{ sock(iroh_relay_bind_address, _iroh_relay_ports.https) | tojson }}
+quic_bind_addr = {{ sock(iroh_relay_bind_address, _iroh_relay_ports.quic) | tojson }}
+hostname = {{ iroh_relay_hostname | tojson }}
+cert_mode = "LetsEncrypt"
+cert_dir = {{ _iroh_relay_cert_dir | tojson }}
+prod_tls = {{ (not (iroh_relay_acme_staging | bool)) | lower }}
+contact = {{ iroh_relay_acme_contact | tojson }}
+{% if iroh_relay_accept_conn_limit | string | length > 0
+      or iroh_relay_accept_conn_burst | string | length > 0
+      or iroh_relay_client_rx_bytes_per_second | string | length > 0 %}
+
+[limits]
+{% if iroh_relay_accept_conn_limit | string | length > 0 %}
+accept_conn_limit = {{ iroh_relay_accept_conn_limit | float }}
+{% endif %}
+{% if iroh_relay_accept_conn_burst | string | length > 0 %}
+accept_conn_burst = {{ iroh_relay_accept_conn_burst | int }}
+{% endif %}
+{% if iroh_relay_client_rx_bytes_per_second | string | length > 0 %}
+
+[limits.client.rx]
+bytes_per_second = {{ iroh_relay_client_rx_bytes_per_second | int }}
+{% if iroh_relay_client_rx_max_burst_bytes | string | length > 0 %}
+max_burst_bytes = {{ iroh_relay_client_rx_max_burst_bytes | int }}
+{% endif %}
+{% endif %}
+{% endif %}

@@ -1,0 +1,626 @@
+---
+# Provision iroh-relay: validate, refuse ports another service holds, install,
+# configure, start, gate on the listeners, then look for the certificate. Every
+# pure-input assert runs before the first host mutation. The DNS name and the ACME
+# contact are operator inputs — see roles/iroh_relay/README.md.
+
+# --- Install method + target ----------------------------------------------------
+- name: Require a valid install method
+  ansible.builtin.assert:
+    that:
+      - iroh_relay_install_method in ["release", "manual"]
+    fail_msg: >-
+      iroh_relay_install_method must be "release" (the pinned, sha256-verified GitHub
+      Release tarball) or "manual" (copy a binary from the control machine); got
+      "{{ iroh_relay_install_method }}".
+
+- name: Require a pinned release version
+  ansible.builtin.assert:
+    that:
+      - iroh_relay_version is string
+      - iroh_relay_version is match('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$')
+    fail_msg: >-
+      iroh_relay_version must be an iroh release version such as "1.3.0" (the
+      v<version> tag of n0-computer/iroh); got "{{ iroh_relay_version }}". Keep it on
+      the iroh version decdn builds against.
+  when: iroh_relay_install_method == "release"
+
+- name: Resolve the iroh-relay target triple
+  when: iroh_relay_install_method == "release"
+  block:
+    - name: Require a supported target triple
+      ansible.builtin.assert:
+        that:
+          - iroh_relay_target in _iroh_relay_arch_targets.values()
+        fail_msg: >-
+          iroh_relay_target resolved to "{{ iroh_relay_target }}", which is not one of
+          the Linux targets this role installs ({{ _iroh_relay_arch_targets.values() | join(', ') }}).
+          It is derived from the host's gathered architecture
+          ("{{ ansible_facts.get('architecture', 'not gathered') }}"): gather facts or
+          set iroh_relay_target explicitly.
+
+    - name: Require the target triple to match the host architecture
+      ansible.builtin.assert:
+        that:
+          - _iroh_relay_arch_targets[ansible_facts['architecture']] == iroh_relay_target
+        fail_msg: >-
+          iroh_relay_target is {{ iroh_relay_target }}, but this host is
+          {{ ansible_facts['architecture'] }} and needs
+          {{ _iroh_relay_arch_targets[ansible_facts['architecture']] }}. Drop the
+          explicit iroh_relay_target (it is derived from the host) or fix it.
+      when: ansible_facts.get('architecture', '') in _iroh_relay_arch_targets
+
+    # Upstream signs nothing; this digest is the only thing that vouches for the
+    # binary, so never install without one.
+    - name: Require a pinned sha256 for the target
+      ansible.builtin.assert:
+        that:
+          - iroh_relay_sha256 is mapping
+          - (iroh_relay_sha256[iroh_relay_target] | default('') | string) is match('^[0-9a-f]{64}$')
+        fail_msg: >-
+          No sha256 pin for iroh-relay {{ iroh_relay_version }} on {{ iroh_relay_target }}
+          under iroh_relay_sha256. Copy the asset's digest from the release
+          (gh release view v{{ iroh_relay_version }} -R n0-computer/iroh --json assets)
+          whenever you bump iroh_relay_version.
+
+- name: Require a manual binary source
+  ansible.builtin.assert:
+    that:
+      - iroh_relay_manual_bin_src is string
+      - iroh_relay_manual_bin_src | length > 0
+    fail_msg: >-
+      iroh_relay_install_method "manual" needs iroh_relay_manual_bin_src, a
+      control-machine path to the iroh-relay binary.
+  when: iroh_relay_install_method == "manual"
+
+# --- Public name + certificate ------------------------------------------------------
+- name: Validate the relay hostname
+  ansible.builtin.assert:
+    that:
+      # A DNS name: labels of letters, digits and inner hyphens, at least one dot,
+      # no scheme, port, path or trailing dot. An IP address cannot get a Let's
+      # Encrypt certificate here (TLS-ALPN-01 needs a name).
+      - iroh_relay_hostname is string
+      - iroh_relay_hostname is match('^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$')
+    fail_msg: >-
+      iroh_relay_hostname is required: the DNS name nodes reach the relay at, such as
+      relay1.example.org, with no https:// or port (got "{{ iroh_relay_hostname }}").
+      Its A/AAAA records must point at this host.
+
+- name: Validate the ACME contact
+  ansible.builtin.assert:
+    that:
+      # iroh-relay prefixes mailto: itself.
+      - iroh_relay_acme_contact is string
+      - iroh_relay_acme_contact is match('^[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,63}$')
+    fail_msg: >-
+      iroh_relay_acme_contact is required: an email address for the Let's Encrypt
+      account, without mailto: (got "{{ iroh_relay_acme_contact }}").
+
+- name: Validate the boolean knobs
+  ansible.builtin.assert:
+    that:
+      - iroh_relay_acme_staging is boolean
+      - iroh_relay_enable_quic_addr_discovery is boolean
+    fail_msg: >-
+      iroh_relay_acme_staging and iroh_relay_enable_quic_addr_discovery must be real
+      booleans (true/false), not strings (got "{{ iroh_relay_acme_staging }}" and
+      "{{ iroh_relay_enable_quic_addr_discovery }}"). Pass them as JSON on the
+      command line (-e '{"iroh_relay_acme_staging": true}').
+
+# --- Listeners ------------------------------------------------------------------
+# Parsed with Python's ipaddress on the control machine (no ansible.utils here):
+# a regex let "203.0.113.5:443" and the long loopback forms through, and the relay
+# then crash-loops on a config the role has already written.
+- name: Parse the public bind address
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -I
+      - -c
+      - |
+        import ipaddress, sys
+        raw = sys.argv[1]
+        try:
+            a = ipaddress.ip_address(raw)
+        except ValueError:
+            sys.exit("not a bare IP address (no brackets, port or zone)")
+        if a.is_unspecified and raw not in ("::", "0.0.0.0"):
+            sys.exit('write the wildcard as "::" or "0.0.0.0"')
+        mapped = getattr(a, "ipv4_mapped", None)
+        if mapped is not None:
+            sys.exit("an IPv4-mapped IPv6 address; use the IPv4 address itself")
+        if a.is_loopback or a.is_link_local or a.is_multicast:
+            sys.exit("a loopback, link-local or multicast address serves no peer")
+        print("ok")
+      - "{{ iroh_relay_bind_address | string }}"
+  register: iroh_relay_bind_parse
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  delegate_to: localhost
+  become: false
+
+- name: Validate the public bind address
+  ansible.builtin.assert:
+    that:
+      - iroh_relay_bind_address is string
+      - iroh_relay_bind_parse.rc == 0
+      - iroh_relay_bind_parse.stdout | trim == 'ok'
+    fail_msg: >-
+      iroh_relay_bind_address must be "::" (every address), "0.0.0.0" (an IPv4-only
+      host) or one of the host's own unicast addresses, as a bare IP with no brackets
+      or port (got "{{ iroh_relay_bind_address }}": {{ iroh_relay_bind_parse.stderr
+      | default('') | trim | default('rejected', true) }}).
+
+# AGENTS.md hard rule 2: the relay itself is public, its metrics are not. The port
+# must also stay clear of this repo's other listeners, so a co-located node,
+# sponsord or Alloy keeps its own.
+- name: Require the metrics listener on loopback
+  ansible.builtin.assert:
+    that:
+      - iroh_relay_metrics_bind is match('^127(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$')
+      - iroh_relay_metrics_port | string is match('^[0-9]+$')
+      - iroh_relay_metrics_port | int >= 1024
+      - iroh_relay_metrics_port | int <= 65535
+      - iroh_relay_metrics_port | int not in _iroh_relay_reserved_ports
+    fail_msg: >-
+      iroh_relay_metrics_bind must be an IPv4 loopback address (got
+      "{{ iroh_relay_metrics_bind }}") and iroh_relay_metrics_port a TCP port from 1024
+      to 65535 that is none of {{ _iroh_relay_reserved_ports | join(', ') }} (the
+      relay's public ports and this repo's other listeners; got
+      "{{ iroh_relay_metrics_port }}"). Metrics are never public (AGENTS.md hard rule 2).
+  vars:
+    _iroh_relay_reserved_ports: >-
+      {{ (_iroh_relay_ports.values() | list)
+         + [decdn_metrics_port | default(9090), decdn_admin_port | default(9191),
+            sponsord_port | default(8090), sponsord_onramp_port | default(8080),
+            grafana_alloy_otlp_grpc_port | default(4317),
+            grafana_alloy_otlp_http_port | default(4318),
+            (grafana_alloy_server_http_addr | default('127.0.0.1:12345')).split(':') | last]
+         | map('int') | list }}
+
+# --- Access + limits --------------------------------------------------------------
+- name: Validate the denylist
+  ansible.builtin.assert:
+    that:
+      - iroh_relay_denylist is sequence
+      - iroh_relay_denylist is not string
+      - iroh_relay_denylist is not mapping
+      - iroh_relay_denylist | map('string') | reject('match', '^[0-9a-f]{64}$') | list | length == 0
+      - iroh_relay_denylist | unique | length == iroh_relay_denylist | length
+    fail_msg: >-
+      iroh_relay_denylist must be a list of distinct endpoint IDs, each 64 lowercase
+      hex characters (iroh's hex form of the public key; the z-base32 form decdn's CLI
+      takes, as in `decdn probe --node-id`, must be converted first). Got {{ iroh_relay_denylist | to_json }}.
+
+# The shapes iroh-relay parses (Limits in iroh-relay/src/main.rs: an f64, then
+# usize/u32 counts), checked here so a bad value fails before the relay restarts.
+# Stricter than upstream: zero and negative values, which it takes, are refused
+# (a zero limit is a relay that accepts nothing; "" means unlimited).
+- name: Validate the rate limits
+  ansible.builtin.assert:
+    that:
+      - >-
+        _limit == '' or (_limit is match('^[0-9]+(\.[0-9]+)?$') and _limit | float > 0)
+      - >-
+        _burst == '' or (_burst is match('^[1-9][0-9]*$'))
+      - >-
+        _bps == '' or (_bps is match('^[1-9][0-9]*$') and _bps | int <= 4294967295)
+      - >-
+        _max_burst == '' or (_max_burst is match('^[1-9][0-9]*$') and _max_burst | int <= 4294967295
+                             and _bps != '')
+      - iroh_relay_limit_nofile | string is match('^[1-9][0-9]*$')
+      - iroh_relay_limit_nofile | int >= 1024
+    fail_msg: >-
+      iroh_relay_accept_conn_limit must be "" or a positive number (connections per
+      second); iroh_relay_accept_conn_burst and
+      iroh_relay_client_rx_bytes_per_second / _max_burst_bytes "" or positive integers
+      (the two byte limits at most 4294967295, and a max burst only with a
+      bytes_per_second); iroh_relay_limit_nofile an integer of at least 1024. Got
+      limit "{{ _limit }}", burst "{{ _burst }}", rx "{{ _bps }}" / "{{ _max_burst }}",
+      nofile "{{ iroh_relay_limit_nofile }}".
+  vars:
+    _limit: "{{ iroh_relay_accept_conn_limit | string }}"
+    _burst: "{{ iroh_relay_accept_conn_burst | string }}"
+    _bps: "{{ iroh_relay_client_rx_bytes_per_second | string }}"
+    _max_burst: "{{ iroh_relay_client_rx_max_burst_bytes | string }}"
+
+# RUST_LOG goes into the unit as Environment="RUST_LOG=...", where a quote, a
+# backslash or a % (a systemd specifier) would change the line. (iroh-relay's
+# EnvFilter drops a directive it cannot parse, and logs errors only if none is left.)
+- name: Validate iroh_relay_log_level
+  ansible.builtin.assert:
+    that:
+      - iroh_relay_log_level is string
+      - iroh_relay_log_level | length > 0
+      - iroh_relay_log_level is match('^[A-Za-z0-9_:=,.\[\]{}-]+$')
+    fail_msg: >-
+      iroh_relay_log_level must be a RUST_LOG filter: a level (info) or
+      comma-separated target=level directives (info,iroh_relay=debug), with no spaces,
+      quotes, backslashes or %; got "{{ iroh_relay_log_level }}".
+
+- name: Validate the readiness and certificate-check knobs
+  ansible.builtin.assert:
+    that:
+      - iroh_relay_certificate_check in ['warn', 'fail', 'skip']
+      - iroh_relay_readiness_retries | string is match('^[1-9][0-9]*$')
+      - iroh_relay_readiness_delay | string is match('^[1-9][0-9]*$')
+      - iroh_relay_readiness_settle | string is match('^[0-9]+$')
+      - iroh_relay_certificate_retries | string is match('^[1-9][0-9]*$')
+      - iroh_relay_certificate_delay | string is match('^[1-9][0-9]*$')
+    fail_msg: >-
+      iroh_relay_certificate_check must be "warn", "fail" or "skip", and the
+      readiness and certificate retries and delays positive integers
+      (iroh_relay_readiness_settle a number of seconds, 0 allowed).
+
+# --- Ports (before any change) ------------------------------------------------------
+# The relay must own its ports. Anything else on them (a web server, the onramp's
+# Caddy, another relay) would make it crash-loop after the install, so look before
+# touching the host. Its own listeners (an earlier converge) are fine.
+- name: Read whether iroh-relay is already running
+  ansible.builtin.systemd_service:
+    name: iroh-relay
+  register: iroh_relay_pre_state
+
+- name: Read the listeners on the relay's ports
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  register: iroh_relay_pre_listeners
+  changed_when: false
+  check_mode: false
+  loop:
+    - [ss, -Hltnp, "( sport = :{{ _iroh_relay_ports.http }} or sport = :{{ _iroh_relay_ports.https }}
+                     or sport = :{{ iroh_relay_metrics_port }} )"]
+    - [ss, -Hlunp, "sport = :{{ _iroh_relay_ports.quic }}"]
+  loop_control:
+    label: "{{ item[1] }}"
+
+- name: Refuse public ports held by another process
+  ansible.builtin.assert:
+    that:
+      - _foreign | length == 0
+    fail_msg: |-
+      Another process holds a port iroh-relay needs (tcp/{{ _iroh_relay_ports.http }},
+      tcp/{{ _iroh_relay_ports.https }}, the metrics port {{ iroh_relay_metrics_port }}{{
+      (', or udp/' ~ _iroh_relay_ports.quic) if iroh_relay_enable_quic_addr_discovery else '' }}):
+        {{ _foreign | join('\n  ') }}
+      The relay terminates its own TLS on 80/443 and cannot share them with a web
+      server or the sponsord-onramp's Caddy: give it a host of its own (or move the
+      metrics port with iroh_relay_metrics_port).
+  vars:
+    _main_pid: "{{ iroh_relay_pre_state.status.MainPID | default('0') | string }}"
+    _lines: >-
+      {{ (iroh_relay_pre_listeners.results[0].stdout_lines | default([]))
+         + ((iroh_relay_pre_listeners.results[1].stdout_lines | default([]))
+            if iroh_relay_enable_quic_addr_discovery else []) }}
+    _foreign: >-
+      {{ _lines | reject('search', 'pid=' ~ _main_pid ~ ',') | list
+         if _main_pid != '0' else _lines }}
+
+# "::" serves IPv4 too only while the kernel maps it (net.ipv6.bindv6only=0, the
+# default). With 1, every listener would still belong to the unit, so the gate
+# would pass a relay no IPv4 peer can reach.
+- name: Read the kernel's IPv6-only bind default
+  ansible.builtin.slurp:
+    src: /proc/sys/net/ipv6/bindv6only
+  register: iroh_relay_bindv6only
+  failed_when: false
+  when: iroh_relay_bind_address == '::'
+
+- name: Refuse "::" on a host that binds IPv6 only
+  ansible.builtin.assert:
+    that:
+      - (iroh_relay_bindv6only.content | default('MA==') | b64decode | trim) != '1'
+    fail_msg: >-
+      iroh_relay_bind_address is "::", but net.ipv6.bindv6only is 1 on this host, so
+      the relay would serve no IPv4 peer. Set iroh_relay_bind_address: "0.0.0.0" (or
+      the host's address), or net.ipv6.bindv6only=0.
+  when: iroh_relay_bind_address == '::'
+
+# --- Install, configure, start ------------------------------------------------------
+- name: Install curl for the certificate check
+  ansible.builtin.package:
+    name: curl
+    state: present
+  when: iroh_relay_certificate_check != 'skip'
+
+- name: Install the iroh-relay binary
+  ansible.builtin.import_tasks: install.yml
+
+- name: Create the iroh-relay config directory
+  ansible.builtin.file:
+    path: "{{ iroh_relay_etc }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Template the iroh-relay config
+  ansible.builtin.template:
+    src: iroh-relay.toml.j2
+    dest: "{{ iroh_relay_config_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart iroh-relay
+
+- name: Install the iroh-relay systemd unit
+  ansible.builtin.template:
+    src: iroh-relay.service.j2
+    dest: "{{ _iroh_relay_unit }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart iroh-relay
+
+# --- Restart inputs -----------------------------------------------------------------
+# As roles/sponsord_onramp: hashes of everything the relay starts from, recorded
+# once it is up, so a restart lost to a failed run (the handler never fired) is
+# caught on the next converge.
+- name: Hash the restart inputs
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: iroh_relay_inputs_stat
+  loop:
+    - "{{ iroh_relay_config_file }}"
+    - "{{ _iroh_relay_unit }}"
+    - "{{ iroh_relay_bin }}"
+
+- name: Read the restart-input checksums this role last recorded
+  ansible.builtin.slurp:
+    src: "{{ iroh_relay_inputs_checksum_file }}"
+  register: iroh_relay_inputs_recorded
+  failed_when: >-
+    iroh_relay_inputs_recorded.failed
+    and 'not found' not in (iroh_relay_inputs_recorded.msg | default(''))
+  changed_when: false
+
+- name: Summarise the restart-input checksums
+  ansible.builtin.set_fact:
+    iroh_relay_inputs_sums: >-
+      {{ iroh_relay_inputs_stat.results | map(attribute='stat') | map('default', {}, true)
+         | map(attribute='checksum', default='') | join(' ') }}
+    iroh_relay_inputs_recorded_sums: >-
+      {{ iroh_relay_inputs_recorded.content | default('') | b64decode | trim }}
+
+- name: Note restart inputs that changed since the relay last started
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'The config, the unit or the binary differs from what iroh-relay was last
+      confirmed up on' if iroh_relay_inputs_recorded_sums | length > 0
+      else 'iroh-relay is running but was never confirmed up on its current inputs' }}
+      — restarting iroh-relay.
+  changed_when: true
+  notify: Restart iroh-relay
+  when: >-
+    (iroh_relay_inputs_recorded_sums | length > 0
+     and iroh_relay_inputs_sums != iroh_relay_inputs_recorded_sums)
+    or (iroh_relay_inputs_recorded_sums | length == 0
+        and iroh_relay_pre_state.status.ActiveState | default('') == 'active')
+
+- name: Apply pending iroh-relay changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start iroh-relay
+  ansible.builtin.systemd:
+    name: iroh-relay
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# --- Readiness (fatal) ------------------------------------------------------------
+# The relay parses its config, then binds metrics, then the http, https and QUIC
+# listeners, all before it has a certificate; a bad config or a lost port makes it
+# exit. So the gate is: metrics answer, every listener belongs to the unit, and the
+# unit did not restart in between. ACME runs afterwards (see the certificate check).
+# KICS flags plain HTTP here; the target is the loopback listener asserted above.
+- name: Wait for iroh-relay metrics
+  ansible.builtin.uri:
+    url: "http://{{ iroh_relay_metrics_bind }}:{{ iroh_relay_metrics_port }}/metrics"
+    status_code: 200
+    return_content: true
+    timeout: 5
+  register: iroh_relay_metrics
+  retries: "{{ iroh_relay_readiness_retries }}"
+  delay: "{{ iroh_relay_readiness_delay }}"
+  until: iroh_relay_metrics.status | default(-1) != -1
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Read the iroh-relay unit state
+  ansible.builtin.systemd_service:
+    name: iroh-relay
+  register: iroh_relay_unit_before
+  when: not ansible_check_mode
+
+# Retried: the relay binds its listeners one after another, after metrics. Prints
+# the listeners for the report, and the ones the unit's MainPID does not hold.
+- name: Wait for every listener to belong to the iroh-relay unit
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -u
+      pid={{ iroh_relay_unit_before.status.MainPID | default('0') | int }}
+      missing=""
+      check() {
+        if [ "$1" = tcp ]; then flags=-Hltnp; else flags=-Hlunp; fi
+        out=$(ss "$flags" "sport = :$2")
+        printf '%s\n' "$out"
+        grep -qF "pid=$pid," <<<"$out" || missing="$missing $1/$2"
+      }
+      check tcp {{ _iroh_relay_ports.http }}
+      check tcp {{ _iroh_relay_ports.https }}
+      check tcp {{ iroh_relay_metrics_port }}
+      {% if iroh_relay_enable_quic_addr_discovery %}
+      check udp {{ _iroh_relay_ports.quic }}
+      {% endif %}
+      echo "not held by pid $pid:${missing:- none}"
+      [ "$pid" != 0 ] && [ -z "$missing" ]
+  register: iroh_relay_listeners
+  changed_when: false
+  failed_when: false
+  retries: "{{ iroh_relay_readiness_retries }}"
+  delay: "{{ iroh_relay_readiness_delay }}"
+  until: iroh_relay_listeners.rc == 0
+  when: not ansible_check_mode
+
+- name: Let iroh-relay run before the final check
+  ansible.builtin.wait_for:
+    timeout: "{{ iroh_relay_readiness_settle | int }}"
+  when:
+    - not ansible_check_mode
+    - iroh_relay_readiness_settle | int > 0
+
+- name: Read the iroh-relay unit state again
+  ansible.builtin.systemd_service:
+    name: iroh-relay
+  register: iroh_relay_unit_after
+  when: not ansible_check_mode
+
+- name: Require iroh-relay to be up on all its listeners
+  ansible.builtin.assert:
+    that:
+      - iroh_relay_unit_after.status.ActiveState == 'active'
+      - iroh_relay_unit_after.status.SubState == 'running'
+      - iroh_relay_unit_after.status.MainPID == iroh_relay_unit_before.status.MainPID
+      - iroh_relay_unit_after.status.NRestarts | default('0') == iroh_relay_unit_before.status.NRestarts | default('0')
+      - iroh_relay_metrics.status | default(-1) == 200
+      - _iroh_relay_gate_metric in (iroh_relay_metrics.content | default(''))
+      - iroh_relay_listeners.rc == 0
+    fail_msg: |-
+      iroh-relay is not up: state
+      {{ iroh_relay_unit_after.status.ActiveState }}/{{ iroh_relay_unit_after.status.SubState }},
+      MainPID {{ iroh_relay_unit_before.status.MainPID }} -> {{ iroh_relay_unit_after.status.MainPID }},
+      restarts {{ iroh_relay_unit_before.status.NRestarts | default('?') }} ->
+      {{ iroh_relay_unit_after.status.NRestarts | default('?') }},
+      metrics status {{ iroh_relay_metrics.status | default('none') }}. Listeners:
+        {{ iroh_relay_listeners.stdout | default('none', true) | indent(2) }}
+      It exits at start on a config it cannot parse (an endpoint ID in
+      iroh_relay_denylist that is not a valid key, for one) or a port it cannot bind.
+      Read the reason on the host:
+        sudo journalctl -u iroh-relay -e
+  when: not ansible_check_mode
+
+- name: Record the restart-input checksums
+  ansible.builtin.copy:
+    dest: "{{ iroh_relay_inputs_checksum_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ iroh_relay_inputs_sums }}\n"
+  when: not ansible_check_mode
+
+# --- Certificate ----------------------------------------------------------------------
+# Not part of the gate: a fresh relay has no certificate until Let's Encrypt has
+# reached it from the internet, which this host cannot force. Curl with the real
+# name, pinned to the address the relay listens on (loopback for a wildcard bind),
+# against the system trust store, so the answer is the relay's own certificate, as
+# nodes will see it.
+- name: Fetch /healthz over https with the relay's certificate
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --fail
+      - --silent
+      - --show-error
+      - --max-time
+      - "5"
+      - --resolve
+      - "{{ iroh_relay_hostname }}:{{ _iroh_relay_ports.https }}:{{ _probe_addr }}"
+      - "https://{{ iroh_relay_hostname }}/healthz"
+  vars:
+    _probe_addr: >-
+      {{ '127.0.0.1' if iroh_relay_bind_address in ['::', '0.0.0.0']
+         else ('[' ~ iroh_relay_bind_address ~ ']') if ':' in iroh_relay_bind_address
+         else iroh_relay_bind_address }}
+  register: iroh_relay_cert_probe
+  changed_when: false
+  failed_when: false
+  retries: "{{ iroh_relay_certificate_retries }}"
+  delay: "{{ iroh_relay_certificate_delay }}"
+  until: iroh_relay_cert_probe.rc == 0
+  when:
+    - not ansible_check_mode
+    - iroh_relay_certificate_check != 'skip'
+
+- name: Read the version /healthz reports
+  ansible.builtin.set_fact:
+    iroh_relay_healthz: >-
+      {{ (iroh_relay_cert_probe.stdout | from_json)
+         if (iroh_relay_cert_probe.stdout | trim).startswith('{') else {} }}
+  when:
+    - not ansible_check_mode
+    - iroh_relay_certificate_check != 'skip'
+    - iroh_relay_cert_probe.rc == 0
+
+# Let's Encrypt's certificate, once issued, is cached in the state directory
+# (tokio-rustls-acme's DirCache names it cached_cert_<hash>). Only before that is
+# a failed probe expected; afterwards it is a regression (expired, staging, or no
+# longer reachable), and "warn" fails too.
+- name: Look for a certificate Let's Encrypt already issued
+  ansible.builtin.find:
+    paths: "{{ _iroh_relay_cert_dir }}"
+    patterns: "cached_cert_*"
+  register: iroh_relay_cached_cert
+  when:
+    - not ansible_check_mode
+    - iroh_relay_certificate_check != 'skip'
+    - iroh_relay_cert_probe.rc != 0
+
+# changed, not ok: it then shows in the play recap, not only in the task output.
+- name: Report a relay still waiting for its first certificate
+  ansible.builtin.debug:
+    msg: &iroh_relay_cert_msg |-
+      {{ 'FAILED' if _iroh_relay_cert_fatal | default(true) else 'WARNING' }}: iroh-relay is up,
+      but https://{{ iroh_relay_hostname }}/healthz did not answer with a trusted certificate
+      within ~{{ (iroh_relay_certificate_retries | int) * (iroh_relay_certificate_delay | int) }}s
+      (curl: {{ iroh_relay_cert_probe.stderr | default('') | trim }}). Nodes cannot use
+      the relay until it has one.{{ " Let's Encrypt has issued a certificate for it before, so
+      this is a regression, not a first issuance still pending."
+      if (iroh_relay_cached_cert.matched | default(0)) > 0 else "" }} Let's Encrypt must
+      reach this host on tcp/443:
+        - {{ iroh_relay_hostname }}'s A/AAAA records point at this host;
+        - tcp/443 is open from the internet (the provider's firewall too);
+        - Let's Encrypt's rate limits have not been hit;
+        - iroh_relay_acme_staging is {{ iroh_relay_acme_staging }} (staging certificates are never trusted).
+      The ACME log on the host: sudo journalctl -u iroh-relay | grep -i acme
+  vars:
+    _iroh_relay_cert_fatal: false
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - iroh_relay_certificate_check == 'warn'
+    - iroh_relay_cert_probe.rc != 0
+    - iroh_relay_cached_cert.matched | default(0) == 0
+
+- name: Fail on a relay without a trusted certificate
+  ansible.builtin.fail:
+    msg: *iroh_relay_cert_msg
+  vars:
+    _iroh_relay_cert_fatal: true
+  when:
+    - not ansible_check_mode
+    - iroh_relay_certificate_check != 'skip'
+    - iroh_relay_cert_probe.rc != 0
+    - >-
+      iroh_relay_certificate_check == 'fail'
+      or iroh_relay_cached_cert.matched | default(0) > 0
+
+- name: Require /healthz to report the pinned version
+  ansible.builtin.assert:
+    that:
+      - iroh_relay_healthz.status | default('') == 'ok'
+      - iroh_relay_install_method != 'release' or iroh_relay_healthz.version | default('') == iroh_relay_version
+    fail_msg: >-
+      https://{{ iroh_relay_hostname }}/healthz on this host answered
+      {{ iroh_relay_cert_probe.stdout }}, expected status "ok"{{
+      (' and version "' ~ iroh_relay_version ~ '"') if iroh_relay_install_method == 'release' else '' }}.
+      Something other than this role's iroh-relay serves the name.
+  when:
+    - not ansible_check_mode
+    - iroh_relay_certificate_check != 'skip'
+    - iroh_relay_cert_probe.rc == 0

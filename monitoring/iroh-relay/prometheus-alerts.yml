@@ -1,0 +1,119 @@
+# iroh-relay reference Prometheus alerting rules
+#
+# For the self-hosted iroh relays deCDN peers fall back to when they cannot
+# hole-punch (roles/iroh_relay), whose /metrics the grafana_alloy role ships as
+# job="iroh-relay". Every series is a counter in iroh-relay's `relayserver` group;
+# the names are the ones the pinned release exports (exported-metrics.txt beside
+# this file, which `make lint-helm` checks them against). Thresholds are
+# operator-onboarding defaults, not normative.
+#
+# NOT covered: the certificate's expiry. iroh-relay renews it itself (Let's
+# Encrypt) but exports nothing about it; watch https://<hostname>/healthz with a
+# blackbox or synthetic check of your own. IrohRelayHTTPSErrors and
+# IrohRelayQADHandshakeErrors are the symptoms when the certificate is bad.
+#
+# The relay runs on the Ansible path only. The decdn-node chart does NOT render this
+# file (its PrometheusRule reads ../decdn-node/prometheus-alerts.yml).
+#
+# Validate locally with `make lint-helm`: it runs promtool check rules on this
+# file, and promtool test rules on prometheus-alerts_test.yml against a copy
+# with the annotations stripped (see that file).
+#
+# Load into Grafana Cloud with mimirtool (see ../README.md), or into Prometheus via
+# rule_files (example in ../decdn-node/prometheus-alerts.yml).
+
+groups:
+  - name: iroh-relay
+    interval: 30s
+    rules:
+      - alert: IrohRelayDown
+        expr: up{job="iroh-relay"} == 0
+        for: 2m
+        labels:
+          component: relay
+          severity: critical
+        annotations:
+          summary: "iroh-relay on {{ $labels.instance }} unreachable for 2m"
+          description: |
+            Prometheus has been unable to scrape iroh-relay for two minutes.
+            Peers that cannot hole-punch and list this relay in
+            decdn_relay_urls fall back to their other relays, or lose the
+            connection if this was their only one. Read why on the host:
+            journalctl -u iroh-relay -e. Adjust the job="iroh-relay"
+            selector if your scrape job is named differently.
+
+      # A share of the new https connections, not a count: a busy relay sees
+      # some failed handshakes from scanners all the time. Most of them failing
+      # means clients cannot complete TLS, usually an expired, missing or
+      # staging certificate.
+      - alert: IrohRelayHTTPSErrors
+        expr: >-
+          sum by (job, instance) (rate(relayserver_http_connections_errored_total{job="iroh-relay"}[15m]))
+          / sum by (job, instance) (rate(relayserver_http_connections_total{job="iroh-relay"}[15m]))
+          > 0.5
+        for: 15m
+        labels:
+          component: relay
+          severity: warning
+        annotations:
+          summary: "Most https connections to iroh-relay on {{ $labels.instance }} end in an error"
+          description: |
+            More than half of the https connections iroh-relay accepted in
+            the last 15 minutes ended with an error, for 15 minutes. Check
+            the certificate (curl -v https://<hostname>/healthz) and the
+            ACME log (journalctl -u iroh-relay | grep -i acme).
+
+      # The same for QUIC address discovery, which uses the same certificate.
+      - alert: IrohRelayQADHandshakeErrors
+        expr: >-
+          sum by (job, instance) (rate(relayserver_qad_incoming_error_total{job="iroh-relay"}[15m]))
+          / sum by (job, instance) (rate(relayserver_qad_incoming_total{job="iroh-relay"}[15m]))
+          > 0.5
+        for: 15m
+        labels:
+          component: relay
+          severity: warning
+        annotations:
+          summary: "Most QUIC address discovery handshakes fail on {{ $labels.instance }}"
+          description: |
+            More than half of the incoming QUIC address discovery
+            connections aborted before completing the handshake, for 15
+            minutes. Peers then hole-punch less often and fall back to the
+            relay more. Check the certificate as for IrohRelayHTTPSErrors.
+
+      - alert: IrohRelayDroppingPackets
+        expr: >-
+          sum by (job, instance) (rate(relayserver_send_packets_dropped_total{job="iroh-relay"}[15m]))
+          / sum by (job, instance) (rate(relayserver_send_packets_recv_total{job="iroh-relay"}[15m]))
+          > 0.05
+        for: 15m
+        labels:
+          component: relay
+          severity: warning
+        annotations:
+          summary: "iroh-relay on {{ $labels.instance }} drops more than 5% of relayed packets"
+          description: |
+            iroh-relay dropped more than 5% of the packets it was asked to
+            relay over the last 15 minutes, for 15 minutes. iroh-relay
+            counts a drop only when the destination is not connected to
+            this relay, or writing to it failed; a destination whose queue
+            is full is NOT counted. So the usual cause is peers sending to
+            endpoints that left (or never homed here), not an overloaded
+            host. Look for a peer or client version that keeps addressing
+            gone endpoints before adding capacity.
+
+      # Only meaningful with iroh_relay_client_rx_bytes_per_second set; without
+      # limits the counter never moves.
+      - alert: IrohRelayRateLimiting
+        expr: increase(relayserver_conns_rx_ratelimited_total{job="iroh-relay"}[15m]) > 0
+        for: 0m
+        labels:
+          component: relay
+          severity: info
+        annotations:
+          summary: "iroh-relay on {{ $labels.instance }} is rate-limiting clients"
+          description: |
+            {{ $value | humanize }} client connections had frames
+            rate-limited in the last 15 minutes. Expected now and then; if
+            it never stops, iroh_relay_client_rx_bytes_per_second may be
+            too low for the traffic deCDN peers relay.

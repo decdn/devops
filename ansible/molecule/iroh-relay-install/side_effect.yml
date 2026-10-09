@@ -1,0 +1,182 @@
+---
+# The release install path against a local mirror. The header of molecule.yml lists
+# what each step proves.
+- name: Side effect — release install from a local mirror
+  hosts: all
+  become: true
+  vars:
+    _ir_mirror: /srv/iroh-relay-mirror
+    _ir_base: http://127.0.0.1:8081
+    _ir_stamp: /usr/local/lib/iroh-relay/installed-version
+    _ir_good: 0.0.0-molecule-stub     # what the stub reports
+    _ir_other: 0.0.0-molecule-other   # a release whose binary reports _ir_good
+    _ir_targets:
+      x86_64: x86_64-unknown-linux-gnu
+      aarch64: aarch64-unknown-linux-gnu
+    _ir_target: "{{ _ir_targets[ansible_facts['architecture']] }}"
+  tasks:
+    - name: Create the mirror's release directories
+      ansible.builtin.file:
+        path: "{{ _ir_mirror }}/{{ item }}/x"
+        state: directory
+        mode: "0755"
+      loop: ["v{{ _ir_good }}", "v{{ _ir_other }}"]
+
+    - name: Stage the stub as each release's binary
+      ansible.builtin.copy:
+        src: >-
+          {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/iroh-relay/files/iroh-relay-stub
+        dest: "{{ _ir_mirror }}/{{ item }}/x/iroh-relay"
+        mode: "0755"
+      loop: ["v{{ _ir_good }}", "v{{ _ir_other }}"]
+
+    # One flat binary at the archive root, as upstream's tarballs.
+    - name: Pack each release as upstream names it
+      ansible.builtin.command:
+        argv: [tar, -C, "{{ _ir_mirror }}/v{{ item }}/x", -czf,
+               "{{ _ir_mirror }}/v{{ item }}/iroh-relay-v{{ item }}-{{ _ir_target }}.tar.gz", ./iroh-relay]
+        creates: "{{ _ir_mirror }}/v{{ item }}/iroh-relay-v{{ item }}-{{ _ir_target }}.tar.gz"
+      loop: ["{{ _ir_good }}", "{{ _ir_other }}"]
+
+    - name: Hash the releases and the stub binary
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        checksum_algorithm: sha256
+      register: _ir_sums
+      loop:
+        - "{{ _ir_mirror }}/v{{ _ir_good }}/iroh-relay-v{{ _ir_good }}-{{ _ir_target }}.tar.gz"
+        - "{{ _ir_mirror }}/v{{ _ir_other }}/iroh-relay-v{{ _ir_other }}-{{ _ir_target }}.tar.gz"
+        - "{{ _ir_mirror }}/v{{ _ir_good }}/x/iroh-relay"
+
+    - name: Name the digests
+      ansible.builtin.set_fact:
+        _ir_good_sha: "{{ _ir_sums.results[0].stat.checksum }}"
+        _ir_other_sha: "{{ _ir_sums.results[1].stat.checksum }}"
+        _ir_bin_sha: "{{ _ir_sums.results[2].stat.checksum }}"
+
+    - name: Serve the mirror on loopback
+      ansible.builtin.command:
+        argv: [systemd-run, --unit=molecule-relay-mirror, --collect, python3, -m, http.server, "8081",
+               --bind, 127.0.0.1, --directory, "{{ _ir_mirror }}"]
+      changed_when: true
+
+    - name: Wait for the mirror
+      ansible.builtin.wait_for:
+        port: 8081
+        host: 127.0.0.1
+        timeout: 15
+
+    # --- a wrong pin --------------------------------------------------------------------
+    - name: Install with a wrong sha256 pin
+      block:
+        - name: Run the role in release mode with a wrong digest
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_install_method: release
+            iroh_relay_release_base: "{{ _ir_base }}"
+            iroh_relay_version: "{{ _ir_good }}"
+            iroh_relay_sha256: "{{ {_ir_target: '0' * 64} }}"
+
+        - name: Fail — a release with the wrong digest was installed
+          ansible.builtin.fail:
+            msg: The role finished although the tarball did not match its pin.
+      rescue:
+        - name: Require the download's checksum to be what failed
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Download the release tarball and verify its sha256'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the pinned download."
+
+    - name: Stat the stamp after the refused download
+      ansible.builtin.stat:
+        path: "{{ _ir_stamp }}"
+      register: _ir_stamp_bad
+
+    - name: Require no stamp after the refused download
+      ansible.builtin.assert:
+        that:
+          - not _ir_stamp_bad.stat.exists
+        fail_msg: A tarball that failed its pin left an install stamp.
+
+    # --- the right pin ------------------------------------------------------------------
+    - name: Install the pinned release
+      ansible.builtin.include_tasks: includes/install-good.yml
+
+    # --- the mirror down: nothing to download -------------------------------------------
+    - name: Stop the mirror
+      ansible.builtin.systemd_service:
+        name: molecule-relay-mirror
+        state: stopped
+
+    - name: Re-run the release install with the mirror down
+      ansible.builtin.include_role:
+        name: iroh_relay
+      vars:
+        iroh_relay_install_method: release
+        iroh_relay_release_base: "{{ _ir_base }}"
+        iroh_relay_version: "{{ _ir_good }}"
+        iroh_relay_sha256: "{{ {_ir_target: _ir_good_sha} }}"
+
+    # --- the binary replaced in place -----------------------------------------------------
+    - name: Replace the installed binary with other bytes, same version string
+      ansible.builtin.lineinfile:
+        path: /usr/local/bin/iroh-relay
+        line: "# replaced in place by molecule"
+
+    - name: Serve the mirror again
+      ansible.builtin.command:
+        argv: [systemd-run, --unit=molecule-relay-mirror, --collect, python3, -m, http.server, "8081",
+               --bind, 127.0.0.1, --directory, "{{ _ir_mirror }}"]
+      changed_when: true
+
+    - name: Wait for the mirror again
+      ansible.builtin.wait_for:
+        port: 8081
+        host: 127.0.0.1
+        timeout: 15
+
+    - name: Re-install over the replaced binary
+      ansible.builtin.include_tasks: includes/install-good.yml
+
+    # --- a release whose binary reports another version -----------------------------------
+    - name: Install a release that does not report its pinned version
+      block:
+        - name: Run the role pinned to a version the binary does not report
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_install_method: release
+            iroh_relay_release_base: "{{ _ir_base }}"
+            iroh_relay_version: "{{ _ir_other }}"
+            iroh_relay_sha256: "{{ {_ir_target: _ir_other_sha} }}"
+
+        - name: Fail — the version backstop let a mismatched binary through
+          ansible.builtin.fail:
+            msg: The role finished although the binary does not report the pinned version.
+      rescue:
+        - name: Require the version backstop to be what failed
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require the installed iroh-relay to run and match the pinned version'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the version backstop."
+
+    - name: Stat the stamp after the mismatched version
+      ansible.builtin.stat:
+        path: "{{ _ir_stamp }}"
+      register: _ir_stamp_other
+
+    - name: Require no stamp vouching for the mismatched binary
+      ansible.builtin.assert:
+        that:
+          - not _ir_stamp_other.stat.exists
+        fail_msg: A binary that failed the version backstop left an install stamp.
+
+    # Leave the relay release-installed for verify.
+    - name: Install the pinned release once more
+      ansible.builtin.include_tasks: includes/install-good.yml
+
+    - name: Stop the mirror for good
+      ansible.builtin.systemd_service:
+        name: molecule-relay-mirror
+        state: stopped

@@ -1,0 +1,124 @@
+---
+# iroh_relay role defaults. iroh-relay is n0's relay server for iroh: when two
+# peers cannot hole-punch (roughly one connection in ten), their end-to-end
+# encrypted QUIC traffic falls back to a relay, and the relay's QUIC address
+# discovery (QAD) helps them hole-punch in the first place. deCDN nodes use n0's
+# public relays unless decdn_relay_urls names others; the ADRs expect production to
+# self-host relays as operational infrastructure, not an incentivized role
+# (decdn/adr/architecture.md, "Trust Assumptions").
+#
+# The relay is public by design and terminates its own TLS (Let's Encrypt, over
+# TLS-ALPN-01 on tcp/443); QAD needs the same certificate in-process, so there is
+# no proxy in front of it. It binds tcp/80, tcp/443 and udp/7842 on every address
+# (AGENTS.md hard rule 2, relay exception); its metrics stay on loopback.
+# Upstream: github.com/n0-computer/iroh, iroh-relay/src/main.rs.
+
+# --- Install method -----------------------------------------------------------
+# "release" (default): download the pinned iroh-relay GitHub Release tarball and
+#   verify it against the sha256 pinned below (upstream signs nothing).
+# "manual": copy a binary from the control machine (molecule's stub, or your own
+#   build of iroh-relay with `cargo install iroh-relay --features server`).
+iroh_relay_install_method: release        # "release" | "manual"
+iroh_relay_manual_bin_src: ""             # manual: control-machine path to the binary
+
+# --- Release to install ----------------------------------------------------------
+# Keep it on the iroh version decdn itself builds against (decdn/Cargo.lock), so
+# relay and clients speak the same protocol. Bump the version and every digest
+# together: the digests are the release API's per-asset sha256
+# (gh release view v<version> -R n0-computer/iroh --json assets).
+iroh_relay_version: "1.3.0"
+iroh_relay_release_base: "https://github.com/n0-computer/iroh/releases/download"
+# Derived from the host's gathered architecture (vars/main.yml).
+iroh_relay_target: "{{ _iroh_relay_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
+iroh_relay_sha256:
+  x86_64-unknown-linux-gnu: 50e0158f6b9aefc95b45b515485d3b94d786fb1bfa4155d25937c71b81905f8f
+  aarch64-unknown-linux-gnu: 94161582a616aae4e28242b6c126ab4b0bbae38a051cd90952d34a06301eac6c
+
+# --- Public name + certificate ------------------------------------------------------
+# REQUIRED. The DNS name nodes reach the relay at (decdn_relay_urls:
+# ["https://<hostname>"]). Its A/AAAA records must point at this host, and tcp/443
+# must reach it from the internet, before Let's Encrypt can issue the certificate.
+iroh_relay_hostname: ""
+# REQUIRED. The ACME account contact (an email address; Let's Encrypt mails expiry
+# warnings there).
+iroh_relay_acme_contact: ""
+# true: Let's Encrypt's staging CA, for a trial run that does not spend the
+# production rate limits. Its certificates are NOT trusted: nodes cannot use the
+# relay until this is false again.
+iroh_relay_acme_staging: false
+
+# --- Listeners ------------------------------------------------------------------
+# The public address the relay binds tcp/80, tcp/443 and udp/7842 on: "::" (every
+# address, IPv4 included on a dual-stack host), "0.0.0.0" for an IPv4-only host, or
+# one of the host's own unicast addresses (no loopback, link-local or multicast).
+# On a host with net.ipv6.bindv6only=1, "::" would serve no IPv4, so the role
+# refuses it there: use "0.0.0.0" or set the sysctl to 0. The ports are fixed
+# (vars/main.yml).
+iroh_relay_bind_address: "::"
+# QUIC address discovery on udp/7842: tells peers the address they are seen at,
+# which is what lets them hole-punch. iroh-relay leaves it off unless asked;
+# playbooks/group_vars/all.yml reads this to open udp/7842, so set it in
+# inventory, not in a play's vars.
+iroh_relay_enable_quic_addr_discovery: true
+# Prometheus /metrics, loopback only (asserted). Not 9090: that is decdn-node's.
+iroh_relay_metrics_bind: 127.0.0.1
+iroh_relay_metrics_port: 9092
+
+# --- Access + limits --------------------------------------------------------------
+# The relay serves everyone: its traffic is end-to-end encrypted between peers, and
+# clients (not only nodes) need it as their NAT fallback. Endpoint IDs to refuse,
+# as 64 lowercase hex characters: iroh's hex form of the public key, not the
+# z-base32 form decdn's CLI takes (`decdn probe --node-id`); convert those first.
+# [] = nobody refused.
+iroh_relay_denylist: []
+# Rate limits ("" = unlimited, iroh-relay's default):
+iroh_relay_accept_conn_limit: ""          # new connections per second, server-wide (a number)
+iroh_relay_accept_conn_burst: ""          # connections accepted above that rate in a burst
+iroh_relay_client_rx_bytes_per_second: "" # bytes per second each client may send
+iroh_relay_client_rx_max_burst_bytes: ""  # burst above that rate; needs the line above
+# Each client holds a socket; systemd's default soft limit (1024) would cap the
+# relay near a thousand clients.
+iroh_relay_limit_nofile: 65536
+
+# --- Logging ----------------------------------------------------------------------
+# RUST_LOG: a level (info) or comma-separated target=level directives. iroh-relay
+# logs only errors when it is unset, so the role always sets it.
+iroh_relay_log_level: info
+
+# --- Files on the host ----------------------------------------------------------
+iroh_relay_bin: /usr/local/bin/iroh-relay
+iroh_relay_etc: /etc/iroh-relay
+iroh_relay_config_file: "{{ iroh_relay_etc }}/iroh-relay.toml"           # non-secret (0644)
+# sha256 record of every restart input (config, unit, binary) as of the last
+# converge that saw the relay up.
+iroh_relay_inputs_checksum_file: "{{ iroh_relay_etc }}/.relay-inputs.sha256"
+
+# --- Readiness --------------------------------------------------------------------
+# The relay binds its listeners at start, before it has a certificate (ACME runs
+# in the background and a failure there does not stop it). The gate is loopback
+# /metrics answering and every listener owned by the unit. A timeout FAILS the
+# deploy. Window ~60s for each of the two waits.
+iroh_relay_readiness_retries: 30
+iroh_relay_readiness_delay: 2
+# Seconds the relay must then stay up, on the same process, before the gate passes:
+# a relay that binds and then crashes (Restart=on-failure) must not pass.
+iroh_relay_readiness_settle: 5
+# After the gate: fetch https://<hostname>/healthz on the relay's address
+# (loopback for a wildcard bind) and check the certificate against the host's
+# trust store. "warn" (default) reports a relay that has not got its FIRST
+# certificate yet (that needs DNS and tcp/443 from the internet, which the deploy
+# cannot force) as a changed task, and fails once Let's Encrypt has issued one
+# (an expired, staging or otherwise untrusted certificate is then a regression);
+# "fail" always fails the deploy; "skip" does not look.
+iroh_relay_certificate_check: warn        # "warn" | "fail" | "skip"
+iroh_relay_certificate_retries: 15
+iroh_relay_certificate_delay: 4
+
+# --- Lifecycle: decommission (tasks_from: decommission) -------------------------
+# Only read by that entry point (playbooks/decommission.yml). Shared with decdn_node,
+# sponsord and sponsord_onramp (and identical there, `make test-scripts` checks):
+# one typed confirmation covers every service on the host. A non-interactive run
+# sets decdn_decommission_confirm to the comma-joined, sorted host list
+# (deliberately NOT defaulted here).
+decdn_decommission_max_hosts: 1
+decdn_decommission_prompt_seconds: 300   # an unanswered confirmation prompt fails closed after this

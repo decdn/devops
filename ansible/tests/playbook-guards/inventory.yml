@@ -11,7 +11,13 @@ all:
     sponsord_hosts:
       hosts:
         both: {}
+        relay-onramp: {}
     sponsord_onramp_hosts:
       hosts:
         both: {}
         onramp-only: {}
+        relay-onramp: {}
+    iroh_relay_hosts:
+      hosts:
+        relay-only: {}
+        relay-onramp: {}

@@ -1,0 +1,37 @@
+---
+# Shared config for iroh relay hosts (playbooks/iroh_relay.yml, also run by
+# site.yml). Uncomment and fill in; per-host values (the hostname, at least) go
+# under the host in hosts.yml (as hosts.yml.example shows) or in
+# host_vars/<host>/main.yml.
+# Full variable list: roles/iroh_relay/defaults/main.yml and its README.md.
+# Nothing to provision on the host: the relay generates its ACME account key and
+# TLS key itself, in its 0700 state directory.
+
+# --- Public name + certificate (REQUIRED) ------------------------------------------
+# Per host. Its A/AAAA records must point at the host, and tcp/443 must reach it from
+# the internet, before Let's Encrypt issues the certificate.
+# iroh_relay_hostname: relay1.example.org
+# iroh_relay_acme_contact: ops@example.org
+# A trial run on Let's Encrypt's staging CA (untrusted certificates):
+# iroh_relay_acme_staging: true
+
+# --- Listeners ---------------------------------------------------------------------
+# "::" binds every address (IPv4 too on a dual-stack host); "0.0.0.0" for an
+# IPv4-only host. QUIC address discovery (udp/7842) is on; set it here, not in a
+# play, because the firewall hole reads it.
+# iroh_relay_bind_address: "0.0.0.0"
+# iroh_relay_enable_quic_addr_discovery: false
+
+# --- Access + limits ---------------------------------------------------------------
+# Open to every peer by default. Endpoint IDs to refuse, as 64 lowercase hex:
+# iroh_relay_denylist: []
+# Per-client receive rate (bytes/s) and burst; server-wide new-connection rate:
+# iroh_relay_client_rx_bytes_per_second: 4194304
+# iroh_relay_client_rx_max_burst_bytes: 8388608
+# iroh_relay_accept_conn_limit: 50
+# iroh_relay_accept_conn_burst: 100
+
+# --- The deploy's certificate check ------------------------------------------------
+# "warn" (default) reports a relay without a trusted certificate yet; "fail" fails
+# the deploy once DNS and tcp/443 are known to be in place.
+# iroh_relay_certificate_check: fail

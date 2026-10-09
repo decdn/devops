@@ -55,10 +55,11 @@
       - grafana_alloy_node_enabled is boolean
       - grafana_alloy_sponsord_enabled is boolean
       - grafana_alloy_sponsord_onramp_enabled is boolean
+      - grafana_alloy_iroh_relay_enabled is boolean
     fail_msg: >-
       grafana_alloy_host_metrics_enabled, _self_metrics_enabled, _logs_enabled,
-      _host_include_exporter_metrics, _node_enabled, _sponsord_enabled and
-      _sponsord_onramp_enabled must be
+      _host_include_exporter_metrics, _node_enabled, _sponsord_enabled,
+      _sponsord_onramp_enabled and _iroh_relay_enabled must be
       booleans (true/false), not quoted strings — each gates whole component
       groups in config.alloy.
 
@@ -129,6 +130,7 @@
     - {name: grafana_alloy_self_job, value: "{{ grafana_alloy_self_job | string }}", allow_empty: false}
     - {name: grafana_alloy_logs_job, value: "{{ grafana_alloy_logs_job | string }}", allow_empty: false}
     - {name: grafana_alloy_sponsord_job, value: "{{ grafana_alloy_sponsord_job | string }}", allow_empty: false}
+    - {name: grafana_alloy_iroh_relay_job, value: "{{ grafana_alloy_iroh_relay_job | string }}", allow_empty: false}
   loop_control:
     label: "{{ item.name }}"
 
@@ -160,12 +162,13 @@
       low-cardinality charset (letters, digits, dot, underscore, slash, ≤ 63
       chars): {{ item }} does not fit. Offending variables:
       grafana_alloy_service_name / sponsord_service_name /
-      sponsord_onramp_service_name / service_namespace /
+      sponsord_onramp_service_name / iroh_relay_service_name / service_namespace /
       instance_id / deployment_environment / region.
   loop:
     - "{{ grafana_alloy_service_name }}"
     - "{{ grafana_alloy_sponsord_service_name }}"
     - "{{ grafana_alloy_sponsord_onramp_service_name }}"
+    - "{{ grafana_alloy_iroh_relay_service_name }}"
     - "{{ grafana_alloy_service_namespace }}"
     # _ga_instance_id is REQUIRED (never "") — it has a derived non-empty default.
     - "{{ _ga_instance_id }}"

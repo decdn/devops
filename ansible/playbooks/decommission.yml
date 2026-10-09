@@ -1,6 +1,6 @@
 ---
 # Take a host out of service: stop every service this repo deployed on it and
-# remove its unit (decdn-node, sponsord-onramp, sponsord; the onramp's Caddy is
+# remove its unit (decdn-node, iroh-relay, sponsord-onramp, sponsord; the onramp's Caddy is
 # stopped and disabled, not removed), then tear down the opt-in Grafana Alloy agent.
 # Keeps the identities and keys (the node's keystore withdraws the bond; sponsord's
 # treasury keystore owns the pool) and does NOT touch the chain; each role's last
@@ -17,7 +17,7 @@
 #     forgets the hold, and the pool could be refilled twice). The sponsord role
 #     checks again right before its stop.
 - name: Check the hosts before anything stops
-  hosts: decdn_nodes:sponsord_onramp_hosts:sponsord_hosts
+  hosts: decdn_nodes:sponsord_onramp_hosts:sponsord_hosts:iroh_relay_hosts
   become: true
   gather_facts: false
   tasks:
@@ -50,6 +50,16 @@
         name: decdn_node
         tasks_from: decommission
 
+- name: Decommission iroh relays
+  hosts: iroh_relay_hosts
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stop and remove the relay service
+      ansible.builtin.include_role:
+        name: iroh_relay
+        tasks_from: decommission
+
 # The onramp needs the daemon, so it goes first.
 - name: Decommission sponsord onramps
   hosts: sponsord_onramp_hosts
@@ -75,7 +85,7 @@
 # checks the managed-by marker in the unit), so this is a no-op on a host that never
 # enabled Grafana Cloud or runs a foreign Alloy.
 - name: Tear down the Grafana Alloy agent
-  hosts: decdn_nodes:sponsord_hosts
+  hosts: decdn_nodes:sponsord_hosts:iroh_relay_hosts
   become: true
   tasks:
     - name: Tear down the Grafana Alloy agent this repo installed

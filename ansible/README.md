@@ -7,8 +7,9 @@ hardened host baseline. The roles also ship as the `decdn.node` Galaxy collectio
 |----------|---------|-------------|
 | **`site.yml`** | Harden the host and deploy the public **deCDN node** (`decdn-node`). | `make check` / `make deploy` |
 | `backup.yml` | Encrypted backup of a node's identity or full state, and of sponsord's credentials. | `make backup` |
-| `decommission.yml` | Stop a node, the onramp and sponsord and remove their services (keeps the keys; no on-chain steps). | `make decommission` |
+| `decommission.yml` | Stop a node, an iroh relay, the onramp and sponsord and remove their services (keeps the keys; no on-chain steps). | `make decommission` |
 | `sponsord.yml` | Harden the host and deploy **sponsord**, the onboarding sponsor, on hosts in `sponsord_hosts`, with or without a node; then its public **sponsord-onramp** (behind Caddy) on hosts in `sponsord_onramp_hosts`. Also run by `site.yml`. | `make check-sponsord` / `make deploy-sponsord` |
+| `iroh_relay.yml` | Harden the host and deploy a self-hosted **iroh relay** (`iroh-relay`), the fallback path for peers that cannot hole-punch, on hosts in `iroh_relay_hosts`. Also run by `site.yml`. | `make check-relay` / `make deploy-relay` |
 
 ```
 baseline        host hardening: DevSec os/ssh, nftables default-deny inbound,
@@ -16,10 +17,12 @@ baseline        host hardening: DevSec os/ssh, nftables default-deny inbound,
    ├─ grafana_alloy   opt-in Grafana Cloud agent (metrics, journald, traces), loopback-only
    ├─ decdn_node      public QUIC udp/4433; metrics + admin loopback; signed-tarball or
    │                  local-build install; hardened systemd unit; backup/decommission
-   └─ sponsord        treasury signer + PaymentPool keeper; loopback API; DynamicUser
-      │               unit with systemd credentials; standalone or beside a node
-      └─ sponsord_onramp  the public gate + installers on sponsord's host; loopback
-                          listener behind Caddy (ACME TLS, tcp/80 + tcp/443)
+   ├─ sponsord        treasury signer + PaymentPool keeper; loopback API; DynamicUser
+   │  │               unit with systemd credentials; standalone or beside a node
+   │  └─ sponsord_onramp  the public gate + installers on sponsord's host; loopback
+   │                      listener behind Caddy (ACME TLS, tcp/80 + tcp/443)
+   └─ iroh_relay      self-hosted iroh relay; its own Let's Encrypt TLS on tcp/80 +
+                      tcp/443, QUIC address discovery udp/7842; loopback metrics
 ```
 
 ## Security model
@@ -29,8 +32,9 @@ specific to this path:
 
 - **nftables is the firewall.** SSH plus the node's **udp/4433** (via
   `baseline_extra_inbound`) are the only holes, plus **tcp/80 + tcp/443** for Caddy on a
-  `sponsord_onramp_hosts` host; metrics 9090, the admin RPC 9191, sponsord 8090 and the
-  onramp 8080 stay loopback. Baseline turns off `os_hardening`'s ufw config template
+  `sponsord_onramp_hosts` host and **tcp/80, tcp/443 + udp/7842** for the relay on an
+  `iroh_relay_hosts` host; metrics 9090, the admin RPC 9191, sponsord 8090, the
+  onramp 8080 and the relay's metrics 9092 stay loopback. Baseline turns off `os_hardening`'s ufw config template
   (`ufw_manage_defaults: false`) so a misleading DROP-policy `/etc/default/ufw` is never
   written. Do not install or enable ufw: it would replace the nftables ruleset and drop
   QUIC and SSH.
@@ -293,6 +297,30 @@ as well; `make deploy-sponsord` runs it after the daemon.
 
 Setup and variables: [`roles/sponsord_onramp/README.md`](roles/sponsord_onramp/README.md).
 
+### iroh relay (optional)
+
+The sixth role, `iroh_relay`, deploys a self-hosted
+[iroh relay](https://github.com/n0-computer/iroh). Peers that cannot hole-punch
+fall back to it, and its QUIC address discovery helps the rest hole-punch. Nodes use
+n0's public relays until `decdn_relay_urls` names yours; the ADRs expect production
+to self-host them as operational infrastructure, not as an incentivized role. Put
+each relay on a host of its own (or beside a node) in `iroh_relay_hosts`, then run
+`make deploy-relay`; `make deploy` covers it too.
+
+- **It terminates its own TLS.** It gets a Let's Encrypt certificate for
+  `iroh_relay_hostname` itself, so the name's A/AAAA records must point at the host,
+  and tcp/443 must reach it from the internet. It opens tcp/80, tcp/443 and udp/7842;
+  `iroh_relay_hosts` and `sponsord_onramp_hosts` exclude each other (both want 80
+  and 443).
+- **You provision no secret,** and it needs no backup: the relay generates its
+  ACME account key and TLS key itself, and Let's Encrypt re-issues on a new host.
+- **Pointing nodes at it** replaces n0's relays, so deploy at least two first.
+- **Observability:** with Grafana Cloud on, Alloy scrapes the relay on hosts in
+  `iroh_relay_hosts`; the dashboard and alert rules are in
+  [`monitoring/iroh-relay/`](../monitoring/iroh-relay/).
+
+Setup and variables: [`roles/iroh_relay/README.md`](roles/iroh_relay/README.md).
+
 ### Backup and decommission
 
 ```bash
@@ -304,7 +332,8 @@ make decommission LIMIT=<host>                                     # typed confi
 Backups need `decdn_backup_age_recipients` (public keys); on `sponsord_hosts` they
 archive the treasury keystore and password, the API token and the Turnstile secret.
 On a sponsord host, decommission refuses while sponsord holds an unconfirmed pool
-top-up. Restore, host migration and the on-chain exit:
+top-up. An iroh relay has nothing to back up; its decommission keeps its config and
+Let's Encrypt state. Restore, host migration and the on-chain exit:
 [`docs/lifecycle.md`](../docs/lifecycle.md).
 
 ---

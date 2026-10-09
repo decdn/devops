@@ -12,6 +12,7 @@ all:
           decdn_bind_port: 5555
         co-located: {}
         co-located-onramp: {}
+        relay-node: {}
     sponsord_hosts:
       hosts:
         sponsord: {}
@@ -19,9 +20,17 @@ all:
         onramp: {}
         onramp-own-proxy: {}
         co-located-onramp: {}
+        relay-sponsord: {}
     sponsord_onramp_hosts:
       hosts:
         onramp: {}
         onramp-own-proxy:
           sponsord_onramp_proxy: none
         co-located-onramp: {}
+    iroh_relay_hosts:
+      hosts:
+        relay: {}
+        relay-no-qad:
+          iroh_relay_enable_quic_addr_discovery: false
+        relay-node: {}
+        relay-sponsord: {}

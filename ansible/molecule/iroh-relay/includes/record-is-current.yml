@@ -1,0 +1,33 @@
+---
+# The relay runs, and the restart-input record (roles/iroh_relay: config, unit,
+# binary, space-separated sha256) matches the inputs it runs on.
+- name: Read the relay's unit state
+  ansible.builtin.systemd_service:
+    name: iroh-relay
+  register: _ir_cur_unit
+
+- name: Hash the relay's restart inputs
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    checksum_algorithm: sha256
+  register: _ir_cur_inputs
+  loop:
+    - /etc/iroh-relay/iroh-relay.toml
+    - /etc/systemd/system/iroh-relay.service
+    - /usr/local/bin/iroh-relay
+
+- name: Read the restart-input record
+  ansible.builtin.slurp:
+    src: /etc/iroh-relay/.relay-inputs.sha256
+  register: _ir_cur_record
+
+- name: Require a running relay recorded on its current inputs
+  ansible.builtin.assert:
+    that:
+      - _ir_cur_unit.status.ActiveState == 'active'
+      - (_ir_cur_record.content | b64decode | trim)
+        == (_ir_cur_inputs.results | map(attribute='stat.checksum') | join(' '))
+    fail_msg: >-
+      iroh-relay is {{ _ir_cur_unit.status.ActiveState }}, and the record
+      "{{ _ir_cur_record.content | b64decode | trim }}" should be the inputs'
+      "{{ _ir_cur_inputs.results | map(attribute='stat.checksum') | join(' ') }}".

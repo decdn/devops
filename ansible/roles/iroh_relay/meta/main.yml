@@ -1,0 +1,17 @@
+---
+galaxy_info:
+  role_name: iroh_relay
+  author: deCDN Contributors
+  description: >-
+    Self-hosted iroh relay (n0-computer/iroh's iroh-relay) for deCDN nodes —
+    sha256-pinned release-tarball or manual install, built-in Let's Encrypt TLS,
+    QUIC address discovery, hardened DynamicUser systemd unit, loopback metrics.
+  license: MIT
+  min_ansible_version: "2.15"
+  galaxy_tags: [decdn, iroh, relay, systemd, debian]
+  platforms:
+    - name: Debian
+      versions: [bookworm, trixie]
+    - name: Ubuntu
+      versions: [noble, resolute]
+dependencies: []

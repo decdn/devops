@@ -1,0 +1,29 @@
+---
+# Converge on iroh_relay_bind_address=_ir_bind and check the config, the listeners
+# and (through the inventory's "fail" certificate check) the probe's address.
+- name: Converge bound to {{ _ir_bind }}
+  ansible.builtin.include_role:
+    name: iroh_relay
+  vars:
+    iroh_relay_bind_address: "{{ _ir_bind }}"
+
+- name: Read the rendered config bound to {{ _ir_bind }}
+  ansible.builtin.slurp:
+    src: /etc/iroh-relay/iroh-relay.toml
+  register: _ir_bind_cfg
+
+- name: Read the TCP listeners bound to {{ _ir_bind }}
+  ansible.builtin.command:
+    argv: [ss, -Hltn, "( sport = :80 or sport = :443 )"]
+  register: _ir_bind_ss
+  changed_when: false
+
+- name: Require the relay bound to {{ _ir_bind }}
+  vars:
+    _local: "{{ _ir_bind_ss.stdout_lines | map('split') | map(attribute=3) | list | sort }}"
+  ansible.builtin.assert:
+    that:
+      - ('https_bind_addr = "' ~ _ir_bind ~ ':443"') in (_ir_bind_cfg.content | b64decode)
+      - ('http_bind_addr = "' ~ _ir_bind ~ ':80"') in (_ir_bind_cfg.content | b64decode)
+      - _local == [_ir_bind ~ ':443', _ir_bind ~ ':80'] | sort
+    fail_msg: "Bound to {{ _ir_bind }}: listeners {{ _local }}"

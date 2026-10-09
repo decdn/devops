@@ -12,5 +12,25 @@
     {"proto": "udp", "port": 4433, "comment": "decdn QUIC"},
     {"proto": "tcp", "port": 80, "comment": "sponsord-onramp (Caddy, http)"},
     {"proto": "tcp", "port": 443, "comment": "sponsord-onramp (Caddy, https)"}
+  ],
+  "relay": [
+    {"proto": "tcp", "port": 80, "comment": "iroh-relay (http)"},
+    {"proto": "tcp", "port": 443, "comment": "iroh-relay (https, ACME)"},
+    {"proto": "udp", "port": 7842, "comment": "iroh-relay (QUIC address discovery)"}
+  ],
+  "relay-no-qad": [
+    {"proto": "tcp", "port": 80, "comment": "iroh-relay (http)"},
+    {"proto": "tcp", "port": 443, "comment": "iroh-relay (https, ACME)"}
+  ],
+  "relay-node": [
+    {"proto": "udp", "port": 4433, "comment": "decdn QUIC"},
+    {"proto": "tcp", "port": 80, "comment": "iroh-relay (http)"},
+    {"proto": "tcp", "port": 443, "comment": "iroh-relay (https, ACME)"},
+    {"proto": "udp", "port": 7842, "comment": "iroh-relay (QUIC address discovery)"}
+  ],
+  "relay-sponsord": [
+    {"proto": "tcp", "port": 80, "comment": "iroh-relay (http)"},
+    {"proto": "tcp", "port": 443, "comment": "iroh-relay (https, ACME)"},
+    {"proto": "udp", "port": 7842, "comment": "iroh-relay (QUIC address discovery)"}
   ]
 }

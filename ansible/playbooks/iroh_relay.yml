@@ -1,0 +1,39 @@
+---
+# iroh relays: the fallback path for deCDN peers that cannot hole-punch, and QUIC
+# address discovery for the ones that can. Self-hosted as operational
+# infrastructure, not an incentivized role (decdn/adr/architecture.md).
+#   iroh_relay_hosts: baseline -> grafana_alloy (opt-in, off by default) -> iroh_relay
+# Standalone entry point (`make deploy-relay`), also imported by site.yml. The
+# relay is public by design: it terminates its own TLS (Let's Encrypt) on tcp/443
+# and binds tcp/80 and udp/7842, opened by playbooks/group_vars/all.yml; its
+# metrics stay on loopback. Point nodes at it with decdn_relay_urls — see
+# roles/iroh_relay/README.md.
+# Before the relay play: the onramp's Caddy needs tcp/80 and tcp/443 too, and only
+# one of them can have them. (Under site.yml, sponsord.yml runs first, so on a host
+# in both groups the onramp is already up when this refuses; either way the deploy
+# fails loudly.) The role itself refuses ports another process holds, so the
+# decdn.node collection gets the same protection without this repo's groups.
+# tests/scripts-test.sh runs this play by its name.
+- name: Refuse an iroh relay on a sponsord-onramp host
+  hosts: iroh_relay_hosts
+  gather_facts: false
+  tasks:
+    - name: Require the host outside sponsord_onramp_hosts
+      ansible.builtin.assert:
+        that:
+          - "'sponsord_onramp_hosts' not in group_names"
+        fail_msg: >-
+          {{ inventory_hostname }} is in both iroh_relay_hosts and sponsord_onramp_hosts.
+          The relay terminates its own TLS on tcp/80 and tcp/443, which the onramp's
+          proxy needs as well: give the relay a host of its own.
+
+- name: Provision iroh relays
+  hosts: iroh_relay_hosts
+  become: true
+  roles:
+    - role: baseline
+      tags: [baseline]
+    - role: grafana_alloy
+      tags: [observability, iroh_relay, relay]
+    - role: iroh_relay
+      tags: [iroh_relay, relay]

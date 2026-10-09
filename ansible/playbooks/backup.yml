@@ -31,3 +31,7 @@
       ansible.builtin.include_role:
         name: sponsord
         tasks_from: backup
+
+# No play for iroh_relay_hosts: a relay holds no state worth a backup. Its only
+# files are the role-written config and the ACME account and certificates, which
+# Let's Encrypt re-issues on a new host (see docs/lifecycle.md).
