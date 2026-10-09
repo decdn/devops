@@ -1,0 +1,87 @@
+---
+# What converge + verify cannot prove, from ../source-build's converge (the
+# fixture's rev 1 on main, built and installed): a commit whose binary fails the
+# --version backstop leaves NO stamp, and rolling the ref back to the previous
+# commit (a SHA ref) reinstalls it.
+# Throughout, the fixture binaries refuse `--version` as root: the backstop must run
+# them sandboxed.
+- name: Side effect — a broken commit, then a rollback by SHA
+  hosts: all
+  become: true
+  tasks:
+    - name: Read the converged commit
+      ansible.builtin.command:
+        argv: [git, -C, /srv/decdn-fixture-work, rev-parse, HEAD]
+      register: _rev1
+      changed_when: false
+
+    # Rev 2's binaries fail `--version`, so the backstop rejects them after they
+    # are installed.
+    - name: Commit a FIXTURE_REV 2 whose binaries fail --version
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          cd /srv/decdn-fixture-work
+          ins='    if args.first().map(String::as_str) == Some("--version") {\n        exit(1);\n    }\n'
+          for f in crates/node/src/main.rs crates/cli/src/main.rs; do
+            sed -i 's/FIXTURE_REV: &str = "1"/FIXTURE_REV: \&str = "2"/' "$f"
+            sed -i "s|    let err = Command::new(STUB)|${ins}&|" "$f"
+          done
+          grep -q 'exit(1);' crates/node/src/main.rs
+          git -c user.name=molecule -c user.email=molecule@example.invalid commit -q -am "fixture rev 2 (broken)"
+          git push -q /srv/decdn-fixture.git main
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Run the role on the broken commit
+      block:
+        - name: Converge onto rev 2
+          ansible.builtin.include_role:
+            name: decdn_node
+
+        - name: Fail — a binary that fails --version was accepted
+          ansible.builtin.fail:
+            msg: The role finished although rev 2's decdn-node exits 1 on --version.
+      rescue:
+        - name: Require the failure at the version backstop
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Verify the installed decdn-node runs (version backstop)'
+            fail_msg: "Expected the version backstop to fail, got: {{ ansible_failed_task.name }}"
+
+    - name: Stat the installed-source stamp after the broken install
+      ansible.builtin.stat:
+        path: /usr/local/lib/decdn/installed-source
+      register: _stamp_broken
+
+    - name: Require no stamp for a commit that failed the backstop
+      ansible.builtin.assert:
+        that:
+          - not _stamp_broken.stat.exists
+
+    - name: Roll back to rev 1 by SHA
+      ansible.builtin.include_role:
+        name: decdn_node
+      vars:
+        decdn_node_source_ref: "{{ _rev1.stdout }}"
+
+    - name: Read the rolled-back binaries' fixture revision
+      ansible.builtin.command: "{{ item }} --fixture-rev"
+      loop:
+        - /usr/local/bin/decdn-node
+        - /usr/local/bin/decdn
+      register: _rev
+      changed_when: false
+
+    - name: Read the installed-source stamp after the rollback
+      ansible.builtin.slurp:
+        src: /usr/local/lib/decdn/installed-source
+      register: _stamp
+
+    - name: Require rev 1 reinstalled and stamped
+      ansible.builtin.assert:
+        that:
+          - _rev.results | map(attribute='stdout') | list == ['1', '1']
+          - >-
+            (_stamp.content | b64decode | trim)
+            == 'file:///srv/decdn-fixture.git@' ~ _rev1.stdout

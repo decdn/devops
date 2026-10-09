@@ -210,7 +210,6 @@ export it, so watch the address yourself.
   - idempotence;
   - a restart after a credential rotation;
   - that the `/healthz` gate fails the deploy when the daemon will not start;
-  - each `secret.env` hand-off between inventory and host, with its guards;
   - the top-up hold guard: a held top-up (the stub's marker) fails the converge
     before the restart and keeps the restart record, the override restarts, and the
     next run after the hold clears restarts;
@@ -220,7 +219,8 @@ export it, so watch the address yourself.
     with the mirror down, and rejection of a bad checksum, a bad signature and
     a binary that is not the pinned version;
   - treasury wallet generation through a `key-gen` stub: the files and modes, the
-    stop on an empty pool id, an existing wallet kept, and the daemon starting on it.
+    stop on an empty pool id, an existing wallet kept, and the daemon starting on it;
+  - each `secret.env` hand-off between inventory and host, with its guards.
 - `molecule/sponsord-onramp-lifecycle` runs `playbooks/backup.yml` and
   `playbooks/decommission.yml` on the `sponsord-onramp` converge: the archive's
   members, decommission refused for a held top-up and a missing or wrong

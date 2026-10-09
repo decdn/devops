@@ -1,0 +1,254 @@
+---
+# What converge + verify cannot prove, from ../source-build's converge (the
+# fixture's rev 1 on main, built and installed):
+#   1. "manual" clears the source stamp, and switching back to source rebuilds.
+#   2. A build home the build user owns (an earlier layout), with symlinks planted
+#      where the root-owned layout goes, a crontab and a running process, is
+#      deleted and rebuilt without root following any of the symlinks.
+#   3. Upgrading to this role version (no restart record yet), a run that installs
+#      a new commit and then fails before its restart handler: the retry restarts
+#      the daemon onto the new binary (the restart record was initialised from the
+#      binary in place before the install).
+# Throughout, the fixture binaries refuse `--version` as root: the backstop must run
+# them sandboxed.
+- name: Side effect — manual clears the source stamp; source again rebuilds
+  hosts: all
+  become: true
+  vars:
+    stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/default/files/decdn-node-stub"
+  tasks:
+    - name: Re-run the role in manual mode with the stub
+      ansible.builtin.include_role:
+        name: decdn_node
+      vars:
+        decdn_node_install_method: manual
+        decdn_node_manual_bin_src: "{{ stub_bin }}"
+        decdn_cli_manual_bin_src: "{{ stub_bin }}"
+
+    - name: Stat the installed-source stamp
+      ansible.builtin.stat:
+        path: /usr/local/lib/decdn/installed-source
+      register: _stamp_after
+
+    - name: Require the source stamp cleared
+      ansible.builtin.assert:
+        that:
+          - not _stamp_after.stat.exists
+
+    - name: Switch back to source
+      ansible.builtin.include_role:
+        name: decdn_node
+
+    - name: Read the reinstalled daemon's fixture revision
+      ansible.builtin.command: /usr/local/bin/decdn-node --fixture-rev
+      register: _rev
+      changed_when: false
+
+    - name: Require the source-built binary back in place
+      ansible.builtin.assert:
+        that:
+          - _rev.stdout == '1'
+
+- name: Side effect — an untrusted earlier build home is replaced, not reused
+  hosts: all
+  become: true
+  tasks:
+    - name: Create the decoy directory the planted symlinks point at
+      ansible.builtin.file:
+        path: /srv/decoy
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Hand the build home to the build user and plant symlinks in it
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          chown -R decdn-build:decdn-build /var/lib/decdn-build
+          for d in toolchain git work; do
+            rm -rf "/var/lib/decdn-build/$d"
+            ln -s /srv/decoy "/var/lib/decdn-build/$d"
+          done
+          mkdir -p /var/spool/cron/crontabs
+          echo '* * * * * true' > /var/spool/cron/crontabs/decdn-build
+          setsid runuser -u decdn-build -- sleep 600 </dev/null >/dev/null 2>&1 &
+        executable: /bin/bash
+      changed_when: true
+
+    # The stamp still matches, so the commit is not rebuilt; the layout, rustup
+    # and the clone are, and that is the path the planted symlinks would hijack.
+    - name: Re-run the role over the planted home
+      ansible.builtin.include_role:
+        name: decdn_node
+
+    - name: Stat the decoy, the layout and the crontab
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - /srv/decoy
+        - /var/lib/decdn-build
+        - /var/lib/decdn-build/toolchain
+        - /var/lib/decdn-build/git
+        - /var/lib/decdn-build/work
+        - /var/spool/cron/crontabs/decdn-build
+      register: _legacy
+
+    - name: List the decoy directory
+      ansible.builtin.find:
+        paths: /srv/decoy
+        hidden: true
+        file_type: any
+      register: _decoy_files
+
+    - name: Look for a process of the build user
+      ansible.builtin.command:
+        argv: [pgrep, -u, decdn-build]
+      register: _legacy_procs
+      changed_when: false
+      failed_when: _legacy_procs.rc not in [0, 1]
+
+    - name: Require a fresh root-owned layout, an untouched decoy and no leftovers
+      vars:
+        _s: "{{ dict(_legacy.results | map(attribute='item') | zip(_legacy.results | map(attribute='stat'))) }}"
+      ansible.builtin.assert:
+        that:
+          - _decoy_files.matched == 0
+          - _s['/srv/decoy'].pw_name == 'root' and _s['/srv/decoy'].mode == '0700'
+          - _s['/var/lib/decdn-build'].pw_name == 'root'
+          - _s['/var/lib/decdn-build/toolchain'].isdir and not _s['/var/lib/decdn-build/toolchain'].islnk
+          - _s['/var/lib/decdn-build/git'].isdir and not _s['/var/lib/decdn-build/git'].islnk
+          - _s['/var/lib/decdn-build/work'].isdir and not _s['/var/lib/decdn-build/work'].islnk
+          - not _s['/var/spool/cron/crontabs/decdn-build'].exists
+          - _legacy_procs.rc == 1
+        fail_msg: >-
+          {{ _s | to_nice_json }} decoy files {{ _decoy_files.files | map(attribute='path') | list }},
+          build-user processes {{ _legacy_procs.stdout_lines }}
+
+- name: Side effect — a lost restart on the first run of this role version
+  hosts: all
+  become: true
+  tasks:
+    # The installed rev 1 tree, bumped to FIXTURE_REV 4 on a branch of its own.
+    - name: Commit FIXTURE_REV 4 on an upgrade branch
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          cd /srv/decdn-fixture-work
+          git checkout -q -b upgrade main
+          sed -i 's/FIXTURE_REV: &str = "1"/FIXTURE_REV: \&str = "4"/' \
+            crates/node/src/main.rs crates/cli/src/main.rs
+          git -c user.name=molecule -c user.email=molecule@example.invalid commit -q -am "fixture rev 4"
+          git push -q /srv/decdn-fixture.git upgrade
+          git rev-parse HEAD
+        executable: /bin/bash
+      register: _rev4
+      changed_when: true
+
+    - name: Read the daemon's PID on rev 1
+      ansible.builtin.systemd_service:
+        name: decdn-node
+      register: _unit_before
+
+    # As on a host that last ran a role version without the record.
+    - name: Remove the restart record
+      ansible.builtin.file:
+        path: /etc/decdn/.decdn-node.bin.sha256
+        state: absent
+
+    # The stub's config validate fails while this marker exists: after the
+    # binaries are installed, before the restart handler runs.
+    - name: Make config validation fail
+      ansible.builtin.copy:
+        dest: /etc/decdn/stub-bad-config
+        content: "molecule\n"
+        mode: "0644"
+
+    - name: Install rev 4 and fail before restarting
+      block:
+        - name: Converge onto rev 4
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_node_source_ref: upgrade
+
+        - name: Fail — the run did not stop at config validation
+          ansible.builtin.fail:
+            msg: The role finished although config validation was forced to fail.
+      rescue:
+        - name: Require the failure at the config-validation report
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name is match('^Report the config-validation failure')
+            fail_msg: "Expected the config gate to fail, got: {{ ansible_failed_task.name }}"
+      always:
+        - name: Remove the config-validation marker
+          ansible.builtin.file:
+            path: /etc/decdn/stub-bad-config
+            state: absent
+
+    - name: Stat the release stamp after the failed run
+      ansible.builtin.stat:
+        path: /usr/local/lib/decdn/installed-version
+      register: _release_stamp_failed
+
+    - name: Read the source stamp after the failed run
+      ansible.builtin.slurp:
+        src: /usr/local/lib/decdn/installed-source
+      register: _source_stamp_failed
+
+    - name: Read the daemon's PID after the failed run
+      ansible.builtin.systemd_service:
+        name: decdn-node
+      register: _unit_failed
+
+    - name: Read the installed daemon's fixture revision
+      ansible.builtin.command: /usr/local/bin/decdn-node --fixture-rev
+      register: _rev_failed
+      changed_when: false
+
+    # Rev 4 is on disk and passed the --version backstop, so its stamp is right
+    # (the failure came later, at config validation), but the daemon still runs
+    # rev 1: only the restart record can tell the retry to restart it.
+    - name: Require rev 4 installed and stamped, and the daemon not restarted yet
+      ansible.builtin.assert:
+        that:
+          - _rev_failed.stdout == '4'
+          - not _release_stamp_failed.stat.exists
+          - >-
+            (_source_stamp_failed.content | b64decode | trim)
+            == 'file:///srv/decdn-fixture.git@' ~ (_rev4.stdout_lines | last)
+          - _unit_failed.status.MainPID == _unit_before.status.MainPID
+
+    - name: Retry
+      ansible.builtin.include_role:
+        name: decdn_node
+      vars:
+        decdn_node_source_ref: upgrade
+
+    - name: Read the daemon's PID after the retry
+      ansible.builtin.systemd_service:
+        name: decdn-node
+      register: _unit_retry
+
+    - name: Hash the installed daemon binary
+      ansible.builtin.stat:
+        path: /usr/local/bin/decdn-node
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: _bin_retry
+
+    - name: Read the restart record after the retry
+      ansible.builtin.slurp:
+        src: /etc/decdn/.decdn-node.bin.sha256
+      register: _record_retry
+
+    - name: Require the retry to restart the daemon onto rev 4 and record it
+      ansible.builtin.assert:
+        that:
+          - _unit_retry.status.MainPID != _unit_before.status.MainPID
+          - (_record_retry.content | b64decode | trim) == _bin_retry.stat.checksum
+        fail_msg: >-
+          PID {{ _unit_before.status.MainPID }} -> {{ _unit_retry.status.MainPID }};
+          the daemon was not restarted onto the binary the failed run installed.

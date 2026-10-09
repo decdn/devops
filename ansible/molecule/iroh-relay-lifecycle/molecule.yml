@@ -63,6 +63,9 @@ provisioner:
         iroh_relay_certificate_delay: 1
         iroh_relay_readiness_retries: 10
         iroh_relay_readiness_delay: 1
+        # 1s, not the default 5: the side effects run the role dozens of times. The
+        # crash-after-bind case (../iroh-relay-gate) sets its own 5s.
+        iroh_relay_readiness_settle: 1
         decdn_grafana_cloud_enabled: true
         grafana_alloy_install_method: manual
         grafana_alloy_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/grafana-cloud/files/alloy-stub"

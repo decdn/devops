@@ -132,8 +132,8 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   identical by `make test-scripts` with the shared `decdn_build_*`/`decdn_rustup_*`
   defaults. Validation checks the repo URL for secrets before any task prints it.
   Coverage is end to end on dependency-free fixture repos: `molecule/source-build`
-  (decdn_node) and `molecule/sponsord-onramp-source` (both sponsord
-  roles); or `manual` — binaries built on the control machine. Each method clears
+  with `source-build-rollback` and `source-build-recovery` (decdn_node) and
+  `molecule/sponsord-onramp-source` (both sponsord roles); or `manual` — binaries built on the control machine. Each method clears
   the others' stamps; a stamp is cleared before installing and written only after
   the `--version` backstop passes; the node records the running binary's sha256
   after the start and restarts on a mismatch. Under a hardened
@@ -252,7 +252,8 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   - **Molecule:** `molecule/sponsord-onramp` runs the real Caddy with `tls internal`
     and checks the https chain and that a forged `X-Forwarded-For` cannot pick the
     client address; `molecule/sponsord-onramp-caddy` runs the proxy side effects
-    (ACME, `none`, a foreign Caddyfile) on the same converge.
+    (ACME, `none`, a foreign Caddyfile), the custom gate page and the inventory
+    Turnstile secret on the same converge.
 
 - **`ansible/roles/iroh_relay`** — a self-hosted iroh relay (`iroh-relay` from
   n0-computer/iroh), the fallback path for deCDN peers that cannot hole-punch and their
@@ -305,10 +306,11 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     release stamp is `<version> <target> <pinned archive sha256> <binary sha256>`, so a
     corrected pin or a binary replaced in place is downloaded and verified again.
   - **Molecule:** `molecule/iroh-relay` (a molecule CA in place of Let's Encrypt; the
-    stub's markers break each part of the gate), `iroh-relay-lifecycle`
-    (decommission) and `iroh-relay-install` (release mode against a local mirror),
-    both with the same inventory (`make test-scripts` checks), and
-    `validation-iroh-relay`.
+    stub's markers break each part of the gate), `iroh-relay-certificate` (the
+    certificate check), `iroh-relay-gate` (the other gate refusals, QAD, binds and
+    access modes; two hosts), `iroh-relay-lifecycle` (decommission) and
+    `iroh-relay-install` (release mode against a local mirror), all on the same
+    inventory (`make test-scripts` checks), and `validation-iroh-relay`.
 
 - **`cloud-init/`** — the Ansible path with no control machine. Two templates,
   `user-data.yaml` (a node) and `user-data-sponsord.yaml` (sponsord + onramp), share

@@ -376,16 +376,24 @@ backup scopes decrypted and checked, a rejected and a real decommission),
 `sponsord` (`playbooks/sponsord.yml` on a host with no node: generated token, credential
 rotation restart, the fatal `/healthz` gate, the top-up hold guard, Alloy scraping sponsord and not the node;
 `grafana-cloud` covers sponsord co-located with a node), `sponsord-install` (the same
-converge, then release mode against a signed loopback mirror and treasury wallet
-generation), `sponsord-onramp` (the onramp beside its daemon, behind the real distro
+converge, then release mode against a signed loopback mirror, treasury wallet
+generation and the `secret.env` provenance guards), `sponsord-onramp` (the onramp beside its daemon, behind the real distro
 Caddy with `tls internal`: the https chain, the client address Caddy passes on, a
 Turnstile rotation restart, the fatal gates), `sponsord-onramp-caddy` (the same
-converge, then ACME and `none` modes and a refused foreign Caddyfile),
+converge, then ACME and `none` modes, a refused foreign Caddyfile, a custom gate page
+and the Turnstile secret from inventory),
 `sponsord-onramp-source` (the same converge, then both sponsord roles built from a
 fixture repo with `install_method: source`), `sponsord-onramp-lifecycle` (the same converge, then
 sponsord's backup decrypted and checked, decommission refused for a held top-up and a
-bad confirmation, then a real one), `source-build` (the node built from source
-on the host: the build sandbox, stamps, rollback, an untrusted earlier build home), and
+bad confirmation, then a real one), `iroh-relay` (the relay against a stub: restarts,
+the fatal gate, the port guard), `iroh-relay-certificate` and `iroh-relay-gate` (the
+same converge, then the certificate check; and the other gate refusals, QAD off, the
+bind addresses and the access modes), `iroh-relay-install` and `iroh-relay-lifecycle`
+(the same converge, then the release install and decommission), `source-build` (the
+node built from source on the host: the build sandbox, stamps, a moved branch),
+`source-build-rollback` (the same converge, then a broken commit rolled back by SHA),
+`source-build-recovery` (the same converge, then the install-method switch, an
+untrusted earlier build home and a lost restart), and
 `cloud-init` and `cloud-init-sponsord` (the `cloud-init/` templates booted for real).
 A slow scenario is split along its side effects rather than allowed to set the wall
 clock on its own.

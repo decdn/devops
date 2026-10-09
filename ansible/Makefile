@@ -133,16 +133,21 @@ decommission:
 # plays on Debian 13, Ubuntu 24.04 and 26.04), lifecycle (network profile,
 # backup + decommission), sponsord and sponsord-install (the sponsord role on a host
 # with no node, through playbooks/sponsord.yml, on Debian 12 and Ubuntu 24.04; the
-# install-method and wallet side effects run in sponsord-install), sponsord-onramp
-# and sponsord-onramp-caddy (the onramp beside its daemon, behind the real distro
-# Caddy; the proxy side effects run in sponsord-onramp-caddy), sponsord-onramp-source
+# install-method, wallet and secret.env provenance side effects run in
+# sponsord-install), sponsord-onramp and sponsord-onramp-caddy (the onramp beside its
+# daemon, behind the real distro Caddy; the proxy, gate-page and inventory Turnstile
+# side effects run in sponsord-onramp-caddy), sponsord-onramp-source
 # (that converge, then both sponsord roles built from source), sponsord-onramp-lifecycle
-# (that converge, then sponsord's backup and decommission), iroh-relay and
-# iroh-relay-lifecycle and iroh-relay-install (the relay through
-# playbooks/iroh_relay.yml against a stub on Debian 12 and Ubuntu 24.04: gate,
-# certificate check, port guard; then its decommission, and its release install
-# from a local mirror), validation-iroh-relay (the relay's bad knobs), source-build (the
-# node built from source on the host: sandbox, stamps, rollback), and cloud-init and
+# (that converge, then sponsord's backup and decommission), iroh-relay,
+# iroh-relay-certificate, iroh-relay-gate, iroh-relay-lifecycle and
+# iroh-relay-install (the relay through playbooks/iroh_relay.yml against a stub on
+# Debian 12 and Ubuntu 24.04: restarts, the fatal gate, the port guard; then the
+# certificate check, the gate's other refusals with the bind and access modes, its
+# decommission, and its release install from a local mirror), validation-iroh-relay
+# (the relay's bad knobs), source-build, source-build-rollback and
+# source-build-recovery (the node built from source on the host: sandbox, stamps;
+# then a rollback from a broken commit; then the install-method switch, an untrusted
+# build home and a lost restart), and cloud-init and
 # cloud-init-sponsord (the cloud-init/ templates, booted for real). The glob in
 # scripts/molecule.sh is the authority; this list is a guide.
 #
@@ -176,9 +181,10 @@ decommission:
 # rename cannot leave it silently stale.
 SCENARIOS ?= all
 JOBS ?=
-SLOW_FIRST ?= cloud-init-sponsord cloud-init sponsord-onramp validation \
-	validation-sponsord sponsord-onramp-caddy sponsord-onramp-lifecycle sponsord-install sponsord \
-	validation-alloy os-matrix grafana-cloud
+SLOW_FIRST ?= sponsord-onramp-source sponsord-install cloud-init source-build-recovery \
+	iroh-relay-gate cloud-init-sponsord sponsord source-build sponsord-onramp \
+	sponsord-onramp-caddy iroh-relay source-build-rollback iroh-relay-certificate \
+	validation iroh-relay-install os-matrix grafana-cloud
 MOLECULE_LOCK_PREFIX ?= /tmp/decdn-devops-molecule
 molecule_env = SCENARIOS='$(SCENARIOS)' JOBS='$(JOBS)' SLOW_FIRST='$(SLOW_FIRST)' \
 	MOLECULE_LOCK_PREFIX='$(MOLECULE_LOCK_PREFIX)'
