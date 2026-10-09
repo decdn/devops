@@ -226,9 +226,11 @@ check of your own.
   1. re-pin every `iroh_relay_sha256` digest against the release assets;
   2. run the real binary with a rendered allowlist config: it starts, stays up with
      ACME unreachable, and refuses an endpoint that is not listed;
-  3. deploy against a real node on another host (`make deploy-relay
-     LIMIT=<relay>`) and check that the relay's config lists the ID the node's
-     `decdn whoami` prints;
+  3. deploy a relay with a real DNS name and no cached certificate (an empty
+     `/var/lib/iroh-relay/acme`), with `iroh_relay_certificate_check: fail`,
+     against a real node on another host (`make deploy-relay LIMIT=<relay>`): Let's
+     Encrypt issues the certificate, the check passes, and the relay's config lists
+     the ID the node's `decdn whoami` prints;
   4. re-capture `monitoring/iroh-relay/exported-metrics.txt` from the new binary
      (the command is in its header);
   5. check that the tokio-rustls-acme version the new iroh-relay pins still names
@@ -281,9 +283,10 @@ check of your own.
   - **A real Let's Encrypt issuance.** The molecule CA stands in for it.
   - **The real binary with an allowlist.** The stub checks the
     `access = { allowlist = [...] }` shape, not that iroh-relay parses it or
-    refuses an unlisted endpoint. The v1.3.0 digests were checked against the release assets,
-    and the binary was run once on Debian 12 (it stayed up with ACME unreachable),
-    but that run predates the allowlist and used `access = "everyone"`.
+    refuses an unlisted endpoint. The v1.3.0 digests were checked against the
+    release assets, and the binary was run once on Debian 12 (it stayed up with
+    ACME unreachable), but that run predates the allowlist and used
+    `access = "everyone"`.
   - **The real `decdn whoami` on a separate node host.** The stand-in `decdn` is a
     shell script on the relay host itself. Three things are untested: the real
     CLI's output and exit codes (with a `keystore.json` present, too);
