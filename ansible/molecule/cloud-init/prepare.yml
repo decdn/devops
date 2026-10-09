@@ -19,6 +19,13 @@
         bins:
           - {name: decdn-node, src: "{{ stub_bin }}"}
           - {name: decdn, src: "{{ stub_bin }}"}
+      # Signed and verified, but its binaries report stub_version: verify.yml's last
+      # play needs the version backstop to refuse it.
+      - dir: v0.0.9
+        version: 0.0.9
+        bins:
+          - {name: decdn-node, src: "{{ stub_bin }}"}
+          - {name: decdn, src: "{{ stub_bin }}"}
   tasks:
     - name: The repo, as a git remote
       ansible.builtin.include_tasks: includes/repo.yml

@@ -13,22 +13,18 @@
       "source" (build decdn_node_source_ref on the node) or "manual" (copy
       locally-built binaries from the control machine).
 
-# NOTE (2026-10): upstream decdn/decdn has NO release tags yet — `git ls-remote
-# --tags` is empty and .github/workflows/release.yml only fires on a v[0-9]* tag
-# push. Until the first tag is cut, the default "release" mode has nothing to
-# download from GitHub. This assert names that cause and the alternatives instead
-# of surfacing a bare 404 from the first get_url.
+# decdn_node_version defaults to the release this repo pins; an inventory
+# that blanks it gets this message instead of a bare 404 from get_url.
 - name: Require a pinned release version
   ansible.builtin.assert:
     that:
       - decdn_node_version | length > 0
     fail_msg: >-
       decdn_node_install_method "release" (the default) requires decdn_node_version
-      (e.g. "0.1.1") and a matching v<version> release. Upstream decdn/decdn has
-      cut no release tag yet, so until it does either serve one from a mirror
-      (decdn_node_release_base), set decdn_node_install_method "source" with a
-      decdn_node_source_ref to build on the node, or use "manual" to copy binaries
-      built on the control machine.
+      (e.g. "0.0.1") naming a v<version> release of decdn/decdn (or of the mirror in
+      decdn_node_release_base). To run something unreleased, set
+      decdn_node_install_method "source" with a decdn_node_source_ref to build on
+      the node, or use "manual" to copy binaries built on the control machine.
   when: decdn_node_install_method == "release"
 
 - name: Validate decdn_verify_release_signature is a real boolean
@@ -1718,7 +1714,8 @@
          or decdn_config_validate.stdout | default('', true)
          or decdn_config_validate.msg | default('(no output)', true) }}
       — this role renders a key the installed decdn
-      {{ decdn_node_version | default('(' ~ decdn_node_install_method ~ ' install)', true) }} does not accept, or a
+      {{ decdn_node_version if decdn_node_install_method == 'release'
+         else '(' ~ decdn_node_install_method ~ ' install)' }} does not accept, or a
       value outside its range. Config sections are deny_unknown_fields with no
       aliases upstream, so re-sync roles/decdn_node/templates/node.toml.j2 against
       the binary's schema.

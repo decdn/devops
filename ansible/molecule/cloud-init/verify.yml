@@ -118,3 +118,53 @@
         fail_msg: >-
           Python {{ py }} got ansible-core {{ core }} (pinned: {{ want_core }});
           collections {{ installed }} vs collections.lock.yml {{ wanted }}.
+
+# Last, because it changes the host (destroy follows): a signed, verified release
+# whose binaries report another version must fail the version backstop and leave no
+# stamp. The only release-mode run of decdn_node in the suite is this scenario's, so
+# its refusal is tested here.
+- name: Verify — the version backstop refuses a release reporting another version
+  hosts: all
+  become: true
+  vars:
+    _eph: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+    _keys: "{{ _eph }}/cloud-init-mirror-KEYS-{{ inventory_hostname }}.asc"
+  tasks:
+    - name: Fetch the mirror's signing key (the role copies its keyring from the controller)
+      ansible.builtin.fetch:
+        src: /srv/mirror/KEYS.asc
+        dest: "{{ _keys }}"
+        flat: true
+
+    - name: Install a release whose binaries report another version
+      block:
+        - name: Run the release install of 0.0.9
+          ansible.builtin.include_role:
+            name: decdn_node
+            tasks_from: install
+          vars:
+            decdn_node_install_method: release
+            decdn_node_version: 0.0.9
+            decdn_node_release_base: http://127.0.0.1:8099/releases
+            decdn_release_keyring: "{{ _keys }}"
+
+        - name: Fail — a binary that is not the pinned version was accepted
+          ansible.builtin.fail:
+            msg: The version backstop accepted decdn-node reporting another version.
+      rescue:
+        - name: Require the version backstop to be what stopped it
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Verify the installed decdn-node runs (version backstop)'
+            fail_msg: "Expected the version backstop, got \"{{ ansible_failed_task.name }}\"."
+
+    - name: Check for a version stamp after the refused install
+      ansible.builtin.stat:
+        path: /usr/local/lib/decdn/installed-version
+      register: refused_stamp
+
+    - name: Require no stamp after the refused install
+      ansible.builtin.assert:
+        that:
+          - not refused_stamp.stat.exists
+        fail_msg: A release refused by the version backstop left a version stamp.

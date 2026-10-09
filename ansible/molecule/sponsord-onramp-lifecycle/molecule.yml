@@ -47,7 +47,9 @@ provisioner:
       sponsord_hosts:
         sponsord_install_method: manual
         sponsord_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/sponsord/files/sponsord-stub"
-        sponsord_version: "0.0.0-molecule-stub"
+        # Not the binary's version: proves non-release installs are not held to the pin
+        # (only release mode compares it).
+        sponsord_version: "9.9.9-not-the-binary"
         sponsord_network: arbitrum-sepolia
         sponsord_pool_id: "0x00000000000000000000000000000000000000000000000000000000000000aa"
         sponsord_rpc_url: "https://rpc.example.invalid/v2/molecule"
@@ -62,7 +64,9 @@ provisioner:
         sponsord_onramp_install_method: manual
         sponsord_onramp_manual_bin_src: >-
           ${MOLECULE_PROJECT_DIRECTORY}/molecule/sponsord-onramp/files/sponsord-onramp-stub
-        sponsord_onramp_version: "0.0.0-molecule-stub"
+        # Not the binary's version: proves non-release installs are not held to the pin
+        # (only release mode compares it).
+        sponsord_onramp_version: "9.9.9-not-the-binary"
         # sponsord_onramp_network follows sponsord_network (arbitrum-sepolia).
         sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc
         sponsord_onramp_domain: onramp.molecule.test
@@ -75,7 +79,7 @@ provisioner:
         sponsord_onramp_brand_name: 'deCDN "molecule" $$HOME'
         sponsord_onramp_decdn_release: v0.1.0
         sponsord_onramp_decdn_sums_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
-        sponsord_onramp_cli_release: decdn-sponsored-v0.1.0
+        sponsord_onramp_cli_release: v0.1.0
         sponsord_onramp_cli_sums_sha256: "2222222222222222222222222222222222222222222222222222222222222222"
         sponsord_onramp_fund_rate_per_min: 0
         sponsord_onramp_readiness_retries: 10

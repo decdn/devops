@@ -130,12 +130,18 @@ def main():
         "#\n"
         "#     ./gen-schema-keys.py <path-to-decdn-checkout> > schema-keys.txt\n"
         "#\n"
+        "# from a checkout of v<decdn_node_version>, the decdn/decdn release the roles pin\n"
+        "# (ansible/roles/decdn_node/defaults/main.yml): the generator reads the working\n"
+        "# tree, so check the tag out first.\n"
+        "#\n"
         "# Paths, not bare leaf names: `sketch_bytes` is legal at\n"
         "# cache.tinylfu.sketch_bytes and a startup failure at cache.sketch_bytes, and\n"
         "# a leaf-name inventory cannot tell the two apart. See gen-schema-keys.py for\n"
         "# the struct -> path mapping and molecule/schema/README.md for why this exists.\n"
         "#\n"
-        f"# Synced from decdn/decdn @ 20db95ef (crate version 0.0.0): {len(paths)} paths."
+        # The checkout's commit is not recorded: the sources are read from its working
+        # tree, which need not be a commit (the header above says which tag to use).
+        f"# {len(paths)} paths."
     )
     for path in sorted(paths):
         print(path)

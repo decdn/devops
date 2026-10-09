@@ -47,8 +47,9 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 METRICS_ADDR = ("127.0.0.1", 9090)  # matches the role's default metrics_bind/port
-# Must match decdn_node_version in converge.yml (the version-match backstop).
-VERSION = "decdn-node 0.0.0-molecule-stub"
+# Matches decdn_node_version in the cloud-init scenario's mirror. Printed after the
+# name it runs as (decdn-node or decdn), as clap prints the real binaries' line.
+VERSION = "0.0.0-molecule-stub"
 # When this file exists, `run` blocks WITHOUT binding metrics — simulating a
 # healthy node whose metrics listener binds late. The slow-readiness scenario
 # stages it (see that scenario's prepare.yml) to exercise the advisory-timeout path.
@@ -187,7 +188,7 @@ def _start_watchdog_heartbeat():
 def main():
     args = sys.argv[1:]
     if "--version" in args:
-        print(VERSION)
+        print(f"{os.path.basename(sys.argv[0])} {VERSION}")
         return 0
     if args and args[0] == "key-gen":
         return key_gen(args[1:])

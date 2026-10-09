@@ -51,8 +51,12 @@ What it does **not** do:
   With the defaults (10240 + 8192 MiB), the 20Gi `persistence.size` is tight.
 - **UDP reachability.** Either a load balancer that supports UDP Services, or
   `quic.hostPort.enabled` on nodes with a public IP.
-- **An image.** Upstream has not published `ghcr.io/decdn/decdn-node` yet. The chart
-  refuses to render until `image.tag` or `image.digest` is set. To build one yourself,
+- **An image.** By default the chart runs `ghcr.io/decdn/decdn-node:<appVersion>`
+  (today `0.0.1`, the decdn/decdn release the chart is synced against). Pin
+  `image.digest` instead in production: take it from the release's
+  `decdn-node-image-digest.txt` (`image-digest.txt` in v0.0.1), after checking its
+  `.asc` against the keys in
+  [SECURITY.md](../../SECURITY.md#release-verification). To run an unreleased build,
   follow the header of the upstream `decdn/Dockerfile`: `cargo build --release -p
   decdn-node`, copy the binary to `dist/<arch>/decdn-node`, then `docker build`. The
   Dockerfile only packages that binary, on `debian:bookworm-slim` (glibc 2.36), so build
@@ -113,7 +117,6 @@ in the daemon.
 
 | Value | Notes |
 |-------|-------|
-| `image.tag` or `image.digest` | Required until upstream publishes a release. Prefer a digest. |
 | `secrets.keystore.existingSecret` | Holds the keys `keystore.json`, `node.secret` and `keystore.password`. Rename them with `secrets.keystore.keys.*`. |
 | `secrets.env.existingSecret` | Holds `DECDN_RPC_URL` (key name: `secrets.env.rpcUrlKey`). |
 | `config.identity.region` | ISO 3166-1 alpha-2, uppercase. |

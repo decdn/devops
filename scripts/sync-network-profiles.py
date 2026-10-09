@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Regenerate the roles' network profiles from upstream deployment manifests.
 
-    scripts/sync-network-profiles.py <path-to-decdn-checkout> [--ref origin/main] [--check]
+    scripts/sync-network-profiles.py <path-to-decdn-checkout> [--ref <git ref>] [--check]
 
 Writes ansible/roles/decdn_node/vars/main/networks.yml: one entry per chain upstream's
 `decdn config init --chain <name>` knows, holding the contract addresses that command
@@ -14,8 +14,10 @@ can never disagree about a chain: ansible/roles/sponsord/vars/main/networks.yml
 networks.yml (chain_id + CapacityBond and SlashJudge, which the onramp hands to users'
 decdn). --check covers all three files.
 
-Everything is read from git at --ref (default origin/main), never from the working
-tree, so a checkout sitting on a feature branch still yields main's deployment. Two
+Everything is read from git at --ref, never from the working tree, so the checkout's
+own branch does not matter. --ref defaults to v<decdn_node_version>, the tag of the
+release the roles pin (ansible/roles/decdn_node/defaults/main.yml): the mirror must
+describe the binary a default deploy installs. Two
 upstream files are the source, and both the chain list AND the manifest-key mapping
 are parsed from the first, so this script holds no hand-written copy of either:
 
@@ -41,6 +43,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 OUT = REPO / "ansible/roles/decdn_node/vars/main/networks.yml"
+DEFAULTS = REPO / "ansible/roles/decdn_node/defaults/main.yml"
 SPONSORD_OUT = REPO / "ansible/roles/sponsord/vars/main/networks.yml"
 ONRAMP_OUT = REPO / "ansible/roles/sponsord_onramp/vars/main/networks.yml"
 
@@ -198,9 +201,14 @@ def strip_commit(text: str) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("upstream", type=Path, help="path to a decdn/decdn git checkout")
-    ap.add_argument("--ref", default="origin/main", help="git ref to read (default: origin/main)")
+    ap.add_argument("--ref", help="git ref to read (default: v<decdn_node_version>, the pinned release tag)")
     ap.add_argument("--check", action="store_true", help="exit 1 if the committed file is stale")
     args = ap.parse_args()
+    if args.ref is None:
+        pinned = re.search(r'^decdn_node_version: *"?([^"\s#]+)', DEFAULTS.read_text(), re.M)
+        if not pinned:
+            die(f"no decdn_node_version default in {DEFAULTS.relative_to(REPO)}; pass --ref")
+        args.ref = f"v{pinned.group(1)}"
 
     commit, profiles = load(args.upstream, args.ref)
     outputs = [

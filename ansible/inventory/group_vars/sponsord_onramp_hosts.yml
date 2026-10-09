@@ -10,12 +10,12 @@
 # The daemon's API token (/etc/sponsord/api-token) is the sponsord role's.
 
 # --- Binary ------------------------------------------------------------------------
-# The same three methods as sponsord. "release" (default):
-# sponsord_onramp_version: "0.1.0"
-# Or build on the host (its own checkout, so it may pin a different ref), with
-# sponsord_onramp_version left empty, as for sponsord:
+# The same three methods as sponsord. "release" (default) installs the same release
+# as the sponsord role; set both versions together to hold the host on another:
+# sponsord_onramp_version: "0.0.2"
+# Or build on the host (its own checkout, so it may pin a different ref):
 # sponsord_onramp_install_method: source
-# sponsord_onramp_source_ref: main
+# sponsord_onramp_source_ref: v0.0.2
 # Or manual, which follows sponsord_release_target_dir (`cargo build --release` in
 # a decdn/sponsord checkout builds both binaries):
 # sponsord_onramp_install_method: manual
@@ -32,10 +32,11 @@
 # PUBLIC: served to every user. A keyless endpoint, never sponsord_rpc_url.
 # sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc
 # sponsord_onramp_turnstile_sitekey: "0x…"
-# The releases the installers install: tags and the SHA-256 of each SHA256SUMS
-# (decdn-sponsored's release notes print both of its values).
-# sponsord_onramp_decdn_release: v0.1.0
+# The releases the installers install default to the role's pins (decdn/decdn
+# v0.0.1, decdn/sponsord v0.0.2), each with the SHA-256 of its SHA256SUMS. To serve
+# others, set all four (a decdn/sponsord release's notes print the CLI pair):
+# sponsord_onramp_decdn_release: v0.0.1
 # sponsord_onramp_decdn_sums_sha256: "…"
-# sponsord_onramp_cli_release: decdn-sponsored-v0.1.0
+# sponsord_onramp_cli_release: v0.0.2
 # sponsord_onramp_cli_sums_sha256: "…"
 # CapacityBond and SlashJudge come from sponsord_network (group_vars/sponsord_hosts.yml).

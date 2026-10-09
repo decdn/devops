@@ -47,12 +47,14 @@ Two things here are generated from `decdn/decdn`; regenerate, never hand-edit:
 
 | Mirror | Regenerate with |
 |--------|-----------------|
-| `ansible/roles/decdn_node/vars/main/networks.yml` (contract addresses per network) | `scripts/sync-network-profiles.py <decdn-checkout>` |
+| `ansible/roles/{decdn_node,sponsord,sponsord_onramp}/vars/main/networks.yml` (contract addresses per network) | `scripts/sync-network-profiles.py <decdn-checkout>` |
 | `ansible/molecule/schema/files/schema-keys.txt` (node.toml keys) | `ansible/molecule/schema/files/gen-schema-keys.py <decdn-checkout> > …` |
 
-`scripts/sync-network-profiles.py` reads `origin/main` through git (override with
-`--ref`), so the checkout's own branch doesn't matter for it; `gen-schema-keys.py`
-reads the checkout's working tree, so check out the ref you mean first.
+Both describe the release the roles pin (`decdn_node_version`), so generate them from
+its tag. `scripts/sync-network-profiles.py` reads git at `--ref`, which defaults to
+that tag, whatever the checkout's own branch; `gen-schema-keys.py` reads the
+checkout's working tree, so check out the tag first.
+The full bump checklist is in `ansible/roles/decdn_node/README.md`.
 `sync-network-profiles.py --check` exits 1 for "stale" and 2 for "could not run";
 the weekly `upstream-drift` workflow wraps `gen-schema-keys.py` in a generate-then-diff
 check so it reports the two differently too.

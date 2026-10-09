@@ -66,7 +66,9 @@ provisioner:
       sponsord_hosts:
         sponsord_install_method: manual
         sponsord_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/sponsord/files/sponsord-stub"
-        sponsord_version: "0.0.0-molecule-stub"
+        # Not the binary's version: proves non-release installs are not held to the pin
+        # (only release mode compares it).
+        sponsord_version: "9.9.9-not-the-binary"
         sponsord_network: arbitrum-sepolia
         sponsord_pool_id: "0x00000000000000000000000000000000000000000000000000000000000000aa"
         # Must equal EXPECTED_RPC_URL in files/sponsord-stub. The doubled dollar

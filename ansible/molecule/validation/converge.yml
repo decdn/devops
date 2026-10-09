@@ -259,6 +259,23 @@
             decdn_rejected: "{{ decdn_rejected + ['arch-mismatch'] }}"
           when: ansible_failed_task.name is match('^Require the target triple to match')
 
+    # --- Case: release-version (release mode with the pinned version blanked) -----
+    # decdn_node_version has a default now; an inventory that blanks it must be told
+    # why, not get a 404 from the first download.
+    - name: "Case release-version — release mode with no pinned version"
+      block:
+        - name: Run decdn_node with release mode and an empty version
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_node_install_method: release
+            decdn_node_version: ""
+      rescue:
+        - name: Record release-version rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['release-version'] }}"
+          when: ansible_failed_task.name == "Require a pinned release version"
+
     # --- Case: network-unknown / network-chain (decdn_network profile guards) -----
     - name: "Case network-unknown — decdn_network names no known deployment"
       block:
@@ -918,7 +935,8 @@
           the daemon/crash-loop it at config load, or ship credentials insecurely).
       vars:
         _decdn_expected:
-          ["cross-field", "binary-format", "binary-check-mode", "arch-mismatch", "arch-unset", "network-unknown",
+          ["cross-field", "binary-format", "binary-check-mode", "arch-mismatch", "arch-unset", "release-version",
+           "network-unknown",
            "network-unknown-noaddr", "network-chain", "backup-secret-key", "backup-bare-string",
            "backup-empty", "path-cache-home", "path-backup-home", "path-decommission-cache", "range",
            "range-min1", "bounded-range", "shape", "bool",

@@ -12,11 +12,9 @@
     decdn_node_install_method: manual
     decdn_node_manual_bin_src: "{{ stub_bin }}"
     decdn_cli_manual_bin_src: "{{ stub_bin }}"
-    # Manual mode doesn't require a version, but setting one that MATCHES the stub's
-    # `--version` output exercises the install-time version-match backstop
-    # (install.yml) instead of letting it degrade to a bare liveness check. Must
-    # stay in sync with the version string printed by files/decdn-node-stub.
-    decdn_node_version: "0.0.0-molecule-stub"
+    # Not the binary's version: proves non-release installs are not held to the pin
+    # (only release mode compares it).
+    decdn_node_version: "9.9.9-not-the-binary"
     # Shell metacharacters + a single quote are deliberate: the role's host-side
     # EnvironmentFile parser must preserve the value literally without executing
     # the command substitution (the stub + verify.yml check both properties).

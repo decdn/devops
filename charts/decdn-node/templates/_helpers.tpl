@@ -43,19 +43,14 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/* ---------------------------------------------------------------------------
-Image. Upstream has no release (appVersion 0.0.0 is a placeholder), so an
-unpinned render would reference an image that does not exist: fail loud.
+Image: the digest when set, else the tag, which defaults to appVersion.
 --------------------------------------------------------------------------- */}}
 {{- define "decdn-node.image" -}}
 {{- $img := .Values.image }}
 {{- if $img.digest }}
 {{- printf "%s@%s" $img.repository $img.digest }}
 {{- else }}
-{{- $tag := default .Chart.AppVersion $img.tag }}
-{{- if eq $tag "0.0.0" }}
-{{- fail "image: upstream decdn has published no release image yet; set image.tag or image.digest (e.g. a locally built image of decdn/Dockerfile)" }}
-{{- end }}
-{{- printf "%s:%s" $img.repository $tag }}
+{{- printf "%s:%s" $img.repository (default .Chart.AppVersion $img.tag) }}
 {{- end }}
 {{- end }}
 

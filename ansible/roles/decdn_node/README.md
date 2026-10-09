@@ -7,13 +7,12 @@ pulls a pinned GitHub Release tarball and verifies it against the GPG-signed
 and `manual` copies locally-built binaries from the Ansible control machine. This
 is the repo's deployment (`playbooks/site.yml`).
 
-> **Upstream has cut no release yet.** `decdn/decdn`'s `release.yml` fires on a
-> `v[0-9]*` tag push and `git ls-remote --tags` is empty, so the default `release`
-> mode has nothing to download from GitHub. Until that changes, serve a release
-> from a mirror, or use `source` or `manual`.
+**Pinned release.** `decdn_node_version` defaults to `0.0.1`, the decdn/decdn
+release this repo pins; see [Bumping the decdn release](#bumping-the-decdn-release)
+to move it. CI tests the role against stub binaries, not this release.
 
 **Schema tracking.** This role renders `node.toml` against the config schema of
-`decdn/decdn` main @ `20db95ef` (crate version 0.0.0 — unreleased). Upstream marks every config
+`decdn/decdn` v0.0.1, the release `decdn_node_version` pins. Upstream marks every config
 section `#[serde(deny_unknown_fields)]` and defines **no** serde aliases, so a key
 this role emits that your binary does not know is a startup crash-loop, not a
 warning. The role runs `decdn config validate` against the installed binary after
@@ -45,17 +44,16 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
      `https://github.com/decdn/decdn/releases/download`), then **verifies both**:
      it fetches the release's `SHA256SUMS` and `SHA256SUMS.asc`, checks the
      detached signature against the maintainer keyring vendored at
-     `files/decdn-release-KEYS.asc` (a byte copy of `decdn/KEYS`; upstream's rule
+     `files/decdn-release-KEYS.asc` (a byte copy of `decdn/decdn`'s `KEYS`; upstream's rule
      is that a good signature from *any* key in that file is authentic), and only
      then checks the tarballs against the manifest. `gnupg` is installed on the
      target for this. Set `decdn_release_keyring` to pin your own export, or
      `decdn_verify_release_signature: false` for an air-gapped mirror that strips
      the signature — that takes the tarballs on trust.
 
-     Set `decdn_node_version` to a real `v<version>` release, publicly reachable
-     from the target host; override `decdn_node_release_base` for a mirror.
-     **No upstream release exists yet**, so this mode currently has nothing to
-     fetch — the role's assert says so rather than surfacing a bare 404.
+     `decdn_node_version` (default `0.0.1`) names the `v<version>` release, which
+     must be reachable from the target host; override `decdn_node_release_base`
+     for a mirror.
    - **`source`** — the role builds the two binaries **on the node** from
      `decdn_node_source_repo` (default `https://github.com/decdn/decdn.git`) at
      `decdn_node_source_ref`, which is required and may be any tag, branch or SHA:
@@ -103,14 +101,14 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
        anything is installed and written back only after the `--version`
        backstop passes, so a commit that fails it is rebuilt on the next run, and
        rolling the ref back to the previous commit reinstalls that.
-     - **Leave `decdn_node_version` empty** (or set it to the version the ref's
-       crates report: upstream's workspace is `0.0.0`). The backstop enforces it
-       in this mode too, so a release version left over fails the deploy.
+     - `decdn_node_version` is not checked in this mode: the backstop only
+       requires the binaries to run. To build exactly a release, set
+       `decdn_node_source_ref` to its tag (`v0.0.1`).
      - The repo URL may not carry a secret: no password, no user on an http(s)
-       URL, no query. Root does the fetch, so for a private repo give root on the
-       node an ssh deploy key and the git host's key in root's
-       `~/.ssh/known_hosts` (the clone does not accept unknown host keys), and
-       use `ssh://git@host/path` or `git@host:path`.
+       URL, no query. The upstream repo is public; for a private fork, root does
+       the fetch, so give root on the node an ssh deploy key and the git host's key
+       in root's `~/.ssh/known_hosts` (the clone does not accept unknown host
+       keys), and use `ssh://git@host/path` or `git@host:path`.
      - The build costs the node a Rust toolchain and the git clone under
        `/var/lib/decdn-build`, plus, during a build, a work directory holding the
        whole build tree (several GB), and far more RAM and CPU than the daemon
@@ -145,11 +143,14 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
      `gather_facts: false` must set it explicitly (or gather `min`); an explicit
      value that disagrees with the host fails the deploy.
 
-     Build both `decdn-node` and `decdn` from the upstream `decdn` repo.
-     `decdn_node_version` is **not** required in this mode — but if it is set (e.g.
-     left over from a `release` deploy) the `--version` backstop still enforces it,
-     so clear it when switching to `manual` unless you intend that binary to report
-     that exact version.
+     Build both `decdn-node` and `decdn` from the upstream `decdn` repo, or install
+     the published crates on the control machine (`cargo install --locked --target
+     <decdn_node_target> decdn-node@<version> decdn-cli@<version>`; crates.io
+     carries no maintainer signature, unlike the release tarballs). They land in
+     `~/.cargo/bin`, so point `decdn_node_manual_bin_src` / `decdn_cli_manual_bin_src`
+     at them.
+     `decdn_node_version` is not checked in this mode: the `--version` backstop
+     only requires the binaries to run.
 
 2. **Eth wallet (operator-provisioned).** Generate the node identity + eth
    keystore on the host, as the `decdn` user, directly into the data dir. `key-gen`
@@ -187,10 +188,10 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
 
 ## Required variables (set in `host_vars/<node>/`)
 
-`decdn_node_version` (`release` mode, the default) **or**, in `source` mode,
-`decdn_node_source_ref` **or**, in `manual` mode, either
-`decdn_release_target_dir` or `decdn_node_manual_bin_src` + `decdn_cli_manual_bin_src`
-(see [Prerequisites](#prerequisites) above), an RPC endpoint (sensitive — may embed an
+The install method's input (none in `release` mode, where `decdn_node_version`
+has a default; `decdn_node_source_ref` in `source` mode; in `manual` mode either
+`decdn_release_target_dir` or `decdn_node_manual_bin_src` + `decdn_cli_manual_bin_src`;
+see [Prerequisites](#prerequisites) above), an RPC endpoint (sensitive — may embed an
 API key; provision it on the host or set `decdn_rpc_url` in the git-ignored
 `secret.yml` — see [Secrets](#secrets)), `decdn_region` (ISO 3166-1 alpha-2), and
 the chain: **either** `decdn_network` **or** the **four** contract addresses below
@@ -208,8 +209,9 @@ role's mirror of upstream's deployment manifest,
 [`vars/main/networks.yml`](vars/main/networks.yml). That file is generated by
 `scripts/sync-network-profiles.py` from `contracts/deployments/<chainId>.json` in `decdn/decdn`
 and the `KNOWN_CHAINS` registry in `crates/cli/src/known_chains.rs`, which is exactly
-what `decdn config init --chain` bakes in. A weekly CI job flags when upstream
-redeploys and the mirror falls behind.
+what `decdn config init --chain` bakes in, generated at the tag `decdn_node_version`
+pins. A weekly CI job flags when the mirror no longer matches that tag, and when
+upstream has cut a newer release.
 
 The profile only supplies defaults: an address you also set in inventory wins, and
 the role prints which ones differ from the profile. It refuses an unknown network
@@ -654,7 +656,8 @@ Backups, restores, moving a node to a new host and decommissioning: `make backup
 `make decommission` and the procedures in [`docs/lifecycle.md`](../../../docs/lifecycle.md).
 
 Upgrades (`release` mode): bump `decdn_node_version` and re-deploy — the version stamp triggers re-install + restart; the persistent
-`node.secret` and `keystore.json` are untouched.
+`node.secret` and `keystore.json` are untouched. A new upstream release is bumped
+in this repo as below.
 
 Upgrades (`manual` mode): there is **no** version stamp — rebuild the binaries
 locally and re-deploy. `copy` compares checksums and re-pushes (and restarts) only
@@ -666,10 +669,7 @@ so the node rebuilds (incrementally: `target/` is kept), reinstalls and restarts
 
 Switching methods: every method clears the other methods' stamps on the host, so
 returning to `release` (or `source`) afterwards always re-fetches (or rebuilds) and
-re-installs — even when `decdn_node_version` (or the commit) is unchanged. (This is
-separate from the `--version` backstop: a `decdn_node_version` left set in `manual`
-or `source` mode is still enforced against that binary — see the prerequisites
-above.)
+re-installs — even when `decdn_node_version` (or the commit) is unchanged.
 
 A binary installed by a run that then failed before its restart handler ran is
 still restarted onto: the role records the daemon binary's sha256 after the start
@@ -690,3 +690,36 @@ After switching away from `source` for good, `/var/lib/decdn-build` and the
 `decdn-build` user stay behind (shared with the `sponsord` roles). Once no role on
 the host builds from source: `userdel decdn-build && rm -rf /var/lib/decdn-build`,
 and drop its line from `/etc/cron.deny` and `/etc/at.deny`.
+
+## Bumping the decdn release
+
+The repo pins one decdn/decdn release everywhere. When upstream cuts a new one (the
+weekly `upstream-drift` workflow fails on it), move every pin in one change:
+
+1. `decdn_node_version` in `defaults/main.yml`.
+2. The generated mirrors, from a decdn checkout at the new tag:
+   `scripts/sync-network-profiles.py <checkout> --ref v<version>` and
+   `ansible/molecule/schema/files/gen-schema-keys.py <checkout> >
+   ansible/molecule/schema/files/schema-keys.txt` (run on a checkout of the tag).
+   If the schema keys changed, re-sync `templates/node.toml.j2` (and the chart's
+   `values.config`).
+3. The onramp's installer pin: `sponsord_onramp_decdn_release` (`v<version>`) and
+   `sponsord_onramp_decdn_sums_sha256` (`sha256sum SHA256SUMS` once
+   `SHA256SUMS.asc` verifies), in `roles/sponsord_onramp/defaults/main.yml` and
+   `compose/sponsord-onramp.env.example`.
+4. `DECDN_IMAGE_DIGEST` in `compose/.env.example` (and the example digest in
+   `charts/decdn-node/values.yaml`), from the release's signed
+   `decdn-node-image-digest.txt` (`image-digest.txt` in v0.0.1).
+5. `appVersion` in `charts/decdn-node/Chart.yaml`, then validate the chart against
+   the real binary: `DECDN_CLI=<the release's decdn> make lint-helm` (CI has no real
+   binary for the chart).
+6. `files/decdn-release-KEYS.asc`, if upstream's `KEYS` changed (and the sponsord
+   copy, and `SECURITY.md`'s fingerprints).
+7. The prose that names the version: `git grep -n '<old version>'` outside the
+   changelogs, and a `[Unreleased]` entry in `ansible/galaxy/CHANGELOG.md` and
+   `charts/decdn-node/CHANGELOG.md`.
+
+`make test-scripts` fails while the role, the onramp pins (role and Compose
+example), the chart's `appVersion` or the KEYS and SECURITY.md disagree; the weekly
+`upstream-drift` job checks the digests against the release. A decdn/sponsord release is bumped the same way
+([sponsord's README](../sponsord/README.md#bumping-the-sponsord-release)).

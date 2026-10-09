@@ -1,7 +1,8 @@
 ---
 # Install the sponsord binary. Three methods, selected by sponsord_install_method:
-#   "release" (default): download the pinned sponsord-v<version> GitHub Release
-#     tarball, verify it against the GPG-signed SHA256SUMS manifest, then extract.
+#   "release" (default): download the tarball from the pinned v<version> GitHub
+#     Release (one tag releases the decdn/sponsord workspace), verify it against
+#     the GPG-signed SHA256SUMS manifest, then extract.
 #     Idempotent and upgrade-aware via a version stamp.
 #   "source": clone sponsord_source_repo at sponsord_source_ref on the host and
 #     cargo-build it as an unprivileged user (tasks/source.yml).
@@ -19,7 +20,7 @@
       ansible.builtin.set_fact:
         # The archive holds ONE flat binary at its root (upstream release.yml).
         sponsord_release_archive: "sponsord-{{ sponsord_version }}-{{ sponsord_target }}.tar.gz"
-        sponsord_release_url: "{{ sponsord_release_base }}/sponsord-v{{ sponsord_version }}"
+        sponsord_release_url: "{{ sponsord_release_base }}/v{{ sponsord_version }}"
 
     - name: Read the installed-version stamp
       ansible.builtin.slurp:
@@ -222,8 +223,9 @@
         group: root
         mode: "0755"
 
-# Runs every converge, so a binary that drifted from the pin is caught. With
-# sponsord_version empty (the usual source/manual case) it degrades to a liveness check.
+# Runs every converge, so a binary that drifted from the pin is caught. Only
+# "release" mode compares sponsord_version: it has a default, so a source build of another
+# ref or a manual binary is held to a liveness check (rc == 0).
 # An exact match on clap's `sponsord <version>` line, so a 0.1.0 pin does not
 # accept 10.1.0 or 0.1.0-rc.1.
 # In source mode the binary is the output of untrusted build scripts, so it runs in
@@ -250,12 +252,13 @@
     that:
       - sponsord_installed_version.rc == 0
       - >-
-        sponsord_version | length == 0
+        sponsord_install_method != 'release'
         or (sponsord_installed_version.stdout | trim) == 'sponsord ' ~ sponsord_version
     fail_msg: >-
       {{ sponsord_bin }} --version exited {{ sponsord_installed_version.rc }} with
       "{{ sponsord_installed_version.stdout | trim }}"{{
-      (', expected "sponsord ' ~ sponsord_version ~ '"') if sponsord_version | length > 0 else '' }}.
+      (', expected "sponsord ' ~ sponsord_version ~ '"')
+        if sponsord_install_method == 'release' else '' }}.
       The binary on the host is broken or is not the pinned release. In release mode,
       remove /usr/local/lib/sponsord/installed-version to force a fresh download.
   when: not ansible_check_mode

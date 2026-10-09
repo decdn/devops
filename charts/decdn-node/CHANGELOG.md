@@ -59,7 +59,9 @@ Initial chart. Not yet published (pre-1.0; the values shape may still change).
 ### Added
 
 - One-replica `StatefulSet` running the upstream daemon-only image
-  (`ghcr.io/decdn/decdn-node`, `image.tag` or `image.digest` required), non-root,
+  (`ghcr.io/decdn/decdn-node`: `image.digest`, else `image.tag`, else `appVersion`,
+  `0.0.1`, the first decdn/decdn release; `make test-scripts` holds it equal to the
+  `decdn_node` role's `decdn_node_version`), non-root,
   read-only root filesystem, every capability dropped, `RuntimeDefault` seccomp.
 - `PersistentVolumeClaim` data dir. A `prepare` init container installs the node
   identity from an operator-provisioned `existingSecret` at `0600`, and the keystore

@@ -20,18 +20,16 @@
 
 # --- Which binaries to install ------------------------------------------------
 # "release" (the default): the v<version> GitHub Release tarballs, verified against
-# the GPG-signed SHA256SUMS manifest. Upstream has cut NO release tag yet
-# (`git ls-remote --tags decdn/decdn` is empty), so until it does either serve one
-# from a mirror (decdn_node_release_base) or pick one of the alternatives below.
+# the GPG-signed SHA256SUMS manifest. The version defaults to the decdn/decdn release
+# the role pins; set it only to hold a node on another one.
 decdn_node_install_method: release
-decdn_node_version: ""          # MUST-EDIT — e.g. "0.1.1"
+# decdn_node_version: "0.0.1"
 #
 # Alternative: build on the node from a git ref (any tag, branch or SHA), as an
-# unprivileged build user with a pinned toolchain. Clear decdn_node_version (the
-# --version check enforces it in every mode; upstream's crates report 0.0.0):
+# unprivileged build user with a pinned toolchain (decdn_node_version is not checked
+# in this mode):
 #     decdn_node_install_method: source
-#     decdn_node_source_ref: main
-#     decdn_node_version: ""
+#     decdn_node_source_ref: v0.0.1
 # Alternative: copy binaries built on this control machine
 # (`cargo build --release -p decdn-node -p decdn-cli` in a decdn/decdn checkout):
 #     decdn_node_install_method: manual

@@ -11,11 +11,13 @@
   vars:
     stub_version: "0.0.0-molecule-stub"
     stubs: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule"
+    # One v<version> release holding both archives under one SHA256SUMS, as
+    # decdn/sponsord releases its workspace.
     mirror_releases:
-      - dir: "sponsord-v{{ stub_version }}"
-        bins: [{name: sponsord, src: "{{ stubs }}/sponsord/files/sponsord-stub"}]
-      - dir: "sponsord-onramp-v{{ stub_version }}"
-        bins: [{name: sponsord-onramp, src: "{{ stubs }}/sponsord-onramp/files/sponsord-onramp-stub"}]
+      - dir: "v{{ stub_version }}"
+        bins:
+          - {name: sponsord, src: "{{ stubs }}/sponsord/files/sponsord-stub"}
+          - {name: sponsord-onramp, src: "{{ stubs }}/sponsord-onramp/files/sponsord-onramp-stub"}
   tasks:
     # CONTAINER-ONLY: without shared propagation on / every LoadCredential= directory
     # comes up empty under docker (../sponsord/prepare.yml explains).

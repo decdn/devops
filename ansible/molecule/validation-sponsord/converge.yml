@@ -695,7 +695,7 @@
     sponsord_onramp_turnstile_sitekey: 1x00000000000000000000AA
     sponsord_onramp_decdn_release: v0.1.0
     sponsord_onramp_decdn_sums_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
-    sponsord_onramp_cli_release: decdn-sponsored-v0.1.0
+    sponsord_onramp_cli_release: v0.1.0
     sponsord_onramp_cli_sums_sha256: "2222222222222222222222222222222222222222222222222222222222222222"
   tasks:
     # --- sponsord_onramp: each case breaks ONE input over the valid baseline in play
@@ -936,6 +936,21 @@
             name: sponsord_onramp
           vars:
             sponsord_onramp_decdn_release: "0.1.0"
+      rescue:
+        - name: Record onramp-pin rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-pin'] }}"
+          when: ansible_failed_task.name == "Validate the release pins the installers use"
+
+    # Upstream's ReleasePin takes v<semver> only: decdn-sponsored ships in the
+    # decdn/sponsord workspace release, so a per-crate tag names no release.
+    - name: "Case onramp-pin — a per-crate decdn-sponsored-v CLI release tag"
+      block:
+        - name: Run sponsord_onramp with a decdn-sponsored-v CLI release tag
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_cli_release: "decdn-sponsored-v0.1.0"
       rescue:
         - name: Record onramp-pin rejection (only if its assert failed)
           ansible.builtin.set_fact:
@@ -1303,7 +1318,7 @@
            "onramp-zero-address", "onramp-bind", "onramp-bind", "onramp-proxy",
            "onramp-domain", "onramp-public-url", "onramp-public-url", "onramp-rpc",
            "onramp-rpc", "onramp-rpc", "onramp-rpc", "onramp-public-url", "onramp-sitekey", "onramp-pin",
-           "onramp-pin", "onramp-limit", "onramp-ip-header", "onramp-token",
+           "onramp-pin", "onramp-pin", "onramp-limit", "onramp-ip-header", "onramp-token",
            "onramp-turnstile", "onramp-turnstile", "onramp-turnstile-empty",
            "onramp-turnstile-inventory",
            "onramp-network-chain", "onramp-proxy", "onramp-proxy", "onramp-domain",

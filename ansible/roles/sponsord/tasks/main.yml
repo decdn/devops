@@ -15,19 +15,18 @@
       "source" (build sponsord_source_ref on the host) or "manual" (copy a
       locally-built binary from the control machine).
 
-# Upstream decdn/sponsord has cut no sponsord-v* tag yet; this names the cause
-# instead of surfacing a bare 404 from get_url.
+# sponsord_version defaults to the release this repo pins; an inventory
+# that blanks it gets this message instead of a bare 404 from get_url.
 - name: Require a pinned release version
   ansible.builtin.assert:
     that:
       - sponsord_version | length > 0
     fail_msg: >-
       sponsord_install_method "release" (the default) requires sponsord_version (e.g.
-      "0.1.0") and a matching sponsord-v<version> release. Upstream decdn/sponsord has
-      cut none yet, so until it does either serve one from a mirror
-      (sponsord_release_base), set sponsord_install_method "source" with a
-      sponsord_source_ref to build on the host, or use "manual" to copy a binary
-      built on the control machine.
+      "0.0.2") naming a v<version> release of decdn/sponsord (or of the mirror in
+      sponsord_release_base). To run something unreleased, set
+      sponsord_install_method "source" with a sponsord_source_ref to build on the
+      host, or use "manual" to copy a binary built on the control machine.
   when: sponsord_install_method == "release"
 
 - name: Validate sponsord_verify_release_signature is a real boolean

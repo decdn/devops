@@ -19,8 +19,8 @@
 #               host-generated wallet, a running daemon, and the pinned collection set.
 #
 # The node's release mode runs here and nowhere else in the suite: the role's download,
-# GPG signature check, SHA256SUMS check, extract and version stamp, against a mirror,
-# because upstream has not cut a release yet.
+# GPG signature check, SHA256SUMS check, extract and version stamp, against a local
+# mirror (CI does not download the real release).
 #
 # Coverage boundary: `baseline` is skipped through bootstrap.sh's test-only switch
 # (/etc/decdn-bootstrap/TEST-ONLY-skip-baseline, written by converge outside the

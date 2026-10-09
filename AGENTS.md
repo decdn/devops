@@ -97,9 +97,27 @@ scripts/                # upstream-mirror generators, the release gate, the mole
 `ansible/roles/decdn_node/vars/main/networks.yml` and its subsets
 `ansible/roles/sponsord/vars/main/networks.yml` and
 `ansible/roles/sponsord_onramp/vars/main/networks.yml` (all `scripts/sync-network-profiles.py`)
-and `ansible/molecule/schema/files/schema-keys.txt` (`gen-schema-keys.py`). The weekly
-`upstream-drift` workflow flags staleness. These are the only protocol facts (contract
-addresses) the repo carries, and they carry their upstream commit.
+and `ansible/molecule/schema/files/schema-keys.txt` (`gen-schema-keys.py`), both
+generated from the decdn/decdn tag `decdn_node_version` pins. The weekly
+`upstream-drift` workflow flags staleness against that tag, and a newer upstream
+release of either repo. These are the only protocol facts (contract addresses) the
+repo carries, and `networks.yml` carries its upstream commit.
+
+**Pinned upstream releases.** One decdn/decdn release (`decdn_node_version`, today
+`0.0.1`) and one decdn/sponsord release (`sponsord_version` = `sponsord_onramp_version`,
+today `0.0.2`; decdn/sponsord tags its whole workspace `vX.Y.Z`, there are no per-crate
+tags) are pinned across every path: the role defaults, the onramp's installer pins
+(`sponsord_onramp_{decdn,cli}_release` + `_sums_sha256`, copied into
+`compose/sponsord-onramp.env.example`), `compose/.env.example`'s image digests, the
+chart's `appVersion` and the generated mirrors. cloud-init takes the role defaults at
+`DEVOPS_REF`. `make test-scripts` checks the pins agree with each other, the Compose
+example and `appVersion`, and that both vendored KEYS hold the keys SECURITY.md
+publishes; the weekly `upstream-drift` job checks the digests and the mirrors against
+the releases and flags a newer upstream tag. The `--version` check compares the pin in
+`release` mode only (exactly, on `<binary> <version>`). Bump everything together with
+the checklists in `roles/decdn_node/README.md` and `roles/sponsord/README.md`. Both upstream repos are public and also publish their
+binaries as crates (`decdn-node`, `decdn-cli`, `sponsord`, `sponsord-onramp`); the
+roles do not install from crates.io (no maintainer signature).
 
 **Monitoring assets are maintained here, by hand.** `monitoring/` holds the deCDN
 Grafana dashboards and Prometheus alert rules for every deploy path; upstream ships none.
@@ -125,8 +143,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
 - **`ansible/`** — the declarative deployment project. **The public deCDN node**
   (`playbooks/site.yml` → baseline + `decdn-node`), installed by `decdn_node_install_method`:
   `release` (the default) — a pinned GitHub release tarball verified against the
-  release's GPG-signed `SHA256SUMS` (upstream has cut no tag yet, so this needs a mirror
-  for now); `source` — a git ref (any tag/branch/SHA) cloned and `cargo build`-ed **on the
+  release's GPG-signed `SHA256SUMS` (`decdn_node_version`, default `0.0.1`); `source` — a git ref (any tag/branch/SHA) cloned and `cargo build`-ed **on the
   node** as the unprivileged `decdn-build` user, sha256-pinned rustup, a `<repo>@<commit>`
   stamp (`tasks/source.yml`, copied into both sponsord roles, which share the user,
   home and toolchain). **No build can poison a later one:** root owns the home, the
@@ -203,8 +220,10 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   independent of the node, so `playbooks/sponsord.yml` (`make deploy-sponsord`, also
   imported by `site.yml`) targets its own `sponsord_hosts` group, standalone or
   co-located with a node.
-  - **Install:** a GPG-verified `sponsord-v*` release by default (none cut yet), a
-    host-side `source` build, or a manual binary.
+  - **Install:** a GPG-verified `v*` decdn/sponsord release by default
+    (`sponsord_version`, `0.0.2`), a host-side `source` build, or a manual binary.
+    The `--version` backstop checks the version in `release` mode only (the version
+    has a default, so other modes would fail against it), as in the other two roles.
   - **Unit:** `DynamicUser`; the API token (generated on the host, never replaced),
     treasury keystore and password (operator-provisioned, or generated on the host
     with `sponsord_generate_treasury_wallet`) are `LoadCredential=`
@@ -247,7 +266,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   `make test-scripts`); the role checks no group name, so collection users keep their
   own groups, and its token gate and `/healthz` fail without a daemon.
   - **Install / unit / gate:** the sponsord role's patterns, copied: a
-    GPG-verified `sponsord-onramp-v*` release (default), `source` or manual (the
+    GPG-verified `v*` decdn/sponsord release (default), `source` or manual (the
     KEYS and the source installer are the sponsord role's files, via `role_path`), `DynamicUser` with the token and the Turnstile secret (inventory
     or operator, with `secret.env`'s provenance record and guards) as
     `LoadCredential=`, `PartOf=sponsord.service`, a restart-inputs
@@ -444,8 +463,9 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     docker compose …`.
 
 - **`charts/decdn-node/`** — the same node on Kubernetes: a one-replica StatefulSet (one
-  release = one identity) on the upstream daemon-only image (`ghcr.io/decdn/decdn-node`;
-  unpublished, so `image.tag`/`image.digest` is required), PVC data dir, a `prepare` init
+  release = one identity) on the upstream daemon-only image (`ghcr.io/decdn/decdn-node`,
+  tag `appVersion` = the role's `decdn_node_version` unless `image.tag`/`image.digest`
+  is set), PVC data dir, a `prepare` init
   container that installs the identity files from an `existingSecret` onto the PVC at
   `0600` (upstream rejects symlinked or group/world-readable key files) and the password
   into an in-memory volume, `DECDN_RPC_URL` via `secretKeyRef` (named keys only), public

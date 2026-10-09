@@ -29,14 +29,15 @@ template's inventory, leaving out its `baseline_*` settings. Ansible applies one
 `baseline_sudo_users` list, not the union of two groups', so the lint wants it set once.
 The bootstrap then waits for both sets of secrets.
 
-> **Upstream has not published a release yet.** The node installs only from a
-> GPG-verified release tarball (`release` mode). The `manual` mode would install
-> binaries that nothing verified, and the Ansible path's `source` mode builds whatever
-> its git ref points at (and takes many minutes on first boot), so the lint refuses
-> both. Until a release exists, serve
+> **Releases only.** The node installs only from a GPG-verified release tarball
+> (`release` mode). The `manual` mode would install binaries that nothing verified,
+> and the Ansible path's `source` mode builds whatever its git ref points at (and
+> takes many minutes on first boot), so the lint refuses both. The release is the
+> one the roles pin at `DEVOPS_REF` (decdn/decdn `v0.0.1` today, decdn/sponsord
+> `v0.0.2` for a sponsor host); set `decdn_node_version` in the user-data to pin
+> another. `decdn_node_release_base` points the download at a mirror that serves
 > `v<version>/{decdn-node,decdn}-<version>-<target>.tar.gz`, `SHA256SUMS` and
-> `SHA256SUMS.asc` from a mirror, and set `decdn_node_release_base` in the user-data
-> to point at it. The signature is still checked against deCDN's release key.
+> `SHA256SUMS.asc`; the signature is still checked against deCDN's release keys.
 
 ## What happens at boot
 
@@ -84,11 +85,11 @@ log is in `/var/log/cloud-init-output.log`.
    - `baseline_sudo_users`: your admin login and your SSH **public** key. Hardening
      disables root and password logins. Some providers (Hetzner, DigitalOcean) inject
      your key for `root` only, so without this entry you are locked out.
-   - `decdn_node_version`: the upstream release to install.
    - `decdn_region`: the VM's ISO 3166-1 alpha-2 country code, e.g. `DE`.
 
    Optional:
    - `ssh_allow_cidrs`, to accept SSH only from your addresses;
+   - `decdn_node_version`, to install another release than the one `DEVOPS_REF` pins;
    - `decdn_node_release_base`, for a mirror (see the note above);
    - `decdn_network`, `arbitrum-sepolia` today.
 
@@ -178,23 +179,24 @@ holds the treasury wallet, and
 [`sponsord-onramp`](../ansible/roles/sponsord_onramp/README.md), its public gate, with
 Caddy terminating TLS. The flow is the node's. Only the values and the secrets differ.
 
-> **Upstream has not published a sponsord release yet.** Both services install only
-> from GPG-verified release tarballs (`release` mode), and the lint refuses `manual`
-> and `source`.
-> Until `sponsord-v<version>` and `sponsord-onramp-v<version>` exist, serve them from
-> a mirror and set `sponsord_release_base` and `sponsord_onramp_release_base`. The
+> **Releases only.** Both services install only from GPG-verified release tarballs
+> (`release` mode), and the lint refuses `manual` and `source`. Both come from one
+> decdn/sponsord release (`v<version>`), the one the roles pin at `DEVOPS_REF`
+> unless the user-data sets `sponsord_version` and `sponsord_onramp_version`.
+> `sponsord_release_base` and `sponsord_onramp_release_base` point at a mirror; the
 > signature is still checked against the KEYS vendored in the `sponsord` role.
 
 1. **Before you start**, as the role READMEs describe:
    - create the treasury wallet, open its pool (`decdn pool open`, which prints the
      pool id) and fund it;
    - create a Cloudflare Turnstile widget for your domain;
-   - pick the `decdn` and `decdn-sponsored` releases the installers install, with the
-     SHA-256 of each `SHA256SUMS`.
+   - check the `decdn` and `decdn-sponsored` releases the installers install: the
+     roles' pins at `DEVOPS_REF` unless you set all four `sponsord_onramp_*_release`
+     / `_sums_sha256` values.
 2. **Fill in the user-data.** Replace every `CHANGE_ME`: `DEVOPS_REF` and
-   `baseline_sudo_users` (as for a node), `sponsord_version`, `sponsord_pool_id`,
-   `sponsord_onramp_version`, `sponsord_onramp_domain`, `sponsord_onramp_rpc_url`,
-   `sponsord_onramp_turnstile_sitekey` and the four release pins.
+   `baseline_sudo_users` (as for a node), `sponsord_pool_id`,
+   `sponsord_onramp_domain`, `sponsord_onramp_rpc_url` and
+   `sponsord_onramp_turnstile_sitekey`.
    - `sponsord_onramp_rpc_url` is served to every user, so it must be a **public**
      endpoint with no API key in it. sponsord's own RPC URL may embed a key, so it is
      written on the host instead (step 5).
@@ -241,8 +243,9 @@ Day 2 is in the role READMEs. Rotate a secret by replacing its file and running
   that revision. Nothing pulls on a timer: the host only runs code you pinned. A tag is
   resolved again on every run, so if someone re-points it, the next run follows. Pin a
   SHA if that matters to you.
-- **Upgrade the node or the sponsor:** change `decdn_node_version` (or
-  `sponsord_version` / `sponsord_onramp_version`) in the inventory and re-run.
+- **Upgrade the node or the sponsor:** move `DEVOPS_REF` to a revision that pins the
+  new release, or set `decdn_node_version` (or `sponsord_version` and
+  `sponsord_onramp_version`) in the inventory, and re-run.
 - **Back up, migrate or decommission:** the host is an ordinary Ansible node. Add it to
   an inventory on your workstation with the same variables and use `make backup`,
   `make decommission` and the rest ([`docs/lifecycle.md`](../docs/lifecycle.md)). From
@@ -280,7 +283,7 @@ Day 2 is in the role READMEs. Rotate a secret by replacing its file and running
   - ansible-core: by version and hash.
   - The collections: by exact version.
   - The node, sponsord and sponsord-onramp: by release version, installed only if
-    `SHA256SUMS` carries a valid signature from the vendored release key. The lint
+    `SHA256SUMS` carries a valid signature from a vendored release key. The lint
     refuses a user-data that turns a `*_verify_release_signature` off, swaps a
     `*_release_keyring`, or sets an install method or signature switch outside its
     own group's `vars`.

@@ -25,12 +25,12 @@
     that:
       - sponsord_onramp_version | length > 0
     fail_msg: >-
-      sponsord_onramp_install_method "release" (the default) requires sponsord_onramp_version (e.g.
-      "0.1.0") and a matching sponsord-onramp-v<version> release. Upstream decdn/sponsord has
-      cut none yet, so until it does either serve one from a mirror
-      (sponsord_onramp_release_base), set sponsord_onramp_install_method "source" with a
-      sponsord_onramp_source_ref to build on the host, or use "manual" to copy a binary
-      built on the control machine.
+      sponsord_onramp_install_method "release" (the default) requires
+      sponsord_onramp_version (e.g. "0.0.2") naming a v<version> release of
+      decdn/sponsord (or of the mirror in sponsord_onramp_release_base). To run
+      something unreleased, set sponsord_onramp_install_method "source" with a
+      sponsord_onramp_source_ref to build on the host, or use "manual" to copy a
+      binary built on the control machine.
   when: sponsord_onramp_install_method == "release"
 
 - name: Validate sponsord_onramp_verify_release_signature is a real boolean
@@ -378,7 +378,7 @@
   ansible.builtin.assert:
     that:
       - sponsord_onramp_decdn_release is match('^v' ~ _semver ~ '$')
-      - sponsord_onramp_cli_release is match('^decdn-sponsored-v' ~ _semver ~ '$')
+      - sponsord_onramp_cli_release is match('^v' ~ _semver ~ '$')
       - sponsord_onramp_decdn_sums_sha256 is match('^[0-9a-f]{64}$')
       - sponsord_onramp_cli_sums_sha256 is match('^[0-9a-f]{64}$')
       - sponsord_onramp_min_cli_version == '' or sponsord_onramp_min_cli_version is match('^' ~ _semver ~ '$')
@@ -387,11 +387,13 @@
         or (sponsord_onramp_releases_base is match('^https://[^/?#@]+(/[^?#]*)?$')
             and sponsord_onramp_releases_base is not search('[\s\x27"`$\x5c\x5c{}]'))
     fail_msg: >-
-      The installers need sponsord_onramp_decdn_release (vMAJOR.MINOR.PATCH),
-      sponsord_onramp_cli_release (decdn-sponsored-vMAJOR.MINOR.PATCH), and the SHA-256
-      of each release's SHA256SUMS in sponsord_onramp_decdn_sums_sha256 /
-      sponsord_onramp_cli_sums_sha256 (64 lowercase hex; decdn-sponsored's release notes
-      print both values). sponsord_onramp_min_cli_version must be "" or MAJOR.MINOR.PATCH,
+      The installers need sponsord_onramp_decdn_release (a decdn/decdn tag,
+      vMAJOR.MINOR.PATCH), sponsord_onramp_cli_release (a decdn/sponsord tag,
+      vMAJOR.MINOR.PATCH: upstream releases decdn-sponsored with the rest of its
+      workspace, so there is no decdn-sponsored-v* tag), and the SHA-256 of each
+      release's SHA256SUMS in sponsord_onramp_decdn_sums_sha256 /
+      sponsord_onramp_cli_sums_sha256 (64 lowercase hex; a decdn/sponsord release's
+      notes print the CLI pair under "Onramp pin"). sponsord_onramp_min_cli_version must be "" or MAJOR.MINOR.PATCH,
       sponsord_onramp_releases_base "" or an https base URL.
   vars:
     _semver: '(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?'

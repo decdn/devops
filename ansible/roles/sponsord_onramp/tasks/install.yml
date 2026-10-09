@@ -1,7 +1,8 @@
 ---
 # Install the sponsord-onramp binary. Three methods, selected by sponsord_onramp_install_method:
-#   "release" (default): download the pinned sponsord-onramp-v<version> GitHub Release
-#     tarball, verify it against the GPG-signed SHA256SUMS manifest, then extract.
+#   "release" (default): download the tarball from the pinned v<version> GitHub
+#     Release (the decdn/sponsord workspace release that also carries sponsord),
+#     verify it against the GPG-signed SHA256SUMS manifest, then extract.
 #     Idempotent and upgrade-aware via a version stamp.
 #   "source": clone sponsord_onramp_source_repo at sponsord_onramp_source_ref on the host and
 #     cargo-build it as an unprivileged user (tasks/source.yml).
@@ -20,7 +21,7 @@
         # The archive holds ONE flat binary at its root (upstream release.yml).
         sponsord_onramp_release_archive: >-
           sponsord-onramp-{{ sponsord_onramp_version }}-{{ sponsord_onramp_target }}.tar.gz
-        sponsord_onramp_release_url: "{{ sponsord_onramp_release_base }}/sponsord-onramp-v{{ sponsord_onramp_version }}"
+        sponsord_onramp_release_url: "{{ sponsord_onramp_release_base }}/v{{ sponsord_onramp_version }}"
 
     - name: Read the installed-version stamp
       ansible.builtin.slurp:
@@ -226,8 +227,9 @@
         mode: "0755"
       notify: Restart sponsord-onramp
 
-# Runs every converge, so a binary that drifted from the pin is caught. With
-# sponsord_onramp_version empty (the usual source/manual case) it degrades to a liveness check.
+# Runs every converge, so a binary that drifted from the pin is caught. Only
+# "release" mode compares sponsord_onramp_version: it has a default, so a source build of another
+# ref or a manual binary is held to a liveness check (rc == 0).
 # An exact match on clap's `sponsord-onramp <version>` line, so a 0.1.0 pin does not
 # accept 10.1.0 or 0.1.0-rc.1.
 # In source mode the binary is the output of untrusted build scripts, so it runs in
@@ -254,13 +256,13 @@
     that:
       - sponsord_onramp_installed_version.rc == 0
       - >-
-        sponsord_onramp_version | length == 0
+        sponsord_onramp_install_method != 'release'
         or (sponsord_onramp_installed_version.stdout | trim) == 'sponsord-onramp ' ~ sponsord_onramp_version
     fail_msg: >-
       {{ sponsord_onramp_bin }} --version exited {{ sponsord_onramp_installed_version.rc }} with
       "{{ sponsord_onramp_installed_version.stdout | trim }}"{{
       (', expected "sponsord-onramp ' ~ sponsord_onramp_version ~ '"')
-        if sponsord_onramp_version | length > 0 else '' }}.
+        if sponsord_onramp_install_method == 'release' else '' }}.
       The binary on the host is broken or is not the pinned release. In release mode,
       remove /usr/local/lib/sponsord-onramp/installed-version to force a fresh download.
   when: not ansible_check_mode

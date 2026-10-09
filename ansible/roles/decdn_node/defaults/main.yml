@@ -8,9 +8,8 @@
 
 # --- Install method -----------------------------------------------------------
 # "release" (default): download the pinned GitHub Release tarballs and verify them
-#   against the GPG-signed SHA256SUMS (a v<version> release must exist — upstream
-#   has cut none yet, so pin decdn_node_version against a mirror via
-#   decdn_node_release_base, or use one of the two methods below until it does).
+#   against the GPG-signed SHA256SUMS of the v<version> release on decdn/decdn (or
+#   on a mirror, via decdn_node_release_base).
 # "source": clone decdn_node_source_repo at decdn_node_source_ref ON THE NODE and
 #   `cargo build` it there as an unprivileged build user. No release and no
 #   control-machine toolchain needed; costs a Rust toolchain plus build time,
@@ -57,8 +56,12 @@ decdn_rustup_sha256:
   x86_64-unknown-linux-gnu: dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
   aarch64-unknown-linux-gnu: 15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433
 
-# --- Release to install (REQUIRED in "release" mode — a v<version> GitHub Release must exist) ---
-decdn_node_version: ""            # e.g. "0.1.1" (asserted non-empty in "release" mode)
+# --- Release to install ("release" mode) --------------------------------------
+# The decdn/decdn release this repo pins (cloud-init takes it from here too). A bump
+# also moves the generated mirrors, the onramp's decdn pin (role default and
+# compose/sponsord-onramp.env.example), the Compose image digest and the chart's
+# appVersion (README.md, "Bumping the decdn release").
+decdn_node_version: "0.0.1"       # asserted non-empty in "release" mode
 # Release target triple. Derived from the host's gathered architecture (x86_64 or
 # aarch64, see vars/main/arch.yml), so arm64 hosts (Graviton, Ampere, Hetzner CAX)
 # get the aarch64 tarball with no inventory change. Needs facts: a play with

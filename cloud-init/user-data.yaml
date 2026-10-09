@@ -60,12 +60,13 @@ write_files:
           # Optional: accept SSH only from these CIDRs.
           # ssh_allow_cidrs: ["203.0.113.0/24"]
 
-          # The node, installed from the GPG-verified release tarballs.
+          # The node, installed from the GPG-verified release tarballs. The release is
+          # the decdn_node role's default at DEVOPS_REF (decdn_node_version); set
+          # decdn_node_version here to pin another one.
           decdn_node_install_method: release
-          decdn_node_version: "CHANGE_ME"      # MUST-EDIT: an upstream release, e.g. "0.2.0"
-          # Until upstream publishes a release, point this at a mirror that serves
-          # v<version>/{decdn-node,decdn}-<version>-<target>.tar.gz, SHA256SUMS and
-          # SHA256SUMS.asc. The signature is still checked against deCDN's release key.
+          # Optional: a mirror that serves v<version>/{decdn-node,decdn}-<version>-<target>.tar.gz,
+          # SHA256SUMS and SHA256SUMS.asc. The signature is still checked against
+          # deCDN's release keys.
           # decdn_node_release_base: "https://mirror.example/decdn/releases/download"
           decdn_node_generate_keystore: true   # the wallet is generated on the host
           decdn_network: arbitrum-sepolia

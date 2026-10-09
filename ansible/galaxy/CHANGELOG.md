@@ -128,11 +128,14 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   installers and the API the `decdn-sponsored` CLI polls. It runs on the daemon's
   host (the token gate and `/healthz` fail without the daemon) and reads the daemon's own
   `/etc/sponsord/api-token`.
-  - Install: a local binary (`sponsord_onramp_install_method: manual`, the default
-    until upstream tags a release; `sponsord_onramp_release_target_dir` follows
-    `sponsord_release_target_dir`) or a `sponsord-onramp-v<version>` release
-    verified against its GPG-signed `SHA256SUMS`, with the keys vendored in the
-    `sponsord` role.
+  - Install: the `v<version>` decdn/sponsord release (`release`, the default;
+    `sponsord_onramp_version` is pinned to `0.0.2`, the same release as sponsord's)
+    verified against its GPG-signed `SHA256SUMS` with the keys vendored in the
+    `sponsord` role, a host-side `source` build, or a local binary (`manual`;
+    `sponsord_onramp_release_target_dir` follows `sponsord_release_target_dir`).
+  - The installers' release pins default to decdn/decdn `v0.0.1` and decdn/sponsord
+    `v0.0.2`, each with its `SHA256SUMS` digest; `sponsord_onramp_cli_release` takes
+    the decdn/sponsord tag (`vX.Y.Z`), as the onramp's own pin parser does.
   - Unit: `DynamicUser`, the daemon token and the host-provisioned Turnstile secret
     (`0600 /etc/sponsord/turnstile-secret`, never handled by the role) as
     `LoadCredential=` credentials, `PartOf=sponsord.service` so it re-reads the
@@ -162,9 +165,11 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `caddy.service`, which changes `config.alloy` once on every Grafana-enabled host.
 
 - `sponsord` role: deploys the deCDN onboarding sponsor (decdn/sponsord) on its own
-  host or beside a node. It installs a local binary (`sponsord_install_method: manual`,
-  the default until upstream tags a release) or a `sponsord-v<version>` release
-  verified against its GPG-signed `SHA256SUMS`. The unit uses `DynamicUser`, and the
+  host or beside a node. It installs the `v<version>` decdn/sponsord release
+  (`release`, the default; `sponsord_version` is pinned to `0.0.2`; decdn/sponsord
+  tags its whole workspace once, so a mirror in `sponsord_release_base` serves
+  `v<version>/sponsord-<version>-<target>.tar.gz`) verified against its GPG-signed
+  `SHA256SUMS`, a host-side `source` build, or a local binary (`manual`). The unit uses `DynamicUser`, and the
   API token, treasury keystore and password reach it as `LoadCredential=`
   credentials. Newer systemd (255 on Ubuntu 24.04) writes credentials `0440` and sponsord refuses a
   group-readable keystore, so the keystore is re-copied `0600` into the unit's
@@ -293,6 +298,28 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- `decdn_node`: `decdn_node_version` defaults to `0.0.1`, the first decdn/decdn
+  release, so `release` mode installs without a version in inventory. `make
+  test-scripts` checks it agrees with the onramp's decdn pin, the Compose example
+  and the chart's `appVersion`; the weekly `upstream-drift` job checks the pins
+  against the releases themselves.
+- `decdn_node`: the release `--version` check is an exact match on the binary's
+  `<name> <version>` line, as sponsord's is (it was a substring match, so a `0.0.1`
+  pin accepted `0.0.10`).
+- `decdn_node`, `sponsord`, `sponsord_onramp`: the `--version` backstop compares
+  the version in `release` mode only. With a default version set, a `source` build
+  of another ref or a `manual` binary would otherwise fail against it; those modes
+  keep the liveness check.
+- `decdn_node`: the vendored `decdn-release-KEYS.asc` is upstream's current `KEYS`,
+  which adds Alper Gundogdu's key (E27B 9A2D 2519 1E8E C90B F8AE 57E2 823C 16CC
+  D376) beside Ant Somers'. It now holds the same keys as sponsord's copy;
+  `make test-scripts` checks that they match.
+- The generated mirrors (`vars/main/networks.yml`, `schema-keys.txt`) are
+  regenerated from decdn/decdn v0.0.1 (no value changed), and
+  `scripts/sync-network-profiles.py` reads the pinned tag by default instead of
+  `origin/main`. The weekly `upstream-drift` job checks the mirrors against that
+  tag, the onramp's `SHA256SUMS` digests and the Compose image digests against the
+  pinned releases, and fails when either upstream repo has a newer `vX.Y.Z` tag.
 - `sponsord`: the restart-inputs comparison is now the only thing that restarts the
   daemon. The tasks that write secret.env, sponsord.env, the unit or the binary no
   longer notify the handler themselves (each is a hashed input already), so a write
@@ -308,9 +335,9 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - **Breaking:** `decdn_node_install_method`, `sponsord_install_method` and
   `sponsord_onramp_install_method` now default to `release` (was `manual`). An
-  inventory that relied on the old default must set `manual` explicitly. Upstream
-  has cut no release yet, so `release` needs a pinned version and a mirror until
-  it does; the version assert now names the alternatives.
+  inventory that relied on the old default must set `manual` explicitly. The
+  version defaults pin the upstream releases (above); the version assert names
+  the alternatives when an inventory blanks it.
 - `decdn_node`, `sponsord`, `sponsord_onramp`: every install method clears both
   install stamps (release and source) before it replaces the first binary, and
   writes its own only after the `--version` backstop passes (`decdn_node` used to
@@ -319,8 +346,8 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   downloaded again next run, and pinning back to the previous version reinstalls
   it.
 
-- The role now tracks the config schema of decdn/decdn @ 20db95ef (was
-  d3bc7da7; no key has changed since 3ebf5f17).
+- The role now tracks the config schema of decdn/decdn v0.0.1 (was d3bc7da7; no
+  key has changed since 3ebf5f17).
 
 - `grafana_alloy` fails loud on an architecture Alloy has no package for, instead of
   a 404 at download time.
@@ -403,8 +430,8 @@ Not yet published to Galaxy (pre-1.0; the published shape may still change).
   inbound, fail2ban, unattended-upgrades, chrony, an admin sudo account, and DevSec
   OS + SSH hardening applied last.
 - `decdn.node.decdn_node` — the `decdn-node` daemon under a hardened systemd unit,
-  from locally built binaries (`manual`, the default until upstream tags a release)
-  or a GPG-verified GitHub Release tarball (`release`); public QUIC udp/4433,
+  from a GPG-verified GitHub Release tarball (`release`, the default), a build on the
+  host, or locally built binaries (`manual`); public QUIC udp/4433,
   loopback metrics + admin RPC.
 - Release-integrity verification: `release` mode fetches the release's `SHA256SUMS`
   and `SHA256SUMS.asc`, verifies the detached signature against the maintainer
