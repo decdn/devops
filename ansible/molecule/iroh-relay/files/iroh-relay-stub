@@ -240,6 +240,7 @@ def main():
     health = json.dumps({"status": "ok", "version": STUB_VERSION, "git_hash": "unknown"}).encode()
     https = Server(cfg["https"], handler({"/healthz": (200, "application/json", health)}))
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     try:
         ctx.load_cert_chain(CERT, KEY)
     except OSError as e:

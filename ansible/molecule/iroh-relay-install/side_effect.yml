@@ -103,6 +103,30 @@
     - name: Install the pinned release
       ansible.builtin.include_tasks: includes/install-good.yml
 
+    # --- a pin changed without a version bump -------------------------------------------
+    # The stamp records the pin, so a changed pin is downloaded and checked again
+    # rather than trusted on the version alone (here it does not match: refused).
+    - name: Re-run with the pin changed and the version unchanged
+      block:
+        - name: Run the role with the same version and another digest
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_install_method: release
+            iroh_relay_release_base: "{{ _ir_base }}"
+            iroh_relay_version: "{{ _ir_good }}"
+            iroh_relay_sha256: "{{ {_ir_target: '1' * 64} }}"
+
+        - name: Fail — a changed pin was trusted on the old stamp
+          ansible.builtin.fail:
+            msg: The role finished although the pin changed and the tarball no longer matches it.
+      rescue:
+        - name: Require the re-download's checksum to be what failed
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Download the release tarball and verify its sha256'
+            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the pinned download."
+
     # --- the mirror down: nothing to download -------------------------------------------
     - name: Stop the mirror
       ansible.builtin.systemd_service:

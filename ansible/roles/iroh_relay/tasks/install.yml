@@ -3,8 +3,9 @@
 #   "release" (default): download the pinned iroh-relay-v<version>-<target>.tar.gz
 #     from n0-computer/iroh's GitHub Release, verified against the sha256 pinned in
 #     defaults (upstream publishes no signature), then extract. Idempotent and
-#     upgrade-aware via a stamp that also records the installed binary's sha256, so
-#     a binary replaced in place (same version string, other bytes) is re-downloaded.
+#     upgrade-aware via a stamp that also records the pinned archive digest and the
+#     installed binary's sha256, so a corrected pin, or a binary replaced in place
+#     (same version string, other bytes), is downloaded and verified again.
 #   "manual": copy a binary from the control machine.
 # Every method clears the stamp before it replaces the binary, so an interrupted
 # install leaves no stamp vouching for it.
@@ -15,9 +16,11 @@
     - name: Name the release archive
       ansible.builtin.set_fact:
         iroh_relay_release_archive: "iroh-relay-v{{ iroh_relay_version }}-{{ iroh_relay_target }}.tar.gz"
-        # The stamp names the target too, so a host whose triple changed (an
-        # override, a re-imaged host) is not trusted on the version alone.
-        iroh_relay_stamp_prefix: "{{ iroh_relay_version }} {{ iroh_relay_target }}"
+        # The stamp names the target and the pinned archive digest too, so a host
+        # whose triple changed (an override, a re-imaged host) or a pin corrected
+        # without a version bump is not trusted on the version alone.
+        iroh_relay_stamp_prefix: >-
+          {{ iroh_relay_version }} {{ iroh_relay_target }} {{ iroh_relay_sha256[iroh_relay_target] }}
 
     - name: Read the installed-version stamp
       ansible.builtin.slurp:
@@ -33,7 +36,7 @@
         checksum_algorithm: sha256
       register: iroh_relay_bin_pre
 
-    # "<version> <target> <sha256 of the installed binary>".
+    # "<version> <target> <pinned archive sha256> <sha256 of the installed binary>".
     - name: Decide whether (re)install is needed
       ansible.builtin.set_fact:
         iroh_relay_need_install: >-
@@ -194,7 +197,7 @@
         checksum_algorithm: sha256
       register: iroh_relay_bin_post
 
-    - name: Record the installed version, target and binary checksum
+    - name: Record the installed version, target, pin and binary checksum
       ansible.builtin.copy:
         dest: "{{ _iroh_relay_stamp }}"
         content: "{{ iroh_relay_stamp_prefix }} {{ iroh_relay_bin_post.stat.checksum }}\n"

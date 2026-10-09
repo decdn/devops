@@ -28,8 +28,10 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   seconds. A separate certificate check (`iroh_relay_certificate_check`: warn, fail
   or skip) fetches `https://<hostname>/healthz` on the relay's address (loopback for
   a wildcard bind) against the host's trust store; `warn` also fails once Let's
-  Encrypt has issued a certificate before. The release stamp records the binary's
-  sha256, so a binary replaced in place is downloaded again.
+  Encrypt has issued a production certificate for the hostname before (never in
+  staging mode). The release stamp records the pinned archive digest and the
+  binary's sha256, so a corrected pin or a binary replaced in place is downloaded
+  and verified again.
   `tasks_from: decommission` keeps the config, binary and ACME state.
 - `grafana_alloy`: `grafana_alloy_iroh_relay_enabled` scrapes the relay's loopback
   `/metrics` as `job="iroh-relay"` and labels and re-levels its journal stream like

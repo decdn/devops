@@ -20,11 +20,13 @@
     src: "{{ _ir_stamp }}"
   register: _ir_stamp_good
 
-- name: Require the release's binary, stamped with its version, target and checksum
+- name: Require the release's binary, stamped with its version, target, pin and checksum
   ansible.builtin.assert:
     that:
       - _ir_installed.stat.checksum == _ir_bin_sha
-      - (_ir_stamp_good.content | b64decode | trim) == _ir_good ~ ' ' ~ _ir_target ~ ' ' ~ _ir_bin_sha
+      - >-
+        (_ir_stamp_good.content | b64decode | trim)
+        == _ir_good ~ ' ' ~ _ir_target ~ ' ' ~ _ir_good_sha ~ ' ' ~ _ir_bin_sha
     fail_msg: >-
       Installed binary {{ _ir_installed.stat.checksum }} (want {{ _ir_bin_sha }}), stamp
       "{{ _ir_stamp_good.content | b64decode | trim }}".

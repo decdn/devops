@@ -27,6 +27,12 @@ _iroh_relay_stamp: /usr/local/lib/iroh-relay/installed-version
 # The archive holds one flat binary at its root.
 _iroh_relay_archive_member: iroh-relay
 
+# Let's Encrypt's production ACME directory, as tokio-rustls-acme 0.9 names it. Its
+# certificate cache file is cached_cert_<base64url(sha256(domain NUL directory))>,
+# so the role can tell a production certificate for this hostname from a staging
+# one (or one for an old name).
+_iroh_relay_acme_production_directory: https://acme-v02.api.letsencrypt.org/directory
+
 # One series the relay always exports, for the readiness gate (the full list:
 # monitoring/iroh-relay/exported-metrics.txt).
 _iroh_relay_gate_metric: relayserver_accepts_total

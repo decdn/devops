@@ -28,8 +28,9 @@ relay exception to AGENTS.md hard rule 2.
     the iroh GitHub release and verifies it against the sha256 pinned in
     `iroh_relay_sha256` for the host's target triple. Upstream signs nothing, so the
     pin is all that vouches for it. A stamp (`/usr/local/lib/iroh-relay/installed-version`,
-    `<version> <target> <sha256>`) skips re-downloading while the binary on disk is
-    the one it records, so a binary replaced in place is downloaded again. On every
+    `<version> <target> <pinned archive sha256> <binary sha256>`) skips re-downloading
+    while the pin and the binary on disk are the ones it records, so a corrected pin
+    or a binary replaced in place is downloaded and verified again. On every
     run `iroh-relay --version` must print exactly `iroh-relay <version>` (a `manual`
     binary only has to print a line starting with the word `iroh-relay`).
   - `manual` copies a binary from the control machine.
@@ -67,9 +68,10 @@ relay exception to AGENTS.md hard rule 2.
   - `warn` (the default) reports a relay still waiting for its first certificate,
     as a changed task so it shows in the play recap. The first issuance needs DNS
     and tcp/443 from the internet, which the deploy cannot force. Once Let's Encrypt
-    has issued one (a `cached_cert_*` file exists in the ACME directory), a failed
-    check is a regression (expired, staging, no longer reachable) and fails the
-    deploy here too.
+    has issued a production certificate for this hostname (its cache file exists in
+    the ACME directory), a failed check is a regression (expired, no longer
+    reachable) and fails the deploy here too. With `iroh_relay_acme_staging` it only
+    warns: staging certificates are never trusted.
   - `fail` fails the deploy.
   - `skip` does not look.
 - **Restarts only on a change.** A hash record of the config, the unit and the

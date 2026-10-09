@@ -285,11 +285,13 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     a certificate, and an ACME failure does not stop it). Then a separate certificate
     check (`iroh_relay_certificate_check` warn/fail/skip) curls
     `https://<hostname>/healthz` on the relay's address (loopback for a wildcard bind)
-    against the host trust store; `warn` fails too once a `cached_cert_*` exists in
-    the ACME dir (after a first issuance a failed probe is a regression). Restarts
-    come from the templates' and the binary install's notifies and the restart-inputs
-    record (config, unit, binary). The release stamp is `<version> <target> <sha256>`,
-    so a binary replaced in place is downloaded again.
+    against the host trust store; `warn` fails too once the PRODUCTION certificate
+    for this hostname is cached in the ACME dir (tokio-rustls-acme names it after the
+    domain and the ACME directory URL, `vars/main.yml`), never in staging mode, whose
+    certificates are never trusted. Restarts come from the templates' and the binary
+    install's notifies and the restart-inputs record (config, unit, binary). The
+    release stamp is `<version> <target> <pinned archive sha256> <binary sha256>`, so a
+    corrected pin or a binary replaced in place is downloaded and verified again.
   - **Molecule:** `molecule/iroh-relay` (a molecule CA in place of Let's Encrypt; the
     stub's markers break each part of the gate), `iroh-relay-lifecycle`
     (decommission) and `iroh-relay-install` (release mode against a local mirror),

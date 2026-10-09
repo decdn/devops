@@ -557,19 +557,41 @@
     - iroh_relay_certificate_check != 'skip'
     - iroh_relay_cert_probe.rc == 0
 
-# Let's Encrypt's certificate, once issued, is cached in the state directory
-# (tokio-rustls-acme's DirCache names it cached_cert_<hash>). Only before that is
-# a failed probe expected; afterwards it is a regression (expired, staging, or no
-# longer reachable), and "warn" fails too.
-- name: Look for a certificate Let's Encrypt already issued
-  ansible.builtin.find:
-    paths: "{{ _iroh_relay_cert_dir }}"
-    patterns: "cached_cert_*"
-  register: iroh_relay_cached_cert
+# Let's Encrypt's production certificate, once issued, is cached in the state
+# directory under a name derived from the hostname and the ACME directory (see
+# vars/main.yml). Only before that is a failed probe expected; afterwards it is a
+# regression (expired, or no longer reachable), and "warn" fails too. A staging
+# certificate is never trusted, so staging never escalates, and its cache file
+# (another directory, another name) does not count.
+- name: Name the production certificate's cache file
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - -I
+      - -c
+      - |
+        import base64, hashlib, sys
+        digest = hashlib.sha256(sys.argv[1].encode() + b"\0" + sys.argv[2].encode()).digest()
+        print("cached_cert_" + base64.urlsafe_b64encode(digest).decode().rstrip("="))
+      - "{{ iroh_relay_hostname }}"
+      - "{{ _iroh_relay_acme_production_directory }}"
+  register: iroh_relay_cert_cache_name
+  changed_when: false
+  check_mode: false
+  delegate_to: localhost
+  become: false
   when:
     - not ansible_check_mode
-    - iroh_relay_certificate_check != 'skip'
+    - iroh_relay_certificate_check == 'warn'
     - iroh_relay_cert_probe.rc != 0
+    - not iroh_relay_acme_staging
+
+- name: Look for a production certificate Let's Encrypt already issued
+  ansible.builtin.stat:
+    path: "{{ _iroh_relay_cert_dir }}/{{ iroh_relay_cert_cache_name.stdout | trim }}"
+    get_checksum: false
+  register: iroh_relay_cached_cert
+  when: iroh_relay_cert_cache_name.stdout is defined
 
 # changed, not ok: it then shows in the play recap, not only in the task output.
 - name: Report a relay still waiting for its first certificate
@@ -581,7 +603,7 @@
       (curl: {{ iroh_relay_cert_probe.stderr | default('') | trim }}). Nodes cannot use
       the relay until it has one.{{ " Let's Encrypt has issued a certificate for it before, so
       this is a regression, not a first issuance still pending."
-      if (iroh_relay_cached_cert.matched | default(0)) > 0 else "" }} Let's Encrypt must
+      if (iroh_relay_cached_cert.stat.exists | default(false)) else "" }} Let's Encrypt must
       reach this host on tcp/443:
         - {{ iroh_relay_hostname }}'s A/AAAA records point at this host;
         - tcp/443 is open from the internet (the provider's firewall too);
@@ -595,7 +617,7 @@
     - not ansible_check_mode
     - iroh_relay_certificate_check == 'warn'
     - iroh_relay_cert_probe.rc != 0
-    - iroh_relay_cached_cert.matched | default(0) == 0
+    - not (iroh_relay_cached_cert.stat.exists | default(false))
 
 - name: Fail on a relay without a trusted certificate
   ansible.builtin.fail:
@@ -608,7 +630,7 @@
     - iroh_relay_cert_probe.rc != 0
     - >-
       iroh_relay_certificate_check == 'fail'
-      or iroh_relay_cached_cert.matched | default(0) > 0
+      or (iroh_relay_cached_cert.stat.exists | default(false))
 
 - name: Require /healthz to report the pinned version
   ansible.builtin.assert:

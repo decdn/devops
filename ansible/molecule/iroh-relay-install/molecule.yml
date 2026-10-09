@@ -5,8 +5,9 @@
 # switches to "release" against a local mirror serving the stub as
 # iroh-relay-v<version>-<target>.tar.gz:
 #   a wrong sha256 pin    fails at the download, nothing installed or stamped;
-#   the right pin         installs it, stamps "<version> <target> <sha256>", and
-#                         /healthz reports the pinned version (cert check "fail");
+#   the right pin         installs it, stamps "<version> <target> <pin> <sha256>",
+#                         and /healthz reports the pinned version (cert check "fail");
+#   a changed pin         (same version) is downloaded and checked again;
 #   the mirror down       a re-run downloads nothing;
 #   the binary replaced   (same version string, other bytes) is downloaded again;
 #   a version the binary  does not report fails the version backstop, unstamped.

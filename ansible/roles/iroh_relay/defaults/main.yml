@@ -107,8 +107,9 @@ iroh_relay_readiness_settle: 5
 # (loopback for a wildcard bind) and check the certificate against the host's
 # trust store. "warn" (default) reports a relay that has not got its FIRST
 # certificate yet (that needs DNS and tcp/443 from the internet, which the deploy
-# cannot force) as a changed task, and fails once Let's Encrypt has issued one
-# (an expired, staging or otherwise untrusted certificate is then a regression);
+# cannot force) as a changed task, and fails once Let's Encrypt has issued a
+# production certificate for this hostname (an expired or unreachable one is then
+# a regression; staging never escalates, its certificates are never trusted);
 # "fail" always fails the deploy; "skip" does not look.
 iroh_relay_certificate_check: warn        # "warn" | "fail" | "skip"
 iroh_relay_certificate_retries: 15
