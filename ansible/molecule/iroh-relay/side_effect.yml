@@ -19,10 +19,15 @@
 #      is no conflict, until QAD is on again (the port guard's UDP half).
 #  10. 0.0.0.0 and a specific IPv4 address: rendered, bound, and probed there (the
 #      certificate check is "fail" in this inventory).
-#  11. The allowlist: a node whose ID cannot be read fails tasks_from node-ids; the
-#      "everyone" and "denylist" modes render as such.
-# The role is run with include_role here, so the inventory nodes' IDs (which the
-# converge's playbook read) are read first, as playbooks/iroh_relay.yml does.
+#  11. The allowlist: every relay reads every platform's node ID; a node with no
+#      identity, a failing `whoami`, an unreachable node, a host outside the
+#      inventory and two nodes sharing an ID each fail tasks_from node-ids; the
+#      read works in check mode; with the inventory read off only the listed IDs
+#      render; the "everyone" and "denylist" modes render as such. (A role run that
+#      skipped the read is refused: ../validation-iroh-relay.)
+# The role is run with include_role here, so the inventory nodes' IDs are read first,
+# as playbooks/iroh_relay.yml does: facts the converge run set do not carry over to
+# this run.
 # Decommission runs in ../iroh-relay-lifecycle. The host is left as converged, with
 # the molecule CA trusted, for verify.
 - name: Side effect — restarts, the fatal gate, the port guard, the certificate check
@@ -71,6 +76,25 @@
         that:
           - _ir_noop.status.MainPID == _ir_before.status.MainPID
         fail_msg: A re-run with no input changed restarted iroh-relay.
+
+    # The same set in another order, with a node's ID also listed by hand: the merge
+    # sorts and de-duplicates, so nothing re-renders and nothing restarts.
+    - name: Converge with the same IDs reordered and one listed twice over
+      ansible.builtin.include_role:
+        name: iroh_relay
+      vars:
+        iroh_relay_allowlist: ["{{ inventory_hostname | hash('sha256') }}", "{{ _ir_first_id }}"]
+
+    - name: Read the relay after the reordered allowlist
+      ansible.builtin.systemd_service:
+        name: iroh-relay
+      register: _ir_reorder
+
+    - name: Require the reordered allowlist to have left the relay alone
+      ansible.builtin.assert:
+        that:
+          - _ir_reorder.status.MainPID == _ir_before.status.MainPID
+        fail_msg: The same allowlist in another order (with a duplicate) restarted iroh-relay.
 
     - name: Converge with a second allowlist entry
       ansible.builtin.include_role:
@@ -593,45 +617,58 @@
         loop_var: _ir_bind
 
     # --- 11. the access modes ----------------------------------------------------------
-    - name: Read the node IDs with a node that has no identity yet
-      block:
-        - name: Stage the stand-in node's no-identity marker
-          ansible.builtin.copy:
-            dest: /etc/decdn/molecule-no-identity
-            content: ""
-            mode: "0644"
+    - name: Read the node IDs while one stand-in node misbehaves
+      ansible.builtin.include_tasks: includes/node-ids-fail.yml
+      loop:
+        - {marker: molecule-no-identity, failed_at: Require an endpoint ID from every deCDN node}
+        - {marker: molecule-whoami-fails, failed_at: Require an endpoint ID from every deCDN node}
+        - {marker: molecule-shared-id, failed_at: Refuse deCDN nodes that share an endpoint ID}
+      loop_control:
+        loop_var: _ir_case
 
-        - name: Read the inventory nodes' IDs
-          ansible.builtin.include_role:
-            name: iroh_relay
-            tasks_from: node-ids
+    # A node that cannot be reached is reported by name, not as the relay host.
+    - name: Add a deCDN node nobody can reach
+      ansible.builtin.add_host:
+        name: molecule-unreachable-node
+        ansible_connection: ssh
+        ansible_host: 127.0.0.1
+        ansible_port: 1
+        ansible_ssh_common_args: -o ConnectTimeout=3
 
-        - name: Fail — a node without an identity was left out silently
-          ansible.builtin.fail:
-            msg: The node IDs were read although a node has no identity.
-      rescue:
-        - name: Require the ID check to be what failed
-          ansible.builtin.assert:
-            that:
-              - ansible_failed_task.name == 'Require an endpoint ID from every deCDN node'
-            fail_msg: "Failed at '{{ ansible_failed_task.name }}', not the node ID check."
-      always:
-        - name: Remove the no-identity marker
-          ansible.builtin.file:
-            path: /etc/decdn/molecule-no-identity
-            state: absent
+    - name: Read the node IDs of an unreachable node and of a host outside the inventory
+      ansible.builtin.include_tasks: includes/node-ids-fail.yml
+      loop:
+        - hosts: [molecule-unreachable-node]
+          failed_at: Require an endpoint ID from every deCDN node
+        - hosts: [molecule-not-an-inventory-host]
+          failed_at: Validate iroh_relay_allowlist_node_hosts
+      loop_control:
+        loop_var: _ir_case
 
-    # The failed read left no fact behind it would have been wrong to trust; read
-    # them again before converging.
-    - name: Read the inventory nodes' IDs again
+    - name: Read the inventory nodes' IDs in check mode
       ansible.builtin.include_role:
         name: iroh_relay
         tasks_from: node-ids
+        apply:
+          check_mode: true
+
+    - name: Require the check-mode read to have read every node
+      ansible.builtin.assert:
+        that:
+          - _iroh_relay_inventory_node_ids_read
+          - _iroh_relay_inventory_node_ids | sort == groups['iroh_relay_hosts'] | map('hash', 'sha256') | sort
+        fail_msg: "Check mode read {{ _iroh_relay_inventory_node_ids }}."
 
     - name: Converge in each other access mode
       ansible.builtin.include_tasks: includes/access-mode.yml
       loop:
         - {access: everyone, allowlist: [], denylist: [], want: '"everyone"'}
+        # The inventory read off: only the listed ID, none of the nodes'.
+        - access: allowlist
+          allowlist: [81d82536cb4c96ddbeab1f6bf4495d126c1942fb90b9ffb433d91d23314801e7]
+          denylist: []
+          from_inventory: false
+          want: '{ allowlist = ["81d82536cb4c96ddbeab1f6bf4495d126c1942fb90b9ffb433d91d23314801e7"] }'
         - access: denylist
           allowlist: []
           denylist: [08ebd644cd0bd76975a53e7ff96b1eacd14dd4f61672f3f54c7c8bb19fbf2a08]

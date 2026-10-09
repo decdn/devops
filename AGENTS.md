@@ -268,9 +268,12 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     `decdn_user` via systemd-run; fallbacks = decdn_node defaults, `make
     test-scripts` checks), merged with `iroh_relay_allowlist`, sorted. An unreadable
     node or an empty list fails the deploy, and a list set for another mode is
-    refused. The cost, documented in the role README: a client not on the list
-    cannot reach a node homed on the relay when they cannot hole-punch (iroh relays
-    through the destination's home relay).
+    refused; the role refuses to run when the inventory read is on but did not run.
+    Relays deploy `serial: 1`. The cost, documented in the role README: decdn
+    clients use a fresh iroh key per fetch (`decdn/crates/client/src/endpoint.rs`),
+    so they can never be listed, and iroh hole-punches over an existing connection,
+    so a client reaches a node homed on an allowlisted relay only if the node is
+    directly reachable. NATed nodes that serve clients need `everyone`.
   - **Install:** the release tarball pinned to the iroh version decdn builds against
     (`iroh_relay_version`, now 1.3.0), verified against a per-target sha256 in defaults
     (upstream signs nothing; the gnu triples, glibc 2.34+), or `manual`. Bump the

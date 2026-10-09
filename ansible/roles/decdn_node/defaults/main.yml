@@ -134,6 +134,9 @@ decdn_bind_port: 4433           # public QUIC (udp); opened in the baseline fire
 # scalar — only this list. (The --relay-url CLI flag / DECDN_RELAY_URL env var do
 # still exist, and `relay_url` is still a key INSIDE each discovery peer below.)
 # e.g. ["https://relay1.example:443", "https://relay2.example:443"]
+# The list REPLACES n0's relays. Relays deployed by this repo's iroh_relay role admit
+# only listed node IDs by default: re-deploy them (make deploy-relay) after adding a
+# node or rotating its key, or they refuse it (roles/iroh_relay/README.md).
 decdn_relay_urls: []
 # The optional knobs below default to "" (or []) => "omit the key, use the daemon's
 # own default". Set a value only to override; an explicit 0/false IS emitted.

@@ -8,6 +8,7 @@
     iroh_relay_access: "{{ _ir_mode.access }}"
     iroh_relay_allowlist: "{{ _ir_mode.allowlist }}"
     iroh_relay_denylist: "{{ _ir_mode.denylist }}"
+    iroh_relay_allowlist_from_inventory: "{{ _ir_mode.from_inventory | default(true) }}"
 
 - name: Read the config rendered in the access mode {{ _ir_mode.access }}
   ansible.builtin.slurp:

@@ -4,10 +4,12 @@
 #      relay.molecule.test, which the stub serves on https (the real relay would
 #      fetch one from Let's Encrypt into its state directory);
 #   2. the Grafana Cloud credential env file (as ../grafana-cloud/prepare.yml);
-#   3. a stand-in deCDN node on the same host (the inventory names it in
+#   3. a stand-in deCDN node on every platform (the inventory names them in
 #      iroh_relay_allowlist_node_hosts): a decdn user, /etc/decdn/node.toml and a
-#      `decdn` that prints a fixed "node id: <hex>" for `whoami`, or the real CLI's
-#      "(none — …)" line while /etc/decdn/molecule-no-identity exists.
+#      `decdn` whose `whoami` prints "node id: <sha256 of the host name>" (one ID
+#      per host). Markers under /etc/decdn change it: molecule-no-identity prints
+#      the real CLI's "(none — …)" line, molecule-whoami-fails exits 1 with an
+#      error, molecule-shared-id prints the same ID on every host.
 - name: Prepare
   hosts: all
   become: true
@@ -104,9 +106,14 @@
           [ "${1:-}" = --config ] && [ -r "${2:-}" ] && [ "${3:-}" = whoami ] \
             || { echo "decdn stand-in: unexpected arguments: $*" >&2; exit 2; }
           [ "$(id -un)" = decdn ] || { echo "decdn stand-in: run as $(id -un), not decdn" >&2; exit 1; }
-          if [ -e /etc/decdn/molecule-no-identity ]; then
+          if [ -e /etc/decdn/molecule-whoami-fails ]; then
+            echo "Error: node.secret in /var/lib/decdn is group- or world-readable" >&2
+            exit 1
+          elif [ -e /etc/decdn/molecule-no-identity ]; then
             echo "node id: (none — no node.secret in /var/lib/decdn; run decdn key-gen)"
-          else
+          elif [ -e /etc/decdn/molecule-shared-id ]; then
             echo "node id: e8a601ca5aea34a904990dcc03e2c46a7b39d6a23b395dd669ceba0c0aa1077e"
+          else
+            echo "node id: {{ inventory_hostname | hash('sha256') }}"
             echo "key path: /var/lib/decdn/node.secret"
           fi

@@ -1,0 +1,44 @@
+---
+# Read the inventory nodes' IDs (tasks_from node-ids) with one stand-in node broken
+# by _ir_case.marker (on every host), or reading _ir_case.hosts, and require the
+# read to fail at _ir_case.failed_at and record nothing.
+- name: Stage the stand-in node's marker
+  ansible.builtin.copy:
+    dest: "/etc/decdn/{{ _ir_case.marker }}"
+    content: ""
+    mode: "0644"
+  when: _ir_case.marker is defined
+
+- name: Read the node IDs, expecting a refusal
+  block:
+    - name: Read the inventory nodes' IDs
+      ansible.builtin.include_role:
+        name: iroh_relay
+        tasks_from: node-ids
+      vars:
+        iroh_relay_allowlist_node_hosts: "{{ _ir_case.hosts | default(groups['iroh_relay_hosts']) }}"
+
+    - name: Fail — the node IDs were read anyway
+      ansible.builtin.fail:
+        msg: "The node IDs were read although {{ _ir_case.marker | default(_ir_case.hosts) }} should have failed it."
+  rescue:
+    - name: Require the expected refusal
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name == _ir_case.failed_at
+          - not _iroh_relay_inventory_node_ids_read
+        fail_msg: >-
+          Failed at '{{ ansible_failed_task.name }}' (want '{{ _ir_case.failed_at }}'),
+          or the failed read was recorded as done.
+  always:
+    - name: Remove the stand-in node's marker
+      ansible.builtin.file:
+        path: "/etc/decdn/{{ _ir_case.marker }}"
+        state: absent
+      when: _ir_case.marker is defined
+
+# Every case leaves the read undone: read again, so later converges see the nodes.
+- name: Read the inventory nodes' IDs again
+  ansible.builtin.include_role:
+    name: iroh_relay
+    tasks_from: node-ids

@@ -22,8 +22,10 @@
       {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/iroh-relay/files/iroh-relay-stub
     iroh_relay_hostname: relay.molecule.test
     iroh_relay_acme_contact: ops@molecule.test
-    # The default allowlist mode needs one ID (no inventory nodes are read here).
+    # The default allowlist mode needs one ID. No inventory nodes are read here
+    # (role-only runs), so the inventory read is off; inventory-not-read turns it on.
     iroh_relay_allowlist: ["{{ _ir_id }}"]
+    iroh_relay_allowlist_from_inventory: false
     # The target triple of the other supported architecture, for release-target.
     _ir_other_target: >-
       {{ (_ir_targets | dict2items | rejectattr('key', 'equalto', ansible_facts['architecture'])
@@ -379,6 +381,21 @@
             decdn_rejected: "{{ decdn_rejected + ['inventory-bool'] }}"
           when: ansible_failed_task.name == "Validate the access mode"
 
+    # The inventory read on, but tasks_from node-ids never ran: refused rather than
+    # deploying the manual list without the fleet.
+    - name: "Case inventory-not-read — the inventory read on, the node IDs never read"
+      block:
+        - name: Run iroh_relay with the inventory read on and no node IDs read
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_allowlist_from_inventory: true
+      rescue:
+        - name: Record inventory-not-read rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['inventory-not-read'] }}"
+          when: ansible_failed_task.name == "Require the inventory nodes' IDs to have been read"
+
     - name: "Case allowlist-string — a string as the allowlist"
       block:
         - name: Run iroh_relay with a string as the allowlist
@@ -403,6 +420,21 @@
         - name: Record allowlist-bad-hex rejection (only if its assert failed)
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['allowlist-bad-hex'] }}"
+          when: ansible_failed_task.name == "Validate the allowlist"
+
+    # Unquoted, an all-digit ID loads from YAML as an integer (and would render as
+    # a TOML number the relay cannot parse).
+    - name: "Case allowlist-int — an all-digit endpoint id that YAML loads as a number"
+      block:
+        - name: Run iroh_relay with an all-digit endpoint id that YAML loads as a number
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_allowlist: [1111111111111111111111111111111111111111111111111111111111111111]
+      rescue:
+        - name: Record allowlist-int rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['allowlist-int'] }}"
           when: ansible_failed_task.name == "Validate the allowlist"
 
     - name: "Case allowlist-dup — a repeated allowlist id"
@@ -646,8 +678,10 @@
           - allowlist-in-everyone-mode
           - denylist-in-allowlist-mode
           - inventory-bool
+          - inventory-not-read
           - allowlist-string
           - allowlist-bad-hex
+          - allowlist-int
           - allowlist-dup
           - allowlist-empty
           - denylist-string

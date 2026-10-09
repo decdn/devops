@@ -23,8 +23,11 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   allowlist (`iroh_relay_access`: allowlist, denylist or everyone): the IDs in
   `iroh_relay_allowlist`, plus, through this repo's playbook (`tasks_from:
   node-ids`), every inventory deCDN node's ID read with `decdn whoami`. An empty
-  list or an unreadable node fails the deploy. Clients not on the list cannot reach
-  a node homed on the relay. Optional rate limits. The bind address is parsed
+  list, an unreadable node, duplicate node IDs, or a role run that skipped the read
+  fail the deploy. decdn clients use a fresh key per fetch and cannot be listed: they
+  reach a node homed on an allowlisted relay only if the node is directly reachable,
+  so nodes behind NAT that serve clients need `everyone`. Relays deploy one at a
+  time. Optional rate limits. The bind address is parsed
   as an IP (no port, loopback, link-local or mapped forms), and `::` is refused
   where `net.ipv6.bindv6only=1`. Before any change it refuses ports another process
   holds; after the start, a fatal gate requires metrics to answer, every listener

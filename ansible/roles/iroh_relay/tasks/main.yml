@@ -206,11 +206,15 @@
       - _ids is sequence
       - _ids is not string
       - _ids is not mapping
+      # Strings only: an unquoted all-digit ID loads from YAML as an integer and
+      # would render as a TOML number.
+      - _ids | reject('string') | list | length == 0
       - _ids | map('string') | reject('match', '^[0-9a-f]{64}$') | list | length == 0
       - _ids | unique | length == _ids | length
     fail_msg: >-
       iroh_relay_allowlist must be a list of distinct endpoint IDs, each 64 lowercase hex
-      characters, as `decdn whoami` prints them ("node id: <hex>"). Got
+      characters as strings (quote them in YAML), as `decdn whoami` prints them
+      ("node id: <hex>"). Got
       {{ _ids | to_json }}.
   vars:
     _ids: "{{ iroh_relay_allowlist }}"
@@ -221,35 +225,65 @@
       - _ids is sequence
       - _ids is not string
       - _ids is not mapping
+      # Strings only: an unquoted all-digit ID loads from YAML as an integer and
+      # would render as a TOML number.
+      - _ids | reject('string') | list | length == 0
       - _ids | map('string') | reject('match', '^[0-9a-f]{64}$') | list | length == 0
       - _ids | unique | length == _ids | length
     fail_msg: >-
       iroh_relay_denylist must be a list of distinct endpoint IDs, each 64 lowercase hex
-      characters, as `decdn whoami` prints them ("node id: <hex>"). Got
+      characters as strings (quote them in YAML), as `decdn whoami` prints them
+      ("node id: <hex>"). Got
       {{ _ids | to_json }}.
   vars:
     _ids: "{{ iroh_relay_denylist }}"
 
+# With the inventory read on, the IDs must have been read in this run
+# (tasks_from: node-ids, which playbooks/iroh_relay.yml runs first). Otherwise a
+# playbook that skipped it, by design or --start-at-task, would deploy the manual
+# list alone and drop every node without a word.
+- name: Require the inventory nodes' IDs to have been read
+  ansible.builtin.assert:
+    that:
+      - _iroh_relay_inventory_node_ids_read | default(false) | bool
+    fail_msg: >-
+      iroh_relay_access is "allowlist" and iroh_relay_allowlist_from_inventory is
+      true, but the inventory's deCDN node IDs were not read in this run. Include
+      `tasks_from: node-ids` of this role before it (playbooks/iroh_relay.yml does), or
+      set iroh_relay_allowlist_from_inventory: false and list every ID in
+      iroh_relay_allowlist.
+  when:
+    - iroh_relay_access == 'allowlist'
+    - iroh_relay_allowlist_from_inventory
+
+# Parsed from `decdn whoami` by tasks/node-ids.yml, or set by a caller: the same
+# shape iroh-relay parses.
 - name: Validate the inventory nodes' IDs
   ansible.builtin.assert:
     that:
       - _ids is sequence
       - _ids is not string
       - _ids is not mapping
-      - _ids | map('string') | reject('match', '^[0-9a-f]{64}$') | list | length == 0
-      - _ids | unique | length == _ids | length
+      - _ids | reject('string') | list | length == 0
+      - _ids | reject('match', '^[0-9a-f]{64}$') | list | length == 0
     fail_msg: >-
-      The IDs read from the inventory's deCDN nodes must be a list of distinct endpoint IDs, each 64 lowercase hex
-      characters, as `decdn whoami` prints them ("node id: <hex>"). Got
+      _iroh_relay_inventory_node_ids must be a list of endpoint IDs, each 64
+      lowercase hex characters as `decdn whoami` prints them ("node id: <hex>"); got
       {{ _ids | to_json }}.
   vars:
     _ids: "{{ _iroh_relay_inventory_node_ids | default([]) }}"
+  when:
+    - iroh_relay_access == 'allowlist'
+    - iroh_relay_allowlist_from_inventory
 
 - name: Merge the allowlist
   ansible.builtin.set_fact:
-    # Sorted, so the same set of nodes renders the same config (no restart).
+    # Sorted, so the same set of nodes renders the same config (no restart). The
+    # inventory's IDs count only while the inventory read is on.
     _iroh_relay_effective_allowlist: >-
-      {{ ((iroh_relay_allowlist | list) + (_iroh_relay_inventory_node_ids | default([]) | list))
+      {{ ((iroh_relay_allowlist | list)
+          + ((_iroh_relay_inventory_node_ids | default([]) | list)
+             if iroh_relay_allowlist_from_inventory else []))
          | unique | sort }}
 
 - name: Require a non-empty allowlist

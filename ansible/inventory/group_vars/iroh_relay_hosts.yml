@@ -23,10 +23,12 @@
 # iroh_relay_enable_quic_addr_discovery: false
 
 # --- Access + limits ---------------------------------------------------------------
-# By default only listed endpoint IDs may connect: every decdn_nodes host's ID (read
-# on the node by playbooks/iroh_relay.yml) plus these. Clients not listed cannot
-# reach a node homed on this relay when they cannot hole-punch. IDs are 64 lowercase
-# hex, as `decdn whoami` prints them.
+# By default only listed endpoint IDs may relay: every decdn_nodes host's ID (read on
+# the node by playbooks/iroh_relay.yml, so a relay deploy needs SSH to every node)
+# plus these. decdn clients use a fresh key per fetch and cannot be listed: they
+# reach a node homed here only if the node is directly reachable, so nodes behind
+# NAT that serve clients need relays in "everyone" mode. IDs are 64 lowercase hex,
+# as `decdn whoami` prints them. Re-deploy the relays after adding a node.
 # iroh_relay_allowlist: []
 # Or serve everyone, or everyone but some:
 # iroh_relay_access: everyone             # "allowlist" | "denylist" | "everyone"

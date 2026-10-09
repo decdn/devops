@@ -2,7 +2,9 @@
 # iroh relays: the fallback path for deCDN peers that cannot hole-punch, and QUIC
 # address discovery for the ones that can. Self-hosted as operational
 # infrastructure, not an incentivized role (decdn/adr/architecture.md).
-#   iroh_relay_hosts: baseline -> grafana_alloy (opt-in, off by default) -> iroh_relay
+#   iroh_relay_hosts: read the deCDN nodes' IDs (the allowlist) -> baseline ->
+#                     grafana_alloy (opt-in, off by default) -> iroh_relay, one relay
+#                     at a time
 # Standalone entry point (`make deploy-relay`), also imported by site.yml. The
 # relay is public by design: it terminates its own TLS (Let's Encrypt) on tcp/443
 # and binds tcp/80 and udp/7842, opened by playbooks/group_vars/all.yml; its
@@ -37,17 +39,26 @@
   become: true
   gather_facts: false
   tasks:
+    # Tagged like the iroh_relay role below (and its tasks, through apply), so a
+    # tag-scoped run (--tags iroh_relay / relay) never renders the allowlist
+    # without the inventory's nodes.
     - name: Read every deCDN node's endpoint ID
       ansible.builtin.include_role:
         name: iroh_relay
         tasks_from: node-ids
+        apply:
+          tags: [iroh_relay, relay]
+      tags: [iroh_relay, relay]
       when:
         - iroh_relay_access | default('allowlist') == 'allowlist'
         - iroh_relay_allowlist_from_inventory | default(true) | bool
 
+# One relay at a time: a fleet change re-renders every relay's allowlist, and
+# restarting them together would drop every relayed connection at once.
 - name: Provision iroh relays
   hosts: iroh_relay_hosts
   become: true
+  serial: 1
   roles:
     - role: baseline
       tags: [baseline]

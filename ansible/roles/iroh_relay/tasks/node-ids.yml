@@ -3,12 +3,15 @@
 # allowlist: `include_role: {name: iroh_relay, tasks_from: node-ids}`, run by
 # playbooks/iroh_relay.yml before the relay is provisioned. It sets
 # _iroh_relay_inventory_node_ids, which tasks/main.yml merges with
-# iroh_relay_allowlist.
+# iroh_relay_allowlist, and _iroh_relay_inventory_node_ids_read, without which
+# tasks/main.yml refuses to run while the inventory read is on.
 #
 # `decdn whoami` reads the node's key file offline (the daemon need not run) and
 # prints "node id: <64 lowercase hex>", the form iroh-relay parses. It runs on the
 # node as the node's own user (the key directory is 0700, owned by it), through
-# systemd-run as the decdn_node role's README does. delegate_to ignores --limit, so
+# systemd-run as the decdn_node role's README does, with stdin a pipe: on a TTY it
+# would ask for the node's keystore password, which a systemd-run unit cannot
+# answer. `--limit` narrows a play's hosts, not groups[] or delegate_to targets, so
 # `make deploy-relay LIMIT=<relay>` still reads every node. Any node whose ID cannot
 # be read fails the deploy: a relay that silently drops a node from its allowlist
 # would refuse that node's peers.
@@ -16,9 +19,14 @@
 # The fallbacks are roles/decdn_node/defaults/main.yml's (tests/scripts-test.sh
 # checks): that role's defaults are not loaded for the node hosts here.
 
-- name: Name the deCDN nodes to read
+# Set again at the end only once every ID was read, so a failed (or rescued) read
+# never leaves an earlier list standing in for this one.
+- name: Mark the inventory nodes' IDs as not read yet
   ansible.builtin.set_fact:
-    _iroh_relay_node_hosts: "{{ iroh_relay_allowlist_node_hosts | default(groups['decdn_nodes'] | default([])) }}"
+    _iroh_relay_inventory_node_ids_read: false
+
+- name: Resolve the deCDN nodes to read
+  ansible.builtin.include_tasks: node-hosts.yml
 
 - name: Read each deCDN node's endpoint ID
   ansible.builtin.command:
@@ -33,25 +41,36 @@
       - --config
       - "{{ hostvars[item].decdn_config_file | default('/etc/decdn/node.toml') }}"
       - whoami
+    # A pipe, never the connection's TTY: whoami prompts for the keystore
+    # password only on a TTY, after printing the node id.
+    stdin: "\n"
   delegate_to: "{{ item }}"
   loop: "{{ _iroh_relay_node_hosts }}"
   register: _iroh_relay_whoami
   changed_when: false
   failed_when: false
+  # An unreachable node is reported below, by name, instead of marking the relay
+  # host itself unreachable.
+  ignore_unreachable: true
+  timeout: 120
   check_mode: false
 
 - name: Require an endpoint ID from every deCDN node
   ansible.builtin.assert:
     that:
-      - item.rc == 0
+      - not (item.unreachable | default(false))
+      - item.rc | default(-1) == 0
       - _id is match('^[0-9a-f]{64}$')
     fail_msg: |-
       Could not read the endpoint ID of deCDN node {{ item.item }} for the relay's
-      allowlist (`decdn whoami` exited {{ item.rc | default('?') }}):
+      allowlist ({{ ('unreachable: ' ~ (item.msg | default('')))
+                    if item.unreachable | default(false)
+                    else ('`decdn whoami` exited ' ~ (item.rc | default('?'))) }}):
         {{ (item.stdout | default('') ~ '\n' ~ item.stderr | default('')) | trim | indent(2) }}
-      Deploy that node first (its identity is created then), or set
-      iroh_relay_allowlist_from_inventory: false and list the IDs in
-      iroh_relay_allowlist yourself.
+      Deploy that node first (its identity is created then). To deploy the relay
+      while a node is down, set iroh_relay_allowlist_node_hosts to the nodes that are
+      up and add the missing node's ID to iroh_relay_allowlist, or set
+      iroh_relay_allowlist_from_inventory: false and list every ID yourself.
     quiet: true
   vars:
     _id: >-
@@ -61,9 +80,32 @@
   loop_control:
     label: "{{ item.item }}"
 
+- name: Collect the inventory nodes' endpoint IDs
+  ansible.builtin.set_fact:
+    _iroh_relay_read_ids: >-
+      {{ _iroh_relay_whoami.results | default([])
+         | map(attribute='stdout_lines') | map('select', 'match', '^node id: ') | map('first')
+         | map('regex_replace', '^node id: ', '') | map('trim') | list }}
+
+# Two nodes with one key: a cloned image, or a node migrated with its key while its
+# old host is still in the inventory. One of them is not who the inventory says.
+- name: Refuse deCDN nodes that share an endpoint ID
+  ansible.builtin.assert:
+    that:
+      - _iroh_relay_read_ids | unique | length == _iroh_relay_read_ids | length
+    fail_msg: >-
+      These deCDN nodes report the same endpoint ID (the same node.secret):
+      {{ _dups }}. Each node needs its own key; remove the stale host from
+      decdn_nodes (or iroh_relay_allowlist_node_hosts), or re-key the clone.
+  vars:
+    # "<id>: <host>, <host>" for every ID more than one host reported.
+    _dups: >-
+      {% set by_id = {} %}{% for pair in _iroh_relay_node_hosts | zip(_iroh_relay_read_ids) %}{%
+      set _ = by_id.update({pair[1]: by_id.get(pair[1], []) + [pair[0]]}) %}{% endfor %}{%
+      for id, hosts in by_id.items() if hosts | length > 1 %}{{
+      id }}: {{ hosts | join(', ') }}{{ '; ' if not loop.last else '' }}{% endfor %}
+
 - name: Record the inventory nodes' endpoint IDs
   ansible.builtin.set_fact:
-    _iroh_relay_inventory_node_ids: >-
-      {{ _iroh_relay_whoami.results | default([]) | map(attribute='stdout_lines')
-         | map('select', 'match', '^node id: ') | map('first')
-         | map('regex_replace', '^node id: ', '') | map('trim') | list }}
+    _iroh_relay_inventory_node_ids: "{{ _iroh_relay_read_ids }}"
+    _iroh_relay_inventory_node_ids_read: true
