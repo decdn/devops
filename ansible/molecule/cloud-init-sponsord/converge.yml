@@ -48,15 +48,8 @@
       ansible.builtin.include_tasks: ../cloud-init/includes/boot.yml
 
     # --- Stopped at the secret gate -------------------------------------------------
-    - name: Read the bootstrap state
-      ansible.builtin.slurp:
-        src: /var/lib/decdn-bootstrap/state
-      register: bootstrap_state
-
-    - name: Read the list of missing secrets
-      ansible.builtin.slurp:
-        src: /var/lib/decdn-bootstrap/awaiting
-      register: awaiting
+    - name: Read the bootstrap state and the list of missing secrets
+      ansible.builtin.include_tasks: ../cloud-init/includes/read-state.yml
 
     - name: Stat what must NOT exist before the secrets
       ansible.builtin.stat:

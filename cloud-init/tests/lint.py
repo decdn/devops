@@ -7,7 +7,8 @@ user-data.yaml, the node, and user-data-sponsord.yaml, the sponsor host)
 `cloud-init schema` checks the file's shape, including the `#cloud-config` header. This
 script checks what the schema cannot:
   * no secret anywhere:
-    - write_files writes only the bootstrap's own four files, as plain text;
+    - write_files writes only the bootstrap's own four files, once each, as plain
+      `content` (no encoding, append, source or defer);
     - no key whose name looks secret-bearing (RPC URL, password, token, keystore
       contents, private key, decdn_extra_env), except the onramp's public RPC URL;
     - no `NAME=value` assignment of a secret-looking variable in any string (file
@@ -20,8 +21,9 @@ script checks what the schema cannot:
     group's vars would override them. Nor may a user-data move the signing keys or the
     secret files bootstrap.sh's gate looks for;
   * the inventory holds only localhost, in decdn_nodes and/or sponsord_hosts (and
-    sponsord_onramp_hosts only beside sponsord_hosts), with a local connection, and
-    names a keyed admin account (baseline's lockout guard);
+    sponsord_onramp_hosts only beside sponsord_hosts), with a local connection in every
+    group that sets one, and names a keyed admin account (baseline's lockout guard). A
+    malformed shape is a violation, not a traceback;
   * stage 1 and the login hint pass shellcheck, and runcmd runs exactly stage 1;
   * cloud-init/collections.lock.yml pins every collection in ansible/requirements.yml,
     at a version inside its range.
@@ -46,8 +48,12 @@ HINT_PATH = "/etc/profile.d/decdn-bootstrap.sh"
 # The only files a user-data may write. Anything else (/etc/decdn/decdn.env,
 # /etc/grafana-alloy.env, …) is where a secret would go, and belongs on the host.
 FILE_PATHS = {ENV_PATH, INVENTORY_PATH, STAGE1_PATH, HINT_PATH}
+# The only keys a write_files entry may carry. The rest change what lands on the host
+# without changing the `content` this checks: encoding (b64, gzip), append (onto an
+# earlier entry or a file already there), source (fetched from a URL) and defer.
+FILE_KEYS = {"path", "owner", "permissions", "content"}
 ENV_KEYS = {"DEVOPS_REPO", "DEVOPS_REF"}
-# The molecule scenario's switch for skipping baseline in a container (bootstrap.sh).
+# The molecule scenarios' switch for skipping baseline in a container (bootstrap.sh).
 # A user-data that creates it, by write_files or a command, ships an unhardened host.
 TEST_ONLY_MARKER = "TEST-ONLY-skip-baseline"
 
@@ -88,7 +94,8 @@ FORBIDDEN_VARS = {
 # (baseline_sudo_users[].keys), so match specific fragments, not "key" alone. extra_env
 # is decdn_extra_env, the role's home for AWS credentials and similar.
 SECRET_KEY = re.compile(r"passw|secret|token|rpc_url|private|api_?key|keystore|chpasswd|extra_env", re.I)
-# Role knobs that match SECRET_KEY but carry no secret: booleans and file paths.
+# Role knobs that match SECRET_KEY but carry no secret: booleans, file paths and one
+# public URL.
 SECRET_KEY_ALLOW = {
     "decdn_node_generate_keystore",
     "baseline_sudo_passwordless",
@@ -229,71 +236,14 @@ def check_lock():
             violation(f"collections.lock.yml pins {name} {pinned[name]}, outside ansible/requirements.yml's {spec}")
 
 
-def main():
-    if len(sys.argv) != 2:
-        print(__doc__, file=sys.stderr)
-        sys.exit(2)
-    path = Path(sys.argv[1])
-    try:
-        raw = path.read_text()
-        doc = load_yaml(raw)
-    except (OSError, ParseError) as e:
-        print(f"lint.py: cannot parse {path}: {e}", file=sys.stderr)
-        sys.exit(2)
-    if not isinstance(doc, dict):
-        print(f"lint.py: {path} is not a YAML mapping", file=sys.stderr)
-        sys.exit(2)
+def check_inventory(inventory):
+    """The inventory's shape, groups and pinned knobs.
 
-    entries = [f for f in doc.get("write_files") or [] if isinstance(f, dict)]
-    files = {f.get("path"): f for f in entries}
-    for p in sorted(FILE_PATHS - files.keys()):
-        violation(f"write_files has no {p}")
-    for p in sorted(files.keys() - FILE_PATHS, key=str):
-        violation(f"write_files writes {p}; only the bootstrap's own files belong in user-data "
-                  "(secrets such as decdn.env are written on the host)")
-    for f in entries:
-        if f.get("encoding", "text/plain") not in ("text/plain", "text"):
-            violation(f"write_files {f.get('path')}: encoding {f.get('encoding')} hides its content from this check")
-    for p in (ENV_PATH, INVENTORY_PATH):
-        if p in files and str(files[p].get("permissions")) != "0600":
-            violation(f"{p} must be written 0600")
-    if TEST_ONLY_MARKER in raw:
-        violation(f"the user-data mentions {TEST_ONLY_MARKER}, the test-only switch that skips host hardening")
-
-    # --- No secrets ---------------------------------------------------------------
-    try:
-        inventory = load_yaml(files.get(INVENTORY_PATH, {}).get("content", "")) or {}
-    except ParseError as e:
-        print(f"lint.py: the embedded {INVENTORY_PATH} does not parse: {e}", file=sys.stderr)
-        sys.exit(2)
-    for where, tree in (("user-data", doc), ("inventory", inventory)):
-        for p, k in walk_keys(tree):
-            if SECRET_KEY.search(k) and k not in SECRET_KEY_ALLOW:
-                violation(f"{where}: {p} looks secret-bearing; secrets never go in user-data")
-    for where, tree in (("user-data", doc), ("inventory", inventory)):
-        for p, v in walk_strings(tree):
-            if SECRET_ASSIGNMENT.search(v):
-                violation(f"{where}: {p} assigns a secret-looking variable; secrets never go in user-data")
-    for i, line in enumerate(raw.splitlines(), 1):
-        if URL_CREDENTIALS.search(line):
-            violation(f"line {i}: a URL with embedded credentials")
-        if not line.lstrip().startswith("#"):
-            for var, home in (("DECDN_RPC_URL", "/etc/decdn/decdn.env"),
-                              ("SPONSORD_RPC_URL", "/etc/sponsord/secret.env")):
-                if var in line:
-                    violation(f"line {i}: {var} belongs in {home} on the host, not in user-data")
-
-    env = {}
-    for line in files.get(ENV_PATH, {}).get("content", "").splitlines():
-        if line.strip() and not line.lstrip().startswith("#"):
-            k, _, v = line.partition("=")
-            env[k.strip()] = v.strip()
-    for k in env.keys() - ENV_KEYS:
-        violation(f"bootstrap.env: unexpected key {k} (allowed: {', '.join(sorted(ENV_KEYS))})")
-    if not env.get("DEVOPS_REPO", "").startswith("https://"):
-        violation("bootstrap.env: DEVOPS_REPO must be an https:// URL")
-
-    # --- The inventory ----------------------------------------------------------------
+    A shape this does not expect is reported, and the checks that read it are skipped,
+    so a malformed inventory is a violation and not a traceback."""
+    if not isinstance(inventory, dict):
+        violation(f"inventory: must be a mapping of groups, not a {type(inventory).__name__}")
+        return
     present = [g for g in GROUPS if g in inventory]
     if set(inventory) - set(GROUPS):
         violation(f"inventory: only the {', '.join(GROUPS)} groups belong here, "
@@ -311,19 +261,28 @@ def main():
         # Only what this lint inspects. A `children:` group would add hosts and drop
         # pinned knobs where nothing below looks.
         if set(group) - {"hosts", "vars"}:
-            violation(f"inventory: {g} may hold only hosts and vars, not {sorted(set(group) - {'hosts', 'vars'})}")
+            violation(f"inventory: {g} may hold only hosts and vars, not {sorted(set(group) - {'hosts', 'vars'}, key=str)}")
+        if group.get("vars") is not None and not isinstance(group["vars"], dict):
+            violation(f"inventory: {g}.vars must be a mapping")
         groups[g] = group
-    connection = None
+    # Ansible merges a host's variables across groups in an order this lint does not
+    # model, so every group that sets the connection must set it to local.
+    connections = []
     for g, group in groups.items():
         hosts = group.get("hosts") or {}
         if not isinstance(hosts, dict) or set(hosts) != {"localhost"}:
-            violation(f"inventory: {g} must hold exactly localhost, not {sorted(hosts) if isinstance(hosts, dict) else hosts}")
+            violation(f"inventory: {g} must hold exactly localhost, not {sorted(hosts, key=str) if isinstance(hosts, dict) else hosts}")
             continue
         host = hosts.get("localhost")
-        if isinstance(host, dict) and "ansible_connection" in host:
-            connection = host["ansible_connection"]
-    if connection != "local":
+        if host is not None and not isinstance(host, dict):
+            violation(f"inventory: {g}.hosts.localhost must be a mapping of host vars, or empty")
+        elif isinstance(host, dict) and "ansible_connection" in host:
+            connections.append((g, host["ansible_connection"]))
+    if not connections:
         violation("inventory: localhost needs ansible_connection: local")
+    for g, c in connections:
+        if c != "local":
+            violation(f"inventory: {g}.hosts.localhost.ansible_connection is {c!r}; every group must use local")
     for p, k in walk_keys(inventory):
         if k in PINNED_VARS and p != f"{PINNED_VARS[k]}.vars.{k}":
             violation(f"inventory: {p}: set {k} only in {PINNED_VARS[k]}.vars, where it is checked")
@@ -382,6 +341,91 @@ def main():
     if not isinstance(users, list) or not users \
             or not all(isinstance(u, dict) and u.get("name") and u.get("keys") for u in users):
         violation("inventory: baseline_sudo_users needs at least one named account, each with keys (lockout guard)")
+
+
+def main():
+    if len(sys.argv) != 2:
+        print(__doc__, file=sys.stderr)
+        sys.exit(2)
+    path = Path(sys.argv[1])
+    try:
+        raw = path.read_text()
+        doc = load_yaml(raw)
+    except (OSError, ParseError) as e:
+        print(f"lint.py: cannot parse {path}: {e}", file=sys.stderr)
+        sys.exit(2)
+    if not isinstance(doc, dict):
+        print(f"lint.py: {path} is not a YAML mapping", file=sys.stderr)
+        sys.exit(2)
+
+    entries = doc.get("write_files") or []
+    if not isinstance(entries, list):
+        violation("write_files must be a list of files")
+        entries = []
+    files = {}
+    for i, f in enumerate(entries):
+        if not isinstance(f, dict):
+            violation(f"write_files[{i}] must be a mapping with a path and its content")
+            continue
+        p = f.get("path")
+        if not isinstance(p, str):
+            violation(f"write_files[{i}]: path must be a string, not {p!r}")
+            continue
+        for k in sorted(set(f) - FILE_KEYS, key=str):
+            violation(f"write_files {p}: {k} is not allowed (only {', '.join(sorted(FILE_KEYS))}), so the "
+                      "content checked here is what lands on the host")
+        if not isinstance(f.get("content"), str) or not f["content"].strip():
+            violation(f"write_files {p}: content must be non-empty text")
+            f = {**f, "content": ""}
+        if p in files:
+            violation(f"write_files writes {p} twice; cloud-init would apply both, and only the first is checked")
+            continue
+        files[p] = f
+    for p in sorted(FILE_PATHS - files.keys()):
+        violation(f"write_files has no {p}")
+    for p in sorted(files.keys() - FILE_PATHS, key=str):
+        violation(f"write_files writes {p}; only the bootstrap's own files belong in user-data "
+                  "(secrets such as decdn.env are written on the host)")
+    for p in (ENV_PATH, INVENTORY_PATH):
+        if p in files and str(files[p].get("permissions")) != "0600":
+            violation(f"{p} must be written 0600")
+    if TEST_ONLY_MARKER in raw:
+        violation(f"the user-data mentions {TEST_ONLY_MARKER}, the test-only switch that skips host hardening")
+
+    # --- No secrets ---------------------------------------------------------------
+    try:
+        inventory = load_yaml(files.get(INVENTORY_PATH, {}).get("content", "")) or {}
+    except ParseError as e:
+        print(f"lint.py: the embedded {INVENTORY_PATH} does not parse: {e}", file=sys.stderr)
+        sys.exit(2)
+    for where, tree in (("user-data", doc), ("inventory", inventory)):
+        for p, k in walk_keys(tree):
+            if SECRET_KEY.search(k) and k not in SECRET_KEY_ALLOW:
+                violation(f"{where}: {p} looks secret-bearing; secrets never go in user-data")
+    for where, tree in (("user-data", doc), ("inventory", inventory)):
+        for p, v in walk_strings(tree):
+            if SECRET_ASSIGNMENT.search(v):
+                violation(f"{where}: {p} assigns a secret-looking variable; secrets never go in user-data")
+    for i, line in enumerate(raw.splitlines(), 1):
+        if URL_CREDENTIALS.search(line):
+            violation(f"line {i}: a URL with embedded credentials")
+        if not line.lstrip().startswith("#"):
+            for var, home in (("DECDN_RPC_URL", "/etc/decdn/decdn.env"),
+                              ("SPONSORD_RPC_URL", "/etc/sponsord/secret.env")):
+                if var in line:
+                    violation(f"line {i}: {var} belongs in {home} on the host, not in user-data")
+
+    env = {}
+    for line in files.get(ENV_PATH, {}).get("content", "").splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            k, _, v = line.partition("=")
+            env[k.strip()] = v.strip()
+    for k in env.keys() - ENV_KEYS:
+        violation(f"bootstrap.env: unexpected key {k} (allowed: {', '.join(sorted(ENV_KEYS))})")
+    if not env.get("DEVOPS_REPO", "").startswith("https://"):
+        violation("bootstrap.env: DEVOPS_REPO must be an https:// URL")
+
+    check_inventory(inventory)
 
     # --- Stage 1 --------------------------------------------------------------------
     # Exactly stage 1, so nothing masks its exit status (`|| true`) from cloud-init.

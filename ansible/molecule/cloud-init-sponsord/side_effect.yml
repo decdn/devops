@@ -1,17 +1,80 @@
 ---
-# The operator's part, as the "Sponsor host" walkthrough in cloud-init/README.md tells it:
+# First, the inventory mistakes stage 2 must refuse, each recording "failed" and saying
+# so at login (../cloud-init/includes/refuse.yml). Each case costs about a minute: pip
+# and Galaxy run before the check.
+# Then the operator's part, as the "Sponsor host" walkthrough in cloud-init/README.md
+# tells it:
 #   1. Write sponsord's three secrets only, and re-run. The onramp's Turnstile secret is
 #      still missing, so the run must stop at the gate again, listing just that file:
 #      the gate covers every group the host is in, not only the first.
 #   2. Write the Turnstile secret, move DEVOPS_REF to a tag on a newer commit (the
 #      upgrade path), and re-run for the whole playbook. The values are placeholders:
 #      the stubs never dial the RPC URL or Cloudflare.
-- name: Side effect — the secrets, in two steps
+- name: Side effect — inventory refusals, then the secrets in two steps
   hosts: all
   become: true
   vars:
     env_file: /etc/decdn-bootstrap/bootstrap.env
+    bootstrap_inventory: /etc/decdn-bootstrap/inventory.yml
+    # Evaluated after good_inventory is read below.
+    refusals:
+      - name: localhost in neither base group
+        dest: "{{ bootstrap_inventory }}"
+        content: >-
+          {{ good_inventory.content | b64decode
+             | regex_replace('(?m)^sponsord_hosts:$', 'molecule_hosts:') }}
+        mode: "0600"
+        expect: neither decdn_nodes nor sponsord_hosts
+      - name: the onramp outside sponsord_hosts
+        dest: "{{ bootstrap_inventory }}"
+        content: >-
+          {{ good_inventory.content | b64decode
+             | regex_replace('(?m)^sponsord_hosts:$', 'decdn_nodes:') }}
+        mode: "0600"
+        expect: in sponsord_onramp_hosts but not in sponsord_hosts
   tasks:
+    - name: Read the working inventory
+      ansible.builtin.slurp:
+        src: "{{ bootstrap_inventory }}"
+      register: good_inventory
+
+    - name: Read the SHA converge pinned (recorded by prepare.yml)
+      ansible.builtin.slurp:
+        src: /srv/devops-src.sha
+      register: pinned_sha_file
+
+    - name: Decode it
+      ansible.builtin.set_fact:
+        pinned_sha: "{{ pinned_sha_file.content | b64decode | trim }}"
+
+    - name: Refuse each broken inventory
+      ansible.builtin.include_tasks: ../cloud-init/includes/refuse.yml
+      loop: "{{ refusals }}"
+      loop_control:
+        loop_var: refusal
+        label: "{{ refusal.name }}"
+
+    # Stage 2 clears the list before it checks anything, so a failed run leaves no
+    # stale list for final_message to point at.
+    - name: Stat the list of missing secrets after the refusals
+      ansible.builtin.stat:
+        path: /var/lib/decdn-bootstrap/awaiting
+      register: refused_awaiting
+
+    - name: Assert the refusals left no list of missing secrets
+      ansible.builtin.assert:
+        that:
+          - not refused_awaiting.stat.exists
+        fail_msg: /var/lib/decdn-bootstrap/awaiting survived a failed run
+
+    - name: Restore the working inventory
+      ansible.builtin.copy:
+        dest: "{{ bootstrap_inventory }}"
+        content: "{{ good_inventory.content | b64decode }}"
+        owner: root
+        group: root
+        mode: "0600"
+
     - name: Create /etc/sponsord
       ansible.builtin.file:
         path: /etc/sponsord
@@ -41,15 +104,8 @@
       changed_when: true
       failed_when: false
 
-    - name: Read the state after the partial re-run
-      ansible.builtin.slurp:
-        src: /var/lib/decdn-bootstrap/state
-      register: partial_state
-
-    - name: Read the list of missing secrets after the partial re-run
-      ansible.builtin.slurp:
-        src: /var/lib/decdn-bootstrap/awaiting
-      register: partial_awaiting
+    - name: Read the state and the list of missing secrets after the partial re-run
+      ansible.builtin.include_tasks: ../cloud-init/includes/read-state.yml
 
     - name: Stat the daemon (not installed while any secret is missing)
       ansible.builtin.stat:
@@ -60,14 +116,14 @@
       ansible.builtin.assert:
         that:
           - partial.rc == 0
-          - partial_state.content | b64decode | trim == 'awaiting-secret'
-          - partial_awaiting.content | b64decode | split | list == ['/etc/sponsord/turnstile-secret']
+          - bootstrap_state.content | b64decode | trim == 'awaiting-secret'
+          - awaiting.content | b64decode | split | list == ['/etc/sponsord/turnstile-secret']
           - partial.stdout is search('Cloudflare Turnstile secret')
           - partial.stdout is not search('treasury wallet')
           - not partial_bin.stat.exists
         fail_msg: >-
-          rc={{ partial.rc }} state={{ partial_state.content | b64decode | trim }}
-          awaiting={{ partial_awaiting.content | b64decode | to_json }}
+          rc={{ partial.rc }} state={{ bootstrap_state.content | b64decode | trim }}
+          awaiting={{ awaiting.content | b64decode | to_json }}
           sponsord installed={{ partial_bin.stat.exists }}
           output={{ (partial.stdout_lines[-30:] + partial.stderr_lines) | to_json }}
 

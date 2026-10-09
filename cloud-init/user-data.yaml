@@ -85,7 +85,8 @@ write_files:
         complete) ;;
         awaiting-secret)
           echo "deCDN: hardened, waiting for these secrets on the host (root, 0600). Write them, then run: $rerun"
-          sed 's/^/  /' /var/lib/decdn-bootstrap/awaiting 2>/dev/null ;;
+          sed 's/^/  /' /var/lib/decdn-bootstrap/awaiting 2>/dev/null \
+            || echo "  (no list found; see $log)" ;;
         running)
           if pgrep -f 'sbin/decdn-bootstrap|cloud-init/bootstrap[.]sh' >/dev/null 2>&1; then
             echo "deCDN: the bootstrap is running (log: $log)"

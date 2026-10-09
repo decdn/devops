@@ -34,15 +34,8 @@
       ansible.builtin.include_tasks: includes/boot.yml
 
     # --- Stopped at the secret gate -------------------------------------------------
-    - name: Read the bootstrap state
-      ansible.builtin.slurp:
-        src: /var/lib/decdn-bootstrap/state
-      register: bootstrap_state
-
-    - name: Read the list of missing secrets
-      ansible.builtin.slurp:
-        src: /var/lib/decdn-bootstrap/awaiting
-      register: awaiting
+    - name: Read the bootstrap state and the list of missing secrets
+      ansible.builtin.include_tasks: includes/read-state.yml
 
     # Stage 1 leaves the checkout on a detached HEAD, so .git/HEAD holds the SHA itself.
     - name: Read the checkout's commit
