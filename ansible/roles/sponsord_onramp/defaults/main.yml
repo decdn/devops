@@ -139,7 +139,8 @@ sponsord_onramp_gate_template_src: ""
 # A tag and the SHA-256 of that release's SHA256SUMS file (`sha256sum SHA256SUMS`
 # after verifying its .asc). decdn-sponsored ships in the decdn/sponsord workspace
 # release, whose notes print its pair under "Onramp pin" (upstream RELEASING.md).
-# Defaults: decdn/decdn v0.0.1 and decdn/sponsord v0.0.2.
+# Defaults: decdn/decdn v0.0.1 and decdn/sponsord v0.0.2. Override a tag together with
+# its digest: preflight refuses a pair where only one half moved.
 sponsord_onramp_decdn_release: v0.0.1     # decdn/decdn tag
 sponsord_onramp_decdn_sums_sha256: cd3d63846b04775b55537bf3b865d7340b40c1eb8ec352ff2dca7111814ba350
 sponsord_onramp_cli_release: v0.0.2       # decdn/sponsord tag

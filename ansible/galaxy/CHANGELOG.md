@@ -135,7 +135,8 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
     `sponsord_onramp_release_target_dir` follows `sponsord_release_target_dir`).
   - The installers' release pins default to decdn/decdn `v0.0.1` and decdn/sponsord
     `v0.0.2`, each with its `SHA256SUMS` digest; `sponsord_onramp_cli_release` takes
-    the decdn/sponsord tag (`vX.Y.Z`), as the onramp's own pin parser does.
+    the decdn/sponsord tag (`vX.Y.Z`), as the onramp's own pin parser does. Preflight
+    refuses a pair where only the tag or only the digest moved off its default.
   - Unit: `DynamicUser`, the daemon token and the host-provisioned Turnstile secret
     (`0600 /etc/sponsord/turnstile-secret`, never handled by the role) as
     `LoadCredential=` credentials, `PartOf=sponsord.service` so it re-reads the

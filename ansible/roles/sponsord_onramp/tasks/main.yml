@@ -398,6 +398,32 @@
   vars:
     _semver: '(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?'
 
+# Each pin is a tag and its SHA256SUMS digest, and the defaults pin a real pair. An
+# inventory that moves one but not the other passes the format checks above and
+# serves installers that refuse the release on every user's machine, so a pair must
+# keep both defaults or change both. The defaults are read from this role's own
+# file, so they are not repeated here.
+- name: Require each release pin's tag and digest to move together
+  ansible.builtin.assert:
+    that:
+      - >-
+        (sponsord_onramp_decdn_release == _pin_defaults.sponsord_onramp_decdn_release)
+        == (sponsord_onramp_decdn_sums_sha256 == _pin_defaults.sponsord_onramp_decdn_sums_sha256)
+      - >-
+        (sponsord_onramp_cli_release == _pin_defaults.sponsord_onramp_cli_release)
+        == (sponsord_onramp_cli_sums_sha256 == _pin_defaults.sponsord_onramp_cli_sums_sha256)
+    fail_msg: >-
+      Set a release pin's tag and its SHA256SUMS digest together: either keep both
+      defaults ({{ _pin_defaults.sponsord_onramp_decdn_release }} /
+      {{ _pin_defaults.sponsord_onramp_cli_release }}) or set both. Got
+      sponsord_onramp_decdn_release={{ sponsord_onramp_decdn_release }} with
+      sponsord_onramp_decdn_sums_sha256={{ sponsord_onramp_decdn_sums_sha256 }}, and
+      sponsord_onramp_cli_release={{ sponsord_onramp_cli_release }} with
+      sponsord_onramp_cli_sums_sha256={{ sponsord_onramp_cli_sums_sha256 }}. A tag
+      served with another release's digest fails every installer.
+  vars:
+    _pin_defaults: "{{ lookup('ansible.builtin.file', role_path ~ '/defaults/main.yml') | from_yaml }}"
+
 - name: Validate the onramp's limits
   ansible.builtin.assert:
     that:

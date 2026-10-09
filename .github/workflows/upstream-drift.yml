@@ -108,6 +108,7 @@ jobs:
             echo "$repo: pinned $pin, newest vX.Y.Z tag $latest"
             return 1
           }
+          # shellcheck disable=SC2329  # invoked by sums_check and digest_check
           asset() { # <repo> <tag> <file>: a release asset on stdout
             curl -fsSL --retry 3 "https://github.com/$1/releases/download/$2/$3"
           }

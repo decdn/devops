@@ -957,6 +957,34 @@
             decdn_rejected: "{{ decdn_rejected + ['onramp-pin'] }}"
           when: ansible_failed_task.name == "Validate the release pins the installers use"
 
+    # The play pins a non-default pair; moving one half back to its default
+    # leaves a tag served with another release's digest.
+    - name: "Case onramp-pin-pair — the CLI tag moved without its digest"
+      block:
+        - name: Run sponsord_onramp with the default CLI tag and a non-default digest
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_cli_release: v0.0.2
+      rescue:
+        - name: Record onramp-pin-pair rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-pin-pair'] }}"
+          when: ansible_failed_task.name == "Require each release pin's tag and digest to move together"
+
+    - name: "Case onramp-pin-pair — the decdn digest moved without its tag"
+      block:
+        - name: Run sponsord_onramp with a non-default decdn tag and the default digest
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_decdn_sums_sha256: cd3d63846b04775b55537bf3b865d7340b40c1eb8ec352ff2dca7111814ba350
+      rescue:
+        - name: Record onramp-pin-pair rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-pin-pair'] }}"
+          when: ansible_failed_task.name == "Require each release pin's tag and digest to move together"
+
     - name: "Case onramp-pin — an upper-case SHA256SUMS digest"
       block:
         - name: Run sponsord_onramp with an upper-case SHA256SUMS digest
@@ -1318,7 +1346,8 @@
            "onramp-zero-address", "onramp-bind", "onramp-bind", "onramp-proxy",
            "onramp-domain", "onramp-public-url", "onramp-public-url", "onramp-rpc",
            "onramp-rpc", "onramp-rpc", "onramp-rpc", "onramp-public-url", "onramp-sitekey", "onramp-pin",
-           "onramp-pin", "onramp-pin", "onramp-limit", "onramp-ip-header", "onramp-token",
+           "onramp-pin", "onramp-pin", "onramp-pin-pair",
+           "onramp-pin-pair", "onramp-limit", "onramp-ip-header", "onramp-token",
            "onramp-turnstile", "onramp-turnstile", "onramp-turnstile-empty",
            "onramp-turnstile-inventory",
            "onramp-network-chain", "onramp-proxy", "onramp-proxy", "onramp-domain",

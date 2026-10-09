@@ -101,8 +101,9 @@ is unreachable.
 5. **The releases the installers install** default to the ones this repo pins: for
    `decdn`, the decdn/decdn `v0.0.1` tag and the SHA-256 of that release's
    `SHA256SUMS`; for `decdn-sponsored`, the decdn/sponsord `v0.0.2` tag and its
-   digest (printed under "Onramp pin" in the release notes). Override all four to
-   serve others.
+   digest (printed under "Onramp pin" in the release notes). To serve others, set
+   each tag together with its digest: the role refuses a pair where one half keeps
+   its default.
 6. **Set inventory** (`group_vars/sponsord_onramp_hosts.yml`): the domain, the
    public RPC URL and the sitekey. The contracts come from `sponsord_network`.
 
