@@ -221,10 +221,25 @@ check of your own.
 - **Certificates.** iroh-relay renews its certificate itself; nothing on the
   Ansible side needs to run. `journalctl -u iroh-relay | grep -i acme` shows the
   ACME exchange.
-- **Upgrades.** Bump `iroh_relay_version` and every `iroh_relay_sha256` digest
-  together, to the iroh version decdn moved to. Then re-capture
-  `monitoring/iroh-relay/exported-metrics.txt` from the new binary (the command is
-  in its header).
+- **Upgrades.** Move `iroh_relay_version` to the iroh version decdn moved to
+  (`decdn/Cargo.lock`), then:
+  1. re-pin every `iroh_relay_sha256` digest against the release assets;
+  2. run the real binary with a rendered allowlist config: it starts, stays up with
+     ACME unreachable, and refuses an endpoint that is not listed;
+  3. deploy a relay with a real DNS name and no cached certificate (an empty
+     `/var/lib/iroh-relay/acme`), with `iroh_relay_certificate_check: fail`,
+     against a real node on another host (`make deploy-relay LIMIT=<relay>`): Let's
+     Encrypt issues the certificate, the check passes, and the relay's config lists
+     the ID the node's `decdn whoami` prints;
+  4. re-capture `monitoring/iroh-relay/exported-metrics.txt` from the new binary
+     (the command is in its header);
+  5. check that the tokio-rustls-acme version the new iroh-relay pins still names
+     its certificate cache as `vars/main.yml` says;
+  6. check that the molecule stub
+     (`molecule/iroh-relay/files/iroh-relay-stub`) accepts exactly the config keys
+     the new release's `main.rs` defines.
+
+  CI covers none of these (see [Testing](#testing)).
 - **Privacy.** A relay sees the source and destination IP addresses of what it
   relays, and the timing, but not the content ([ADR 017], P-17).
 - **Backup.** None. The relay holds no state worth one: Let's Encrypt re-issues
@@ -263,8 +278,23 @@ check of your own.
 - `molecule/iroh-relay-lifecycle` runs decommission: the refusals, then a real
   decommission, twice.
 - `molecule/validation-iroh-relay` is the bad-input matrix.
-- Not covered by CI: a real Let's Encrypt issuance, and the real binary. The
-  v1.3.0 digests were checked against the release assets, and the binary was run
-  once on Debian 12 with this config (it stayed up with ACME unreachable) when the
-  role was written; repeat that by hand when you bump `iroh_relay_version`.
+- Not covered by CI, so checked by hand on every `iroh_relay_version` bump (the
+  checklist is under [Day 2](#day-2), **Upgrades**):
+  - **A real Let's Encrypt issuance.** The molecule CA stands in for it.
+  - **The real binary with an allowlist.** The stub checks the
+    `access = { allowlist = [...] }` shape, not that iroh-relay parses it or
+    refuses an unlisted endpoint. The v1.3.0 digests were checked against the
+    release assets, and the binary was run once on Debian 12 (it stayed up with
+    ACME unreachable), but that run predates the allowlist and used
+    `access = "everyone"`.
+  - **The real `decdn whoami` on a separate node host.** The stand-in `decdn` is a
+    shell script on the relay host itself. Three things are untested: the real
+    CLI's output and exit codes (with a `keystore.json` present, too);
+    `systemd-run -p User=decdn` against the decdn_node role's real layout
+    (`/var/lib/decdn` 0700, `/etc/decdn/node.toml` 0640); and delegation to a
+    distinct node host under `LIMIT=<relay>`.
+  - **The ACME certificate-cache name.** `warn` mode's escalation looks for
+    tokio-rustls-acme 0.9's file name,
+    `cached_cert_<base64url(sha256(domain NUL directory))>` (`vars/main.yml`). If an
+    iroh bump changes it, the escalation stops with no error.
 - `tests/firewall-holes` pins the firewall holes per host shape.
