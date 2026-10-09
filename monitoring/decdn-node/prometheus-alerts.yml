@@ -281,17 +281,20 @@ groups:
       # is gone, so `up == 0` alone stays silent when the whole host is. A central
       # Prometheus (the chart's ServiceMonitor) writes up=0 itself; there the arm fires
       # once the target leaves service discovery, so a pod replacement slower than the
-      # for: pages. The arm keeps the instance label (absent() would not) and matches on
-      # job, instance and namespace only: a changed region or other label on a live
-      # target does not fire, and two chart releases (both pods named decdn-node-0) do
-      # not hide each other. It remembers a series for 1d, so it resolves a day after the
-      # last sample even if the host is still dead, and a decommissioned host or a
-      # renamed job or instance fires until then: silence it.
+      # for: pages. The arm keeps the instance label (absent() would not). Both arms
+      # reduce to job, instance and namespace, the labels the alert carries: a changed
+      # region or other label on a live target does not fire, one target fires once
+      # even with two label sets in the window, the for: carries over between the
+      # arms, and two chart releases (both pods named decdn-node-0) do not hide each
+      # other. It remembers a series for 1d, so it resolves a day after the last sample
+      # even if the host is still dead, and a decommissioned host or a renamed job or
+      # instance fires until then: silence it.
       - alert: DecdnNodeDown
         expr: |
-          up{job=~".*decdn.*"} == 0
-          or (max_over_time(up{job=~".*decdn.*"}[1d])
-                unless on(job, instance, namespace) up{job=~".*decdn.*"})
+          max by (job, instance, namespace) (up{job=~".*decdn.*"} == 0)
+          or max by (job, instance, namespace) (
+               max_over_time(up{job=~".*decdn.*"}[1d])
+                 unless on(job, instance, namespace) up{job=~".*decdn.*"})
         for: 1m
         labels:
           component: node

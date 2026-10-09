@@ -12,19 +12,22 @@ rule_files:
 evaluation_interval: 30s
 
 tests:
-  # Down. a fails its scrape (up=0) and fires at exactly the for; its samples end
-  # at 5m too, and the absence arm carries the alert on without resetting the for
-  # (at 10m30s a for restarted at the handoff would not have run out yet). b is
+  # Down. a fails its scrape (up=0) and fires at exactly the for, under job and
+  # instance alone (its region label is dropped). Its samples end at 5m too, and
+  # the absence arm carries the alert on without resetting the for (at 10m30s a
+  # for restarted at the handoff would not have run out yet). b is
   # healthy throughout. c stops at 5m with no staleness marker (the host died with
   # its agent): up goes absent once the 5m lookback passes, the absence arm fires
   # after the for, is still firing at 23h and resolves once the 1d window holds no
   # sample (25h). d gets a staleness marker and is back 1m later, inside the for,
   # so it never fires (checked at 6m, inside the gap). d2's marker is followed by
   # a gap longer than the for: it fires at 7m30s and resolves when it is back
-  # (10m30s). e changes its region label on a live target and never fires.
+  # (10m30s). e changes its region label on a live target and does not fire;
+  # when it stops later (15m30s) it fires once, under job and instance alone,
+  # although both of its label sets are still in the 1d window.
   - interval: 30s
     input_series:
-      - series: 'up{job="sponsord", instance="a"}'
+      - series: 'up{job="sponsord", instance="a", region="eu"}'
         values: '0x10'
       - series: 'up{job="sponsord", instance="b"}'
         values: '1x3000'
@@ -37,7 +40,7 @@ tests:
       - series: 'up{job="sponsord", instance="e", region="eu"}'
         values: '1x10'
       - series: 'up{job="sponsord", instance="e", region="us"}'
-        values: '_x11 1x2989'
+        values: '_x11 1x20'
     alert_rule_test:
       - eval_time: 1m30s
         alertname: SponsordDown
@@ -69,6 +72,7 @@ tests:
         exp_alerts:
           - exp_labels: {job: sponsord, instance: a, component: sponsor, severity: critical}
           - exp_labels: {job: sponsord, instance: c, component: sponsor, severity: critical}
+          - exp_labels: {job: sponsord, instance: e, component: sponsor, severity: critical}
       - eval_time: 25h
         alertname: SponsordDown
         exp_alerts: []

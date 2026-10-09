@@ -44,8 +44,10 @@ both (see [RELEASING.md](../../RELEASING.md)).
 - `DecdnNodeDown` (and the repo's `SponsordDown` and `IrohRelayDown`) also fires on
   an instance whose `up` stopped arriving after it reported in the last day. An
   agent scraping on the host, such as Alloy, writes no `up == 0` when the host dies,
-  so the alert never fired for that outage. It matches on `job`, `instance` and
-  `namespace`, so a changed `region` on a live node does not fire. On Kubernetes it
+  so the alert never fired for that outage. It is reduced to `job`, `instance` and
+  `namespace` (its only labels besides `component` and `severity`; it no longer
+  carries `region`, `pod` or the other target labels), so a changed `region` on a
+  live node does not fire and a node fires once. On Kubernetes it
   now also fires when the pod is gone for longer than the `for:` (1m), which
   includes a slow pod replacement, and for up to a day after the release scales to
   zero or `metrics.serviceMonitor.jobLabel` changes: silence it (#109).

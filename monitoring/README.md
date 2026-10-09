@@ -46,9 +46,11 @@ instance whose `up` stopped arriving after it reported in the last day.
   service discovery), after the `for:`.
 - **How long.** It resolves a day after the last sample, even if the target is
   still down.
-- **What it matches on.** `job` and `instance` (and `namespace` for the node). A
-  changed `region`, `deployment_environment` or other label on a live target does
-  not fire.
+- **What it carries.** Both arms reduce to `job` and `instance` (and `namespace` for
+  the node), so those, `component` and `severity` are the alert's only labels: route
+  on them, not on `region` or `deployment_environment`. A changed label on a live
+  target does not fire, and a target fires once even when an older label set is
+  still in the window.
 - **Silence it** before you decommission a host, move a service to a new inventory
   host, or rename its `job` (`grafana_alloy_*_job`, `metrics.serviceMonitor.jobLabel`)
   or `instance`: the old series fires for a day. On Kubernetes, the same goes for
