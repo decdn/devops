@@ -1,0 +1,41 @@
+---
+# Which deCDN nodes tasks/node-ids.yml reads: iroh_relay_allowlist_node_hosts when
+# set (an empty list only on purpose), else every host in decdn_nodes. Sets
+# _iroh_relay_node_hosts. Separate so tests/scripts-test.sh can run it without a node.
+
+- name: Name the deCDN nodes to read
+  ansible.builtin.set_fact:
+    _iroh_relay_node_hosts: >-
+      {{ iroh_relay_allowlist_node_hosts
+         if iroh_relay_allowlist_node_hosts is defined
+         else (groups['decdn_nodes'] | default([])) }}
+
+# The default must find nodes: a relay-only inventory, or a misspelled group, would
+# otherwise read nothing and deploy an allowlist without the fleet.
+- name: Require deCDN nodes to read
+  ansible.builtin.assert:
+    that:
+      - iroh_relay_allowlist_node_hosts is defined or _iroh_relay_node_hosts | length > 0
+    fail_msg: >-
+      The relay's allowlist reads every host in decdn_nodes, but this inventory has
+      none. Add the deCDN nodes to decdn_nodes, set iroh_relay_allowlist_node_hosts
+      to the hosts to read (an explicit [] reads none), or set
+      iroh_relay_allowlist_from_inventory: false and list the IDs in
+      iroh_relay_allowlist.
+
+# A name that is not an inventory host would be contacted by its DNS name, with
+# decdn_node's fallbacks standing in for its settings.
+- name: Validate iroh_relay_allowlist_node_hosts
+  ansible.builtin.assert:
+    that:
+      - _iroh_relay_node_hosts is sequence
+      - _iroh_relay_node_hosts is not string
+      - _iroh_relay_node_hosts is not mapping
+      - _iroh_relay_node_hosts | reject('in', groups['all']) | list | length == 0
+      - _iroh_relay_node_hosts | unique | length == _iroh_relay_node_hosts | length
+    fail_msg: >-
+      iroh_relay_allowlist_node_hosts must be a list of distinct inventory hosts
+      (got {{ _iroh_relay_node_hosts | to_json }}; not in the inventory:
+      {{ (_iroh_relay_node_hosts | reject('in', groups['all']) | list | to_json)
+         if _iroh_relay_node_hosts is sequence and _iroh_relay_node_hosts is not string
+         else 'n/a' }}).

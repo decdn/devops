@@ -18,6 +18,11 @@ certificate in-process, so there is no proxy in front of it. It binds tcp/80,
 tcp/443 and udp/7842 on every address; its metrics stay on loopback. This is the
 relay exception to AGENTS.md hard rule 2.
 
+By default only **listed endpoint IDs may relay through it**: the deCDN nodes in the
+inventory and any you add. decdn clients cannot be listed, so they reach a node
+homed here only if the node is directly reachable; see
+[Who may use it](#who-may-use-it).
+
 [decdn/adr/architecture.md]: https://github.com/decdn/decdn/blob/main/adr/architecture.md
 [ADR 019]: https://github.com/decdn/decdn/blob/main/adr/019-node-onboarding.md
 
@@ -113,7 +118,55 @@ decdn_relay_urls:
 Setting `decdn_relay_urls` **replaces** n0's relays; it does not add to them. A node
 whose only relay is down has no fallback for peers it cannot hole-punch. Deploy
 **at least two** relays, preferably in different regions, before switching a fleet
-over. Clients (`decdn fetch`, `decdn probe --relay-url …`) take relays the same way.
+over. Clients (`decdn fetch`, `decdn probe --relay-url …`) take relays the same way,
+but a relay in the default `allowlist` mode refuses them (see below): point clients
+only at relays in `everyone` or `denylist` mode.
+
+## Who may use it
+
+`iroh_relay_access` picks the mode. It gates who may **relay through** the relay;
+QUIC address discovery (udp/7842) and the captive-portal probe (tcp/80) answer
+anyone in every mode.
+
+- **`allowlist` (the default):** only the listed endpoint IDs may relay.
+  - `playbooks/iroh_relay.yml` reads the ID of every host in `decdn_nodes` (`decdn
+    whoami` on the node, as its decdn user; `tasks_from: node-ids`). `--limit`
+    narrows a play's hosts, not `groups[]` or `delegate_to` targets, so it reads
+    every node under `LIMIT=<relay>` too. A relay deploy therefore needs SSH to
+    every node.
+  - `iroh_relay_allowlist` adds more stable-key peers: nodes outside this
+    inventory, another operator's nodes. The IDs are 64 lowercase hex, as `decdn
+    whoami` prints them (`node id: <hex>`).
+  - **The deploy fails** when the list cannot be built: a node's ID cannot be read
+    (not deployed yet, `whoami` fails, or the host is unreachable), two nodes report
+    the same ID, `decdn_nodes` is missing or empty, or the list ends up empty. To
+    deploy while a node is down, set `iroh_relay_allowlist_node_hosts` to the nodes
+    that are up and add the missing one's ID to `iroh_relay_allowlist`.
+  - **Re-deploy every relay after adding a node or rotating its key** (`decdn node
+    rotate-key --key iroh`): `make deploy-relay`, or `make deploy` without a
+    `LIMIT` that leaves the relays out. Until then the relays refuse the node, and
+    if they are its only relays, peers behind NAT cannot reach it. The re-deploy
+    restarts the relays one at a time (`serial: 1`), which drops the connections
+    relayed through each in turn.
+- **`denylist`:** everyone except `iroh_relay_denylist`.
+- **`everyone`:** no restriction.
+
+**What allowlist mode costs.** decdn clients (`decdn fetch`, `decdn probe`, onramp
+users) use a fresh iroh key for every fetch, so they **can never be listed**. iroh
+hole-punches over a connection it already has, and a node behind NAT has no path
+but its relay, so a client reaches a node homed on an allowlisted relay **only if
+the node is directly reachable** (a public address with udp/4433 open). A node
+behind NAT that serves clients needs its relays in `everyone` mode. Allowlist mode
+fits relays for node-to-node traffic, and nodes that are reachable directly anyway.
+
+`iroh_relay_allowlist_from_inventory: false` stops the inventory read; then only
+`iroh_relay_allowlist` counts. A list set for a mode that does not use it is refused
+rather than ignored. With the inventory read on, the role refuses to run unless
+`tasks_from: node-ids` ran first, so a playbook that forgets it cannot deploy a
+list without the nodes. Collection users without this repo's playbook include
+`tasks_from: node-ids` themselves (it reads `iroh_relay_allowlist_node_hosts`, default
+`groups['decdn_nodes']`), or set `iroh_relay_allowlist_from_inventory: false` and
+list the IDs.
 
 ## Variables
 
@@ -129,7 +182,11 @@ over. Clients (`decdn fetch`, `decdn probe --relay-url …`) take relays the sam
 | `iroh_relay_bind_address` | `::` | The public address for 80, 443 and 7842: `::` (every address, IPv4 included on a dual-stack host with `net.ipv6.bindv6only=0`), `0.0.0.0` (an IPv4-only host or kernel), or one of the host's own unicast addresses. |
 | `iroh_relay_enable_quic_addr_discovery` | `true` | QUIC address discovery on udp/7842 (iroh-relay leaves it off by default). Set it in inventory: the firewall hole follows it. |
 | `iroh_relay_metrics_bind` / `_port` | `127.0.0.1` / `9092` | Prometheus `/metrics`. Must be loopback, and the port must clear this repo's other listeners. |
-| `iroh_relay_denylist` | `[]` | Endpoint IDs refused service, as 64 lowercase hex characters (iroh's hex form of the public key, not the z-base32 form decdn's CLI takes in `decdn probe --node-id`; convert those first). Empty means open to everyone. |
+| `iroh_relay_access` | `allowlist` | `allowlist`, `denylist` or `everyone`. See [Who may use it](#who-may-use-it). |
+| `iroh_relay_allowlist` | `[]` | `allowlist`: endpoint IDs beyond the inventory's nodes, as 64 lowercase hex (what `decdn whoami` prints). Stable-key peers only: decdn clients cannot be listed. |
+| `iroh_relay_allowlist_from_inventory` | `true` | `allowlist`: add every `decdn_nodes` host's ID (read by `playbooks/iroh_relay.yml`). |
+| `iroh_relay_allowlist_node_hosts` | `groups['decdn_nodes']` | The hosts whose IDs are read (not defined by the role; override in inventory). |
+| `iroh_relay_denylist` | `[]` | `denylist`: endpoint IDs refused service, same form. |
 | `iroh_relay_accept_conn_limit` / `_accept_conn_burst` | `""` | New connections per second server-wide, and the burst above that. `""` means unlimited. |
 | `iroh_relay_client_rx_bytes_per_second` / `_client_rx_max_burst_bytes` | `""` | Per-client receive rate and burst (at most 4294967295; a burst needs a rate). |
 | `iroh_relay_limit_nofile` | `65536` | The unit's `LimitNOFILE`. |
@@ -196,7 +253,10 @@ check of your own.
     - a missing config fails the start;
     - an untrusted certificate fails in `fail` mode, warns in `warn` mode, and fails
       in `warn` mode once a certificate was issued;
-    - `0.0.0.0` and a specific IPv4 address are rendered, bound and probed.
+    - `0.0.0.0` and a specific IPv4 address are rendered, bound and probed;
+    - the allowlist: the ID read from a stand-in node (a fake `decdn` on the relay
+      host) is merged with the listed one; a node without an identity fails the
+      read; the `everyone` and `denylist` modes render as such.
 - `molecule/iroh-relay-install` runs the `release` method against a local mirror
   serving the stub as a release tarball: a wrong pin, the stamp, a re-run with the
   mirror down, a binary replaced in place, and a version the binary does not report.

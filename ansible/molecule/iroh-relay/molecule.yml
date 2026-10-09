@@ -71,8 +71,12 @@ provisioner:
         iroh_relay_hostname: relay.molecule.test
         iroh_relay_acme_contact: ops@molecule.test
         # A real ed25519 public key in iroh's hex form.
-        iroh_relay_denylist:
+        # The default allowlist mode: one ID listed here, plus the ID the stand-in
+        # `decdn` (prepare.yml) prints on each platform, every platform read as if
+        # it were one of the inventory's deCDN nodes (by every relay, across hosts).
+        iroh_relay_allowlist:
           - 81d82536cb4c96ddbeab1f6bf4495d126c1942fb90b9ffb433d91d23314801e7
+        iroh_relay_allowlist_node_hosts: "{{ groups['iroh_relay_hosts'] }}"
         # Every optional key rendered, so the stub checks each one's shape.
         iroh_relay_accept_conn_limit: 50
         iroh_relay_accept_conn_burst: 100

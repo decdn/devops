@@ -262,6 +262,18 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   `playbooks/iroh_relay.yml` (`make deploy-relay`, also imported by `site.yml`) runs
   baseline → grafana_alloy → iroh_relay on `iroh_relay_hosts`, after a play refusing a
   host also in `sponsord_onramp_hosts` (both want 80/443; `make test-scripts` runs it).
+  - **Access:** `iroh_relay_access` defaults to `allowlist`. A play before the
+    relay's runs `tasks_from: node-ids`: `decdn whoami` on every `decdn_nodes` host
+    (delegate_to, so `LIMIT=<relay>` still reads them all; as the node's
+    `decdn_user` via systemd-run; fallbacks = decdn_node defaults, `make
+    test-scripts` checks), merged with `iroh_relay_allowlist`, sorted. An unreadable
+    node or an empty list fails the deploy, and a list set for another mode is
+    refused; the role refuses to run when the inventory read is on but did not run.
+    Relays deploy `serial: 1`. The cost, documented in the role README: decdn
+    clients use a fresh iroh key per fetch (`decdn/crates/client/src/endpoint.rs`),
+    so they can never be listed, and iroh hole-punches over an existing connection,
+    so a client reaches a node homed on an allowlisted relay only if the node is
+    directly reachable. NATed nodes that serve clients need `everyone`.
   - **Install:** the release tarball pinned to the iroh version decdn builds against
     (`iroh_relay_version`, now 1.3.0), verified against a per-target sha256 in defaults
     (upstream signs nothing; the gnu triples, glibc 2.34+), or `manual`. Bump the

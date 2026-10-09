@@ -430,6 +430,33 @@ for r in decdn_node sponsord sponsord_onramp iroh_relay; do
   done
 done
 pass "the decommission defaults and the confirmation's service list agree across all four roles"
+# iroh_relay's tasks_from node-ids runs `decdn whoami` on the inventory's nodes, where
+# decdn_node's defaults are not loaded: its fallbacks must be those defaults.
+ids="$repo/ansible/roles/iroh_relay/tasks/node-ids.yml"
+node_defaults="$repo/ansible/roles/decdn_node/defaults/main.yml"
+for key in decdn_user decdn_cli_bin decdn_config_file; do
+  want="$(sed -nE "s/^$key: ([^[:space:]#]+).*/\1/p" "$node_defaults")"
+  [ -n "$want" ] || fail "decdn_node/defaults/main.yml: no $key"
+  grep -qF "hostvars[item].$key | default('$want')" "$ids" \
+    || fail "iroh_relay/tasks/node-ids.yml: the $key fallback is not decdn_node's default ($want)"
+done
+pass "iroh_relay's node-ID fallbacks match decdn_node's defaults"
+# A tag-scoped relay run (--tags iroh_relay / relay) must still read the inventory's
+# node IDs: the include and its tasks (apply) carry every tag the role has.
+if command -v yq >/dev/null; then
+  pb="$repo/ansible/playbooks/iroh_relay.yml"
+  role_tags="$(yq -o=json '[.[] | .roles[]? | select(.role == "iroh_relay") | .tags] | .[0] | sort' "$pb")"
+  inc='.[] | select(.name == "Read the deCDN nodes'"'"' endpoint IDs for the relay allowlist") | .tasks[0]'
+  [[ "$role_tags" != null && "$role_tags" != "[]" \
+     && "$(yq -o=json "[$inc | .tags] | .[0] | sort" "$pb")" == "$role_tags" \
+     && "$(yq -o=json "[$inc | .[\"ansible.builtin.include_role\"].apply.tags] | .[0] | sort" "$pb")" == "$role_tags" ]] \
+    || fail "playbooks/iroh_relay.yml: the node-ID read must carry the iroh_relay role's tags ($role_tags), on the include and in apply"
+  pass "iroh_relay.yml reads the node IDs under the relay role's tags"
+elif [[ -n ${CI:-} ]]; then
+  fail "yq is not on PATH in CI; the node-ID tag check would be skipped"
+else
+  skipped+=("node-ID tag check (needs yq)")
+fi
 
 # decommission.yml must check every sponsord host for a held top-up before any play
 # stops a service: a refusal after the node and onramp plays would leave the host
@@ -502,6 +529,66 @@ if command -v ansible >/dev/null; then
     expect 2 "iroh_relay.yml refuses a relay on a sponsord-onramp host" guard relay-onramp
     grep -q "is in both iroh_relay_hosts and sponsord_onramp_hosts" "$work/out" \
       || { cat "$work/out" >&2; fail "the relay-onramp refusal did not come from the placement check"; }
+    # The relay's allowlist reads the inventory's deCDN nodes (tasks_from node-ids).
+    # Which nodes (tasks_from node-hosts) is resolved without contacting any: the
+    # default group, an explicit list, a missing group, a host outside the inventory.
+    mkdir -p "$work/relay-ids"
+    cat > "$work/relay-ids/with-nodes.yml" <<'YML'
+all:
+  vars: {ansible_connection: local}
+  children:
+    iroh_relay_hosts: {hosts: {relay: {}}}
+    decdn_nodes: {hosts: {node-a: {}, node-b: {}}}
+YML
+    cat > "$work/relay-ids/no-nodes.yml" <<'YML'
+all:
+  vars: {ansible_connection: local}
+  children:
+    iroh_relay_hosts: {hosts: {relay: {}}}
+YML
+    cat > "$work/relay-ids/hosts.yml" <<'YML'
+- name: Resolve the relay's node hosts
+  hosts: iroh_relay_hosts
+  gather_facts: false
+  tasks:
+    - name: Resolve them
+      ansible.builtin.include_role:
+        name: iroh_relay
+        tasks_from: node-hosts
+    - name: Print them
+      ansible.builtin.debug:
+        msg: "node hosts: {{ _iroh_relay_node_hosts | to_json }}"
+YML
+    relay_ids() { # <inventory> [ansible-playbook args...]
+      local inv="$1"; shift
+      (cd "$work/relay-ids" && ANSIBLE_DEPRECATION_WARNINGS=0 ANSIBLE_ROLES_PATH="$repo/ansible/roles" \
+        ansible-playbook -i "$inv" "$@" </dev/null)
+    }
+    expect 0 "the relay reads decdn_nodes by default" relay_ids with-nodes.yml hosts.yml
+    grep -qF 'node hosts: [\"node-a\", \"node-b\"]' "$work/out" \
+      || { cat "$work/out" >&2; fail "the relay's default node hosts are not groups['decdn_nodes']"; }
+    expect 2 "the relay refuses an inventory without deCDN nodes" relay_ids no-nodes.yml hosts.yml
+    grep -q "has none" "$work/out" || { cat "$work/out" >&2; fail "the empty-group refusal did not come from node-hosts"; }
+    expect 0 "the relay accepts an explicit empty node list" \
+      relay_ids no-nodes.yml hosts.yml -e '{"iroh_relay_allowlist_node_hosts": []}'
+    expect 2 "the relay refuses a node host outside the inventory" \
+      relay_ids with-nodes.yml hosts.yml -e '{"iroh_relay_allowlist_node_hosts": ["node-a", "ghost"]}'
+    grep -q 'not in the inventory: \[\\"ghost\\"\]' "$work/out" \
+      || { cat "$work/out" >&2; fail "the outside-host refusal did not name the host"; }
+    # The playbook skips the read for the other modes and with it turned off (the
+    # include would otherwise run whoami on the nodes).
+    yq '[.[] | select(.name == "Read the deCDN nodes'"'"' endpoint IDs for the relay allowlist")]
+        + [{"name": "Marker", "hosts": "iroh_relay_hosts", "gather_facts": false,
+            "tasks": [{"name": "Reached the relay play", "ansible.builtin.debug": {"msg": "relay-play-reached"}}]}]' \
+      "$repo/ansible/playbooks/iroh_relay.yml" > "$work/relay-ids/read.yml"
+    [[ "$(yq 'length' "$work/relay-ids/read.yml")" == 2 ]] \
+      || fail "playbooks/iroh_relay.yml has no single node-ID read play"
+    for skip in '{"iroh_relay_access": "everyone"}' '{"iroh_relay_allowlist_from_inventory": false}'; do
+      expect 0 "iroh_relay.yml skips the node-ID read with $skip" relay_ids with-nodes.yml read.yml -e "$skip"
+      if ! grep -q "relay-play-reached" "$work/out" || grep -q "Resolve the deCDN nodes to read" "$work/out"; then
+        cat "$work/out" >&2; fail "iroh_relay.yml did not skip the node-ID read with $skip"
+      fi
+    done
   elif [[ -n ${CI:-} ]]; then
     fail "yq is not on PATH in CI; the playbook-guard cases would be skipped"
   else

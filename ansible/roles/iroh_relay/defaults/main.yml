@@ -65,12 +65,28 @@ iroh_relay_metrics_bind: 127.0.0.1
 iroh_relay_metrics_port: 9092
 
 # --- Access + limits --------------------------------------------------------------
-# The relay serves everyone: its traffic is end-to-end encrypted between peers, and
-# clients (not only nodes) need it as their NAT fallback. Endpoint IDs to refuse,
-# as 64 lowercase hex characters: iroh's hex form of the public key, not the
-# z-base32 form decdn's CLI takes (`decdn probe --node-id`); convert those first.
-# [] = nobody refused.
-iroh_relay_denylist: []
+# Who may relay through it (QUIC address discovery and the tcp/80 probe answer
+# anyone in every mode):
+#   "allowlist" (default): only the endpoint IDs below. The IDs of the inventory's
+#     deCDN nodes are added by playbooks/iroh_relay.yml (iroh_relay_allowlist_from_inventory).
+#     decdn clients (decdn fetch, onramp users) use a fresh key per fetch and can
+#     NEVER be listed, and iroh hole-punches over a connection it already has, so a
+#     client reaches a node homed here only if the node is directly reachable. A
+#     node behind NAT that serves clients needs its relays in "everyone" mode.
+#   "denylist": everyone but iroh_relay_denylist.
+#   "everyone": no restriction.
+# An empty allowlist fails the deploy (a relay that admits nobody), and a list set
+# for a mode that does not use it is refused rather than silently ignored.
+iroh_relay_access: allowlist              # "allowlist" | "denylist" | "everyone"
+# Endpoint IDs as 64 lowercase hex characters, the form `decdn whoami` prints
+# ("node id: <hex>") and iroh-relay parses.
+iroh_relay_allowlist: []                  # allowlist: IDs beyond the inventory's nodes
+iroh_relay_denylist: []                   # denylist: IDs refused service
+# allowlist: read every inventory deCDN node's ID (`decdn whoami` on the node, as
+# its decdn user) and add it. Read by playbooks/iroh_relay.yml (tasks_from:
+# node-ids); a node whose ID cannot be read fails the deploy. Which hosts:
+# iroh_relay_allowlist_node_hosts, default groups['decdn_nodes'].
+iroh_relay_allowlist_from_inventory: true
 # Rate limits ("" = unlimited, iroh-relay's default):
 iroh_relay_accept_conn_limit: ""          # new connections per second, server-wide (a number)
 iroh_relay_accept_conn_burst: ""          # connections accepted above that rate in a burst

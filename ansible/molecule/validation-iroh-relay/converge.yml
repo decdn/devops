@@ -22,6 +22,10 @@
       {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/iroh-relay/files/iroh-relay-stub
     iroh_relay_hostname: relay.molecule.test
     iroh_relay_acme_contact: ops@molecule.test
+    # The default allowlist mode needs one ID. No inventory nodes are read here
+    # (role-only runs), so the inventory read is off; inventory-not-read turns it on.
+    iroh_relay_allowlist: ["{{ _ir_id }}"]
+    iroh_relay_allowlist_from_inventory: false
     # The target triple of the other supported architecture, for release-target.
     _ir_other_target: >-
       {{ (_ir_targets | dict2items | rejectattr('key', 'equalto', ansible_facts['architecture'])
@@ -325,12 +329,148 @@
             decdn_rejected: "{{ decdn_rejected + ['metrics-port-low'] }}"
           when: ansible_failed_task.name == "Require the metrics listener on loopback"
 
+    - name: "Case access-unknown — an unknown access mode"
+      block:
+        - name: Run iroh_relay with an unknown access mode
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_access: "open"
+      rescue:
+        - name: Record access-unknown rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['access-unknown'] }}"
+          when: ansible_failed_task.name == "Validate the access mode"
+
+    - name: "Case allowlist-in-everyone-mode — allowlist entries in everyone mode"
+      block:
+        - name: Run iroh_relay with allowlist entries in everyone mode
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_access: "everyone"
+      rescue:
+        - name: Record allowlist-in-everyone-mode rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['allowlist-in-everyone-mode'] }}"
+          when: ansible_failed_task.name == "Validate the access mode"
+
+    - name: "Case denylist-in-allowlist-mode — denylist entries in allowlist mode"
+      block:
+        - name: Run iroh_relay with denylist entries in allowlist mode
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_denylist: ["{{ _ir_id }}"]
+      rescue:
+        - name: Record denylist-in-allowlist-mode rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['denylist-in-allowlist-mode'] }}"
+          when: ansible_failed_task.name == "Validate the access mode"
+
+    - name: "Case inventory-bool — a string for allowlist_from_inventory"
+      block:
+        - name: Run iroh_relay with a string for allowlist_from_inventory
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_allowlist_from_inventory: "yes"
+      rescue:
+        - name: Record inventory-bool rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['inventory-bool'] }}"
+          when: ansible_failed_task.name == "Validate the access mode"
+
+    # The inventory read on, but tasks_from node-ids never ran: refused rather than
+    # deploying the manual list without the fleet.
+    - name: "Case inventory-not-read — the inventory read on, the node IDs never read"
+      block:
+        - name: Run iroh_relay with the inventory read on and no node IDs read
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_allowlist_from_inventory: true
+      rescue:
+        - name: Record inventory-not-read rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['inventory-not-read'] }}"
+          when: ansible_failed_task.name == "Require the inventory nodes' IDs to have been read"
+
+    - name: "Case allowlist-string — a string as the allowlist"
+      block:
+        - name: Run iroh_relay with a string as the allowlist
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_allowlist: "{{ _ir_id }}"
+      rescue:
+        - name: Record allowlist-string rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['allowlist-string'] }}"
+          when: ansible_failed_task.name == "Validate the allowlist"
+
+    - name: "Case allowlist-bad-hex — an uppercase hex endpoint id"
+      block:
+        - name: Run iroh_relay with an uppercase hex endpoint id
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_allowlist: ["{{ _ir_id | upper }}"]
+      rescue:
+        - name: Record allowlist-bad-hex rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['allowlist-bad-hex'] }}"
+          when: ansible_failed_task.name == "Validate the allowlist"
+
+    # Unquoted, an all-digit ID loads from YAML as an integer (and would render as
+    # a TOML number the relay cannot parse).
+    - name: "Case allowlist-int — an all-digit endpoint id that YAML loads as a number"
+      block:
+        - name: Run iroh_relay with an all-digit endpoint id that YAML loads as a number
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_allowlist: [1111111111111111111111111111111111111111111111111111111111111111]
+      rescue:
+        - name: Record allowlist-int rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['allowlist-int'] }}"
+          when: ansible_failed_task.name == "Validate the allowlist"
+
+    - name: "Case allowlist-dup — a repeated allowlist id"
+      block:
+        - name: Run iroh_relay with a repeated allowlist id
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_allowlist: ["{{ _ir_id }}", "{{ _ir_id }}"]
+      rescue:
+        - name: Record allowlist-dup rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['allowlist-dup'] }}"
+          when: ansible_failed_task.name == "Validate the allowlist"
+
+    - name: "Case allowlist-empty — an empty allowlist"
+      block:
+        - name: Run iroh_relay with an empty allowlist
+          ansible.builtin.include_role:
+            name: iroh_relay
+          vars:
+            iroh_relay_allowlist: []
+      rescue:
+        - name: Record allowlist-empty rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['allowlist-empty'] }}"
+          when: ansible_failed_task.name == "Require a non-empty allowlist"
+
     - name: "Case denylist-string — a string as the denylist"
       block:
         - name: Run iroh_relay with a string as the denylist
           ansible.builtin.include_role:
             name: iroh_relay
           vars:
+            iroh_relay_access: denylist
+            iroh_relay_allowlist: []
             iroh_relay_denylist: "81d82536cb4c96ddbeab1f6bf4495d126c1942fb90b9ffb433d91d23314801e7"
       rescue:
         - name: Record denylist-string rejection (only if its assert failed)
@@ -338,12 +478,14 @@
             decdn_rejected: "{{ decdn_rejected + ['denylist-string'] }}"
           when: ansible_failed_task.name == "Validate the denylist"
 
-    - name: "Case denylist-zbase32 — a z-base-32 endpoint id"
+    - name: "Case denylist-zbase32 — a z-base-32 endpoint id (not what iroh parses)"
       block:
         - name: Run iroh_relay with a z-base-32 endpoint id
           ansible.builtin.include_role:
             name: iroh_relay
           vars:
+            iroh_relay_access: denylist
+            iroh_relay_allowlist: []
             iroh_relay_denylist: ["qybgnirdnemrodzcgtrkzwmr5x3wnbxbzq7orcbjtd6zuvmj4n3o"]
       rescue:
         - name: Record denylist-zbase32 rejection (only if its assert failed)
@@ -357,6 +499,8 @@
           ansible.builtin.include_role:
             name: iroh_relay
           vars:
+            iroh_relay_access: denylist
+            iroh_relay_allowlist: []
             iroh_relay_denylist: ["{{ _ir_id }}", "{{ _ir_id }}"]
       rescue:
         - name: Record denylist-dup rejection (only if its assert failed)
@@ -530,6 +674,16 @@
           - metrics-public
           - metrics-port-node
           - metrics-port-low
+          - access-unknown
+          - allowlist-in-everyone-mode
+          - denylist-in-allowlist-mode
+          - inventory-bool
+          - inventory-not-read
+          - allowlist-string
+          - allowlist-bad-hex
+          - allowlist-int
+          - allowlist-dup
+          - allowlist-empty
           - denylist-string
           - denylist-zbase32
           - denylist-dup

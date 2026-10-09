@@ -1,0 +1,24 @@
+---
+# Converge with iroh_relay_access=_ir_mode.access (and its lists) and check what
+# the config renders.
+- name: Converge in the access mode {{ _ir_mode.access }}
+  ansible.builtin.include_role:
+    name: iroh_relay
+  vars:
+    iroh_relay_access: "{{ _ir_mode.access }}"
+    iroh_relay_allowlist: "{{ _ir_mode.allowlist }}"
+    iroh_relay_denylist: "{{ _ir_mode.denylist }}"
+    iroh_relay_allowlist_from_inventory: "{{ _ir_mode.from_inventory | default(true) }}"
+
+- name: Read the config rendered in the access mode {{ _ir_mode.access }}
+  ansible.builtin.slurp:
+    src: /etc/iroh-relay/iroh-relay.toml
+  register: _ir_mode_cfg
+
+- name: Require the access line of the mode {{ _ir_mode.access }}
+  ansible.builtin.assert:
+    that:
+      - ('access = ' ~ _ir_mode.want) in (_ir_mode_cfg.content | b64decode).splitlines()
+    fail_msg: >-
+      Expected "access = {{ _ir_mode.want }}" in the config; got
+      {{ (_ir_mode_cfg.content | b64decode).splitlines() | select('match', '^access') | list }}.
