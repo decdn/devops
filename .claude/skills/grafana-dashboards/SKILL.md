@@ -40,6 +40,8 @@ the iroh relay's in `monitoring/iroh-relay/`):
 - `prometheus-alerts.yml` — three groups: `decdn-slash-safety`, `decdn-liveness`,
   `decdn-delivery`. Every rule carries a `component` label. Only rules with a matching
   section in upstream's `docs/runbook.md` (20 of 51) also carry a `runbook_url`.
+  `DecdnNodeDown` has promtool unit tests in `prometheus-alerts_test.yml` (the
+  chart's `.helmignore` keeps that file out of the package): keep them in step.
 
 - `monitoring/sponsord/` — the onboarding sponsor's own pair: `dashboard-sponsord.json` (uid
   `decdn-sponsord`) and `prometheus-alerts.yml` (group `sponsord`, `job="sponsord"`).

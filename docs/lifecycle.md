@@ -92,7 +92,10 @@ identity on the network and on-chain. **Stop the old host first.**
    Alloy agent and keeps the data; ignore the on-chain exit steps it prints, since the
    identity is moving, not leaving) or run `sudo systemctl disable --now decdn-node`
    on it. On a host that also runs sponsord, `make decommission` takes sponsord and
-   its onramp down too: to move only the node, use the `systemctl` command.
+   its onramp down too: to move only the node, use the `systemctl` command. Silence
+   `DecdnNodeDown` for the old host first: the
+   [`*Down` alerts](../monitoring/README.md#the-down-alerts) fire on a
+   series that went silent, for up to a day.
 
 2. **Prepare the new host** with a normal deploy. Do *not* set
    `decdn_node_generate_keystore: true` for it. The deploy creates the `decdn` user
@@ -163,6 +166,10 @@ steps with the `decdn` CLI, both with `--dry-run` first (use `decdn_chain` from
 
 Delete the keystore only after the withdrawal has landed. The public `udp/4433`
 firewall rule stays until baseline is re-run without it.
+
+Silence `DecdnNodeDown` for the host before you run `make decommission`: the
+[`*Down` alerts](../monitoring/README.md#the-down-alerts) also fire on a series that
+went silent, so it fires for up to a day afterwards.
 
 Do not use `decdn node drain` to take a systemd-managed node down: the unit is
 `Restart=always`, so systemd starts the drained daemon again five seconds later.
@@ -257,7 +264,8 @@ pool.
    `make decommission LIMIT=old-host` (on a host that also runs a node, that takes the
    node down too). Take the old host out of `sponsord_hosts` and
    `sponsord_onramp_hosts`: decommission keeps `/etc/sponsord`, so a later deploy
-   would start a second daemon on the same treasury.
+   would start a second daemon on the same treasury. Silence `SponsordDown` for the
+   old host first ([`*Down` alerts](../monitoring/README.md#the-down-alerts)).
 2. Restore the fetched archive onto the new host. The files stay `root` `0600`:
 
    ```bash
@@ -276,7 +284,9 @@ service it covers there.
 It keeps `/etc/sponsord` (the treasury owns the pool), the binaries and the caddy
 package, and does not touch the chain: the pool and its USDC stay with the treasury
 wallet until you withdraw them with the `decdn` CLI. tcp/80 and tcp/443 stay open
-until the host leaves `sponsord_onramp_hosts` and baseline runs again.
+until the host leaves `sponsord_onramp_hosts` and baseline runs again. Silence
+`SponsordDown` for the host first: it fires on a series that went silent, for up to
+a day ([`*Down` alerts](../monitoring/README.md#the-down-alerts)).
 
 ## iroh relay
 
@@ -296,7 +306,11 @@ under `/var/lib/private/iroh-relay` (`0700`), which a new host re-issues for its
   decommission LIMIT=<host>` stops `iroh-relay` (SIGINT, its graceful shutdown),
   disables it and removes the unit, and tears down the Alloy agent. It keeps the
   binary, `/etc/iroh-relay` and the ACME state. tcp/80, tcp/443 and udp/7842 stay
-  open until the host leaves `iroh_relay_hosts` and baseline runs again.
+  open until the host leaves `iroh_relay_hosts` and baseline runs again. Silence
+  `IrohRelayDown` for the host first: the
+  [`*Down` alerts](../monitoring/README.md#the-down-alerts) fire on a series that went
+  silent, for up to a day. The same goes for a migration to a host with a new
+  inventory name.
 
 ## Compose and Kubernetes
 
@@ -310,3 +324,5 @@ under `/var/lib/private/iroh-relay` (`0700`), which a new host re-issues for its
   created off-cluster and should already hold elsewhere. The daemon's state is on the
   PVC; snapshot it with your storage's `VolumeSnapshot` support after scaling the
   StatefulSet to zero. Never run two releases with the same identity Secret.
+  Scaling to zero fires `DecdnNodeDown` after its `for:` and keeps it firing for up
+  to a day ([`*Down` alerts](../monitoring/README.md#the-down-alerts)): silence it first.

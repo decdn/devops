@@ -232,18 +232,20 @@ if [ -n "$promtool" ]; then
     || { cat "$work/promtool.out" >&2; fail "promtool check rules (monitoring/iroh-relay/prometheus-alerts.yml)"; }
   pass "promtool check rules (iroh-relay): $(grep -o '[0-9]* rules found' "$work/promtool.out")"
 
-  # The sponsord rules do time arithmetic on unix-time gauges, and the iroh-relay
-  # rules divide one counter's rate by another's, which only a unit test catches.
+  # The sponsord rules do time arithmetic on unix-time gauges, the iroh-relay
+  # rules divide one counter's rate by another's, and every *Down rule has an
+  # absence arm, which only a series that stops can exercise. Only a unit test
+  # catches mistakes in those.
   # promtool compares annotations exactly and they are prose, so each test runs
   # against a copy with them stripped (monitoring/<service>/prometheus-alerts_test.yml).
   mkdir "$work/rules-test"
-  for svc in sponsord iroh-relay; do
+  for svc in decdn-node sponsord iroh-relay; do
     yq 'del(.groups[].rules[].annotations)' "$monitoring/$svc/prometheus-alerts.yml" \
       > "$work/rules-test/$svc-alerts.yml"
     cp "$monitoring/$svc/prometheus-alerts_test.yml" "$work/rules-test/$svc-alerts_test.yml"
   done
   chmod -R a+rX "$work/rules-test"
-  for svc in sponsord iroh-relay; do
+  for svc in decdn-node sponsord iroh-relay; do
     if [ -n "${PROMTOOL_IMAGE:-}" ]; then
       docker run --rm -v "$work/rules-test:/w:ro" -w /w --entrypoint promtool "$PROMTOOL_IMAGE" \
         test rules "$svc-alerts_test.yml" > "$work/promtool.out" 2>&1
@@ -253,7 +255,7 @@ if [ -n "$promtool" ]; then
     pass "promtool test rules: $svc alerts"
   done
 else
-  skipped+=("promtool (PROMTOOL is empty): alert rule syntax and the sponsord and iroh-relay rule tests are NOT checked")
+  skipped+=("promtool (PROMTOOL is empty): alert rule syntax and the decdn-node, sponsord and iroh-relay rule tests are NOT checked")
 fi
 
 # The sponsord and iroh-relay dashboards live outside the chart (monitoring/<service>/),

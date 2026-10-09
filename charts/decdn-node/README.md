@@ -275,6 +275,10 @@ metrics:
   dashboards collide.
 - `metrics.serviceMonitor.jobLabel` (default `decdn-node`) is the `job` the dashboards
   and the `DecdnNodeDown` alert expect. `region` comes from `config.identity.region`.
+- `DecdnNodeDown` also fires when a node's `up` stops arriving: a pod replacement that
+  takes longer than its `for:` (1m) pages, and scaling a release to zero or changing
+  `jobLabel` fires for up to a day. Silence it for planned work
+  ([monitoring README](../../monitoring/README.md#the-down-alerts)).
 - Loki and Tempo panels stay empty unless the node's logs and traces reach those
   backends; the chart ships neither.
 
