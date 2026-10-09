@@ -5,8 +5,8 @@
 #               daemon packaged as release tarballs, with a SHA256SUMS signed by a
 #               throwaway GPG key, served on loopback. It also commits the working tree
 #               into a git repo in the container, for stage 1 to clone.
-#               (prepare and converge are built from includes/, which the
-#               ../cloud-init-sponsord scenario shares.)
+#               (prepare and converge are built from pack.yml and includes/, which
+#               the ../cloud-init-sponsord scenario shares.)
 #   converge    seeds NoCloud with the user-data (placeholders filled, the repo, mirror
 #               and keyring pointed at the local ones) and runs cloud-init's boot stages.
 #               It then asserts that the host stopped cleanly at the secret gate.
@@ -18,9 +18,10 @@
 #   verify      checks the checkout is at the tag, a release-mode install, a
 #               host-generated wallet, a running daemon, and the pinned collection set.
 #
-# The node's release mode runs here and nowhere else in the suite: the role's download,
-# GPG signature check, SHA256SUMS check, extract and version stamp, against a local
-# mirror (CI does not download the real release).
+# The node's release download and verify path runs here and nowhere else in the suite:
+# the role's download, GPG signature check, SHA256SUMS check, extract and version
+# stamp, against a local mirror (CI does not download the real release).
+# ../validation also runs release mode, but stops at preflight.
 #
 # Coverage boundary: `baseline` is skipped through bootstrap.sh's test-only switch
 # (/etc/decdn-bootstrap/TEST-ONLY-skip-baseline, written by converge outside the
@@ -31,8 +32,8 @@
 #
 # Oldest and newest supported distributions only. They bracket the controller Pythons
 # that cloud-init/requirements.txt pins two ansible-core versions for (3.11 gets 2.19,
-# 3.14 gets 2.21). The image digests are the same pins as ../default and ../os-matrix;
-# bump them together.
+# 3.14 gets 2.21). The image digests are the same pins as ../default, ../os-matrix and
+# ../cloud-init-sponsord; bump them together.
 #
 # The stages need network access: apt (the user-data's packages), PyPI (the pinned
 # ansible-core) and Galaxy (the pinned collections).

@@ -1,8 +1,9 @@
 ---
 # Boots the REAL cloud-init/user-data-sponsord.yaml (a sponsor host: sponsord, then
 # sponsord-onramp behind Caddy) in a systemd container, following the "Sponsor host"
-# walkthrough in cloud-init/README.md. Built from ../cloud-init/includes/, so the boot
-# plumbing is the node scenario's; this one covers what differs:
+# walkthrough in cloud-init/README.md. Built from ../cloud-init/pack.yml and
+# ../cloud-init/includes/, so the boot plumbing is the node scenario's; this one covers
+# what differs:
 #   prepare     cloud-init and the repo (as ../cloud-init), shared mount propagation
 #               (as ../sponsord), and a signed loopback mirror holding one v* release
 #               of the shared stubs (sponsord and sponsord-onramp, as upstream ships
@@ -10,14 +11,16 @@
 #   converge    seeds the template (placeholders filled; release bases, keyrings and
 #               Caddy's `tls internal` pointed at local ones) and boots. Asserts the
 #               host stopped at the secret gate with all four sponsor secrets listed.
-#   side_effect writes only sponsord's three secrets and re-runs: the gate must still
-#               hold, now for the Turnstile secret alone. Then writes it, moves
-#               DEVOPS_REF to a tag, and re-runs.
+#   side_effect refuses an inventory with localhost in neither base group, and one
+#               with the onramp outside sponsord_hosts (stage 2's checks, each
+#               recording "failed"). Then writes only sponsord's three secrets and
+#               re-runs: the gate must still hold, now for the Turnstile secret alone.
+#               Then writes it, moves DEVOPS_REF to a tag, and re-runs.
 #   verify      both services and Caddy running from the signed releases, the API
 #               token generated on the host, https through Caddy, no hint left.
 #
-# Release mode for sponsord-onramp runs here and nowhere else in the suite; sponsord's
-# also runs in ../sponsord.
+# The release download and verify path of sponsord-onramp runs here and nowhere else
+# in the suite; sponsord's also runs in ../sponsord.
 #
 # One platform: Ubuntu 26.04, the newest supported release, so systemd >= 255 (which
 # writes credentials 0440, see roles/sponsord/README.md) and Caddy from universe. The

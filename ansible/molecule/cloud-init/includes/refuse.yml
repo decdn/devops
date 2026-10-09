@@ -1,16 +1,17 @@
 ---
-# One refusal case for ../side_effect.yml: write the broken bootstrap.env, run stage 1, and
-# check that it refused for the stated reason, recorded "failed" and did not move the
-# checkout.
-- name: "Write a bootstrap.env with {{ refusal.name }}"
+# One refusal case for ../side_effect.yml and ../../cloud-init-sponsord/side_effect.yml:
+# write the broken file (refusal.dest, bootstrap.env unless set), run the bootstrap,
+# and check that it refused for the stated reason, recorded "failed" and did not move
+# the checkout.
+- name: "Write the broken file with {{ refusal.name }}"
   ansible.builtin.copy:
-    dest: "{{ env_file }}"
+    dest: "{{ refusal.dest | default(env_file) }}"
     content: "{{ refusal.content }}"
     owner: root
     group: root
     mode: "{{ refusal.mode }}"
 
-- name: "Run stage 1 with {{ refusal.name }}"
+- name: "Run the bootstrap with {{ refusal.name }}"
   ansible.builtin.command:
     cmd: /usr/local/sbin/decdn-bootstrap
   register: refused
@@ -33,7 +34,7 @@
     src: /opt/decdn-devops/.git/HEAD
   register: refused_head
 
-- name: "Assert stage 1 refused {{ refusal.name }}"
+- name: "Assert the bootstrap refused {{ refusal.name }}"
   ansible.builtin.assert:
     that:
       - refused.rc == 1

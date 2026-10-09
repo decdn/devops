@@ -121,8 +121,8 @@
 
 # Last, because it changes the host (destroy follows): a signed, verified release
 # whose binaries report another version must fail the version backstop and leave no
-# stamp. The only release-mode run of decdn_node in the suite is this scenario's, so
-# its refusal is tested here.
+# stamp. The only run of decdn_node's release download and verify path in the suite
+# is this scenario's, so its refusal is tested here.
 - name: Verify — the version backstop refuses a release reporting another version
   hosts: all
   become: true

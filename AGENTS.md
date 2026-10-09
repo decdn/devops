@@ -407,7 +407,11 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   its own group's `vars`), and the node's wallet is host-generated. The roles are used
   unchanged, so a role change reaches this path without edits here. A new secret file
   in a role means a new entry in `bootstrap.sh`'s `SECRETS` and the lint's
-  `FORBIDDEN_VARS`. When `ansible/requirements.yml` changes, re-sync the lock:
+  `FORBIDDEN_VARS`, its instructions in the hint's `case` in `bootstrap.sh` (a new
+  group needs its own arm; `make test-scripts` checks), and the README's table. Phase 1 trusts
+  every `decdn_nodes`/`sponsord_hosts` play to run `baseline` tagged `baseline`
+  (checked per play at boot by `cloud-init/baseline-plays.awk`, and by
+  `make test-scripts`). When `ansible/requirements.yml` changes, re-sync the lock:
   `make lint-cloud-init` checks it covers the requirements. The molecule `cloud-init`
   and `cloud-init-sponsord` scenarios boot the real templates through cloud-init
   (skipping `baseline`) against a locally signed release mirror, built from the shared

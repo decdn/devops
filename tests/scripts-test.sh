@@ -305,6 +305,7 @@ if command -v cloud-init >/dev/null; then
   userdata="$repo/cloud-init/user-data.yaml"
   sponsorud="$repo/cloud-init/user-data-sponsord.yaml"
   expect 0 "lint-cloud-init accepts both cloud-init/ templates" make -s -C "$repo" lint-cloud-init
+  expect 0 "lint-cloud-init accepts the sponsor template alone" make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$sponsorud"
   sed '1s/^#cloud-config$/# cloud-config/' "$userdata" > "$work/ci-header.yaml"
   if make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-header.yaml" >"$work/out" 2>&1 \
     || ! grep -q 'is not a valid cloud-config' "$work/out"; then
@@ -337,7 +338,12 @@ if command -v cloud-init >/dev/null; then
   ci_variant "decdn_extra_env"             'decdn_nodes.vars.decdn_extra_env looks secret-bearing' "s#$net#&\\n\\1decdn_extra_env: {AWS_REGION: eu-west-1}#"
   ci_variant "credentials in a URL"        'a URL with embedded credentials' 's#^(\s*)DEVOPS_REPO=https://#\1DEVOPS_REPO=https://user:pw@#'
   ci_variant "another write_files path"    'write_files writes /etc/decdn/decdn.env' "s#$stage1#\\1- path: /etc/decdn/decdn.env\\n\\1  content: FOO=bar\\n&#"
-  ci_variant "b64-encoded content"         'encoding b64 hides its content' "s#$stage1#&\\n\\1  encoding: b64#"
+  ci_variant "b64-encoded content"         'decdn-bootstrap: encoding is not allowed' "s#$stage1#&\\n\\1  encoding: b64#"
+  # write_files is checked entry by entry: a second entry for a checked path could fetch
+  # stage 1 from a URL (no shellcheck) or append to the inventory (no pinned-var check).
+  ci_variant "stage 1 fetched from a URL"  'decdn-bootstrap twice' "s#$stage1#\\1- path: /usr/local/sbin/decdn-bootstrap\\n\\1  source: {uri: \"https://x.example/stage1\"}\\n&#"
+  ci_variant "appended inventory"          'inventory.yml: append is not allowed' "s#$stage1#\\1- path: /etc/decdn-bootstrap/inventory.yml\\n\\1  append: true\\n\\1  permissions: \"0600\"\\n\\1  content: \"decdn_nodes: {vars: {decdn_verify_release_signature: false}}\"\\n&#"
+  ci_variant "empty stage 1"               'decdn-bootstrap: content must be non-empty text' '/^  - path: \/usr\/local\/sbin\/decdn-bootstrap$/,/^runcmd:$/ {/^      /s/^/#/; s/^    content: \|$/    content: ""/}'
   ci_variant "secret assigned in runcmd"   'assigns a secret-looking variable' 's#^  - \[/usr/local/sbin/decdn-bootstrap\]$#&\n  - "GC_API_TOKEN=x /bin/true"#'
   # Hardening and the signed install
   ci_variant "the test-only baseline skip" 'mentions TEST-ONLY-skip-baseline' 's#^  - \[/usr/local/sbin/decdn-bootstrap\]$#  - [touch, /etc/decdn-bootstrap/TEST-ONLY-skip-baseline]\n&#'
@@ -346,8 +352,7 @@ if command -v cloud-init >/dev/null; then
   ci_variant "no host-generated wallet"    'decdn_node_generate_keystore must be true' 's/^(\s*)decdn_node_generate_keystore: true(.*)$/\1decdn_node_generate_keystore: false\2/'
   ci_variant "signature off as a host var" 'set decdn_verify_release_signature only in decdn_nodes.vars' "s#$loc#&\\n\\1decdn_verify_release_signature: false#"
   ci_variant "install method as a host var" 'set decdn_node_install_method only in decdn_nodes.vars' "s#$loc#&\\n\\1decdn_node_install_method: manual#"
-  ci_variant "another signing key"         'decdn_release_keyring may not be overridden' "s#$net#&\\n\\1decdn_release_keyring: /tmp/KEYS.asc#"
-  ci_variant "another env file path"       'decdn_env_file may not be overridden' "s#$net#&\\n\\1decdn_env_file: /etc/decdn/other.env#"
+  ci_variant "signature off in its group"  'decdn_verify_release_signature must not be turned off' "s#$net#&\\n\\1decdn_verify_release_signature: false#"
   ci_variant "another inventory group"     'only the decdn_nodes, sponsord_hosts, sponsord_onramp_hosts groups belong here' 's#^(\s*)decdn_nodes:$#\1all: {vars: {decdn_verify_release_signature: false}}\n&#'
   # Shape
   ci_variant "localhost outside decdn_nodes" 'localhost must be in decdn_nodes or sponsord_hosts' 's/^(\s*)decdn_nodes:$/\1decdn_hosts:/'
@@ -368,10 +373,23 @@ if command -v cloud-init >/dev/null; then
   ci_variant "onramp manual install"       'sponsord_onramp_install_method must be release' 's/^(\s*)sponsord_onramp_install_method: release$/\1sponsord_onramp_install_method: manual/' "$sponsorud"
   ci_variant "sponsord signature off as a host var" 'set sponsord_verify_release_signature only in sponsord_hosts.vars' "s#$loc#&\\n\\1sponsord_verify_release_signature: false#" "$sponsorud"
   ci_variant "onramp pin in another group" 'set sponsord_onramp_install_method only in sponsord_onramp_hosts.vars' "s#$spnet#&\\n\\1sponsord_onramp_install_method: release#" "$sponsorud"
-  ci_variant "another sponsord signing key" 'sponsord_release_keyring may not be overridden' "s#$spnet#&\\n\\1sponsord_release_keyring: /tmp/KEYS.asc#" "$sponsorud"
-  ci_variant "another treasury keystore path" 'sponsord_treasury_keystore_file may not be overridden' "s#$spnet#&\\n\\1sponsord_treasury_keystore_file: /tmp/k.json#" "$sponsorud"
-  ci_variant "treasury wallet generation" 'sponsord_generate_treasury_wallet may not be overridden' "s#$spnet#&\\n\\1sponsord_generate_treasury_wallet: true#" "$sponsorud"
+  ci_variant "sponsord signature off in its group" 'sponsord_verify_release_signature must not be turned off' "s#$spnet#&\\n\\1sponsord_verify_release_signature: false#" "$sponsorud"
+  ci_variant "onramp signature off in its group" 'sponsord_onramp_verify_release_signature must not be turned off' "s#$onproxy#&\\n\\1sponsord_onramp_verify_release_signature: false#" "$sponsorud"
+  # Every knob lint.py forbids: a signing key, or a path the bootstrap's secret gate
+  # does not look at. Read from lint.py, so a new entry is covered here too.
+  forbidden="$(cd "$repo/cloud-init/tests" && python3 -B -c 'import lint; print(*sorted(lint.FORBIDDEN_VARS))')"
+  [[ -n $forbidden ]] || fail "could not read FORBIDDEN_VARS from cloud-init/tests/lint.py"
+  for v in $forbidden; do
+    if [[ $v == decdn_* ]]; then
+      ci_variant "forbidden $v" "$v may not be overridden" "s#$net#&\\n\\1$v: /tmp/x#"
+    else
+      ci_variant "forbidden $v" "$v may not be overridden" "s#$spnet#&\\n\\1$v: /tmp/x#" "$sponsorud"
+    fi
+  done
   ci_variant "onramp without sponsord_hosts" 'sponsord_onramp_hosts needs sponsord_hosts too' 's/^(\s*)sponsord_hosts:$/\1decdn_nodes:/' "$sponsorud"
+  ci_variant "a second connection"         "sponsord_onramp_hosts.hosts.localhost.ansible_connection is 'ssh'" '/^\s*sponsord_onramp_hosts:$/,/^\s*vars:$/ s/^(\s*)localhost:$/&\n\1  ansible_connection: ssh/' "$sponsorud"
+  ci_variant "hosts as a list"             'sponsord_onramp_hosts must hold exactly localhost' '/^\s*sponsord_onramp_hosts:$/,/^\s*vars:$/ {s/^(\s*)hosts:$/\1hosts: [localhost]/; /^\s*localhost:$/d}' "$sponsorud"
+  ci_variant "the inventory as a list"     'inventory: must be a mapping of groups, not a list' 's/^(\s*)decdn_nodes:$/\1- decdn_nodes:/'
   ci_variant "another host in the onramp group" 'sponsord_onramp_hosts must hold exactly localhost' '/^\s*sponsord_onramp_hosts:$/,/^\s*vars:$/ s/^(\s*)localhost:$/&\n\1other.example:/' "$sponsorud"
   # A node and a sponsor on one host: the node template plus the sponsord groups.
   sed -E 's/^(\s*)decdn_region: .*$/&\n      sponsord_hosts:\n        hosts:\n          localhost:\n        vars:\n          sponsord_install_method: release\n          sponsord_version: "0.1.0"\n      sponsord_onramp_hosts:\n        hosts:\n          localhost:\n        vars:\n          sponsord_onramp_install_method: release\n          sponsord_onramp_version: "0.1.0"/' \
@@ -404,6 +422,72 @@ elif [[ -n ${CI:-} ]]; then
   fail "cloud-init is not on PATH in CI; the lint-cloud-init negatives would be skipped"
 else
   skipped+=("lint-cloud-init negatives (needs cloud-init on PATH; CI installs it)")
+fi
+
+# --- cloud-init's baseline guard: per play, not over the whole playbook (#90) ---------
+# bootstrap.sh feeds cloud-init/baseline-plays.awk the output of
+# `site.yml --tags baseline --list-hosts --list-tasks`. These fixtures follow that output
+# for a sponsor-only host. The node's play lists baseline tasks but no host, so it must
+# not vouch for the sponsord play.
+plays_out() { # <sponsord play's task lines>
+  printf '\nplaybook: playbooks/site.yml\n\n'
+  printf "  play #1 (decdn_nodes): Provision a hardened deCDN node\tTAGS: []\n    pattern: ['decdn_nodes']\n    hosts (0):\n    tasks:\n"
+  printf '      baseline : Validate the admin accounts\tTAGS: [baseline]\n\n'
+  printf "  play #2 (sponsord_onramp_hosts): Require every sponsord-onramp host to be a sponsord host\tTAGS: []\n    pattern: ['sponsord_onramp_hosts']\n    hosts (1):\n      localhost\n    tasks:\n\n"
+  printf "  play #3 (sponsord_hosts): Provision sponsord\tTAGS: []\n    pattern: ['sponsord_hosts']\n    hosts (1):\n      localhost\n    tasks:\n%b\n" "$1"
+}
+guard_plays() { # <groups> <sponsord play's task lines>
+  plays_out "$2" | awk -v groups="$1" -f "$repo/cloud-init/baseline-plays.awk"
+}
+hardened='      baseline : Validate the admin accounts\tTAGS: [baseline]\n      Apply DevSec OS hardening\tTAGS: [baseline]'
+expect 0 "baseline guard accepts a sponsor host whose play selects baseline" guard_plays sponsord_hosts "$hardened"
+expect 1 "baseline guard refuses a sponsord play without baseline (another play's tasks do not count)" \
+  guard_plays sponsord_hosts '      Apply DevSec OS hardening\tTAGS: [baseline]'
+grep -q 'a play for sponsord_hosts selects no baseline task' "$work/out" \
+  || { cat "$work/out" >&2; fail "the baseline guard refused, but not for sponsord_hosts' play"; }
+expect 1 "baseline guard refuses a group whose play does not list localhost" \
+  guard_plays "decdn_nodes sponsord_hosts" "$hardened"
+grep -q 'no play targets decdn_nodes with localhost in it' "$work/out" \
+  || { cat "$work/out" >&2; fail "the baseline guard refused, but not for decdn_nodes"; }
+expect 2 "baseline guard refuses an empty group list" guard_plays "" "$hardened"
+# bootstrap.sh's gate and lint.py agree on the groups a user-data may use, and the
+# bootstrap's hint has its own instructions for each.
+boot="$repo/cloud-init/bootstrap.sh"
+host_groups="$(sed -nE 's/^readonly HOST_GROUPS=\((.*)\)$/\1/p' "$boot")"
+[[ -n $host_groups ]] || fail "cloud-init/bootstrap.sh: no HOST_GROUPS"
+[[ "$host_groups" == "$(cd "$repo/cloud-init/tests" && python3 -B -c 'import lint; print(*lint.GROUPS)')" ]] \
+  || fail "cloud-init/bootstrap.sh HOST_GROUPS ($host_groups) differs from lint.py's GROUPS"
+for g in $host_groups; do
+  grep -qE "^  \[$g\]=" "$boot" || fail "cloud-init/bootstrap.sh: no SECRETS entry for $g"
+  grep -qE "^    $g\)$" "$boot" || fail "cloud-init/bootstrap.sh: the hint has no case arm for $g"
+done
+pass "bootstrap.sh's groups match lint.py's, each with its secrets and its hint"
+# The same contract, read from the playbooks: the cloud-init molecule scenarios skip
+# baseline, so nothing at boot would notice it gone from one group's play.
+if command -v yq >/dev/null; then
+  for g in decdn_nodes sponsord_hosts; do
+    n=0
+    for pb in site.yml sponsord.yml; do
+      n=$((n + $(yq "[.[] | select(.hosts == \"$g\")] | length" "$repo/ansible/playbooks/$pb")))
+      [[ "$(yq "[.[] | select(.hosts == \"$g\") | select((.roles // []) | map(select(.role == \"baseline\" and ((.tags // []) | contains([\"baseline\"])))) | length == 0)] | length" "$repo/ansible/playbooks/$pb")" == 0 ]] \
+        || fail "playbooks/$pb: a $g play lacks the baseline role tagged baseline (cloud-init's phase 1 relies on it)"
+    done
+    ((n >= 1)) || fail "no play in site.yml or sponsord.yml targets $g"
+  done
+  pass "every decdn_nodes and sponsord_hosts play runs baseline under the baseline tag"
+  # The two templates differ only in their inventory: stage 1, the login hint and the
+  # final message are the same bytes in both.
+  shared='{"files": [.write_files[] | select(.path == "/usr/local/sbin/decdn-bootstrap" or .path == "/etc/profile.d/decdn-bootstrap.sh")], "final_message": .final_message}'
+  node_shared="$(yq -o=json "$shared" "$repo/cloud-init/user-data.yaml")"
+  [[ "$(yq '.files | length' <<<"$node_shared")" == 2 && "$(yq '.final_message | length > 0' <<<"$node_shared")" == true ]] \
+    || fail "cloud-init/user-data.yaml: stage 1, the login hint or final_message not found"
+  [[ "$node_shared" == "$(yq -o=json "$shared" "$repo/cloud-init/user-data-sponsord.yaml")" ]] \
+    || fail "cloud-init/user-data.yaml and user-data-sponsord.yaml differ in stage 1, the login hint or final_message"
+  pass "the cloud-init templates share stage 1, the login hint and final_message byte for byte"
+elif [[ -n ${CI:-} ]]; then
+  fail "yq is not on PATH in CI; the baseline-tag check would be skipped"
+else
+  skipped+=("baseline-tag check (needs yq)")
 fi
 
 # --- the shared pieces stay identical across roles ---------------------------------

@@ -13,7 +13,9 @@
 #   2. Syntax-check site.yml. Check that the inventory puts localhost in decdn_nodes or
 #      sponsord_hosts, and in sponsord_hosts whenever it is in sponsord_onramp_hosts.
 #      Without that membership the plays match no host and exit 0, and the firewall
-#      holes in playbooks/group_vars/ never load.
+#      holes in playbooks/group_vars/ never load. Then check that, under
+#      `--tags baseline`, each of those groups' plays still selects the baseline role
+#      (baseline-plays.awk), since phase 1 relies on it.
 #   3. Pick the phase. Each of the host's groups needs its secrets on the host (SECRETS
 #      below):
 #      - any missing: run `baseline` only (SSH, firewall, patching, the admin account),
@@ -101,6 +103,8 @@ if [[ -e $SKIP_BASELINE_MARKER ]]; then
 fi
 
 set_state running
+# A list left by an earlier run is stale from here on.
+set_awaiting
 
 # --- 1. Pinned toolchain ------------------------------------------------------
 # A venv whose interpreter no longer runs (the distro's python3 changed under it after a
@@ -146,12 +150,18 @@ done
   || die "$INVENTORY puts localhost in sponsord_onramp_hosts but not in sponsord_hosts (the onramp runs beside the daemon)"
 echo "decdn-bootstrap: localhost is in ${groups_in[*]}"
 
-# Phase 1 below relies on site.yml tagging the baseline role `baseline`. If that tag
-# were renamed, --tags baseline would select nothing and exit 0, and the host would be
-# reported hardened without being so.
-tasks=$(ansible-playbook -i "$INVENTORY" playbooks/site.yml --tags baseline --list-tasks)
-grep -qE '^\s+baseline : ' <<<"$tasks" \
-  || die "--tags baseline selects no baseline task in playbooks/site.yml (was the role's tag renamed?)"
+# Phase 1 below relies on every play for the host's groups tagging the baseline role
+# `baseline`. If a play lost the role or its tag, --tags baseline would skip it and
+# exit 0, and the host would be reported hardened without being so. The check is per
+# play: --list-tasks lists every play, hostless ones too, so another group's play
+# would satisfy a check over the whole output.
+base_groups=()
+for g in decdn_nodes sponsord_hosts; do
+  [[ -z ${member[$g]:-} ]] || base_groups+=("$g")
+done
+plays=$(ansible-playbook -i "$INVENTORY" playbooks/site.yml --tags baseline --list-hosts --list-tasks)
+awk -v groups="${base_groups[*]}" -f "$repo/cloud-init/baseline-plays.awk" <<<"$plays" \
+  || die "--tags baseline would not harden this host (see above; was the baseline role or its tag removed from a play?)"
 
 # --- 3. Converge ----------------------------------------------------------------
 missing=()
@@ -167,13 +177,15 @@ done
 
 if ((${#missing[@]} == 0)); then
   ansible-playbook -i "$INVENTORY" playbooks/site.yml "${extra_args[@]}"
-  set_awaiting
   set_state complete
 else
   ansible-playbook -i "$INVENTORY" playbooks/site.yml --tags baseline "${extra_args[@]}"
   set_awaiting "${missing[@]}"
   set_state awaiting-secret
 fi
+# The final state is recorded: a session dropping while the hint below prints must not
+# rewrite it to "failed".
+trap - EXIT HUP INT TERM
 
 state=$(<"$STATE_FILE")
 echo "decdn-bootstrap: $state"
@@ -213,6 +225,12 @@ The onramp's Cloudflare Turnstile secret:
   umask 077
   printf '%s' '<secret>' | sudo tee /etc/sponsord/turnstile-secret >/dev/null
   sudo chmod 600 /etc/sponsord/turnstile-secret
+EOF
+      ;;
+    *)
+      cat <<EOF
+
+The secrets of $g: cloud-init/README.md of decdn/devops says where they go.
 EOF
       ;;
   esac
