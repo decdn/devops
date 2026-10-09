@@ -864,7 +864,7 @@
       },
       "title": "Serve refusals by reason",
       "type": "timeseries",
-      "description": "Every refusal reason the serve leg records. The payment-class reasons and cache miss all collapse to the same NotFound wire code, so a client cannot tell them apart \u2014 these counters are the only place the cause survives.",
+      "description": "Every refusal reason the serve leg records. The wire carries only three classes (NotFound, Declined, Unfunded), each covering many of these reasons, so a client cannot tell them apart. These counters are the only place the cause survives.",
       "targets": [
         {
           "datasource": {
@@ -2313,7 +2313,7 @@
       },
       "title": "Unattributed stream failures",
       "type": "timeseries",
-      "description": "Seller-leg stream failures that no reason counter claims: rate(decdn_streams_failed_total{direction=\"inbound\"}) minus the 29 siblings that each end exactly one inbound stream — every serve_stream_rejected_* reason (the stream-cap reset included), the unreadable request, the two midstream exhaustion stops, the takedown termination, the rejected voucher, the spent proof budget, the declined quote (a requester that leaves before any voucher credits a byte, which includes the header handshake a downstream miss pull does not adopt), the mid-stream client abandon, and the node fault. decdn_serve_economics_refused_total is deliberately NOT subtracted: it is a buyer-leg gate that declines to buy from a candidate upstream, and ends no inbound stream. Expected 0. Any positive rate is a failure no reason claims, which is a bug: file it. The node crate's INBOUND_FAILURE_REASONS list and a test hold this expression to the code.",
+      "description": "Seller-leg stream failures that no reason counter claims: rate(decdn_streams_failed_total{direction=\"inbound\"}) minus the siblings that each end exactly one inbound stream — every serve_stream_rejected_* reason (the stream-cap reset included), the unreadable request, the two midstream exhaustion stops, the takedown termination, the rejected voucher, the spent proof budget, the declined quote (a requester that leaves before any voucher credits a byte, which includes the header handshake a downstream miss pull does not adopt), the mid-stream client abandon, and the node fault. decdn_serve_economics_refused_total is deliberately NOT subtracted: it is a buyer-leg gate that declines to buy from a candidate upstream, and ends no inbound stream. Expected 0. Any positive rate is a failure no reason claims, which is a bug: file it. The node crate's INBOUND_FAILURE_REASONS list and a test hold this expression to the code.",
       "targets": [
         {
           "datasource": {

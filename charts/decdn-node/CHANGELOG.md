@@ -24,6 +24,17 @@ both (see [RELEASING.md](../../RELEASING.md)).
   promtool unit tests. sponsord has no Kubernetes path, so the chart neither renders
   nor packages them; they are for import on the Ansible and Compose paths.
 
+### Changed
+
+- Dashboards follow decdn/decdn#2354, so they need a node built with it: the pull
+  leg's `decdn_node_pull_reactive_topup{,_refused}_total` become
+  `decdn_node_pull_recovery_step{,_refused}_total`, both refusal panels and the
+  unattributed-failures expression add `decdn_serve_stream_rejected_pool_closing_total`,
+  and the delivery dashboard drops `decdn_probe_post_eviction_failures_total`. The
+  refusal panel descriptions now name the three wire classes (`NotFound`, `Declined`,
+  `Unfunded`) that replaced the per-reason codes. On an older node the renamed and new
+  series, and the whole unattributed-failures panel, show no data (#104).
+
 ### Fixed
 
 - Delivery dashboard: recency seed failures get their own stat panel, which reads the
