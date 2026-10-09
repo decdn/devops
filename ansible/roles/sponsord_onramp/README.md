@@ -20,15 +20,17 @@ is unreachable.
 ## What it does
 
 - **Installs the binary**, exactly as the `sponsord` role does:
-  - `release` (the default) downloads `sponsord-onramp-v<version>` and verifies it
-    against the GPG-signed `SHA256SUMS`, with the KEYS file vendored in the
-    `sponsord` role. Upstream has cut no release yet, so until it does this needs a
-    mirror (`sponsord_onramp_release_base`).
+  - `release` (the default) downloads `sponsord-onramp-<version>-<triple>.tar.gz`
+    from the `v<version>` release of `decdn/sponsord` (`sponsord_onramp_version`,
+    default `0.0.2`, the same release as the daemon's) and verifies it against the
+    GPG-signed `SHA256SUMS`, with the KEYS file vendored in the `sponsord` role.
+    `sponsord_onramp_release_base` points it at a mirror.
   - `source` builds `sponsord_onramp_source_ref` of `sponsord_onramp_source_repo`
     on the host (`cargo build -p sponsord-onramp`) as the `sponsord` role's `source`
     mode does, from its own clone, so the two can pin different refs. Each builds
     from scratch, so a co-located host compiles the sponsord workspace twice.
-  - `manual` copies a binary built in a `decdn/sponsord` checkout.
+  - `manual` copies a binary built in a `decdn/sponsord` checkout (or installed
+    with `cargo install --locked sponsord-onramp@<version>`, unsigned).
     `sponsord_onramp_release_target_dir` defaults to `sponsord_release_target_dir`,
     so one `cargo build --release` covers both.
 - **Uses two secrets.** Both stay root `0600` under `/etc/sponsord` and reach the
@@ -96,13 +98,14 @@ is unreachable.
 
 4. **Point DNS** for the domain (A/AAAA) at the host, so Caddy can get a
    certificate.
-5. **Pick the releases the installers install.** For `decdn`, a `vX.Y.Z` tag and the
-   SHA-256 of that release's `SHA256SUMS`. For `decdn-sponsored`, a
-   `decdn-sponsored-vX.Y.Z` tag and the same digest; both values are printed in its
-   release notes.
+5. **The releases the installers install** default to the ones this repo pins: for
+   `decdn`, the decdn/decdn `v0.0.1` tag and the SHA-256 of that release's
+   `SHA256SUMS`; for `decdn-sponsored`, the decdn/sponsord `v0.0.2` tag and its
+   digest (printed under "Onramp pin" in the release notes). To serve others, set
+   each tag together with its digest: the role refuses a pair where one half keeps
+   its default.
 6. **Set inventory** (`group_vars/sponsord_onramp_hosts.yml`): the domain, the
-   public RPC URL, the sitekey and the four release-pin values. The contracts come
-   from `sponsord_network`.
+   public RPC URL and the sitekey. The contracts come from `sponsord_network`.
 
 Then run `make deploy-sponsord` from `ansible/`.
 
@@ -116,7 +119,7 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | `sponsord_onramp_source_repo` / `_source_ref` | `decdn/sponsord` on GitHub / `""` | `source` only. The ref is required: a tag, branch or SHA. |
 | `sponsord_onramp_source_build_jobs` | `""` | `source` only: `CARGO_BUILD_JOBS` (`""` = one per CPU). |
 | `sponsord_onramp_manual_bin_src` / `_release_target_dir` | `""` / `sponsord_release_target_dir` | `manual` only. |
-| `sponsord_onramp_version` | `""` | Required in `release` mode, e.g. `0.1.0` → tag `sponsord-onramp-v0.1.0`. |
+| `sponsord_onramp_version` | `0.0.2` | `release` mode: the `decdn/sponsord` release (tag `v0.0.2`). Keep it equal to `sponsord_version`: overriding one does not move the other. |
 | `sponsord_onramp_network` | `sponsord_network` | Supplies CapacityBond and SlashJudge. Must match the daemon's network. |
 | `sponsord_onramp_capacity_bond_address`, `_slash_judge_address` | from profile | Explicit values win. SlashJudge may be `""`. |
 | `sponsord_onramp_rpc_url` | `""` | **Required. Public**: served to every user. No credentials, query or API key. |
@@ -130,8 +133,8 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | `sponsord_onramp_turnstile_sitekey` | `""` | **Required.** |
 | `sponsord_onramp_turnstile_secret` | `""` | **Sensitive.** Leave empty to provision `turnstile-secret` on the host. |
 | `sponsord_onramp_turnstile_secret_overwrite_host_file` | `false` | Confirm that the inventory secret may replace a file the role did not write. |
-| `sponsord_onramp_decdn_release`, `_decdn_sums_sha256` | `""` | **Required.** `vX.Y.Z` and 64 lowercase hex. |
-| `sponsord_onramp_cli_release`, `_cli_sums_sha256` | `""` | **Required.** `decdn-sponsored-vX.Y.Z` and 64 lowercase hex. |
+| `sponsord_onramp_decdn_release`, `_decdn_sums_sha256` | `v0.0.1`, its digest | A decdn/decdn `vX.Y.Z` tag and 64 lowercase hex. The default follows the `decdn_node` role's pin; a host override of `decdn_node_version` does not move it. |
+| `sponsord_onramp_cli_release`, `_cli_sums_sha256` | `v0.0.2`, its digest | A decdn/sponsord `vX.Y.Z` tag (no `decdn-sponsored-v*` tags exist) and 64 lowercase hex. |
 | `sponsord_onramp_min_cli_version` | `""` | Older `decdn-sponsored` CLIs are told to re-run the installer. |
 | `sponsord_onramp_brand_name`, `_gate_template_src` | `""` | The gate page's name, or your own HTML page (a control-machine file). |
 | `sponsord_onramp_spending_cap_micro_usdc`, `_ttl_secs` | `""` | Requested per capability. `""` takes the daemon's maximum; more than it fails the deploy. |

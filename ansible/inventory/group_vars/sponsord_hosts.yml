@@ -11,13 +11,14 @@
 # The API token is generated on the host at /etc/sponsord/api-token.
 
 # --- Binary ------------------------------------------------------------------------
-# The default method, "release", needs the sponsord-v* release to install (upstream
-# has cut none yet; serve one from a mirror via sponsord_release_base until then):
-# sponsord_version: "0.1.0"
-# Or build on the host from a git ref (tag, branch or SHA), with sponsord_version
-# left empty (it is enforced exactly in every mode; upstream reports 0.0.0):
+# The default method, "release", installs the decdn/sponsord release the role pins
+# (tag v<sponsord_version>); set it only to hold the host on another one, together
+# with sponsord_onramp_version:
+# sponsord_version: "0.0.2"
+# Or build on the host from a git ref (tag, branch or SHA; sponsord_version is not
+# checked in this mode):
 # sponsord_install_method: source
-# sponsord_source_ref: main
+# sponsord_source_ref: v0.0.2
 # Or copy a control-machine build: a decdn/sponsord checkout's target dir
 # (`cargo build --release -p sponsord`; the role checks the ELF matches the host).
 # sponsord_install_method: manual

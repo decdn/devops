@@ -20,21 +20,29 @@ default-deny inbound, DevSec host hardening.
 
 In `release` install mode, and while `decdn_verify_release_signature` keeps its
 default of `true`, the `decdn_node` role checks every downloaded tarball against the
-release's GPG-signed `SHA256SUMS`, using the maintainer key
-vendored at `ansible/roles/decdn_node/files/decdn-release-KEYS.asc`. That key is a
-copy of upstream's `KEYS`:
+release's GPG-signed `SHA256SUMS`, using the maintainer keys vendored at
+`ansible/roles/decdn_node/files/decdn-release-KEYS.asc`. The `sponsord` and
+`sponsord_onramp` roles do the same with
+`ansible/roles/sponsord/files/sponsord-release-KEYS.asc`. Both files are copies of
+upstream's `KEYS` (decdn/decdn and decdn/sponsord), which hold the same maintainer
+keys, and a good signature from any of them is accepted:
 
 ```
 Ant Somers <ant@decdn.org>
 Fingerprint: DA75 1570 6F18 73D2 74D8  A369 9E11 A9FF D62D AADB
+
+Alper Gundogdu <alper@decdn.org>
+Fingerprint: E27B 9A2D 2519 1E8E C90B  F8AE 57E2 823C 16CC D376
 ```
 
-The same fingerprint is published in
+The same fingerprints are published in
 [decdn/decdn's SECURITY.md](https://github.com/decdn/decdn/blob/main/SECURITY.md).
-Check a new copy of the vendored key against it before trusting that copy, with
-`gpg --show-keys --with-fingerprint <file>`.
+Check a new copy of the vendored keys against it before trusting that copy, with
+`gpg --show-keys --with-fingerprint <file>`. `make test-scripts` checks that the two
+vendored files hold the same keys.
 
-Setting `decdn_verify_release_signature: false` (meant for an air-gapped mirror that
+Setting `decdn_verify_release_signature: false` (or `sponsord_verify_release_signature`
+/ `sponsord_onramp_verify_release_signature`; meant for an air-gapped mirror that
 strips signatures) drops that guarantee, and the role prints a warning when it's off.
 `manual` mode verifies nothing: it installs whatever binaries you point it at.
 `source` mode checks no signature either: it builds whatever the configured git ref

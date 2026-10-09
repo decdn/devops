@@ -1,6 +1,6 @@
 ---
 # Shared by the cloud-init scenarios' prepare.yml: a release mirror on loopback
-# (http://127.0.0.1:8099/releases), so release mode runs without an upstream release.
+# (http://127.0.0.1:8099/releases), so release mode runs without the real releases.
 # Port 8099, not 8080: the onramp listens on 127.0.0.1:8080 by default.
 # Each release directory holds stub binaries packaged the way upstream names its
 # tarballs (one flat binary per archive, <name>-<version>-<target>.tar.gz) and a
@@ -9,8 +9,9 @@
 # upstream KEYS, which is the only difference from a real release.
 #
 # Input, from the including play:
-#   mirror_releases: [{dir: <release directory>, bins: [{name: <binary>, src: <controller path>}]}]
-#   stub_version:    the version every archive is named for
+#   mirror_releases: [{dir: <release directory>, version: <archive version, default
+#                     stub_version>, bins: [{name: <binary>, src: <controller path>}]}]
+#   stub_version:    the version archives are named for unless the release sets one
 - name: Name the release target triple
   ansible.builtin.set_fact:
     _mirror_target: >-
@@ -68,8 +69,9 @@
     cmd: |
       set -euo pipefail
       export GNUPGHOME=/srv/mirror/gnupg
+      ver={{ item.version | default(stub_version) | quote }}
       for bin in {{ item.bins | map(attribute='name') | map('quote') | join(' ') }}; do
-        tar -C /srv/mirror/stage -czf "$bin-{{ stub_version }}-{{ _mirror_target }}.tar.gz" "$bin"
+        tar -C /srv/mirror/stage -czf "$bin-$ver-{{ _mirror_target }}.tar.gz" "$bin"
       done
       sha256sum -- *.tar.gz > SHA256SUMS
       gpg --batch --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS

@@ -8,10 +8,10 @@ description: >-
 type: application
 # Chart version: bump on any chart change (SemVer).
 version: 0.1.0
-# The decdn release the chart's config rendering is synced against. Upstream has
-# no `v*` tag (or published image) yet, so 0.0.0 is a placeholder and the chart
-# refuses to render until `image.tag` or `image.digest` is set explicitly.
-appVersion: "0.0.0"
+# The decdn/decdn release the chart's config rendering is synced against, and the
+# image tag used when neither image.tag nor image.digest is set. Keep it equal to
+# the decdn_node role's decdn_node_version (make test-scripts checks).
+appVersion: "0.0.1"
 kubeVersion: ">=1.25.0-0"
 home: https://decdn.org
 sources:

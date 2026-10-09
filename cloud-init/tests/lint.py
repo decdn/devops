@@ -146,6 +146,26 @@ def walk_keys(node, path=""):
             yield from walk_keys(v, f"{path}[{i}]")
 
 
+def values_of(node, key):
+    """Every value set for `key` anywhere in a parsed YAML tree."""
+    found = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if str(k) == key:
+                found.append(v)
+            found += values_of(v, key)
+    elif isinstance(node, list):
+        for v in node:
+            found += values_of(v, key)
+    return found
+
+
+# The onramp's installer pins: a tag and its SHA256SUMS digest per release, which only
+# make sense together (the role defaults pin all four).
+ONRAMP_PINS = ("sponsord_onramp_decdn_release", "sponsord_onramp_decdn_sums_sha256",
+               "sponsord_onramp_cli_release", "sponsord_onramp_cli_sums_sha256")
+
+
 def walk_strings(node, path=""):
     """Yield (dotted path, value) for every string scalar in a parsed YAML tree."""
     if isinstance(node, dict):
@@ -334,6 +354,18 @@ def main():
                                    or PUBLIC_RPC_URL_BAD_CHARS.search(url)):
             violation("inventory: sponsord_onramp_rpc_url must be a public http(s) URL with no userinfo, query "
                       "or fragment (the onramp serves it to every user; a keyed URL belongs to sponsord)")
+    # decdn/sponsord ships both daemons in one release, so a user-data that moves one
+    # version off the role default must move the other with it.
+    if "sponsord_onramp_hosts" in groups:
+        sv = values_of(inventory, "sponsord_version")
+        ov = values_of(inventory, "sponsord_onramp_version")
+        if (sv or ov) and not (len(sv) == len(ov) == 1 and str(sv[0]) == str(ov[0])):
+            violation("inventory: set sponsord_version and sponsord_onramp_version together, once each and "
+                      "equal (one decdn/sponsord release ships both)")
+        pins = [k for k in ONRAMP_PINS if values_of(inventory, k)]
+        if pins and len(pins) != len(ONRAMP_PINS):
+            violation(f"inventory: set all of {', '.join(ONRAMP_PINS)} or none (a release tag without its "
+                      f"SHA256SUMS digest fails every installer); set: {', '.join(pins)}")
     # Ansible applies one baseline_sudo_users list, the one from the highest-precedence
     # place that sets it, not the union. So it may be set once, and that list is checked.
     sudo_lists = {}

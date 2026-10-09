@@ -25,11 +25,11 @@
     _sp_eph: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
     _sp_keys: "{{ _sp_eph }}/sponsord-mirror-KEYS-{{ inventory_hostname }}.asc"
     _sp_stamp: /usr/local/lib/sponsord/installed-version
-    _sp_rel: /srv/sponsord-mirror/www/releases/sponsord-v0.0.0-molecule-stub
+    _sp_rel: /srv/sponsord-mirror/www/releases/v0.0.0-molecule-stub
   tasks:
     - name: Wait for the mirror to serve the signed manifest
       ansible.builtin.uri:
-        url: "{{ _sp_base }}/sponsord-v{{ _sp_ver }}/SHA256SUMS.asc"
+        url: "{{ _sp_base }}/v{{ _sp_ver }}/SHA256SUMS.asc"
       register: _sp_mirror_up
       until: _sp_mirror_up.status == 200
       retries: 10

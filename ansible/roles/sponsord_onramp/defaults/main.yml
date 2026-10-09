@@ -10,10 +10,9 @@
 # (AGENTS.md hard rule 2). Upstream: github.com/decdn/sponsord, docs/operator.md.
 
 # --- Install method -----------------------------------------------------------
-# "release" (default): download the pinned sponsord-onramp-v<version> GitHub Release tarball
-#   and verify it against the GPG-signed SHA256SUMS. Upstream has cut no
-#   sponsord-onramp-v* tag yet, so pin sponsord_onramp_version against a mirror (sponsord_onramp_release_base) or
-#   use one of the two methods below until it does.
+# "release" (default): download the pinned v<version> GitHub Release tarball and
+#   verify it against the GPG-signed SHA256SUMS. decdn/sponsord releases its whole
+#   workspace (sponsord, sponsord-onramp, decdn-sponsored) from one vX.Y.Z tag.
 # "source": clone sponsord_onramp_source_repo at sponsord_onramp_source_ref on the host and
 #   `cargo build -p sponsord-onramp` there as an unprivileged build user (see "Build from
 #   source" below).
@@ -48,8 +47,10 @@ decdn_rustup_sha256:
   x86_64-unknown-linux-gnu: dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
   aarch64-unknown-linux-gnu: 15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433
 
-# --- Release to install (REQUIRED in "release" mode) ---------------------------
-sponsord_onramp_version: ""               # e.g. "0.1.0" -> tag sponsord-onramp-v0.1.0
+# --- Release to install ("release" mode) ----------------------------------------
+# The decdn/sponsord release (tag v<version>) this repo pins, the
+# same one as the sponsord role's sponsord_version.
+sponsord_onramp_version: "0.0.2"          # asserted non-empty in "release" mode
 # Derived from the host's gathered architecture (vars/main/arch.yml).
 sponsord_onramp_target: "{{ _sponsord_onramp_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
 sponsord_onramp_release_base: "https://github.com/decdn/sponsord/releases/download"
@@ -134,13 +135,16 @@ sponsord_onramp_brand_name: ""            # [deCDN] name on the gate page
 # (placeholders: upstream docs/operator.md). "" = the built-in page.
 sponsord_onramp_gate_template_src: ""
 
-# --- Releases the installers install (REQUIRED) -------------------------------
-# A tag and the SHA-256 of that release's SHA256SUMS file. Both values for
-# decdn-sponsored are printed in its release notes (upstream RELEASING.md).
-sponsord_onramp_decdn_release: ""         # decdn/decdn tag, e.g. v0.1.0
-sponsord_onramp_decdn_sums_sha256: ""     # 64 lowercase hex
-sponsord_onramp_cli_release: ""           # e.g. decdn-sponsored-v0.1.0
-sponsord_onramp_cli_sums_sha256: ""       # 64 lowercase hex
+# --- Releases the installers install -------------------------------------------
+# A tag and the SHA-256 of that release's SHA256SUMS file (`sha256sum SHA256SUMS`
+# after verifying its .asc). decdn-sponsored ships in the decdn/sponsord workspace
+# release, whose notes print its pair under "Onramp pin" (upstream RELEASING.md).
+# Defaults: decdn/decdn v0.0.1 and decdn/sponsord v0.0.2. Override a tag together with
+# its digest: preflight refuses a pair where only one half moved.
+sponsord_onramp_decdn_release: v0.0.1     # decdn/decdn tag
+sponsord_onramp_decdn_sums_sha256: cd3d63846b04775b55537bf3b865d7340b40c1eb8ec352ff2dca7111814ba350
+sponsord_onramp_cli_release: v0.0.2       # decdn/sponsord tag
+sponsord_onramp_cli_sums_sha256: f6f8cbaf127277aefb27044ac595f1f8a4743126b58831ba6e36d0a3922b1597
 # Oldest decdn-sponsored accepted; older CLIs are told to re-run the installer.
 sponsord_onramp_min_cli_version: ""
 sponsord_onramp_releases_base: ""         # [https://github.com/decdn]

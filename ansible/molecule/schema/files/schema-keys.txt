@@ -4,12 +4,16 @@
 #
 #     ./gen-schema-keys.py <path-to-decdn-checkout> > schema-keys.txt
 #
+# from a checkout of v<decdn_node_version>, the decdn/decdn release the roles pin
+# (ansible/roles/decdn_node/defaults/main.yml): the generator reads the working
+# tree, so check the tag out first.
+#
 # Paths, not bare leaf names: `sketch_bytes` is legal at
 # cache.tinylfu.sketch_bytes and a startup failure at cache.sketch_bytes, and
 # a leaf-name inventory cannot tell the two apart. See gen-schema-keys.py for
 # the struct -> path mapping and molecule/schema/README.md for why this exists.
 #
-# Synced from decdn/decdn @ 20db95ef (crate version 0.0.0): 156 paths.
+# 156 paths.
 blockchain.buyer_max_approve
 blockchain.buyer_working_deposit_micro_usdc
 blockchain.capacity_bond_address

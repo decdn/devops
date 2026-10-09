@@ -6,7 +6,7 @@
 # playbooks/group_vars/ derives per host, ci.yml's helm path filter, and — with
 # UPSTREAM=<decdn checkout> — the upstream-mirror generators' exit codes.
 # `make test-scripts` runs it; CI's `scripts` job does too. Needs make, docker
-# (compose v2), jq, flock; the cloud-init cases also need cloud-init, shellcheck and yq,
+# (compose v2), jq, flock, gpg; the cloud-init cases also need cloud-init, shellcheck and yq,
 # the firewall-holes case ansible-core.
 set -euo pipefail
 
@@ -374,10 +374,12 @@ if command -v cloud-init >/dev/null; then
   ci_variant "onramp without sponsord_hosts" 'sponsord_onramp_hosts needs sponsord_hosts too' 's/^(\s*)sponsord_hosts:$/\1decdn_nodes:/' "$sponsorud"
   ci_variant "another host in the onramp group" 'sponsord_onramp_hosts must hold exactly localhost' '/^\s*sponsord_onramp_hosts:$/,/^\s*vars:$/ s/^(\s*)localhost:$/&\n\1other.example:/' "$sponsorud"
   # A node and a sponsor on one host: the node template plus the sponsord groups.
-  sed -E 's/^(\s*)decdn_region: .*$/&\n      sponsord_hosts:\n        hosts:\n          localhost:\n        vars:\n          sponsord_install_method: release\n          sponsord_version: "0.1.0"\n      sponsord_onramp_hosts:\n        hosts:\n          localhost:\n        vars:\n          sponsord_onramp_install_method: release/' \
+  sed -E 's/^(\s*)decdn_region: .*$/&\n      sponsord_hosts:\n        hosts:\n          localhost:\n        vars:\n          sponsord_install_method: release\n          sponsord_version: "0.1.0"\n      sponsord_onramp_hosts:\n        hosts:\n          localhost:\n        vars:\n          sponsord_onramp_install_method: release\n          sponsord_onramp_version: "0.1.0"/' \
     "$userdata" > "$work/ci-colocated.yaml"
   expect 0 "lint-cloud-init accepts a node co-located with sponsord" \
     make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-colocated.yaml"
+  ci_variant "one sponsord version moved" 'set sponsord_version and sponsord_onramp_version together' 's/^(\s*)sponsord_onramp_install_method: release$/&\n\1sponsord_onramp_version: "0.0.9"/' "$sponsorud"
+  ci_variant "an onramp pin without its digest" 'set all of sponsord_onramp_decdn_release' 's/^(\s*)sponsord_onramp_install_method: release$/&\n\1sponsord_onramp_cli_release: v0.0.9/' "$sponsorud"
   ci_variant "onramp nested under children" 'sponsord_hosts may hold only hosts and vars, not' '/^      sponsord_onramp_hosts:$/,/^$/{s/^      /          /}; s/^          sponsord_onramp_hosts:$/        children:\n&/' "$sponsorud"
   ci_variant "query in the onramp RPC URL" 'sponsord_onramp_rpc_url must be a public http(s) URL' 's#^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME"$#\1sponsord_onramp_rpc_url: "https://rpc.example/?api_key=x"#' "$sponsorud"
   ci_variant "fragment in the onramp RPC URL" 'sponsord_onramp_rpc_url must be a public http(s) URL' 's#^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME"$#\1sponsord_onramp_rpc_url: "https://rpc.example/rpc\#k"#' "$sponsorud"
@@ -440,6 +442,50 @@ for r in decdn_node sponsord sponsord_onramp iroh_relay iroh_dns_server; do
   done
 done
 pass "the decommission defaults and the confirmation's service list agree across all five roles"
+
+# --- the release pins agree ----------------------------------------------------------
+# decdn/sponsord releases sponsord and sponsord-onramp from one tag, and the onramp's
+# installers should hand users the decdn the node role deploys. The pins are copied
+# into compose/sponsord-onramp.env.example and the chart's appVersion; the chart
+# check is here, not in lint-helm, so a PR that bumps only the role still runs it.
+pin() { # <role> <var>: a scalar default, quotes stripped
+  sed -nE "s/^$2: *\"?([^\" #]*)\"?.*/\1/p" "$repo/ansible/roles/$1/defaults/main.yml"
+}
+envpin() { sed -nE "s/^$1=//p" "$repo/compose/sponsord-onramp.env.example"; }
+for p in "decdn_node decdn_node_version" "sponsord sponsord_version" "sponsord_onramp sponsord_onramp_version"; do
+  # shellcheck disable=SC2086  # "<role> <var>", split on purpose
+  [ -n "$(pin $p)" ] || fail "${p#* }: no default in roles/${p% *}/defaults/main.yml"
+done
+[ "$(pin sponsord sponsord_version)" = "$(pin sponsord_onramp sponsord_onramp_version)" ] \
+  || fail "sponsord_version and sponsord_onramp_version differ (one decdn/sponsord release ships both)"
+[ "$(pin sponsord_onramp sponsord_onramp_cli_release)" = "v$(pin sponsord sponsord_version)" ] \
+  || fail "sponsord_onramp_cli_release is not v<sponsord_version>"
+[ "$(pin sponsord_onramp sponsord_onramp_decdn_release)" = "v$(pin decdn_node decdn_node_version)" ] \
+  || fail "sponsord_onramp_decdn_release is not v<decdn_node_version>"
+for k in DECDN_RELEASE:decdn_release DECDN_SUMS_SHA256:decdn_sums_sha256 \
+         CLI_RELEASE:cli_release CLI_SUMS_SHA256:cli_sums_sha256; do
+  [ "$(envpin "ONRAMP_${k%%:*}")" = "$(pin sponsord_onramp "sponsord_onramp_${k#*:}")" ] \
+    || fail "compose/sponsord-onramp.env.example ONRAMP_${k%%:*} differs from sponsord_onramp_${k#*:}"
+done
+app="$(sed -nE 's/^appVersion: *"?([^" #]*)"?.*/\1/p' "$repo/charts/decdn-node/Chart.yaml")"
+[ "$app" = "$(pin decdn_node decdn_node_version)" ] \
+  || fail "charts/decdn-node/Chart.yaml appVersion '$app' is not decdn_node_version"
+# Both vendored KEYS hold the same maintainer keys (they differ in header text only),
+# and those are the fingerprints SECURITY.md publishes, so swapping a key takes a
+# visible edit there too.
+command -v gpg >/dev/null || fail "gpg is required (the vendored KEYS checks)"
+fprs() { # <KEYS file>: its primary-key fingerprints, sorted
+  local out
+  out="$(gpg --show-keys --with-colons "$1")" || fail "gpg --show-keys failed on $1"
+  awk -F: '$1 == "pub" {p = 1} $1 == "fpr" && p {print $10; p = 0}' <<<"$out" | sort
+}
+want_fprs="$(fprs "$repo/ansible/roles/decdn_node/files/decdn-release-KEYS.asc")"
+[ -n "$want_fprs" ] || fail "decdn_node/files/decdn-release-KEYS.asc: no keys"
+[ "$(fprs "$repo/ansible/roles/sponsord/files/sponsord-release-KEYS.asc")" = "$want_fprs" ] \
+  || fail "the decdn and sponsord release KEYS hold different keys"
+[ "$(sed -nE 's/^Fingerprint: *//p' "$repo/SECURITY.md" | tr -d ' ' | sort)" = "$want_fprs" ] \
+  || fail "SECURITY.md's Fingerprint: lines differ from the vendored KEYS"
+pass "release pins agree across roles, Compose and the chart; the vendored KEYS match SECURITY.md"
 # iroh_relay's tasks_from node-ids runs `decdn whoami` on the inventory's nodes, where
 # decdn_node's defaults are not loaded: its fallbacks must be those defaults.
 ids="$repo/ansible/roles/iroh_relay/tasks/node-ids.yml"
@@ -627,7 +673,9 @@ fi
 
 # --- upstream-mirror generators (optional: needs a decdn/decdn checkout) --------------
 if [[ -n "${UPSTREAM:-}" ]]; then
-  expect 0 "network profiles current"  "$repo/scripts/sync-network-profiles.py" "$UPSTREAM" --check
+  # Against the release the roles pin, as the upstream-drift workflow checks.
+  expect 0 "network profiles current"  "$repo/scripts/sync-network-profiles.py" "$UPSTREAM" \
+    --ref "v$(pin decdn_node decdn_node_version)" --check
   expect 2 "network profiles: bad ref is an error, not drift"  "$repo/scripts/sync-network-profiles.py" "$UPSTREAM" --ref no/such/ref --check
 else
   skipped+=("upstream-mirror generators (set UPSTREAM=<decdn checkout>)")

@@ -19,10 +19,11 @@ gate, installers, behind a TLS reverse proxy), is the
 ## What it does
 
 - **Installs the binary.**
-  - `release` (the default) downloads `sponsord-v<version>` and verifies it
-    against the GPG-signed `SHA256SUMS`, using `files/sponsord-release-KEYS.asc`, a
-    copy of upstream's `KEYS`. Upstream has cut no release yet, so until it does
-    this needs a mirror (`sponsord_release_base`).
+  - `release` (the default) downloads `sponsord-<version>-<triple>.tar.gz` from the
+    `v<version>` release of `decdn/sponsord` (`sponsord_version`, default `0.0.2`;
+    one tag releases the whole workspace) and verifies it against the GPG-signed
+    `SHA256SUMS`, using `files/sponsord-release-KEYS.asc`, a copy of upstream's
+    `KEYS`. `sponsord_release_base` points it at a mirror.
   - `source` clones `sponsord_source_repo` (default `decdn/sponsord` on GitHub) at
     `sponsord_source_ref` (any tag, branch or SHA) on the host and runs `cargo build
     --release --locked -p sponsord` as the unprivileged `decdn-build` user, exactly
@@ -30,13 +31,14 @@ gate, installers, behind a TLS reverse proxy), is the
     rustup and the toolchain the commit pins, both installed by root, a fresh
     build environment for every new commit, a `<repo>@<commit>` stamp so an
     unchanged commit is not rebuilt, and a root-side install that refuses
-    symlinks. Leave `sponsord_version` empty: the version check enforces it
-    exactly, and upstream's crates report `0.0.0`. The build user, its home and the toolchain are
+    symlinks. `sponsord_version` is not checked in this mode; set the ref to a
+    release tag (`v0.0.2`) to build exactly that release. The build user, its home and the toolchain are
     shared with the other roles on the host. cargo also fetches upstream's
     `decdn/decdn` git dependencies, pinned by `Cargo.lock`.
-  - `manual` copies a binary built from a `decdn/sponsord` checkout on the control
-    machine (`sponsord_manual_bin_src`, or `sponsord_release_target_dir` with an
-    ELF/arch check).
+  - `manual` copies a binary built on the control machine, from a `decdn/sponsord`
+    checkout or the published crate (`cargo install --locked sponsord@<version>`,
+    which carries no maintainer signature), with `sponsord_manual_bin_src`, or
+    `sponsord_release_target_dir` with an ELF/arch check.
 - **Places the secrets.** All of them live under `/etc/sponsord`, root 0600:
 
   | File | Who provides it |
@@ -125,7 +127,7 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | `sponsord_source_repo` / `sponsord_source_ref` | `decdn/sponsord` on GitHub / `""` | `source` only. The ref is required: a tag, branch or SHA. |
 | `sponsord_source_build_jobs` | `""` | `source` only: `CARGO_BUILD_JOBS` (`""` = one per CPU). |
 | `sponsord_manual_bin_src` / `sponsord_release_target_dir` | `""` | `manual` only. Set one. |
-| `sponsord_version` | `""` | Required in `release` mode, e.g. `0.1.0` → tag `sponsord-v0.1.0`. |
+| `sponsord_version` | `0.0.2` | `release` mode: the `decdn/sponsord` release (tag `v0.0.2`). Equal to `sponsord_onramp_version`. |
 | `sponsord_network` | `""` | Network profile: `arbitrum-sepolia` supplies chain id and PaymentPool. |
 | `sponsord_chain_id`, `sponsord_payment_pool_address` | from profile | Explicit values win over the profile. |
 | `sponsord_pool_id` | `""` | **Required.** 0x + 64 hex. `""` only on the wallet-creation run. |
@@ -229,3 +231,31 @@ export it, so watch the address yourself.
 - `molecule/cloud-init-sponsord` deploys it from `cloud-init/user-data-sponsord.yaml`
   (no control machine), in release mode, beside the onramp.
 - `molecule/validation-sponsord` holds the negative cases.
+
+## Bumping the sponsord release
+
+decdn/sponsord releases `sponsord`, `sponsord-onramp` and `decdn-sponsored` from one
+`vX.Y.Z` tag. When upstream cuts a new one (the weekly `upstream-drift` workflow
+fails on it), move every pin in one change:
+
+1. `sponsord_version` here and `sponsord_onramp_version` in
+   `roles/sponsord_onramp/defaults/main.yml`, to the same version.
+2. The onramp's CLI pin, `sponsord_onramp_cli_release` (`v<version>`) and
+   `sponsord_onramp_cli_sums_sha256`, from the "Onramp pin" block of the release
+   notes, in `roles/sponsord_onramp/defaults/main.yml` and
+   `compose/sponsord-onramp.env.example`.
+3. `SPONSORD_IMAGE_DIGEST` and `SPONSORD_ONRAMP_IMAGE_DIGEST` in
+   `compose/.env.example`, from the release's signed `sponsord-image-digest.txt`
+   and `sponsord-onramp-image-digest.txt`.
+4. `files/sponsord-release-KEYS.asc`, if upstream's `KEYS` changed (and the
+   decdn_node copy, and `SECURITY.md`'s fingerprints).
+5. Re-check the env var names the Compose file and the role render against the new
+   `crates/*/src/config.rs` (AGENTS.md, `compose/`).
+6. The prose that names the version: `git grep -n '<old version>'` outside the
+   changelogs, and a `[Unreleased]` entry in `ansible/galaxy/CHANGELOG.md`.
+
+`make test-scripts` fails while the two versions or the CLI pins (role and Compose
+example) disagree; the weekly `upstream-drift` job checks the digests against the
+release. A
+decdn/decdn release is bumped the same way
+([decdn_node's README](../decdn_node/README.md#bumping-the-decdn-release)).

@@ -21,10 +21,10 @@ you want hardened from scratch (firewall, SSH, auto-patching), use the
 [Helm chart](../charts/decdn-node/README.md). [`docs/requirements.md`](../docs/requirements.md)
 compares the paths.
 
-> **Upstream has not published a release yet** of the node or of sponsord, so there
-> is no signed image to pin. `compose.yaml` only takes an image by digest, and a
-> locally built image has no digest until it is pushed somewhere. Until a release
-> exists, see [Before a release](#before-a-release-a-local-image).
+`compose.yaml` takes every image by digest. `.env.example` carries the digests of
+the releases the Ansible roles pin (decdn/decdn v0.0.1, decdn/sponsord v0.0.2),
+each copied from that release's signed digest file; the node's
+[Operate](#operate) section says how to take a newer one.
 
 **Upgrading from a node-only `compose.yaml`?** Every service now sits behind a
 profile, so add `COMPOSE_PROFILES=node` to your `.env`. Without it,
@@ -61,9 +61,10 @@ anything past your firewall. The node's only public port is QUIC **udp/4433**.
 
 2. **The `decdn` CLI on the host.** The image is daemon-only. Install the CLI from the
    release tarball, checking it against the GPG-signed `SHA256SUMS` first (the
-   maintainer key is in `decdn/decdn`'s `KEYS`; its fingerprint is in
-   [SECURITY.md](../SECURITY.md#release-verification)). Until a release exists, build it:
-   `cargo build --release -p decdn-cli`.
+   maintainer keys are in `decdn/decdn`'s `KEYS`; their fingerprints are in
+   [SECURITY.md](../SECURITY.md#release-verification)). It is also on crates.io
+   (`cargo install --locked decdn-cli@<version>`), which carries no maintainer
+   signature.
 
 3. **Keys.** Create the password file first (`key-gen` reads it, never creates it),
    then generate the node key and eth keystore into the data dir:
@@ -110,7 +111,7 @@ anything past your firewall. The node's only public port is QUIC **udp/4433**.
 
    ```bash
    cp compose/.env.example compose/.env
-   $EDITOR compose/.env                  # COMPOSE_PROFILES=node; DECDN_IMAGE_DIGEST; DECDN_UID/GID = `id -u decdn` / `id -g decdn`
+   $EDITOR compose/.env                  # COMPOSE_PROFILES=node; DECDN_UID/GID = `id -u decdn` / `id -g decdn`
    sudo docker compose -f compose/compose.yaml up -d
    curl -s 127.0.0.1:9090/metrics | head   # once "node runtime ready" is in the logs
    decdn node health                      # admin RPC, from the host
@@ -137,8 +138,12 @@ the root-only env files whenever it creates a container.
   SIGTERM, the daemon's graceful drain, and waits up to 300 s. Do not use
   `decdn node drain` here: `restart: unless-stopped` starts the drained container
   again.
-- **Upgrade:** set the new release's digest as `DECDN_IMAGE_DIGEST` in `.env`, then
-  `sudo docker compose -f compose/compose.yaml up -d`.
+- **Upgrade:** download the new release's `decdn-node-image-digest.txt` and its `.asc`
+  from `decdn/decdn`'s releases (v0.0.1 named them `image-digest.txt`), `gpg --verify`
+  against the keys in [SECURITY.md](../SECURITY.md#release-verification), set the
+  digest after its `@` as `DECDN_IMAGE_DIGEST` in `.env`, then
+  `sudo docker compose -f compose/compose.yaml up -d`. sponsord's release carries
+  `sponsord-image-digest.txt` and `sponsord-onramp-image-digest.txt` the same way.
 - **Config change:** edit `/etc/decdn/node.toml`, then
   `sudo docker compose -f compose/compose.yaml restart decdn-node` (or
   `decdn node reload` for the hot-reloadable sections).
@@ -349,9 +354,9 @@ yours. The `SponsordTopupHeld` alert (below) flags it.
     | age -r age1… -o sponsord.tar.age
   ```
 
-## Before a release: a local image
+## A local image
 
-Build the daemon image from a `decdn/decdn` checkout (its `Dockerfile` header shows
+To run an unreleased build, build the daemon image from a `decdn/decdn` checkout (its `Dockerfile` header shows
 how) and push it to a registry on the host's loopback, which gives it a digest:
 
 ```bash

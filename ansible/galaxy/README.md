@@ -9,8 +9,8 @@ repository — seven roles and nothing else:
 | `decdn.node.baseline` | Debian/Ubuntu host baseline — nftables default-deny inbound, fail2ban, unattended-upgrades, chrony, an admin sudo user, then DevSec OS + SSH hardening (applied last). |
 | `decdn.node.decdn_node` | The `decdn-node` daemon under a hardened systemd unit — from a GPG-verified release tarball (the default), a build on the host from a git ref, or locally built binaries; public QUIC udp/4433, loopback metrics + admin RPC. `decdn_network` sets the chain from upstream's manifest; `tasks_from: backup` / `decommission` for day 2. |
 | `decdn.node.grafana_alloy` | Opt-in Grafana Cloud observability agent — loopback-only Alloy receiver and hardened telemetry export; scrapes the node, `sponsord`, or both (`grafana_alloy_node_enabled` / `grafana_alloy_sponsord_enabled`), labels the onramp's journal (`grafana_alloy_sponsord_onramp_enabled`), and scrapes an iroh relay (`grafana_alloy_iroh_relay_enabled`) and an iroh DNS server (`grafana_alloy_iroh_dns_server_enabled`). |
-| `decdn.node.sponsord` | The `sponsord` onboarding sponsor (treasury signer + PaymentPool keeper), standalone or beside a node — local binary or GPG-verified `sponsord-v*` release, `DynamicUser` unit with the API token and treasury wallet as systemd credentials, loopback-only API, `/healthz` deploy gate. `sponsord_network` sets the chain and PaymentPool from upstream's manifest. Restarts refuse while a pool top-up is held; `tasks_from: backup` / `decommission` for day 2. |
-| `decdn.node.sponsord_onramp` | `sponsord-onramp`, sponsord's public side (Turnstile gate, installers, CLI API), on the daemon's host — local binary or GPG-verified `sponsord-onramp-v*` release, `DynamicUser` unit with the daemon token and Turnstile secret as systemd credentials, loopback listener behind Caddy (distro package, ACME TLS, admin API off; or your own proxy), `/healthz` deploy gate; `tasks_from: decommission`. |
+| `decdn.node.sponsord` | The `sponsord` onboarding sponsor (treasury signer + PaymentPool keeper), standalone or beside a node — local binary, a host-side source build or a GPG-verified decdn/sponsord `v*` release (pinned to 0.0.2), `DynamicUser` unit with the API token and treasury wallet as systemd credentials, loopback-only API, `/healthz` deploy gate. `sponsord_network` sets the chain and PaymentPool from upstream's manifest. Restarts refuse while a pool top-up is held; `tasks_from: backup` / `decommission` for day 2. |
+| `decdn.node.sponsord_onramp` | `sponsord-onramp`, sponsord's public side (Turnstile gate, installers, CLI API), on the daemon's host — local binary, a host-side source build or a GPG-verified decdn/sponsord `v*` release (pinned to 0.0.2), `DynamicUser` unit with the daemon token and Turnstile secret as systemd credentials, loopback listener behind Caddy (distro package, ACME TLS, admin API off; or your own proxy), `/healthz` deploy gate; `tasks_from: decommission`. |
 | `decdn.node.iroh_relay` | A self-hosted [iroh relay](https://github.com/n0-computer/iroh) (`iroh-relay`) for deCDN peers that cannot hole-punch — sha256-pinned upstream release (or a local binary), its own Let's Encrypt TLS, QUIC address discovery, `DynamicUser` unit holding only `CAP_NET_BIND_SERVICE`, loopback metrics, a deploy gate on every listener, a refusal of ports another process holds; access limited to an allowlist of endpoint IDs by default (`iroh_relay_access`; `tasks_from: node-ids` reads nodes' IDs); `tasks_from: decommission`. Point nodes at it with `decdn_relay_urls`. |
 | `decdn.node.iroh_dns_server` | A self-hosted [iroh DNS server](https://github.com/n0-computer/iroh) (`iroh-dns-server`): the pkarr relay deCDN nodes publish their address records to and the DNS server peers resolve them through, in place of n0's `dns.iroh.link` — sha256-pinned upstream release (or a local binary), its own Let's Encrypt TLS, DNS on one bind address (clear of systemd-resolved's stub), `DynamicUser` unit holding only `CAP_NET_BIND_SERVICE`, loopback metrics, a deploy gate on every listener, `/healthz`'s version and an SOA answer over udp and tcp, a refusal of ports another process holds; `tasks_from: decommission`. Point nodes at it with `decdn_discovery_pkarr_url` and `decdn_discovery_dns_origin`. |
 
@@ -70,10 +70,10 @@ hardening), then the node:
     - role: decdn.node.decdn_node
       vars:
         decdn_network: arbitrum-sepolia   # chain_id + every contract address, from upstream's manifest
-      # Also REQUIRED per host (host_vars): decdn_region, the binaries
-      # (decdn_node_version for the default release method, or
-      # decdn_node_install_method: source + decdn_node_source_ref, or manual +
-      # decdn_release_target_dir), and the RPC URL (host-provisioned
+      # Also REQUIRED per host (host_vars): decdn_region, the binaries (nothing
+      # for the default release method, which installs the pinned
+      # decdn_node_version; decdn_node_install_method: source +
+      # decdn_node_source_ref, or manual + decdn_release_target_dir), and the RPC URL (host-provisioned
       # /etc/decdn/decdn.env, or decdn_rpc_url in a git-ignored secret.yml).
 ```
 

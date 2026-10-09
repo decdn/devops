@@ -25,15 +25,15 @@
       - regexp: '^(\s*)- "CHANGE_ME"(.*)$'
         replace: '\1- "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMolecule0000000000000000000000000000000000 molecule"'
       # sponsord
-      - regexp: '^(\s*)sponsord_version: "CHANGE_ME".*$'
-        replace: '\1sponsord_version: "0.0.0-molecule-stub"'
+      - regexp: '^(\s*)sponsord_install_method: release$'
+        replace: '\1sponsord_install_method: release\n\1sponsord_version: "0.0.0-molecule-stub"'
       - regexp: '^(\s*)# sponsord_release_base: .*$'
         replace: '\1sponsord_release_base: "{{ mirror_base }}"\n\1sponsord_release_keyring: {{ mirror_key }}'
       - regexp: '^(\s*)sponsord_pool_id: "CHANGE_ME".*$'
         replace: '\1sponsord_pool_id: "0x00000000000000000000000000000000000000000000000000000000000000aa"'
       # sponsord-onramp
-      - regexp: '^(\s*)sponsord_onramp_version: "CHANGE_ME".*$'
-        replace: '\1sponsord_onramp_version: "0.0.0-molecule-stub"'
+      - regexp: '^(\s*)sponsord_onramp_install_method: release$'
+        replace: '\1sponsord_onramp_install_method: release\n\1sponsord_onramp_version: "0.0.0-molecule-stub"'
       - regexp: '^(\s*)# sponsord_onramp_release_base: .*$'
         replace: >-
           \1sponsord_onramp_release_base: "{{ mirror_base }}"\n\1sponsord_onramp_release_keyring: {{ mirror_key }}
@@ -43,16 +43,6 @@
         replace: '\1sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc'
       - regexp: '^(\s*)sponsord_onramp_turnstile_sitekey: "CHANGE_ME".*$'
         replace: '\1sponsord_onramp_turnstile_sitekey: 1x00000000000000000000AA'
-      - regexp: '^(\s*)sponsord_onramp_decdn_release: "CHANGE_ME".*$'
-        replace: '\1sponsord_onramp_decdn_release: v0.1.0'
-      - regexp: '^(\s*)sponsord_onramp_decdn_sums_sha256: "CHANGE_ME".*$'
-        replace: >-
-          \1sponsord_onramp_decdn_sums_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
-      - regexp: '^(\s*)sponsord_onramp_cli_release: "CHANGE_ME".*$'
-        replace: '\1sponsord_onramp_cli_release: decdn-sponsored-v0.1.0'
-      - regexp: '^(\s*)sponsord_onramp_cli_sums_sha256: "CHANGE_ME".*$'
-        replace: >-
-          \1sponsord_onramp_cli_sums_sha256: "2222222222222222222222222222222222222222222222222222222222222222"
   tasks:
     - name: Seed the user-data and boot
       ansible.builtin.include_tasks: ../cloud-init/includes/boot.yml

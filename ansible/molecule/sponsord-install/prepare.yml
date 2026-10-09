@@ -29,8 +29,8 @@
         - {path: /srv/sponsord-mirror, mode: "0755"}
         - {path: /srv/sponsord-mirror/www, mode: "0755"}
         - {path: /srv/sponsord-mirror/www/releases, mode: "0755"}
-        - {path: /srv/sponsord-mirror/www/releases/sponsord-v0.0.0-molecule-stub, mode: "0755"}
-        - {path: /srv/sponsord-mirror/www/releases/sponsord-v0.0.9, mode: "0755"}
+        - {path: /srv/sponsord-mirror/www/releases/v0.0.0-molecule-stub, mode: "0755"}
+        - {path: /srv/sponsord-mirror/www/releases/v0.0.9, mode: "0755"}
         - {path: /srv/sponsord-mirror/gnupg, mode: "0700"}
         - {path: /srv/sponsord-mirror/stage, mode: "0700"}
       loop_control:
@@ -44,7 +44,7 @@
         group: root
         mode: "0755"
 
-    # sponsord-v<ver>/sponsord-<ver>-<triple>.tar.gz with the binary at the archive
+    # v<ver>/sponsord-<ver>-<triple>.tar.gz with the binary at the archive
     # root, as upstream's release.yml publishes. v0.0.9 holds the same stub, which
     # reports 0.0.0-molecule-stub: a release whose binary is not the pinned version.
     - name: Build, checksum and sign the mirror's releases
@@ -56,7 +56,7 @@
             --quick-gen-key 'molecule sponsord mirror <mirror@molecule.invalid>' ed25519 sign 1d
           gpg --batch --armor --export > /srv/sponsord-mirror/KEYS.asc
           for ver in 0.0.0-molecule-stub 0.0.9; do
-            cd /srv/sponsord-mirror/www/releases/sponsord-v$ver
+            cd /srv/sponsord-mirror/www/releases/v$ver
             tar -C /srv/sponsord-mirror/stage -czf "sponsord-$ver-{{ _sp_triple }}.tar.gz" sponsord
             sha256sum -- *.tar.gz > SHA256SUMS
             gpg --batch --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS

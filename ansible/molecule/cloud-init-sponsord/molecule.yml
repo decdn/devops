@@ -4,8 +4,9 @@
 # walkthrough in cloud-init/README.md. Built from ../cloud-init/includes/, so the boot
 # plumbing is the node scenario's; this one covers what differs:
 #   prepare     cloud-init and the repo (as ../cloud-init), shared mount propagation
-#               (as ../sponsord), and a signed loopback mirror holding sponsord-v* and
-#               sponsord-onramp-v* releases of the shared stubs.
+#               (as ../sponsord), and a signed loopback mirror holding one v* release
+#               of the shared stubs (sponsord and sponsord-onramp, as upstream ships
+#               them).
 #   converge    seeds the template (placeholders filled; release bases, keyrings and
 #               Caddy's `tls internal` pointed at local ones) and boots. Asserts the
 #               host stopped at the secret gate with all four sponsor secrets listed.

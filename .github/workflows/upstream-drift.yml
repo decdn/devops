@@ -1,15 +1,20 @@
 ---
 name: Upstream drift
 
-# Two things in this repo mirror decdn/decdn and go stale when upstream moves:
-#   - roles/decdn_node/vars/main/networks.yml  (contract addresses; upstream
-#     redeploys change every one of them at once) and its subsets
-#     roles/sponsord/vars/main/networks.yml and
-#     roles/sponsord_onramp/vars/main/networks.yml (the same script and check)
-#   - ansible/molecule/schema/files/schema-keys.txt  (the node.toml key inventory)
-# This job regenerates each from upstream main and fails when a committed copy
-# differs. It is a scheduled early warning, not a PR gate: an upstream change must
-# not turn unrelated PRs red. Fix drift by re-running the generator it names.
+# The repo pins one decdn/decdn and one decdn/sponsord release (decdn_node_version,
+# sponsord_version) and carries copies of what they publish. This job checks, weekly:
+#   - the generated mirrors of decdn/decdn at the pinned tag:
+#     roles/decdn_node/vars/main/networks.yml (contract addresses) and its subsets in
+#     roles/sponsord{,_onramp}/vars/main/, and ansible/molecule/schema/files/
+#     schema-keys.txt (the node.toml key inventory). They describe the binary a
+#     default deploy installs, so they are generated from the tag, not from main;
+#   - the hand-copied release facts: the onramp's SHA256SUMS digests (role defaults)
+#     and the Compose image digests (compose/.env.example), against the pinned
+#     releases' assets;
+#   - that each repo's newest vX.Y.Z tag is still the pin.
+# It is a scheduled early warning, not a PR gate: an upstream release must not turn
+# unrelated PRs red. Fix drift by re-running the generator it names; act on a new
+# release with the bump checklist (roles/decdn_node/README.md, roles/sponsord/README.md).
 on:
   schedule:
     - cron: '17 6 * * 1'        # Mondays 06:17 UTC
@@ -26,14 +31,33 @@ jobs:
   drift:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # An explicit shell adds pipefail, which the checks' `|| return 2` rely on.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Public repo, default branch. The sync script reads origin/main through git,
-      # which this checkout provides as a remote-tracking ref.
+      # The pins, read from the role defaults (plain scalars, so no YAML parser).
+      - name: Read the pinned releases
+        id: pins
+        run: |
+          pin() { sed -nE "s/^$2: *\"?([^\" #]*)\"?.*/\\1/p" "ansible/roles/$1/defaults/main.yml"; }
+          decdn="$(pin decdn_node decdn_node_version)"
+          sponsord="$(pin sponsord sponsord_version)"
+          {
+            echo "decdn_sums=$(pin sponsord_onramp sponsord_onramp_decdn_sums_sha256)"
+            echo "cli_sums=$(pin sponsord_onramp sponsord_onramp_cli_sums_sha256)"
+          } >> "$GITHUB_OUTPUT"
+          if [ -z "$decdn" ] || [ -z "$sponsord" ]; then
+            echo "::error::a role has no pinned version"
+            exit 1
+          fi
+          { echo "decdn=$decdn"; echo "sponsord=$sponsord"; } >> "$GITHUB_OUTPUT"
+      # Public repo, the pinned tag. The sync script reads HEAD through git.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: decdn/decdn
-          ref: main
+          ref: v${{ steps.pins.outputs.decdn }}
           path: upstream
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -42,7 +66,12 @@ jobs:
       # Each check exits 0 (current), 1 (stale) or anything else (could not run), and
       # the two failure kinds are reported differently: a broken generator is not an
       # upstream change. Full output goes to the job summary; annotations stay one line.
-      - name: Compare the mirrors with upstream main
+      - name: Compare the mirrors and the pins with upstream
+        env:
+          DECDN_PIN: v${{ steps.pins.outputs.decdn }}
+          SPONSORD_PIN: v${{ steps.pins.outputs.sponsord }}
+          DECDN_SUMS: ${{ steps.pins.outputs.decdn_sums }}
+          CLI_SUMS: ${{ steps.pins.outputs.cli_sums }}
         run: |
           rc=0
           check() {
@@ -67,7 +96,62 @@ jobs:
             python3 ansible/molecule/schema/files/gen-schema-keys.py upstream > "$fresh" || return 2
             diff -u ansible/molecule/schema/files/schema-keys.txt "$fresh"
           }
-          echo "### Upstream drift (decdn/decdn@$(git -C upstream rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
-          check "network profiles" python3 scripts/sync-network-profiles.py upstream --check
+          # Exit 1 when the repo's newest vX.Y.Z tag (pre-releases skipped) is not the pin.
+          # shellcheck disable=SC2329  # invoked indirectly, through check()
+          release_check() {
+            local repo="$1" pin="$2" tags latest
+            tags="$(git ls-remote --tags --refs "https://github.com/$repo" 'v*')" || return 2
+            latest="$(sed -n 's#.*refs/tags/##p' <<<"$tags" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V | tail -n 1)" || true
+            [ -n "$latest" ] || { echo "$repo: no vX.Y.Z tag found"; return 2; }
+            [ "$latest" = "$pin" ] && return 0
+            echo "$repo: pinned $pin, newest vX.Y.Z tag $latest"
+            return 1
+          }
+          # shellcheck disable=SC2329  # invoked by sums_check and digest_check
+          asset() { # <repo> <tag> <file>: a release asset on stdout
+            curl -fsSL --retry 3 "https://github.com/$1/releases/download/$2/$3"
+          }
+          # Exit 1 when a pinned SHA256SUMS digest is not the release's. The installers
+          # the onramp serves check the downloaded SHA256SUMS against it, so a stale
+          # one would only fail on users' machines.
+          # shellcheck disable=SC2329  # invoked indirectly, through check()
+          sums_check() {
+            local repo="$1" tag="$2" want="$3" got
+            got="$(asset "$repo" "$tag" SHA256SUMS | sha256sum)" || return 2
+            got="${got%% *}"
+            [ "$got" = "$want" ] && return 0
+            echo "$repo $tag: SHA256SUMS is $got, the role pins $want"
+            return 1
+          }
+          # Exit 1 when a compose/.env.example digest is not the one the pinned release's
+          # digest file names (the first of <files> the release has). The .asc is not
+          # checked here; this compares, the bump checklist verifies.
+          # shellcheck disable=SC2329  # invoked indirectly, through check()
+          digest_check() {
+            local repo="$1" tag="$2" var="$3" want got="" f; shift 3
+            want="$(sed -nE "s/^$var=//p" compose/.env.example)"
+            for f in "$@"; do got="$(asset "$repo" "$tag" "$f" 2>/dev/null)" && break; got=""; done
+            [ -n "$got" ] || { echo "$repo $tag: none of $* found"; return 2; }
+            got="${got##*@}"
+            got="${got%%[[:space:]]*}"
+            [ "$got" = "$want" ] && return 0
+            echo "$repo $tag: $var should be $got, compose/.env.example has $want"
+            return 1
+          }
+          echo "### Upstream drift (decdn/decdn $DECDN_PIN, $(git -C upstream rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
+          check "network profiles" python3 scripts/sync-network-profiles.py upstream --ref HEAD --check
           check "config schema keys" schema_check
+          check "decdn/decdn release" release_check decdn/decdn "$DECDN_PIN"
+          check "decdn/sponsord release" release_check decdn/sponsord "$SPONSORD_PIN"
+          check "onramp decdn SHA256SUMS digest" sums_check decdn/decdn "$DECDN_PIN" "$DECDN_SUMS"
+          check "onramp CLI SHA256SUMS digest" sums_check decdn/sponsord "$SPONSORD_PIN" "$CLI_SUMS"
+          # decdn/decdn names the node's digest file after the image from its next
+          # release on; v0.0.1 has the unprefixed one.
+          check "Compose decdn-node digest" digest_check decdn/decdn "$DECDN_PIN" DECDN_IMAGE_DIGEST \
+            decdn-node-image-digest.txt image-digest.txt
+          check "Compose sponsord digest" digest_check decdn/sponsord "$SPONSORD_PIN" SPONSORD_IMAGE_DIGEST \
+            sponsord-image-digest.txt
+          check "Compose sponsord-onramp digest" digest_check decdn/sponsord "$SPONSORD_PIN" \
+            SPONSORD_ONRAMP_IMAGE_DIGEST sponsord-onramp-image-digest.txt
           exit "$rc"

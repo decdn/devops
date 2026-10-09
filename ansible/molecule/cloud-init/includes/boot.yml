@@ -36,6 +36,10 @@
     group: root
     mode: "0600"
 
+# Every edit must match: replace reports ok when nothing does, and an edit that
+# anchors on a line rather than a CHANGE_ME (the injected stub versions) would
+# otherwise drift away from the template unnoticed. The seed was just copied over
+# the edited file, so each edit changes it on every run.
 - name: Fill in the MUST-EDIT values and point at the local repo and mirror
   ansible.builtin.replace:
     path: /var/lib/cloud/seed/nocloud/user-data
@@ -44,6 +48,8 @@
   loop: "{{ userdata_edits }}"
   loop_control:
     label: "{{ item.regexp }}"
+  register: userdata_edit
+  failed_when: userdata_edit is not changed
 
 # Values only (`KEY=CHANGE_ME`, `key: CHANGE_ME`, `- "CHANGE_ME"`), not the header
 # comment or stage 1's own `!= CHANGE_ME` guard.

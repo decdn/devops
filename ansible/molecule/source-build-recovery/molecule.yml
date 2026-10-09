@@ -41,9 +41,9 @@ provisioner:
         # An integer, so the CARGO_BUILD_JOBS branch and the jobs assert both see
         # the non-string form inventory usually gives.
         decdn_node_source_build_jobs: 2
-        # Matches the stub's --version line, so the version backstop compares
-        # rather than degrading to a liveness check.
-        decdn_node_version: "0.0.0-molecule-stub"
+        # Not the binary's version: proves non-release installs are not held to the pin
+        # (only release mode compares it).
+        decdn_node_version: "9.9.9-not-the-binary"
         decdn_rpc_url: "https://rpc.example.invalid/"
         decdn_chain_id: 421614
         decdn_region: "US"

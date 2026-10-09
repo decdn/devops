@@ -4,7 +4,6 @@
 #   "release" (default): download the pinned GitHub Release tarballs, verify them
 #     against the GPG-signed SHA256SUMS manifest upstream publishes, then extract.
 #     Idempotent and upgrade-aware via a version stamp; re-extracts only on change.
-#     NOTE: upstream has cut no release tag yet — see tasks/main.yml.
 #   "source": clone decdn_node_source_repo at decdn_node_source_ref on the node and
 #     cargo-build it there as an unprivileged user (tasks/source.yml). Idempotent
 #     via a <repo>@<commit> stamp.
@@ -325,9 +324,10 @@
 # binary drifted from the pin is caught loudly rather than trusted via the stamp.
 # rc != 0 is included because a custom failed_when suppresses the module's default
 # non-zero-exit check — else a broken manual binary (rc != 0) would pass silently.
-# In "release" mode decdn_node_version is always set (asserted), so the version
-# match is enforced; in "source"/"manual" mode with no version it degrades to a liveness
-# check (rc == 0).
+# In "release" mode the version must match exactly, on clap's `<binary> <version>`
+# line, so a 0.0.1 pin does not accept 0.0.10 or 0.0.1-rc.1; "source" and "manual"
+# are held to rc == 0 only (decdn_node_version has a default, so comparing it there
+# would fail every build of another ref).
 # A source-built binary is the output of code (dependency build scripts) this host
 # does not trust, so in source mode the backstop runs it in a throwaway sandboxed
 # unit: an ephemeral DynamicUser, no network, a read-only filesystem, never root.
@@ -349,8 +349,8 @@
   changed_when: false
   failed_when: >-
     decdn_installed_version.rc != 0
-    or (decdn_node_version | length > 0
-        and decdn_node_version not in decdn_installed_version.stdout)
+    or (decdn_node_install_method == 'release'
+        and (decdn_installed_version.stdout | trim) != 'decdn-node ' ~ decdn_node_version)
 
 # The `decdn` CLI is what runs `config validate`, `key-gen` and every day-2 command,
 # so a half-installed pair (daemon present, CLI missing) must fail here rather than
@@ -362,8 +362,8 @@
   changed_when: false
   failed_when: >-
     decdn_installed_cli_version.rc != 0
-    or (decdn_node_version | length > 0
-        and decdn_node_version not in decdn_installed_cli_version.stdout)
+    or (decdn_node_install_method == 'release'
+        and (decdn_installed_cli_version.stdout | trim) != 'decdn ' ~ decdn_node_version)
 
 # Restart onto a daemon binary the running process may not be on. Every install
 # path above notifies on a changed binary, but a handler queued by a run that then

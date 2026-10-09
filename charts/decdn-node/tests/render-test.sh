@@ -159,6 +159,24 @@ for values in "$chart"/ci/*.yaml; do
 done
 [ -n "$kubeconform" ] || skipped+=("kubeconform (KUBECONFORM is empty)")
 
+# The image is the digest when set, else the tag, else appVersion (which `make
+# test-scripts` holds equal to the decdn_node role's pin). Both containers run it.
+app="$(yq '.appVersion' "$chart/Chart.yaml")"
+digest="sha256:$(printf 'a%.0s' {1..64})"
+image_of() { # <helm args...>: the StatefulSet's container and init container images, one per line
+  helm template t "$chart" -f "$chart/ci/ci-values.yaml" "$@" \
+    | yq 'select(.kind == "StatefulSet") | (.spec.template.spec.initContainers[].image, .spec.template.spec.containers[].image)'
+}
+for c in "unpinned|ghcr.io/decdn/decdn-node:$app|--set image.tag= --set image.digest=" \
+         "tag|ghcr.io/decdn/decdn-node:9.9.9|--set image.tag=9.9.9 --set image.digest=" \
+         "digest over tag|ghcr.io/decdn/decdn-node@$digest|--set image.tag=9.9.9 --set image.digest=$digest"; do
+  IFS='|' read -r what want args <<<"$c"
+  # shellcheck disable=SC2086  # helm args, split on purpose
+  got="$(image_of $args)" || fail "helm template (image: $what)"
+  [ "$(sort -u <<<"$got")" = "$want" ] || fail "image ($what) renders '$got', want '$want' in every container"
+done
+pass "image precedence: digest, then tag, then appVersion ($app), in every container"
+
 toml="$work/ci-values.toml"
 
 # The key check only proves emitted keys are legal. A table that silently vanished
@@ -509,7 +527,6 @@ expect_fail "rpc-url (dashed) in config"   template 'config.blockchain.rpc-url: 
 expect_fail "secret key in origins list"   template 'secret_access_key: secret-bearing'          --set-json 'config.cache.origins=[{"kind":"s3","bucket":"b","credentials":{"secret_access_key":"x"}}]'
 expect_fail "password key in config"       template 'aws_password: secret-bearing'               --set config.cache.origin.credentials.aws_password=x --set config.cache.origin.kind=s3
 expect_fail "replicas knob"                schema   "additional propert(y|ies) 'replicas'"       --set replicas=2
-expect_fail "unpinned image"               template 'published no release image'                 --set image.digest= --set image.tag=
 expect_fail "bad service type"             schema   '/service/type'                              --set service.type=ExternalName
 expect_fail "origin + origins"             template 'mutually exclusive'                         --set config.cache.origin.kind=fs --set config.cache.origin.path=/o --set 'config.cache.origins[0].kind=fs'
 expect_fail "max_blob > cache_size"        template 'max_blob_size_mb must be <='                --set config.cache.max_blob_size_mb=20000

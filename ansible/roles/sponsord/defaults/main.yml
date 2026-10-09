@@ -10,10 +10,9 @@
 # github.com/decdn/sponsord, docs/operator.md.
 
 # --- Install method -----------------------------------------------------------
-# "release" (default): download the pinned sponsord-v<version> GitHub Release tarball
-#   and verify it against the GPG-signed SHA256SUMS. Upstream has cut no
-#   sponsord-v* tag yet, so pin sponsord_version against a mirror (sponsord_release_base) or
-#   use one of the two methods below until it does.
+# "release" (default): download the pinned v<version> GitHub Release tarball and
+#   verify it against the GPG-signed SHA256SUMS. decdn/sponsord releases its whole
+#   workspace (sponsord, sponsord-onramp, decdn-sponsored) from one vX.Y.Z tag.
 # "source": clone sponsord_source_repo at sponsord_source_ref on the host and
 #   `cargo build -p sponsord` there as an unprivileged build user (see "Build from
 #   source" below).
@@ -49,8 +48,11 @@ decdn_rustup_sha256:
   x86_64-unknown-linux-gnu: dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71
   aarch64-unknown-linux-gnu: 15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433
 
-# --- Release to install (REQUIRED in "release" mode) ---------------------------
-sponsord_version: ""               # e.g. "0.1.0" -> tag sponsord-v0.1.0
+# --- Release to install ("release" mode) ----------------------------------------
+# The decdn/sponsord release (tag v<version>) this repo pins. Keep it equal to
+# sponsord_onramp_version: both come from one workspace release (README.md,
+# "Bumping the sponsord release"; make test-scripts checks the defaults agree).
+sponsord_version: "0.0.2"          # asserted non-empty in "release" mode
 # Release target triple, derived from the host's gathered architecture (see
 # vars/main/arch.yml). Set it explicitly only for a play with gather_facts: false.
 sponsord_target: "{{ _sponsord_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
