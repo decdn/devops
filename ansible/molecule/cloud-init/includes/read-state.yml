@@ -1,25 +1,32 @@
 ---
 # Read the bootstrap's state and its list of missing secrets, into `bootstrap_state` and
-# `awaiting` (slurp results), after checking both exist and that an unprivileged
-# account can read them. The login hint reads them as the admin account, and these
-# tests read them as root, which would hide a file (or a directory) the admin cannot
-# read. A gate that stopped writing the list then fails here, with this message,
-# instead of at the slurp with "file not found".
-- name: Stat the bootstrap's state and list of missing secrets
+# `awaiting` (slurp results), after checking them. The login hint reads them as the
+# admin account, so they must be readable by others (read here as `nobody`; these tests
+# run as root, which would hide a file or directory the admin cannot read) and
+# writable by root alone, the directory included: anyone else could rewrite the state
+# and the paths the hint tells the operator to fill. A gate that stopped writing the
+# list fails here, with this message, instead of at the slurp with "file not found".
+- name: Stat the bootstrap's state directory, state and list of missing secrets
   ansible.builtin.stat:
-    path: "/var/lib/decdn-bootstrap/{{ item }}"
+    path: "/var/lib/decdn-bootstrap{{ item }}"
   register: state_files
-  loop: [state, awaiting]
+  loop: ["", /state, /awaiting]
 
-- name: Assert both exist
+- name: Assert each exists, owned by root and writable by root alone
   ansible.builtin.assert:
     that:
       - item.stat.exists
-    fail_msg: /var/lib/decdn-bootstrap/{{ item.item }} is missing
+      - item.stat.pw_name == 'root'
+      - not item.stat.wgrp
+      - not item.stat.woth
+    fail_msg: >-
+      /var/lib/decdn-bootstrap{{ item.item }}:
+      {{ ('mode ' ~ item.stat.mode ~ ', owner ' ~ item.stat.pw_name) if item.stat.exists else 'missing' }}
+      (want root-owned, no group or other write)
     quiet: true
   loop: "{{ state_files.results }}"
   loop_control:
-    label: "{{ item.item }}"
+    label: "/var/lib/decdn-bootstrap{{ item.item }}"
 
 - name: Read both as an unprivileged account, as the login hint does
   ansible.builtin.command:
