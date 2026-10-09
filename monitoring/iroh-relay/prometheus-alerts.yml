@@ -26,16 +26,31 @@ groups:
   - name: iroh-relay
     interval: 30s
     rules:
+      # The second arm fires on a series that stopped arriving. An agent scraping on the
+      # host (grafana_alloy) writes no up=0 when the host, its network or the agent itself
+      # is gone, so `up == 0` alone stays silent when the whole host is. (A central
+      # Prometheus writes up=0 itself; there the arm fires once the target leaves service
+      # discovery.) The arm keeps the instance label (absent() would not). Both arms
+      # reduce to job and instance, the labels the alert carries: a changed region or
+      # other label on a live target does not fire, one target fires once even with
+      # two label sets in the window, and the for: carries over between the arms. It
+      # remembers a series for 1d, so it resolves a day after the last sample even if
+      # the host is still dead, and a decommissioned host or a renamed job or instance
+      # fires until then: silence it.
       - alert: IrohRelayDown
-        expr: up{job="iroh-relay"} == 0
+        expr: |
+          max by (job, instance) (up{job="iroh-relay"} == 0)
+          or max by (job, instance) (
+               max_over_time(up{job="iroh-relay"}[1d]) unless on(job, instance) up{job="iroh-relay"})
         for: 2m
         labels:
           component: relay
           severity: critical
         annotations:
-          summary: "iroh-relay on {{ $labels.instance }} unreachable for 2m"
+          summary: "iroh-relay on {{ $labels.instance }} unreachable"
           description: |
-            Prometheus has been unable to scrape iroh-relay for two minutes.
+            iroh-relay's scrape has failed for two minutes, or its series
+            stopped arriving (the host, its network or the scraping agent is down).
             Peers that cannot hole-punch and list this relay in
             decdn_relay_urls fall back to their other relays, or lose the
             connection if this was their only one. Read why on the host:

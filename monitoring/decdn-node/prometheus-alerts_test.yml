@@ -1,0 +1,94 @@
+# promtool unit tests for prometheus-alerts.yml beside it, run by the chart's
+# tests/render-test.sh (`make lint-helm`). DecdnNodeDown's absence arm only shows
+# itself on a series that stops, which promtool check cannot catch. The test clock
+# starts at 0. The chart's .helmignore keeps this file out of the package.
+#
+# It does not run in place: render-test.sh copies it into a scratch directory as
+# decdn-node-alerts_test.yml, beside a copy of prometheus-alerts.yml with the
+# annotations stripped (promtool compares annotations exactly, and they are prose)
+# named decdn-node-alerts.yml, the name rule_files below expects.
+rule_files:
+  - decdn-node-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # Down. a fails its scrape (up=0) and fires at exactly the for, under job and
+  # instance alone (its region label is dropped). Its samples end at 5m too, and
+  # the absence arm carries the alert on without resetting the for (at 10m30s a
+  # for restarted at the handoff would not have run out yet). b is
+  # healthy throughout. c stops at 5m with no staleness marker (the host died with
+  # its agent): up goes absent once the 5m lookback passes, the absence arm fires
+  # after the for, is still firing at 23h and resolves once the 1d window holds no
+  # sample (25h). d gets a staleness marker and is back 1m later, inside the for,
+  # so it never fires (checked at 6m, inside the gap). d2's marker is followed by
+  # a gap longer than the for: it fires at 6m30s and resolves when it is back
+  # (10m30s). e changes its region label on a live target and does not fire;
+  # when it stops later (15m30s) it fires once, under job and instance alone,
+  # although both of its label sets are still in the 1d window.
+  # f: two chart releases in different namespaces share the pod name; y's stops
+  # while x's lives on, and y still fires. g: the job was renamed on a live
+  # instance (Alloy's old component-ID job); the old job fires, as documented.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="decdn-node", instance="a", region="eu"}'
+        values: '0x10'
+      - series: 'up{job="decdn-node", instance="b"}'
+        values: '1x3000'
+      - series: 'up{job="decdn-node", instance="c"}'
+        values: '1x10'
+      - series: 'up{job="decdn-node", instance="d"}'
+        values: '1x10 stale _x1 1x2987'
+      - series: 'up{job="decdn-node", instance="d2"}'
+        values: '1x10 stale _x9 1x2979'
+      - series: 'up{job="decdn-node", instance="e", region="eu"}'
+        values: '1x10'
+      - series: 'up{job="decdn-node", instance="e", region="us"}'
+        values: '_x11 1x20'
+      - series: 'up{job="decdn-node", instance="decdn-node-0", namespace="x"}'
+        values: '1x3000'
+      - series: 'up{job="decdn-node", instance="decdn-node-0", namespace="y"}'
+        values: '1x10'
+      - series: 'up{job="prometheus.scrape.decdn_node", instance="g"}'
+        values: '1x10'
+      - series: 'up{job="decdn-node", instance="g"}'
+        values: '_x11 1x2989'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: DecdnNodeDown
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: DecdnNodeDown
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: critical}
+      - eval_time: 6m
+        alertname: DecdnNodeDown
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: critical}
+      - eval_time: 8m
+        alertname: DecdnNodeDown
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: critical}
+          - exp_labels: {job: decdn-node, instance: d2, component: node, severity: critical}
+      - eval_time: 10m30s
+        alertname: DecdnNodeDown
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: critical}
+      - eval_time: 12m
+        alertname: DecdnNodeDown
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: critical}
+          - exp_labels: {job: decdn-node, instance: c, component: node, severity: critical}
+          - exp_labels: {job: decdn-node, instance: decdn-node-0, namespace: y, component: node, severity: critical}
+          - exp_labels: {job: prometheus.scrape.decdn_node, instance: g, component: node, severity: critical}
+      - eval_time: 23h
+        alertname: DecdnNodeDown
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: critical}
+          - exp_labels: {job: decdn-node, instance: c, component: node, severity: critical}
+          - exp_labels: {job: decdn-node, instance: decdn-node-0, namespace: y, component: node, severity: critical}
+          - exp_labels: {job: prometheus.scrape.decdn_node, instance: g, component: node, severity: critical}
+          - exp_labels: {job: decdn-node, instance: e, component: node, severity: critical}
+      - eval_time: 25h
+        alertname: DecdnNodeDown
+        exp_alerts: []

@@ -15,6 +15,7 @@ this repo's MIT license. sponsord's were written here.
 | `decdn-node/dashboard-chain.json` | Chain, payments and slash safety (`uid: decdn-chain`): watcher liveness, chain RPC, registries, payments. |
 | `decdn-node/dashboard-node.json` | Single-node drilldown (`uid: decdn-node`): host, process, iroh transport, DHT and probe, logs, traces. |
 | `decdn-node/prometheus-alerts.yml` | Rule groups `decdn-slash-safety`, `decdn-liveness`, `decdn-delivery`. A rule with a matching runbook section carries a `runbook_url` into upstream's `docs/runbook.md`. |
+| `decdn-node/prometheus-alerts_test.yml` | promtool unit tests for `DecdnNodeDown` (run by `make lint-helm`; the chart's `.helmignore` keeps them out of the package). |
 | `sponsord/` | The onboarding sponsor's dashboard and alert rules ([below](#sponsord)). Not rendered by the chart. |
 | `iroh-relay/` | The iroh relay's dashboard and alert rules ([below](#iroh-relay)). Not rendered by the chart. |
 
@@ -22,11 +23,39 @@ this repo's MIT license. sponsord's were written here.
 exports; nothing in CI checks this. See
 [`.claude/skills/grafana-dashboards/SKILL.md`](../.claude/skills/grafana-dashboards/SKILL.md)
 for the name check, the query traps and the publishing steps. Run `make lint-helm`
-after any edit: it runs `promtool check rules` on both `prometheus-alerts.yml` files
-(PromQL syntax, duplicate keys) and checks that every dashboard parses and has its own uid.
-The chart packages `decdn-node/` whole and `make lint-helm` allows only `*.json` and
-`prometheus-alerts.yml` there, so anything else (a README, a rule test) belongs
-elsewhere or in the chart's `.helmignore`.
+after any edit: it runs `promtool check rules` on every `prometheus-alerts.yml`
+(PromQL syntax, duplicate keys), `promtool test rules` on each
+`prometheus-alerts_test.yml` beside it, and checks that every dashboard parses and has
+its own uid. The chart packages everything in `decdn-node/` but what its
+`.helmignore` drops (`*_test.yml`), and `make lint-helm` allows only `*.json` and
+`prometheus-alerts.yml` in the package, so anything else belongs elsewhere or in
+that `.helmignore`.
+
+## The `*Down` alerts
+
+`DecdnNodeDown`, `SponsordDown` and `IrohRelayDown` fire on `up == 0`, and also on an
+instance whose `up` stopped arriving after it reported in the last day.
+
+- **Why.** On the Ansible path the scraper is the Alloy agent on the same host, so
+  when the host, its network or Alloy dies, no `up == 0` is ever written. The
+  absence arm is what catches that outage. A central Prometheus (the chart's
+  ServiceMonitor, or your own on Compose) writes `up == 0` itself, and there the arm
+  fires once the target leaves service discovery.
+- **When.** Without a staleness marker (a dead host), about 5 minutes (Prometheus's
+  lookback) plus the rule's `for:` after the last sample. With one (the target left
+  service discovery), after the `for:`.
+- **How long.** It resolves a day after the last sample, even if the target is
+  still down.
+- **What it carries.** Both arms reduce to `job` and `instance` (and `namespace` for
+  the node), so those, `component` and `severity` are the alert's only labels: route
+  on them, not on `region` or `deployment_environment`. A changed label on a live
+  target does not fire, and a target fires once even when an older label set is
+  still in the window.
+- **Silence it** before you decommission a host, move a service to a new inventory
+  host, or rename its `job` (`grafana_alloy_*_job`, `metrics.serviceMonitor.jobLabel`)
+  or `instance`: the old series fires for a day. On Kubernetes, the same goes for
+  scaling a release to zero, or uninstalling one while another release still
+  carries the rules. A pod replacement that takes longer than the `for:` (1m) pages.
 
 ## On Kubernetes
 

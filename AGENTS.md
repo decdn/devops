@@ -78,7 +78,7 @@ charts/
     files/monitoring    # symlink to ../../../monitoring/decdn-node (helm package dereferences it)
     tests/render-test.sh  # positive/negative render tests (`make lint-helm`)
 monitoring/             # Grafana dashboards + Prometheus alert rules (maintained here)
-  decdn-node/           # the node's, rendered by the chart
+  decdn-node/           # the node's (+ promtool unit tests, .helmignored), rendered by the chart
   sponsord/             # sponsord's (+ promtool unit tests), Ansible/Compose only
   iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible only
 docs/                   # cross-path operator docs: requirements.md, lifecycle.md
@@ -105,7 +105,9 @@ rule that never fires. See `.claude/skills/grafana-dashboards/SKILL.md`. sponsor
 lives in `monitoring/sponsord/`, which the chart does not render; its `sponsord_*`
 names must be ones upstream `decdn/sponsord` `crates/sponsord/src/metrics.rs` exports,
 and its rules have promtool unit tests (`monitoring/sponsord/prometheus-alerts_test.yml`,
-run by `make lint-helm`). The relay's pair lives in `monitoring/iroh-relay/`, also not
+run by `make lint-helm`), as the node's `DecdnNodeDown` does
+(`monitoring/decdn-node/prometheus-alerts_test.yml`, which the chart's `.helmignore`
+keeps out of the package). The relay's pair lives in `monitoring/iroh-relay/`, also not
 rendered by the chart, with its own promtool unit tests; there CI does check the names:
 every `relayserver_*` series must appear in `exported-metrics.txt`, the `/metrics` of
 the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).

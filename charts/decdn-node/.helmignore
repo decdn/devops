@@ -6,3 +6,5 @@
 *.tmp
 *.orig
 tests/
+# The rules' promtool tests (monitoring/decdn-node/, through the files/monitoring link).
+files/monitoring/*_test.yml
