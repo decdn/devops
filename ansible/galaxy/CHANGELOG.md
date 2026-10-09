@@ -29,9 +29,10 @@ collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   so nodes behind NAT that serve clients need `everyone`. Relays deploy one at a
   time. Optional rate limits. The bind address is parsed
   as an IP (no port, loopback, link-local or mapped forms), and `::` is refused
-  where `net.ipv6.bindv6only=1`. Before any change it refuses ports another process
-  holds; after the start, a fatal gate requires metrics to answer, every listener
-  to belong to the unit and the process to stay up for `iroh_relay_readiness_settle`
+  where `net.ipv6.bindv6only=1`. Before any change it refuses ports a process
+  outside the relay unit's cgroup holds (so not the relay's own while systemd
+  restarts it); after the start, a fatal gate requires metrics to answer, every
+  listener to belong to the unit and the process to stay up for `iroh_relay_readiness_settle`
   seconds. A separate certificate check (`iroh_relay_certificate_check`: warn, fail
   or skip) fetches `https://<hostname>/healthz` on the relay's address (loopback for
   a wildcard bind) against the host's trust store; `warn` also fails once Let's

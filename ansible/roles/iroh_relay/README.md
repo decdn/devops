@@ -57,9 +57,13 @@ homed here only if the node is directly reachable; see
   `net.ipv6.bindv6only=1`, where it would serve no IPv4 peer.
 - **Refuses ports another process holds.** Before it changes anything, the role
   fails if anything other than the relay holds tcp/80, tcp/443 or the metrics port,
-  or udp/7842 while QUIC address discovery is on. A web server or the sponsord-onramp's Caddy cannot share 80/443
-  with the relay. `playbooks/iroh_relay.yml` also refuses a host in both
-  `iroh_relay_hosts` and `sponsord_onramp_hosts`.
+  or udp/7842 while QUIC address discovery is on. A listener is the relay's own
+  when every process holding it is in the unit's cgroup (the whole path, so a relay
+  in a nested container is another process), so a re-run against a relay that
+  systemd is restarting does not refuse the relay itself. A web server or the
+  sponsord-onramp's Caddy cannot share 80/443 with the relay.
+  `playbooks/iroh_relay.yml` also refuses a host in both `iroh_relay_hosts` and
+  `sponsord_onramp_hosts`.
 - **Gates the deploy.** After the start, loopback `/metrics` must answer, every
   listener must belong to the unit's `MainPID`, and the same process must still be
   up `iroh_relay_readiness_settle` seconds later (a relay that binds and then
@@ -267,7 +271,9 @@ check of your own.
       binding (`iroh-relay-gate`; the stub's marker files);
     - squatters on tcp/80 (`iroh-relay`) and udp/7842 (`iroh-relay-gate`) are
       refused before any change (the UDP one only with QUIC address discovery on,
-      which is also converged off);
+      which is also converged off), while the relay's own listeners pass on a
+      re-run right after a crash and on a unit holding every port with no MainPID
+      (`iroh-relay-gate`, #113);
     - a missing config fails the start (`iroh-relay`);
     - an untrusted certificate fails in `fail` mode, warns in `warn` mode, and fails
       in `warn` mode once a certificate was issued (`iroh-relay-certificate`);
