@@ -258,20 +258,24 @@ check of your own.
   LetsEncrypt TLS, loopback metrics, and the rest.
   - The converge proves the unit's hardening and capability, the gate and the
     certificate check.
-  - Its side effects prove:
-    - a knob restarts the relay, and a running relay with no record is restarted;
-    - the gate is fatal and records nothing, for a relay that never starts, one
-      that skips its QUIC socket, and one that crashes after binding (the stub's
-      marker files);
-    - squatters on tcp/80 and udp/7842 are refused before any change (the UDP one
-      only with QUIC address discovery on, which is also converged off);
-    - a missing config fails the start;
+  - Its side effects, split over sibling scenarios on the same converge so they
+    run side by side, prove:
+    - a knob restarts the relay (`iroh-relay`), and a running relay with no record
+      is restarted (`iroh-relay-gate`);
+    - the gate is fatal and records nothing, for a relay that never starts
+      (`iroh-relay`), one that skips its QUIC socket, and one that crashes after
+      binding (`iroh-relay-gate`; the stub's marker files);
+    - squatters on tcp/80 (`iroh-relay`) and udp/7842 (`iroh-relay-gate`) are
+      refused before any change (the UDP one only with QUIC address discovery on,
+      which is also converged off);
+    - a missing config fails the start (`iroh-relay`);
     - an untrusted certificate fails in `fail` mode, warns in `warn` mode, and fails
-      in `warn` mode once a certificate was issued;
-    - `0.0.0.0` and a specific IPv4 address are rendered, bound and probed;
-    - the allowlist: the ID read from a stand-in node (a fake `decdn` on the relay
-      host) is merged with the listed one; a node without an identity fails the
-      read; the `everyone` and `denylist` modes render as such.
+      in `warn` mode once a certificate was issued (`iroh-relay-certificate`);
+    - `0.0.0.0` and a specific IPv4 address are rendered, bound and probed
+      (`iroh-relay-gate`);
+    - the allowlist (`iroh-relay-gate`): the ID read from a stand-in node (a fake
+      `decdn` on the relay host) is merged with the listed one; a node without an
+      identity fails the read; the `everyone` and `denylist` modes render as such.
 - `molecule/iroh-relay-install` runs the `release` method against a local mirror
   serving the stub as a release tarball: a wrong pin, the stamp, a re-run with the
   mirror down, a binary replaced in place, and a version the binary does not report.

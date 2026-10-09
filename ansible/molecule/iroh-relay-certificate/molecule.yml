@@ -1,36 +1,18 @@
 ---
-# iroh-relay on a host of its own (iroh_relay_hosts), converged through the real
-# playbooks/iroh_relay.yml against a stub relay (files/iroh-relay-stub), with a
-# molecule CA standing in for Let's Encrypt (no public DNS in a container).
+# The relay's certificate check, split from ../iroh-relay so the two run side by
+# side: the same host shapes, inventory and converge (that scenario's prepare,
+# converge and verify, by path), then side_effect.yml here distrusts the molecule CA:
+# "fail" mode fails, "warn" mode warns until a production certificate for this name
+# is cached in the ACME directory (then it fails too), and staging only warns, even
+# with its certificate cached. The CA is trusted again for verify. Both platforms,
+# for each one's trust store.
 #
-#   converge     the relay: config, hardened unit (DynamicUser, CAP_NET_BIND_SERVICE
-#                only, StateDirectory), the readiness gate (metrics + every
-#                listener owned by the unit) and the certificate check, in "fail"
-#                mode, against the molecule CA the host trusts; Alloy scraping the
-#                relay and labelling its journal stream.
-#   idempotence  an unchanged host must not restart anything.
-#   side_effect  a no-op re-run leaves the relay alone; a changed knob restarts it;
-#                a relay that will not start FAILS the gate and leaves the
-#                restart-input record alone; a squatter on tcp/80 is refused
-#                before anything changes; a missing config fails the start (the
-#                unit's assert).
-#   verify       files, modes, unit hardening, effective capabilities, the
-#                listeners (metrics on loopback only), /healthz over https with the
-#                trusted certificate, /generate_204, the Alloy blocks.
-#
-# The other side effects run on the same converge, so they run side by side (their
-# inventories must stay identical to this one: `make test-scripts` checks): the
-# certificate check in ../iroh-relay-certificate; the gate's other refusals, QAD off,
-# the bind addresses and the access modes in ../iroh-relay-gate; the release install
-# (download, sha256 pin, stamp, version backstop) in ../iroh-relay-install against a
-# local mirror; and decommission in ../iroh-relay-lifecycle. The broken-input matrix lives in
-# ../validation-iroh-relay. `baseline` is skipped (real-host-only — see
-# ../default/molecule.yml), so the tcp/80, tcp/443 and udp/7842 holes are covered by
-# tests/firewall-holes instead.
+# The inventory below must stay identical to ../iroh-relay/molecule.yml's
+# (`make test-scripts` checks); the stub is the one it names.
 driver:
   name: docker
 platforms:
-  - name: relay-molecule
+  - name: relay-cert-molecule
     # Same digest-pinned images as ../sponsord (repo convention).
     image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
     pre_build_image: true
@@ -42,7 +24,7 @@ platforms:
     groups:
       - iroh_relay_hosts
   # systemd 255: StateDirectory= and the ambient capability on a newer systemd.
-  - name: relay-molecule-u2404
+  - name: relay-cert-molecule-u2404
     image: geerlingguy/docker-ubuntu2404-ansible@sha256:3394e335df58c961c00b78ae601ef30cdd7463b112f21b0c5f78674a70526302
     pre_build_image: true
     command: /usr/lib/systemd/systemd
@@ -61,6 +43,10 @@ provisioner:
     ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
     # Same pipelining note as ../default/molecule.yml.
     ANSIBLE_PIPELINING: "true"
+  playbooks:
+    prepare: ../iroh-relay/prepare.yml
+    converge: ../iroh-relay/converge.yml
+    verify: ../iroh-relay/verify.yml
   inventory:
     group_vars:
       iroh_relay_hosts:
@@ -98,12 +84,12 @@ verifier:
   name: ansible
 scenario:
   test_sequence:
-    # Leading destroy: see ../default/molecule.yml.
+    # Leading destroy: see ../default/molecule.yml. No idempotence step: the
+    # converge is ../iroh-relay's, whose idempotence runs there.
     - destroy
     - create
     - prepare
     - converge
-    - idempotence
     - side_effect
     - verify
     - destroy

@@ -6,7 +6,10 @@
   hosts: all
   become: true
   vars:
-    fixture_src: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_DIRECTORY') }}/files/fixture/"
+    # By project path: ../source-build-rollback and ../source-build-recovery run
+    # this file too.
+    fixture_src: >-
+      {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/source-build/files/fixture/
     stub_bin: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/default/files/decdn-node-stub"
   tasks:
     - name: Ensure data + config directories exist

@@ -11,12 +11,12 @@
 #   idempotence  an unchanged host must not restart anything.
 #   side_effect  rotate the treasury password out of band -> the next converge
 #                must restart; make the daemon refuse to start -> the /healthz
-#                gate must FAIL the converge; then put it back; secret.env's
-#                provenance guards.
+#                gate must FAIL the converge; then put it back; a held pool
+#                top-up refuses the restart until it clears.
 #   verify       files, modes, unit hardening, credentials, listener, Alloy config.
 #
-# Release mode and treasury wallet generation run in ../sponsord-install on the same
-# converge, so the two run side by side. Its inventory below must stay identical to
+# Release mode, treasury wallet generation and secret.env's provenance guards run in
+# ../sponsord-install on the same converge, so the two run side by side. Its inventory below must stay identical to
 # this one (`make test-scripts` checks).
 #
 # `baseline` is skipped (real-host-only — see ../default/molecule.yml). The

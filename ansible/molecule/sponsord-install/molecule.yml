@@ -4,7 +4,8 @@
 #   prepare      ../sponsord's staging plus a signed release mirror on loopback;
 #   side_effect  release mode against that mirror (verified install, no re-download,
 #                bad checksum / signature / version each failing at its own task,
-#                manual clearing the stamp), then treasury wallet generation.
+#                manual clearing the stamp), then treasury wallet generation,
+#                then secret.env's provenance guards.
 # No idempotence step (../sponsord runs it on the identical converge) and no verify:
 # ../sponsord/verify.yml checks state its own side effect records, and each play
 # here asserts its own outcome and leaves the host as converged.

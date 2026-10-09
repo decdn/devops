@@ -13,13 +13,14 @@
 #   idempotence  an unchanged host must not restart anything.
 #   side_effect  rotate the Turnstile secret out of band -> the next converge must
 #                restart the onramp (and only it); make the onramp refuse to start
-#                -> the /healthz gate must FAIL the converge; a custom gate page;
-#                the Turnstile secret from inventory.
+#                -> the /healthz gate must FAIL the converge; a missing record
+#                restarts a running onramp; a daemon restart brings it back.
 #   verify       files, modes, unit hardening, credentials, listeners, the whole
 #                https chain through Caddy, the client address Caddy passes on.
 #
-# The proxy side effects (proxy "none", ACME, a Caddyfile the role did not write)
-# run in ../sponsord-onramp-caddy on the same converge, so the two run side by side;
+# The proxy side effects (proxy "none", ACME, a Caddyfile the role did not write), a
+# custom gate page and the Turnstile secret from inventory run in
+# ../sponsord-onramp-caddy on the same converge, so the two run side by side;
 # so do ../sponsord-onramp-source and ../sponsord-onramp-lifecycle. Their
 # inventories must stay identical to this one (`make test-scripts` checks).
 #

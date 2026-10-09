@@ -1,26 +1,17 @@
 ---
-# decdn_node_install_method "source" end to end: the role installs rustup (pinned
-# rustup-init, real download), clones a fixture repo shaped like decdn/decdn at a
-# branch, `cargo build`s it as the unprivileged build user (the fixture's
-# rust-toolchain.toml pulls the real pinned toolchain) and installs the two
-# binaries. They exec the default scenario's Python stub, so the rest of the role
-# (config validate, unit, start, readiness) runs as in `default`.
+# The node built from source, split from ../source-build so the two run side by
+# side: the same host shape, inventory and converge (that scenario's prepare,
+# converge and verify, by path), then side_effect.yml here switches to "manual"
+# and back, replaces an untrusted earlier build home, and recovers a restart lost
+# on the first run of this role version.
 #
-# Needs network access to static.rust-lang.org. The fixture has no dependencies,
-# so it compiles in seconds; a real decdn/decdn build is minutes and is not run in
-# CI. The sponsord and sponsord_onramp roles' tasks/source.yml are exercised by
-# ../sponsord-onramp-source; the input asserts are in ../validation and
-# ../validation-sponsord.
-#
-# side_effect.yml here moves the branch; the rollback from a broken commit runs in
-# ../source-build-rollback, and the install-method switch, the untrusted build home
-# and the lost restart on an upgrade in ../source-build-recovery, both on this
-# converge so the three run side by side (their inventories must stay identical to
-# this one: `make test-scripts` checks).
+# Needs network access to static.rust-lang.org, as ../source-build does. The
+# inventory below must stay identical to ../source-build/molecule.yml's
+# (`make test-scripts` checks).
 driver:
   name: docker
 platforms:
-  - name: decdn-source-build-molecule
+  - name: decdn-source-build-recovery-molecule
     # Same digest as default/molecule.yml (see there).
     image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
     pre_build_image: true
@@ -35,6 +26,10 @@ provisioner:
     ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
     ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
     ANSIBLE_PIPELINING: "true"
+  playbooks:
+    prepare: ../source-build/prepare.yml
+    converge: ../source-build/converge.yml
+    verify: ../source-build/verify.yml
   inventory:
     group_vars:
       # Inventory, not converge vars, so side_effect.yml re-runs the role with the
@@ -60,13 +55,13 @@ verifier:
   name: ansible
 scenario:
   test_sequence:
-    # Leading destroy: see ../default/molecule.yml. idempotence is the check that
-    # an unchanged commit is not rebuilt; side_effect then moves the branch.
+    # Leading destroy: see ../default/molecule.yml. No idempotence: ../source-build
+    # runs it on the identical converge. verify (../source-build's) checks the
+    # converged rev 1 the side effect starts from, so it runs first.
     - destroy
     - create
     - prepare
     - converge
-    - idempotence
     - verify
     - side_effect
     - destroy

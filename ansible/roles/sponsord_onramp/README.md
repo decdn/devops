@@ -204,10 +204,12 @@ collector; its access logs are not shipped.
     cannot choose the address the onramp sees;
   - that a Turnstile rotation restarts the onramp and not the daemon;
   - that the `/healthz` gate fails the deploy when the onramp will not start;
-  - a custom gate page, and the Turnstile secret from inventory.
+  - that a running onramp with no record restarts, and a daemon restart brings it
+    back.
 - `molecule/sponsord-onramp-caddy` runs beside it on the same converge. It checks
   proxy `none`, ACME mode, a broken upstream behind Caddy, the refusal of a foreign
-  Caddyfile, and the confirmed takeover.
+  Caddyfile, and the confirmed takeover; then a custom gate page, and the Turnstile
+  secret from inventory.
 - `molecule/validation-sponsord` holds the negative cases.
 - `tests/firewall-holes` (`make test-scripts`) pins the tcp/80 and tcp/443 holes.
 - `tests/alloy-config` (`make lint-alloy`) runs the onramp's log lines through the

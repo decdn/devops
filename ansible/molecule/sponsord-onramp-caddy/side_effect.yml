@@ -9,6 +9,12 @@
 #      internal CA, a broken upstream behind Caddy fails the run.
 #   3. The role never silently replaces a Caddyfile it did not write; the package's
 #      untouched default it does replace.
+# And two that need no proxy change, here so both scenarios stay short:
+#   4. A custom gate page is installed, read by the onramp, and removed again.
+#   5. The Turnstile secret from inventory: it replaces a host-written file only when
+#      confirmed, lands verbatim at 0600 with an `inventory` record and restarts the
+#      onramp; an unchanged re-run is a no-op; an emptied value never adopts the
+#      role's own file; with the record discarded the host's file is accepted.
 # Order matters: 1 leaves the host in proxy "none" mode and 2's first converge puts
 # Caddy back. The host is left healthy on the role's own Caddyfile, `tls internal`,
 # for verify. Plays after the first reuse its facts (gather_facts: false).
@@ -181,3 +187,181 @@
         that:
           - "'MANAGED BY the sponsord_onramp role' in (_or_after_default.content | b64decode)"
         fail_msg: The role did not take over the caddy package's untouched default Caddyfile.
+
+- name: Side effect — a custom gate page
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    _or_page: >-
+      {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/sponsord-onramp/files/gate.html
+  tasks:
+    - name: Converge with a custom gate page
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_gate_template_src: "{{ _or_page }}"
+
+    - name: Stat the installed page and read the env file
+      ansible.builtin.stat:
+        path: /etc/sponsord/onramp-gate.html
+      register: _or_page_stat
+
+    - name: Read the env file with the page set
+      ansible.builtin.slurp:
+        src: /etc/sponsord/sponsord-onramp.env
+      register: _or_page_env
+
+    # The stub reads the page at start, as the onramp's dynamic user: the role's
+    # /healthz gate passing already proves it was readable.
+    - name: Require the page installed root-owned, world-readable and configured
+      ansible.builtin.assert:
+        that:
+          - _or_page_stat.stat.isreg
+          - _or_page_stat.stat.mode == '0644'
+          - _or_page_stat.stat.pw_name == 'root'
+          - "'ONRAMP_GATE_TEMPLATE=/etc/sponsord/onramp-gate.html' in (_or_page_env.content | b64decode)"
+        fail_msg: The custom gate page is not installed, or not configured.
+
+    - name: Converge without the page again
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    - name: Stat the page after it was dropped
+      ansible.builtin.stat:
+        path: /etc/sponsord/onramp-gate.html
+      register: _or_page_gone
+
+    - name: Read the env file without the page
+      ansible.builtin.slurp:
+        src: /etc/sponsord/sponsord-onramp.env
+      register: _or_page_env_gone
+
+    - name: Require the page and its setting gone
+      ansible.builtin.assert:
+        that:
+          - not _or_page_gone.stat.exists
+          - "'ONRAMP_GATE_TEMPLATE' not in (_or_page_env_gone.content | b64decode)"
+        fail_msg: The dropped gate page is still installed or configured.
+
+- name: Side effect — the Turnstile secret from inventory
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    _or_ts: /etc/sponsord/turnstile-secret
+    _or_ts_record: /etc/sponsord/.turnstile-secret.sha256
+    _or_ts_value: 1x0000000000000000000000000000000DD
+  tasks:
+    - name: Converge with an inventory secret over the host's file, unconfirmed
+      block:
+        - name: Run the role with sponsord_onramp_turnstile_secret set
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_turnstile_secret: "{{ _or_ts_value }}"
+
+        - name: Fail — the role overwrote a host-provisioned Turnstile secret
+          ansible.builtin.fail:
+            msg: The role replaced a Turnstile secret it did not write, unconfirmed.
+      rescue:
+        - name: Require the failure to come from the overwrite guard
+          ansible.builtin.assert:
+            that:
+              - >-
+                ansible_failed_task.name
+                == 'Require confirmation to overwrite a Turnstile secret this role did not write'
+            fail_msg: "Expected the overwrite guard, got \"{{ ansible_failed_task.name }}\"."
+
+    - name: Read the onramp before the takeover
+      ansible.builtin.systemd_service:
+        name: sponsord-onramp
+      register: _or_ts_before
+
+    - name: Converge with the takeover confirmed
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_turnstile_secret: "{{ _or_ts_value }}"
+        sponsord_onramp_turnstile_secret_overwrite_host_file: true
+
+    - name: Read the secret, its record and the onramp after the takeover
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: _or_ts_files
+      loop: ["{{ _or_ts }}", "{{ _or_ts_record }}"]
+
+    - name: Stat the secret after the takeover
+      ansible.builtin.stat:
+        path: "{{ _or_ts }}"
+      register: _or_ts_stat
+
+    - name: Read the onramp after the takeover
+      ansible.builtin.systemd_service:
+        name: sponsord-onramp
+      register: _or_ts_after
+
+    - name: Require the inventory secret written, recorded and picked up
+      ansible.builtin.assert:
+        that:
+          - (_or_ts_files.results[0].content | b64decode) == _or_ts_value
+          - (_or_ts_files.results[1].content | b64decode) is match('^inventory [0-9a-f]{64}\s*$')
+          - _or_ts_stat.stat.mode == '0600'
+          - _or_ts_after.status.ActiveState == 'active'
+          - _or_ts_after.status.MainPID != _or_ts_before.status.MainPID
+        fail_msg: >-
+          The inventory secret was not written verbatim at 0600 with an `inventory`
+          record, or the onramp did not restart onto it.
+
+    - name: Re-run with the same inventory secret, unconfirmed
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_turnstile_secret: "{{ _or_ts_value }}"
+
+    - name: Read the onramp after the re-run
+      ansible.builtin.systemd_service:
+        name: sponsord-onramp
+      register: _or_ts_rerun
+
+    - name: Require the re-run to leave the role's own file and the onramp alone
+      ansible.builtin.assert:
+        that:
+          - _or_ts_rerun.status.MainPID == _or_ts_after.status.MainPID
+        fail_msg: Re-running with an unchanged inventory secret restarted the onramp.
+
+    - name: Converge with the inventory secret gone
+      block:
+        - name: Run the role with sponsord_onramp_turnstile_secret empty
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+
+        - name: Fail — the role adopted its own file as host-provisioned
+          ansible.builtin.fail:
+            msg: The role adopted a file it wrote from inventory as the host's.
+      rescue:
+        - name: Require the failure to come from the adoption guard
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Refuse to adopt a role-written Turnstile secret as host-provisioned'
+            fail_msg: "Expected the adoption guard, got \"{{ ansible_failed_task.name }}\"."
+
+    - name: Hand the secret to the host (discard the record)
+      ansible.builtin.file:
+        path: "{{ _or_ts_record }}"
+        state: absent
+
+    - name: Converge with the host-provisioned secret
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    - name: Read the record after the handover
+      ansible.builtin.slurp:
+        src: "{{ _or_ts_record }}"
+      register: _or_ts_handover
+
+    - name: Require a `host` record after the handover
+      ansible.builtin.assert:
+        that:
+          - (_or_ts_handover.content | b64decode) is match('^host [0-9a-f]{64}\s*$')
+        fail_msg: The handed-over secret was not recorded as the host's.

@@ -6,7 +6,8 @@
 #   warning), ACME mode (no `tls internal`, the redirect answers, an unissuable
 #   certificate only warns), a broken upstream behind Caddy failing the run, and a
 #   Caddyfile the role did not write (refused until confirmed; the package's
-#   untouched default replaced).
+#   untouched default replaced); then a custom gate page, and the Turnstile secret
+#   from inventory (both from ../sponsord-onramp, to keep the two jobs short).
 # No idempotence step: ../sponsord-onramp runs it on the identical converge.
 #
 # The inventory below must stay identical to ../sponsord-onramp/molecule.yml's

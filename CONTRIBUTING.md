@@ -81,9 +81,11 @@ they are maintained here. See [its README](monitoring/README.md).
   `cloud-init-sponsord` scenarios boot the real user-data templates, so they need
   network access to apt, PyPI and Galaxy. Keep each scenario well under its leg's
   timeout; when one grows, split it along its side effects (as `sponsord-install`,
-  `sponsord-onramp-caddy`, `sponsord-onramp-source` and the `validation-*` scenarios
-  are). `source-build` and `sponsord-onramp-source` download rustup and a Rust
-  toolchain from static.rust-lang.org.
+  `sponsord-onramp-caddy`, `sponsord-onramp-source`, `iroh-relay-gate`,
+  `source-build-recovery` and the `validation-*` scenarios are), or move a play into
+  a short sibling that already shares its converge. `source-build`, its two siblings
+  and `sponsord-onramp-source` download rustup and a Rust toolchain from
+  static.rust-lang.org.
 - **`release.yml`**: on `vX.Y.Z` tags; see [RELEASING.md](RELEASING.md).
 - **`upstream-drift.yml`**: weekly, non-blocking; see "Upstream mirrors" above.
 - **Every job is bounded** by `timeout-minutes`. The values are bounds sized off

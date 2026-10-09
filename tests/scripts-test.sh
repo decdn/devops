@@ -172,7 +172,9 @@ want="$(cd "$repo/ansible/molecule" && for d in */molecule.yml; do echo "${d%/mo
 if command -v yq >/dev/null; then
   for pair in sponsord:sponsord-install sponsord-onramp:sponsord-onramp-caddy \
       sponsord-onramp:sponsord-onramp-source sponsord-onramp:sponsord-onramp-lifecycle \
-      iroh-relay:iroh-relay-lifecycle iroh-relay:iroh-relay-install; do
+      iroh-relay:iroh-relay-lifecycle iroh-relay:iroh-relay-install \
+      iroh-relay:iroh-relay-certificate iroh-relay:iroh-relay-gate \
+      source-build:source-build-rollback source-build:source-build-recovery; do
     a="$repo/ansible/molecule/${pair%%:*}/molecule.yml" b="$repo/ansible/molecule/${pair##*:}/molecule.yml"
     [[ "$(yq -o=json '.provisioner.inventory' "$a")" == "$(yq -o=json '.provisioner.inventory' "$b")" ]] \
       || fail "molecule ${pair%%:*} and ${pair##*:} inventories differ (they share one converge)"
