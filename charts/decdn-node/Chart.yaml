@@ -29,7 +29,7 @@ maintainers:
     email: info@decdn.org
     url: https://decdn.org
 # Artifact Hub metadata (https://artifacthub.io/docs/topics/annotations/helm/).
-# release.yml adds artifacthub.io/changes to the packaged copy, generated from this
+# release-chart.yml adds artifacthub.io/changes to the packaged copy, generated from this
 # release's CHANGELOG.md section (scripts/chart-artifacthub-changes.py): never add it here.
 annotations:
   artifacthub.io/category: networking

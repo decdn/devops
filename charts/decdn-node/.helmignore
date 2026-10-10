@@ -8,5 +8,5 @@
 tests/
 # The rules' promtool tests (monitoring/decdn-node/, through the files/monitoring link).
 files/monitoring/*_test.yml
-# Artifact Hub repository metadata: pushed to the registry on its own (release.yml).
+# Artifact Hub repository metadata: pushed to the registry on its own (release-chart.yml).
 artifacthub-repo.yml

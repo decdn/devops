@@ -88,7 +88,8 @@ they are maintained here. See [its README](monitoring/README.md).
   a short sibling that already shares its converge. `source-build`, its two siblings
   and `sponsord-onramp-source` download rustup and a Rust toolchain from
   static.rust-lang.org.
-- **`release.yml`**: on `vX.Y.Z` tags; see [RELEASING.md](RELEASING.md).
+- **`release-collection.yml`** / **`release-chart.yml`**: on `collection-vX.Y.Z` /
+  `decdn-node-X.Y.Z` tags; see [RELEASING.md](RELEASING.md).
 - **`upstream-drift.yml`**: weekly, non-blocking; see "Upstream mirrors" above.
 - **Every job is bounded** by `timeout-minutes`. The values are bounds sized off
   observed runtimes, not targets. Without one a hung job burns the 360-minute default,
@@ -122,8 +123,8 @@ they are maintained here. See [its README](monitoring/README.md).
 - **Bump manually** (Dependabot can't parse them): the `KICS_IMAGE`,
   `KUBECONFORM_IMAGE` and `PROMTOOL_IMAGE` digests in the `Makefile`; the molecule image digests in
   `ansible/molecule/*/molecule.yml` (all together, `docker buildx imagetools inspect`);
-  the four `setup-helm` `version:` inputs (`ci.yml`'s `helm` and `kics` jobs, both
-  jobs in `release.yml`); the collection versions in `ansible/requirements.yml`, and
+  the five `setup-helm` `version:` inputs (`ci.yml`'s `helm`, `kics` and `scripts`
+  jobs, both jobs in `release-chart.yml`); the collection versions in `ansible/requirements.yml`, and
   their exact pins in `cloud-init/collections.lock.yml` (the full transitive set, from
   a fresh `make deps` resolve); ansible-core in `cloud-init/requirements.in`, followed by a
   recompile of the hash-locked `requirements.txt` (command in `cloud-init/README.md`);

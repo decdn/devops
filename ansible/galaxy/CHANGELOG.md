@@ -2,7 +2,9 @@
 
 All notable changes to the `decdn.node` Ansible collection are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
-collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+collection adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). It has
+its own version, independent of the `decdn-node` Helm chart's: a `collection-vX.Y.Z`
+tag releases it (see [RELEASING.md](../../RELEASING.md)).
 
 ## [Unreleased]
 
@@ -544,6 +546,7 @@ serde aliases, so leaving any of these set would refuse the daemon's startup:
 - `decdn_node_sha256` / `decdn_cli_sha256` — superseded by signed `SHA256SUMS`.
 
 <!-- No release tags exist yet; these resolve today. Switch to compare/tag links
-     (compare/v0.1.0...HEAD and releases/tag/v0.1.0) once v0.1.0 is cut. -->
+     (compare/collection-v0.1.0...HEAD and releases/tag/collection-v0.1.0) once
+     collection-v0.1.0 is cut. -->
 [Unreleased]: https://github.com/decdn/devops/commits/main
 [0.1.0]: https://github.com/decdn/devops/releases

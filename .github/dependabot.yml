@@ -20,7 +20,7 @@
 # NOT covered, bump manually (CONTRIBUTING.md § Supply-chain / pinning rules):
 #   - the KICS, kubeconform and promtool image digests in the Makefile
 #   - the molecule image digests in ansible/molecule/*/molecule.yml
-#   - the four setup-helm `version:` inputs (two in ci.yml, two in release.yml)
+#   - the five setup-helm `version:` inputs (three in ci.yml, two in release-chart.yml)
 #   - the Galaxy collections in ansible/requirements.yml, and their exact pins in
 #     cloud-init/collections.lock.yml
 #   - ansible-core in cloud-init/requirements.in (then recompile requirements.txt)

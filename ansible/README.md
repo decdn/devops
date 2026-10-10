@@ -508,6 +508,7 @@ make galaxy-check   # build + validate with galaxy-importer (the checks Galaxy r
 ```
 
 CI's `galaxy-build` job builds and validates the collection on every `ansible/**` change.
-Publishing happens from a `vX.Y.Z` tag through `.github/workflows/release.yml`, together
-with the Helm chart at the same version: see [RELEASING.md](../RELEASING.md). Record every
+Publishing happens from a `collection-vX.Y.Z` tag through
+`.github/workflows/release-collection.yml`, on the collection's own version (the Helm
+chart is released separately): see [RELEASING.md](../RELEASING.md). Record every
 change under `[Unreleased]` in `galaxy/CHANGELOG.md`.

@@ -1,47 +1,69 @@
 # Releasing
 
-A `vX.Y.Z` tag releases two artifacts at one version:
+The repo publishes two artifacts, each on its own version and released by its own tag:
 
-| Artifact | Published to | Install |
-|----------|--------------|---------|
-| `decdn.node` Ansible collection | [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/) | `ansible-galaxy collection install decdn.node:==X.Y.Z` |
-| `decdn-node` Helm chart | `oci://ghcr.io/decdn/charts`, signed with cosign (keyless) | `helm install <release> oci://ghcr.io/decdn/charts/decdn-node --version X.Y.Z` |
+| Artifact | Tag | Workflow | Published to | Install |
+|----------|-----|----------|--------------|---------|
+| `decdn.node` Ansible collection | `collection-vX.Y.Z` | [`release-collection.yml`](.github/workflows/release-collection.yml) | [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/) | `ansible-galaxy collection install decdn.node:==X.Y.Z` |
+| `decdn-node` Helm chart | `decdn-node-X.Y.Z` | [`release-chart.yml`](.github/workflows/release-chart.yml) | `oci://ghcr.io/decdn/charts`, signed with cosign (keyless) | `helm install <release> oci://ghcr.io/decdn/charts/decdn-node --version X.Y.Z` |
 
-[`.github/workflows/release.yml`](.github/workflows/release.yml) does the work. Its
-`build` job runs on every matching tag push. It gates the tag, re-runs
-`make galaxy-check` and `make lint-helm`, packages both, and uploads them with a
-`SHA256SUMS` as a workflow artifact. The `publish` job pushes to Galaxy and ghcr.io and
-creates the GitHub Release, but **only** when the repository variable
-`PUBLISH_ENABLED` is `true`. Until then, a tag push is a dry run. So is a manual
-*Run workflow* (`workflow_dispatch`) with a tag, which is the way to rehearse.
+Release an artifact when it has changes; the other one is not touched. The two do not
+depend on each other, and what they must agree on is checked by CI, not by a shared
+version: the decdn version (the chart's `appVersion` and the role's
+`decdn_node_version`) on every PR (`make test-scripts`), and the config keys each one
+renders against the same upstream schema-key inventory whenever either changes
+(`make lint-helm`, `molecule/schema`). When a change lands in both (a decdn bump,
+say), release both.
+
+Each workflow's `build` job runs on every matching tag push. It gates the tag
+(`scripts/check-release-version.sh`), re-runs that artifact's checks (`make galaxy-check`
+or `make lint-helm`), packages it, and uploads it with a `SHA256SUMS` as a workflow
+artifact. The `publish` job pushes it to Galaxy or ghcr.io and creates the GitHub
+Release, but **only** when the repository variable `PUBLISH_ENABLED` is `true`. Until
+then, a tag push is a dry run. So is a manual *Run workflow* (`workflow_dispatch`) with a
+tag, which is the way to rehearse. The repo's *Latest* release is the highest collection
+version: a collection release is marked Latest only when no higher `collection-v` release
+exists (so a patch to an older line does not take it), and chart releases never are
+(`--latest=false`). Collection publishes run one at a time, so two cannot race for it.
 
 ## Cutting a release
 
-1. **Versions.** Set the same `X.Y.Z` in `ansible/galaxy/galaxy.yml` (`version:`) and
-   `charts/decdn-node/Chart.yaml` (`version:`). Bump the chart's `appVersion` (and the
-   image tag in its `artifacthub.io/images` annotation) if it now targets a newer decdn
-   release.
-2. **Changelogs.** Both `ansible/galaxy/CHANGELOG.md` and `charts/decdn-node/CHANGELOG.md`
-   collect changes under `## [Unreleased]`. At release time, move those entries under a
-   dated `## [X.Y.Z] — YYYY-MM-DD` heading and leave an empty `[Unreleased]` above it.
-   **First release only:** both files already hold a `## [0.1.0] — unreleased` section
-   describing the initial state; fold `[Unreleased]` into it and replace "unreleased"
-   with the date. The gate rejects a missing section and one still marked
-   "unreleased". These two sections become the GitHub Release notes. The chart's
-   section also becomes the packaged chart's `artifacthub.io/changes` annotation
-   (`scripts/chart-artifacthub-changes.py`), so its `###` headings must be Keep a
-   Changelog kinds (Added, Changed, Deprecated, Removed, Fixed, Security) and every
-   change a bulleted entry; `make test-scripts` checks the section parses.
-3. **Check locally:** `scripts/check-release-version.sh vX.Y.Z`, then
-   `make -C ansible galaxy-check` and `make lint-helm`.
-4. **Merge** that as a PR, then tag the merge commit on `main` and push the tag:
+For the collection, everything below is under `ansible/galaxy/`; for the chart, under
+`charts/decdn-node/`.
+
+1. **Version.** Set `X.Y.Z` as `version:` in `galaxy.yml` (collection) or `Chart.yaml`
+   (chart). The chart's `appVersion` and its `artifacthub.io/images` tag already follow
+   the role's `decdn_node_version` (`make test-scripts` refuses a PR where they
+   differ), so a decdn bump is a chart change too: log it in the chart's changelog and
+   release the chart.
+2. **Changelog.** `CHANGELOG.md` collects changes under `## [Unreleased]`. At release
+   time, move those entries under a dated `## [X.Y.Z] — YYYY-MM-DD` heading and leave an
+   empty `[Unreleased]` above it. **First release only:** each changelog already holds
+   a `## [0.1.0] — unreleased` section describing the initial state; fold
+   `[Unreleased]` into it and replace "unreleased" with the date. The gate rejects a
+   missing section, one not dated `YYYY-MM-DD` (so one still marked "unreleased"), and
+   one with no bulleted entries. The section becomes the GitHub Release notes. The
+   chart's section also becomes the packaged chart's `artifacthub.io/changes`
+   annotation (`scripts/chart-artifacthub-changes.py`), so its `###` headings must be
+   Keep a Changelog kinds (Added, Changed, Deprecated, Removed, Fixed, Security) and
+   every change a bulleted entry; `make test-scripts` checks the section parses.
+3. **Check locally:** `scripts/check-release-version.sh collection-vX.Y.Z` then
+   `make -C ansible galaxy-check`, or `scripts/check-release-version.sh decdn-node-X.Y.Z`
+   then `make lint-helm`.
+4. **Merge** that as a PR, then tag the merge commit on `main` with the artifact's tag
+   and push it (both lines if you are releasing both):
 
    ```bash
-   git tag -s vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z
+   git tag -s collection-vX.Y.Z -m "collection-vX.Y.Z" && git push origin collection-vX.Y.Z
+   git tag -s decdn-node-X.Y.Z -m "decdn-node-X.Y.Z" && git push origin decdn-node-X.Y.Z
    ```
 
-5. **Watch** the Release workflow. With publishing enabled, the `publish` job waits for
-   approval on the `release` environment.
+5. **Watch** the *Release collection* or *Release chart* workflow. With publishing
+   enabled, the `publish` job waits for approval on the `release` environment.
+
+The chart's tag shape (`decdn-node-`) and workflow file name (`release-chart.yml`) are
+part of its cosign certificate identity (see [Verifying a release](#verifying-a-release)):
+never change either once a chart is published.
 
 ## First release only
 
@@ -54,9 +76,10 @@ Before the first publish:
   reviewers, and put `GALAXY_API_KEY` there rather than as a repository secret if you
   want the reviewer gate to guard it too.
 - **Enable:** set the repository variable `PUBLISH_ENABLED` to `true`, then cut the
-  release as above.
+  releases as above. Both artifacts start at `0.1.0`, so the first two tags are
+  `collection-v0.1.0` and `decdn-node-0.1.0`; their versions diverge from then on.
 
-After the first publish (the package does not exist before it):
+After the first chart publish (the package does not exist before it):
 
 - **GHCR visibility.** The first `helm push` creates the `decdn/charts/decdn-node`
   package as **private**. Make it public under the org's *Packages* settings, or
@@ -83,27 +106,42 @@ After the first publish (the package does not exist before it):
 
 ## When a publish fails half-way
 
-The steps run chart (with its Artifact Hub metadata), then Galaxy, then the GitHub
-Release. The Release is last, so it only appears once both artifacts are live.
+In both workflows the GitHub Release is the last step, so it only appears once the
+artifact is live. The two workflows share nothing at run time (each has its own
+concurrency group), so a failure in one artifact's release never affects the other's.
 
-- **Chart push failed:** nothing is public yet. Fix the cause and re-run the job.
-- **Artifact Hub metadata push failed:** the chart is live. Fix the cause and re-run;
-  both pushes are repeatable.
-- **Galaxy publish failed after the chart was pushed:** fix the cause and re-run. The
-  chart push is repeatable for the same version (the tag just moves to an identical
-  digest), but **Galaxy refuses a version that already exists**. If Galaxy actually
-  accepted the upload before the job failed, finish by hand from the `release-vX.Y.Z`
-  workflow artifact, with the same assets as the workflow (`release-notes.md` and
-  `artifacthub-repo.yml` in it are not assets): `gh release create vX.Y.Z --title vX.Y.Z
-  --notes-file release-notes.md decdn-node-*.tar.gz decdn-node-*.tgz SHA256SUMS`.
-- **Never re-use a version** for different content. Cut `vX.Y.Z+1`.
+Re-run only the failed `publish` job, never the whole workflow: `publish` reuses the
+artifact `build` checksummed, while a fresh `build` repackages the chart, which need
+not reproduce the same bytes.
+
+**Chart** (`release-chart.yml`: chart push and signature, then the Artifact Hub
+metadata, then the Release). The pushes are repeatable: re-pushing the same package
+moves the version tag to the same digest, and `oras push` moves the `artifacthub.io`
+tag. The Release is not: if `gh release create` made the Release and then failed (an
+asset upload, say), a re-run fails on the existing Release. Finish it by hand with
+`gh release upload decdn-node-X.Y.Z --repo decdn/devops <missing assets>` from the
+`release-decdn-node-X.Y.Z` workflow artifact.
+
+**Collection** (`release-collection.yml`: Galaxy, then the Release). **Galaxy refuses a
+version that already exists.** If the publish step failed before Galaxy accepted the
+upload, fix the cause and re-run. If Galaxy did accept it, finish by hand from the
+`release-collection-vX.Y.Z` workflow artifact, with the same assets as the workflow
+(`release-notes.md` in it is not an asset):
+
+```bash
+# --latest=false if a higher collection-v release already exists
+gh release create collection-vX.Y.Z --repo decdn/devops --title "decdn.node collection X.Y.Z" \
+  --latest=true --notes-file release-notes.md decdn-node-X.Y.Z.tar.gz SHA256SUMS
+```
+
+**Never re-use a version** for different content. Cut the next patch version.
 
 ## Verifying a release
 
 ```bash
-# The chart's signature: keyless, tied to this repo's release workflow.
+# The chart's signature: keyless, tied to this repo's chart release workflow and tags.
 cosign verify ghcr.io/decdn/charts/decdn-node:X.Y.Z \
-  --certificate-identity-regexp '^https://github.com/decdn/devops/.github/workflows/release.yml@refs/tags/v' \
+  --certificate-identity-regexp '^https://github\.com/decdn/devops/\.github/workflows/release-chart\.yml@refs/tags/decdn-node-[0-9]+\.[0-9]+\.[0-9]+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 # The files attached to the GitHub Release.

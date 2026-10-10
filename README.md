@@ -111,13 +111,13 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 | [`docs/`](docs/requirements.md) | Cross-path operator docs: requirements, lifecycle. |
 | `scripts/` | Generators for the upstream mirrors (network profiles) and the release gate. |
 | `Makefile` | Lint, test and security targets; CI runs the same ones. `make help` lists them. |
-| `.github/workflows/` | CI (`ci.yml`, `molecule.yml`), releases (`release.yml`), the weekly upstream drift check. |
+| `.github/workflows/` | CI (`ci.yml`, `molecule.yml`), releases (`release-collection.yml`, `release-chart.yml`), the weekly upstream drift check. |
 
 ## Contributing and releases
 
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): local checks, every `make` target, what CI runs,
   and the pinning rules.
-- [`RELEASING.md`](RELEASING.md): how a `vX.Y.Z` tag publishes the collection and the chart.
+- [`RELEASING.md`](RELEASING.md): how a `collection-vX.Y.Z` tag publishes the collection and a `decdn-node-X.Y.Z` tag the chart.
 - [`AGENTS.md`](AGENTS.md): the repo's hard rules (for humans and AI agents).
 - [`SECURITY.md`](SECURITY.md): reporting a vulnerability, verifying releases.
 

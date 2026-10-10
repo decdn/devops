@@ -50,5 +50,5 @@ resolves to, trusting the transport to the git host and the checksums in the
 checkout's `Cargo.lock`. It does run the build as an unprivileged user, never root.
 
 Published Helm charts (`oci://ghcr.io/decdn/charts/decdn-node`) are signed with a
-keyless cosign signature from this repo's release workflow; see
+keyless cosign signature from this repo's chart release workflow; see
 [RELEASING.md § Verifying a release](RELEASING.md#verifying-a-release).

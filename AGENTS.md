@@ -85,7 +85,7 @@ charts/
     ci/                 # CI values files (mirror molecule/schema's three plays)
     files/monitoring    # symlink to ../../../monitoring/decdn-node (helm package dereferences it)
     tests/render-test.sh  # positive/negative render tests (`make lint-helm`)
-    artifacthub-repo.yml  # Artifact Hub repository metadata (.helmignored, release.yml pushes it)
+    artifacthub-repo.yml  # Artifact Hub repository metadata (.helmignored, release-chart.yml pushes it)
 monitoring/             # Grafana dashboards + Prometheus alert rules (maintained here)
   decdn-node/           # the node's (+ promtool unit tests, .helmignored), rendered by the chart
   sponsord/             # sponsord's (+ promtool unit tests), Ansible/Compose only
@@ -536,9 +536,11 @@ The Alloy per-daemon toggles also live in `all.yml`. Don't move any of it back u
 distributable collection. The overlay lives in `ansible/galaxy/` and is staged into a clean
 collection tree by `galaxy/build.sh` — there is **no** `galaxy.yml` at the `ansible/` root
 (that would make ansible-lint treat the deploy project as a collection). Build/validate with
-`make build` / `make galaxy-check`. **Publishing** is `release.yml` on a `vX.Y.Z` tag,
-together with the chart at the same version, and only while the `PUBLISH_ENABLED`
-repository variable is `true` (RELEASING.md). The chart's publish also pushes its
+`make build` / `make galaxy-check`. **Publishing** is per artifact, each on its own version:
+`release-collection.yml` on a `collection-vX.Y.Z` tag, `release-chart.yml` on a
+`decdn-node-X.Y.Z` tag (that file name and tag prefix are the chart's cosign identity:
+never rename them), and only while the `PUBLISH_ENABLED` repository variable is `true`
+(RELEASING.md). The chart's publish also pushes its
 Artifact Hub metadata (`charts/decdn-node/artifacthub-repo.yml`, `.helmignore`d), and
 the packaged `Chart.yaml` gets an `artifacthub.io/changes` annotation generated from the
 release's chart CHANGELOG section (`scripts/chart-artifacthub-changes.py`): never write

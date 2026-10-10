@@ -4,7 +4,7 @@
     scripts/chart-artifacthub-changes.py <CHANGELOG.md> <X.Y.Z>
 
 Artifact Hub does not read CHANGELOG.md; it shows the changes annotation in the chart's
-Chart.yaml. Rather than keep a second copy by hand, release.yml runs this on the
+Chart.yaml. Rather than keep a second copy by hand, release-chart.yml runs this on the
 `## [X.Y.Z]` section of charts/decdn-node/CHANGELOG.md and sets the annotation on the
 packaged chart only (yq), so the changelog stays the one source.
 

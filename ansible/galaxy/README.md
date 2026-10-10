@@ -25,7 +25,7 @@ repository — seven roles and nothing else:
 
 ## Install
 
-> **Not on Galaxy yet.** The first release (`v0.1.0`) has not been cut; see
+> **Not on Galaxy yet.** The first release (`collection-v0.1.0`) has not been cut; see
 > [RELEASING.md](https://github.com/decdn/devops/blob/main/RELEASING.md). Until then,
 > build and install it from a checkout:
 >

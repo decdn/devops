@@ -62,7 +62,7 @@ pass "schema-key checker: good/bad/empty fixtures"
 # operators on every deploy path import from; the chart reaches them through
 # files/monitoring, a relative symlink, because .Files cannot read outside the chart.
 # helm package must turn it into regular files, and nothing of sponsord's or
-# iroh-relay's may ship, nor artifacthub-repo.yml (release.yml pushes it on its own).
+# iroh-relay's may ship, nor artifacthub-repo.yml (release-chart.yml pushes it on its own).
 link_target="../../../monitoring/decdn-node"
 # Prints what is wrong and returns non-zero, so the negatives below can call it too.
 check_monitoring_link() { # <chart dir> <monitoring dir> <empty scratch dir>
@@ -95,7 +95,7 @@ leak = [m.name for m in members if "sponsord" in m.name.lower() or "iroh-relay" 
 if leak:
     sys.exit(f"sponsord or iroh-relay files in the chart package: {leak}")
 if any(m.name == "decdn-node/artifacthub-repo.yml" for m in members):
-    sys.exit("artifacthub-repo.yml is in the chart package (.helmignore it; release.yml pushes it on its own)")
+    sys.exit("artifacthub-repo.yml is in the chart package (.helmignore it; release-chart.yml pushes it on its own)")
 PY
 }
 out="$(check_monitoring_link "$chart" "$monitoring" "$(mktemp -d "$work/pkg.XXXX")")" || fail "$out"

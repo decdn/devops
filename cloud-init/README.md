@@ -86,7 +86,8 @@ log is in `/var/log/cloud-init-output.log`.
 1. **Fill in the user-data.** Copy [`user-data.yaml`](user-data.yaml) and replace every
    `CHANGE_ME`:
    - `DEVOPS_REF`: a full 40-character commit SHA of this repo (recommended; it is
-     verified after checkout) or a release tag. Branch names are refused.
+     verified after checkout) or a tag; a `collection-vX.Y.Z` release tag versions the
+     roles. Branch names are refused.
    - `baseline_sudo_users`: your admin login and your SSH **public** key. Hardening
      disables root and password logins. Some providers (Hetzner, DigitalOcean) inject
      your key for `root` only, so without this entry you are locked out.

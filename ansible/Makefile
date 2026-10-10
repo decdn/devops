@@ -216,7 +216,8 @@ molecule-list:
 # Stage baseline + decdn_node + grafana_alloy + sponsord + sponsord_onramp + iroh_relay +
 # iroh_dns_server into a clean collection tree and build the artifact under build/. Only the
 # seven roles ship; see galaxy/README.md. Publishing
-# runs from a vX.Y.Z tag in .github/workflows/release.yml (see RELEASING.md).
+# runs from a collection-vX.Y.Z tag in .github/workflows/release-collection.yml
+# (see RELEASING.md).
 build:
 	./galaxy/build.sh
 
