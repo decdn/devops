@@ -1,8 +1,10 @@
 # Requirements and choosing a deploy path
 
 What a deCDN node needs from its host and network, and which of this repo's four
-deploy paths fits. Protocol facts (bond sizing, fees) are not here: they come from the
-deCDN ADRs.
+deploy paths fits. It applies to a node operator's cache node and a publisher's origin
+node alike: an origin is the same node with an origin backend
+([`node-operators.md`](node-operators.md), [`publishers.md`](publishers.md)). Protocol
+facts (bond sizing, fees) are not here: they come from the deCDN ADRs.
 
 ## Choosing a path
 
