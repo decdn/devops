@@ -261,9 +261,8 @@ An `fs` origin reads a path inside the pod, so the content must be on the data P
 Configuring a backend does not make the node an origin on-chain: the namespace's publisher
 seats the node's operator with `OriginAssignment.addOrigin`
 ([ADR 011](https://github.com/decdn/decdn/blob/main/adr/011-content-takedown.md#origin-assignment-authority)).
-Until then it serves its bytes as a cache does. With Ansible, the same node is a
-`decdn_origin_nodes` host
-([`playbooks/origin.yml`](https://github.com/decdn/devops/blob/main/ansible/playbooks/origin.yml)).
+Until then it serves its bytes as a cache does. With Ansible, the same node is the
+`decdn_node` role with `decdn_cache_origin_kind` (or `decdn_cache_origins`) set.
 
 ## Network
 
