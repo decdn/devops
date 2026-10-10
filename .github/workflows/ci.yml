@@ -198,7 +198,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Helm version is pinned here, in the kics and scripts jobs below and twice in
-      # release.yml; bump all five.
+      # release-chart.yml; bump all five.
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.0
@@ -391,7 +391,7 @@ jobs:
       # Without ansible-core on PATH the harness FAILS the firewall-holes case in CI.
       - name: Install ansible-core
         run: command -v ansible || pipx install ansible-core
-      # The release's Helm, for the test that packages the chart as release.yml does.
+      # The release's Helm, for the test that packages the chart as release-chart.yml does.
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.0

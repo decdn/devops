@@ -1,0 +1,116 @@
+---
+name: Release collection
+
+# A collection-vX.Y.Z tag releases the `decdn.node` Ansible collection on its own
+# version; the `decdn-node` Helm chart has its own workflow (release-chart.yml). See
+# RELEASING.md.
+#
+# `build` always runs: it gates the tag (galaxy.yml and the collection changelog must
+# agree on X.Y.Z), re-runs the collection checks, builds the collection, and uploads it
+# with SHA256SUMS as a workflow artifact. `publish` makes it public (Galaxy, and a
+# GitHub Release) ONLY when the repository variable PUBLISH_ENABLED is 'true'. Until
+# then a tag push is a dry run. A manual dispatch is always a dry run.
+on:
+  push:
+    tags: ['collection-v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version to dry-run, e.g. collection-v0.1.0 (nothing is published)
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # Per workflow: a manual dry run of each, both from main, must not queue behind
+  # (or cancel) the other.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false     # never cut a half-published release short
+
+env:
+  TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+
+# `bash -eo pipefail`, not the default `bash -e`, so a failure anywhere in a pipe
+# fails the step.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Gate the tag against the collection and its changelog
+        # The gate accepts either artifact's tag; a manual dispatch could pass the other
+        # one, so refuse it here, before anything is built.
+        run: |
+          [[ "$TAG" == collection-v* ]] || { echo "::error::$TAG is not a collection tag (collection-vX.Y.Z)"; exit 1; }
+          scripts/check-release-version.sh "$TAG" --notes release-notes.md
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install collection build + import tooling
+        run: python -m pip install --upgrade ansible-core ansible-lint galaxy-importer
+      - name: Build and validate the decdn.node collection
+        working-directory: ansible
+        env:
+          ANSIBLE_COLLECTIONS_PATH: collections
+        run: |
+          make deps
+          make galaxy-check
+      - name: Collect the collection and write checksums
+        run: |
+          mkdir -p dist
+          cp ansible/build/decdn-node-"${TAG#collection-v}".tar.gz dist/
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          # Not a release asset, so outside SHA256SUMS: the Release body.
+          cp release-notes.md dist/
+          cat dist/SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ env.TAG }}
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: vars.PUBLISH_ENABLED == 'true' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Protect this environment with required reviewers in the repository settings.
+    environment: release
+    permissions:
+      contents: write           # the GitHub Release
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ env.TAG }}
+          path: dist
+      - name: Verify the artifacts are the ones build checksummed
+        working-directory: dist
+        run: sha256sum --check SHA256SUMS
+      - name: Require the Galaxy API key
+        env:
+          GALAXY_API_KEY: ${{ secrets.GALAXY_API_KEY }}
+        run: |
+          [ -n "$GALAXY_API_KEY" ] || { echo "::error::secret GALAXY_API_KEY is not set"; exit 1; }
+      - name: Install ansible-core
+        run: python3 -m pip install --upgrade ansible-core
+      # Not idempotent: Galaxy refuses a version that already exists, so a re-run
+      # after this step succeeded fails here. RELEASING.md covers recovery.
+      - name: Publish the collection to Galaxy
+        env:
+          GALAXY_API_KEY: ${{ secrets.GALAXY_API_KEY }}
+        run: ansible-galaxy collection publish dist/decdn-node-"${TAG#collection-v}".tar.gz --api-key "$GALAXY_API_KEY"
+      # Last, so the Release page only appears once the collection is live.
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --title "decdn.node collection ${TAG#collection-v}" \
+            --notes-file dist/release-notes.md \
+            dist/decdn-node-*.tar.gz dist/SHA256SUMS

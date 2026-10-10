@@ -193,25 +193,137 @@ else
 fi
 # --- release gate ----------------------------------------------------------------------
 gate="$repo/scripts/check-release-version.sh"
-expect 2 "release gate rejects a stray argument" "$gate" v0.1.0 notes.md
+expect 2 "release gate rejects a stray argument" "$gate" decdn-node-0.1.0 notes.md
 expect 2 "release gate rejects no arguments"     "$gate"
-expect 1 "release gate rejects a malformed tag"  "$gate" 0.1.0
-expect 1 "release gate rejects a version mismatch" "$gate" v9.9.9
-# A released copy of the tree: both changelogs dated, versions equal to the tag.
+# <description> <tag>: refused for its shape. The message is checked because the real
+# changelogs may be unreleased, which would refuse any tag.
+bad_tag() {
+  expect 1 "release gate rejects $1" "$gate" "$2"
+  grep -q "is neither decdn-node-X.Y.Z" "$work/out" || { cat "$work/out" >&2; fail "release gate: $2 refused for another reason"; }
+}
+bad_tag "a bare version"                 0.1.0
+bad_tag "the retired shared vX.Y.Z tag"  v0.1.0
+bad_tag "a chart tag with a v"           decdn-node-v0.1.0
+bad_tag "a collection tag without a v"   collection-0.1.0
+bad_tag "a pre-release suffix"           decdn-node-0.1.0-rc.1
+bad_tag "a trailing character"           collection-v0.1.0x
+expect 1 "release gate rejects a chart version mismatch" "$gate" decdn-node-9.9.9
+grep -q "Chart.yaml version is" "$work/out" || fail "release gate: no chart version mismatch reported"
+expect 1 "release gate rejects a collection version mismatch" "$gate" collection-v9.9.9
+grep -q "galaxy.yml version is" "$work/out" || fail "release gate: no collection version mismatch reported"
+# A copy of the tree where each artifact is released alone: dating one changelog lets
+# that artifact's tag through and leaves the other refused, both ways round.
 rel="$work/rel"
+relgate="$rel/scripts/check-release-version.sh"
+chart_log="$rel/charts/decdn-node/CHANGELOG.md"
+coll_log="$rel/ansible/galaxy/CHANGELOG.md"
 mkdir -p "$rel/scripts" "$rel/ansible/galaxy" "$rel/charts/decdn-node"
 cp "$gate" "$rel/scripts/"
 cp "$repo/ansible/galaxy/galaxy.yml" "$repo/ansible/galaxy/CHANGELOG.md" "$rel/ansible/galaxy/"
 cp "$repo/charts/decdn-node/Chart.yaml" "$repo/charts/decdn-node/CHANGELOG.md" "$rel/charts/decdn-node/"
 version="$(sed -nE 's/^version:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$rel/charts/decdn-node/Chart.yaml")"
-expect 1 "release gate rejects an 'unreleased' changelog heading" "$rel/scripts/check-release-version.sh" "v$version"
-sed -i -E "s/^## \[$version\] — unreleased$/## [$version] — 2099-01-01/" \
-  "$rel/ansible/galaxy/CHANGELOG.md" "$rel/charts/decdn-node/CHANGELOG.md"
-expect 0 "release gate accepts a released tree" "$rel/scripts/check-release-version.sh" "v$version" --notes "$work/notes.md"
-for section in '^## Ansible collection' '^## Helm chart'; do
-  grep -q "$section" "$work/notes.md" || fail "release notes miss '$section'"
+cversion="$(sed -nE 's/^version:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$rel/ansible/galaxy/galaxy.yml")"
+cp "$chart_log" "$work/chart-changelog-unreleased.md"
+# <description> <expected message, fixed string> <gate> <tag>
+refused() {
+  expect 1 "release gate rejects $1" "$3" "$4"
+  grep -qF -- "$2" "$work/out" || { cat "$work/out" >&2; fail "release gate: wrong refusal for $1"; }
+}
+date_section() { sed -i -E "s/^## \[$1\] — unreleased$/## [$1] — 2099-01-01/" "$2"; } # <version> <changelog>
+refused "an 'unreleased' chart changelog heading" "still marks" "$relgate" "decdn-node-$version"
+refused "an 'unreleased' collection changelog heading" "still marks" "$relgate" "collection-v$cversion"
+date_section "$version" "$chart_log"
+expect 0 "release gate accepts a released chart" "$relgate" "decdn-node-$version" --notes "$work/notes-chart.md"
+refused "the collection while only the chart is released" "still marks" "$relgate" "collection-v$cversion"
+cp "$work/chart-changelog-unreleased.md" "$chart_log"
+date_section "$cversion" "$coll_log"
+expect 0 "release gate accepts a released collection" "$relgate" "collection-v$cversion" --notes "$work/notes-collection.md"
+refused "the chart while only the collection is released" "still marks" "$relgate" "decdn-node-$version"
+date_section "$version" "$chart_log" # both released from here on: the release steps below read them
+# <notes file> <its heading> <the other artifact's heading>
+notes_for() {
+  grep -q "^## $2 " "$1" || fail "release notes $1 miss '## $2'"
+  ! grep -q "^## $3 " "$1" || fail "release notes $1 carry the other artifact's '## $3'"
+  (($(grep -c '^- ' "$1") > 0)) || fail "release notes $1 carry no changelog entries"
+  ! grep -qE '^(<!--|\[[^]]+\]: )' "$1" || fail "release notes $1 carry the changelog's trailing comment or link references"
+}
+notes_for "$work/notes-chart.md" 'Helm chart' 'Ansible collection'
+notes_for "$work/notes-collection.md" 'Ansible collection' 'Helm chart'
+pass "release notes carry only their own artifact's changelog section"
+# Section boundaries and refusals, on a fixture changelog: versions that share a prefix,
+# a section above and below, and a trailing comment and link references.
+fx="$work/fx"
+mkdir -p "$fx/scripts" "$fx/charts/decdn-node"
+cp "$gate" "$fx/scripts/"
+cat > "$fx/changelog.md" <<'MD'
+# Changelog
+
+## [Unreleased]
+
+- UNRELEASED
+
+## [0.1.10] — 2099-01-03
+
+### Fixed
+
+- TEN
+
+## [0.1.1] — 2099-01-02
+
+### Fixed
+
+- ONE
+
+## [0.1.0] — 2099-01-01
+
+- ZERO
+
+<!-- a trailing comment -->
+[Unreleased]: https://example.invalid/
+MD
+fxgate() { # <version> [--notes <file>]: the gate on the fixture, the chart at <version>
+  printf 'version: %s\n' "$1" > "$fx/charts/decdn-node/Chart.yaml"
+  local v="$1"; shift
+  "$fx/scripts/check-release-version.sh" "decdn-node-$v" "$@"
+}
+cp "$fx/changelog.md" "$fx/charts/decdn-node/CHANGELOG.md"
+for v in 0.1.10:TEN 0.1.1:ONE 0.1.0:ZERO; do
+  expect 0 "release gate accepts fixture section ${v%%:*}" fxgate "${v%%:*}" --notes "$work/fx-notes.md"
+  [[ "$(head -n1 "$work/fx-notes.md")" == "## Helm chart \`decdn-node\` ${v%%:*}" ]] \
+    || fail "release notes for ${v%%:*} have the wrong title: $(head -n1 "$work/fx-notes.md")"
+  [[ "$(grep -v '^## ' "$work/fx-notes.md" | grep -v '^###' | grep .)" == "- ${v#*:}" ]] \
+    || fail "release notes for ${v%%:*} are not exactly its section: $(cat "$work/fx-notes.md")"
 done
-pass "release notes carry both changelog sections"
+pass "release notes stop at the next section and before the trailing comment and links"
+fxbad() { # <description> <expected message> <version> <sed script applied to the fixture>
+  sed -E "$4" "$fx/changelog.md" > "$fx/charts/decdn-node/CHANGELOG.md"
+  refused "$1" "$2" fxgate "$3"
+}
+fxbad "a missing section"              "has no '## [0.2.0]' section" 0.2.0 ''
+fxbad "a version matched as a regex"   "has no '## [0.1.1]' section" 0.1.1 's/^## \[0\.1\.1\]/## [0x1x1]/'
+fxbad "an undated heading"             "is not one '## [0.1.1] — YYYY-MM-DD'" 0.1.1 's/^(## \[0\.1\.1\]) — .*/\1 — TBD/'
+fxbad "a heading with no date"         "is not one '## [0.1.1] — YYYY-MM-DD'" 0.1.1 's/^(## \[0\.1\.1\]) — .*/\1/'
+fxbad "a duplicated section"           "is not one '## [0.1.1] — YYYY-MM-DD'" 0.1.1 's/^## \[0\.1\.0\]/## [0.1.1]/'
+fxbad "a section with no entries"      "has no '- ' entries" 0.1.2 's/^## \[0\.1\.10\].*/## [0.1.2] — 2099-01-04\n\n&/'
+# Each workflow triggers on exactly the tag shape the gate accepts for its artifact, and
+# strips exactly that prefix wherever it turns the tag into a version.
+if command -v yq >/dev/null; then
+  while IFS='|' read -r wf prefix glob; do
+    got="$(yq -o=json -I0 '.on.push.tags' "$repo/.github/workflows/$wf")"
+    [[ "$got" == "[\"$glob\"]" ]] || fail "$wf triggers on $got, want [\"$glob\"]"
+    # shellcheck disable=SC2016 # a literal ${TAG#...} in the workflow, not an expansion
+    got="$(grep -o '\${TAG#[^}]*}' "$repo/.github/workflows/$wf" | sort -u)"
+    [[ "$got" == "\${TAG#$prefix}" ]] || fail "$wf strips $(xargs <<<"$got"), want \${TAG#$prefix}"
+  done <<'EOF'
+release-chart.yml|decdn-node-|decdn-node-[0-9]+.[0-9]+.[0-9]+
+release-collection.yml|collection-v|collection-v[0-9]+.[0-9]+.[0-9]+
+EOF
+  pass "release-chart.yml and release-collection.yml trigger on, and strip, their own tag shapes"
+elif [[ -n ${CI:-} ]]; then
+  fail "yq is not on PATH in CI; the release trigger check would be skipped"
+else
+  skipped+=("release trigger check (needs yq)")
+fi
 
 # --- artifacthub.io/changes, generated from the chart changelog at release ---------
 changes="$repo/scripts/chart-artifacthub-changes.py"
@@ -288,39 +400,105 @@ if sed -n '/^## \[Unreleased\]/,/^## \[[0-9]/p' "$repo/charts/decdn-node/CHANGEL
     "$changes" "$repo/charts/decdn-node/CHANGELOG.md" Unreleased
 fi
 if command -v yq >/dev/null && command -v jq >/dev/null && command -v helm >/dev/null; then
-  # release.yml's own steps, read by name and run as Actions runs them, on a released
-  # copy of the chart: the annotation step, then helm package, then the check.
-  step() { # <step name>: its run script, or fail
+  # The release workflows' own steps, read by name and run as Actions runs them, on
+  # released copies of the tree. Nothing else runs the publish jobs before a real
+  # publish, where a broken Release step strands an artifact already on Galaxy.
+  wfstep() { # <workflow file> <job> <step name>: its run script, or fail
     local run
-    run="$(yq ".jobs.build.steps[] | select(.name == \"$1\") | .run" "$repo/.github/workflows/release.yml")"
-    [[ -n "$run" && "$run" != null ]] || fail "release.yml has no build step '$1'"
+    run="$(yq ".jobs.$2.steps[] | select(.name == \"$3\") | .run" "$repo/.github/workflows/$1")"
+    [[ -n "$run" && "$run" != null ]] || fail "$1 has no $2 step '$3'"
     printf '%s\n' "$run"
   }
-  annotate="$(step "Add the artifacthub.io/changes annotation")"
-  check="$(step "Check the packaged artifacthub.io/changes")"
+  # A gh that records its arguments and refuses a --notes-file or dist/ asset that is
+  # not a non-empty file (an unmatched glob reaches it as the literal pattern).
+  mkdir -p "$work/bin"
+  cat > "$work/bin/gh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$GH_ARGS"
+prev=""
+for a in "$@"; do
+  if [[ $prev == --notes-file || $a == dist/* ]]; then
+    [[ -s $a ]] || { echo "gh stub: no file $a" >&2; exit 1; }
+  fi
+  prev=$a
+done
+SH
+  chmod +x "$work/bin/gh"
+  run_in() { # <dir> <tag> <run script>
+    (cd "$1" && PATH="$work/bin:$PATH" GH_ARGS="$work/gh-args" TAG="$2" GITHUB_REPOSITORY=decdn/devops \
+      bash --noprofile --norc -eo pipefail -c "$3") >"$work/out" 2>&1
+  }
+  # <dir>: its files, sorted, on one line
+  files() { (cd "$1" && printf '%s\n' * | LC_ALL=C sort | xargs); }
+
+  # Each workflow's gate step refuses the other artifact's tag (a manual dispatch).
+  for spec in "release-chart.yml|chart|decdn-node-$version|collection-v$cversion" \
+              "release-collection.yml|collection|collection-v$cversion|decdn-node-$version"; do
+    IFS='|' read -r wf kind own other <<<"$spec"
+    gstep="$(wfstep "$wf" build "Gate the tag against the $kind and its changelog")"
+    ! run_in "$rel" "$other" "$gstep" || fail "$wf's gate step accepts $other"
+    grep -q "is not a $kind tag" "$work/out" || { cat "$work/out" >&2; fail "$wf's gate step: wrong refusal for $other"; }
+    run_in "$rel" "$own" "$gstep" || { cat "$work/out" >&2; fail "$wf's gate step refuses $own"; }
+  done
+  pass "each release workflow's gate step takes only its own artifact's tag"
+
+  # Chart: annotate, package, check the annotation, verify the sums, create the Release.
+  annotate="$(wfstep release-chart.yml build "Add the artifacthub.io/changes annotation")"
+  package="$(wfstep release-chart.yml build "Package the chart and write checksums")"
+  check="$(wfstep release-chart.yml build "Check the packaged artifacthub.io/changes")"
   ah="$work/ah"
-  mkdir -p "$ah/scripts" "$ah/charts" "$ah/dist"
+  mkdir -p "$ah/scripts" "$ah/charts"
   cp "$changes" "$ah/scripts/"
   cp -RL "$repo/charts/decdn-node" "$ah/charts/"
-  cp "$rel/charts/decdn-node/CHANGELOG.md" "$ah/charts/decdn-node/"
-  run_step() { (cd "$ah" && TAG="v$version" bash --noprofile --norc -eo pipefail -c "$1") >"$work/out" 2>&1; }
-  run_step "$annotate" || { cat "$work/out" >&2; fail "release.yml's annotation step failed"; }
-  helm package "$ah/charts/decdn-node" --destination "$ah/dist" >"$work/out" 2>&1 \
-    || { cat "$work/out" >&2; fail "helm package failed on the chart with artifacthub.io/changes"; }
-  run_step "$check" || { cat "$work/out" >&2; fail "release.yml's check refuses the generated annotation"; }
-  [[ "$("$changes" "$rel/charts/decdn-node/CHANGELOG.md" "$version" | yq -o=json -I0)" \
+  cp "$chart_log" "$ah/charts/decdn-node/"
+  cp "$work/notes-chart.md" "$ah/release-notes.md"
+  run_step() { run_in "$ah" "decdn-node-$version" "$1"; }
+  run_step "$annotate" || { cat "$work/out" >&2; fail "release-chart.yml's annotation step failed"; }
+  run_step "$package" || { cat "$work/out" >&2; fail "release-chart.yml's package step failed"; }
+  [[ "$(files "$ah/dist")" == "SHA256SUMS artifacthub-repo.yml decdn-node-$version.tgz release-notes.md" ]] \
+    || fail "release-chart.yml's dist/ holds $(files "$ah/dist")"
+  [[ "$(awk '{print $2}' "$ah/dist/SHA256SUMS")" == "decdn-node-$version.tgz" ]] \
+    || fail "release-chart.yml's SHA256SUMS lists more or less than the chart: $(cat "$ah/dist/SHA256SUMS")"
+  run_step "$check" || { cat "$work/out" >&2; fail "release-chart.yml's check refuses the generated annotation"; }
+  [[ "$("$changes" "$chart_log" "$version" | yq -o=json -I0)" \
      == "$(helm show chart "$ah/dist/decdn-node-$version.tgz" | yq -o=json -I0 '.annotations["artifacthub.io/changes"] | from_yaml')" ]] \
     || fail "the packaged artifacthub.io/changes differs from the generator's output"
-  pass "release.yml's annotation step survives helm package unchanged, and its check accepts it"
+  pass "release-chart.yml's annotation step survives its package step unchanged, and its check accepts it"
+  run_in "$ah/dist" "decdn-node-$version" "$(wfstep release-chart.yml publish "Verify the artifacts are the ones build checksummed")" \
+    || { cat "$work/out" >&2; fail "release-chart.yml's publish job refuses its build's checksums"; }
+  run_step "$(wfstep release-chart.yml publish "Create the GitHub Release")" \
+    || { cat "$work/out" >&2; fail "release-chart.yml's Release step failed"; }
+  grep -qx -- "--latest=false" "$work/gh-args" || fail "release-chart.yml's Release is not created with --latest=false"
+  grep -qx "decdn-node chart $version" "$work/gh-args" || fail "release-chart.yml's Release title is not 'decdn-node chart $version'"
+  pass "release-chart.yml's publish job verifies its build's dist/ and attaches it to a non-Latest Release"
   yq -i '.annotations["artifacthub.io/changes"] = "not a list"' "$ah/charts/decdn-node/Chart.yaml"
   helm package "$ah/charts/decdn-node" --destination "$ah/dist" >/dev/null 2>&1 \
     || fail "helm package failed on the chart with a scalar artifacthub.io/changes"
-  ! run_step "$check" || fail "release.yml's check accepts a scalar artifacthub.io/changes"
-  pass "release.yml's check refuses an artifacthub.io/changes that is not a list"
+  ! run_step "$check" || fail "release-chart.yml's check accepts a scalar artifacthub.io/changes"
+  pass "release-chart.yml's check refuses an artifacthub.io/changes that is not a list"
+
+  # Collection: collect the built tarball, verify the sums, create the Release.
+  co="$work/co"
+  mkdir -p "$co/ansible/build"
+  echo stub > "$co/ansible/build/decdn-node-$cversion.tar.gz"
+  cp "$work/notes-collection.md" "$co/release-notes.md"
+  run_in "$co" "collection-v$cversion" "$(wfstep release-collection.yml build "Collect the collection and write checksums")" \
+    || { cat "$work/out" >&2; fail "release-collection.yml's collect step failed"; }
+  [[ "$(files "$co/dist")" == "SHA256SUMS decdn-node-$cversion.tar.gz release-notes.md" ]] \
+    || fail "release-collection.yml's dist/ holds $(files "$co/dist")"
+  [[ "$(awk '{print $2}' "$co/dist/SHA256SUMS")" == "decdn-node-$cversion.tar.gz" ]] \
+    || fail "release-collection.yml's SHA256SUMS lists more or less than the collection: $(cat "$co/dist/SHA256SUMS")"
+  run_in "$co/dist" "collection-v$cversion" "$(wfstep release-collection.yml publish "Verify the artifacts are the ones build checksummed")" \
+    || { cat "$work/out" >&2; fail "release-collection.yml's publish job refuses its build's checksums"; }
+  run_in "$co" "collection-v$cversion" "$(wfstep release-collection.yml publish "Create the GitHub Release")" \
+    || { cat "$work/out" >&2; fail "release-collection.yml's Release step failed"; }
+  ! grep -q -- "--latest" "$work/gh-args" || fail "release-collection.yml's Release must stay eligible for Latest"
+  grep -qx "decdn.node collection $cversion" "$work/gh-args" || fail "release-collection.yml's Release title is not 'decdn.node collection $cversion'"
+  pass "release-collection.yml collects only its tarball, and its publish job verifies and attaches it"
 elif [[ -n ${CI:-} ]]; then
-  fail "yq, jq or helm is not on PATH in CI; the artifacthub.io/changes release steps would be skipped"
+  fail "yq, jq or helm is not on PATH in CI; the release workflow steps would be skipped"
 else
-  skipped+=("artifacthub.io/changes release steps (needs yq, jq and helm)")
+  skipped+=("release workflow steps (needs yq, jq and helm)")
 fi
 
 # --- lint-compose: the real file passes, each broken variant is rejected -------------

@@ -2,9 +2,9 @@
 
 All notable changes to the chart are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the chart adheres to
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html). The chart and the
-`decdn.node` Ansible collection share one repo version: a `vX.Y.Z` tag releases
-both (see [RELEASING.md](../../RELEASING.md)).
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html). The chart has its own
+version, independent of the `decdn.node` Ansible collection's: a `decdn-node-X.Y.Z`
+tag releases it (see [RELEASING.md](../../RELEASING.md)).
 
 ## [Unreleased]
 
