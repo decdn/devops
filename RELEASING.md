@@ -13,8 +13,9 @@ independent. The one dependency is Galaxy's: `decdn.publisher` requires `decdn.n
 (its playbooks run `decdn.node`'s baseline, Alloy and origin nodes), so the publisher
 collection's first release comes after the node collection's. `scripts/release.sh`
 refuses any publisher release whose `decdn.node: ">=X.Y.Z"` no `node-collection-v*`
-tag on origin satisfies yet. A tag is not a Galaxy upload, so release the node
-collection while `PUBLISH_ENABLED` is `true` before raising that constraint. What the artifacts must agree on is checked by CI, not by a shared
+tag on origin satisfies yet. A tag is not a Galaxy upload, so the publish job also
+asks Galaxy, before uploading a `decdn.publisher`, for a `decdn.node` that satisfies
+it, and fails while there is none: publish that node release, then re-run the job. What the artifacts must agree on is checked by CI, not by a shared
 version: the decdn version (the chart's `appVersion` and the role's
 `decdn_node_version`) on every PR (`make test-scripts`), and the config keys each one
 renders against the same upstream schema-key inventory whenever either changes

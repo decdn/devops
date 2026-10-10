@@ -568,6 +568,33 @@ SH
     ! grep -q "decdn-$other-" "$work/gh-args" || fail "release-collection.yml's $c Release attaches the $other collection"
     ! LATEST="" run_in "$co" "$c-collection-v$cversion" "$release" || fail "release-collection.yml's Release runs with no Latest decision"
   done
+  # A decdn.publisher publish first asks Galaxy (ansible-galaxy collection download)
+  # for the decdn.node its built MANIFEST.json requires; a node publish skips it.
+  galaxy_dep="$(wfstep release-collection.yml publish "Require decdn.publisher's decdn.node dependency on Galaxy")"
+  cat > "$work/bin/ansible-galaxy" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$GALAXY_ARGS"
+[[ -n ${GALAXY_HAS_NODE:-} ]]
+SH
+  chmod +x "$work/bin/ansible-galaxy"
+  gd="$work/galaxy-dep"
+  mkdir -p "$gd/m" "$gd/dist"
+  printf '{"collection_info": {"dependencies": {"decdn.node": ">=0.1.0"}}}' > "$gd/m/MANIFEST.json"
+  tar -czf "$gd/dist/decdn-publisher-$cversion.tar.gz" -C "$gd/m" MANIFEST.json
+  export GALAXY_ARGS="$work/galaxy-args"
+  : > "$GALAXY_ARGS"
+  run_in "$gd" "node-collection-v$cversion" "$galaxy_dep" \
+    || { cat "$work/out" >&2; fail "release-collection.yml's Galaxy dependency step fails a node release"; }
+  [[ ! -s $GALAXY_ARGS ]] || fail "release-collection.yml's Galaxy dependency step queries Galaxy for a node release"
+  GALAXY_HAS_NODE=1 run_in "$gd" "publisher-collection-v$cversion" "$galaxy_dep" \
+    || { cat "$work/out" >&2; fail "release-collection.yml's Galaxy dependency step refuses a resolvable decdn.node"; }
+  grep -qx 'decdn.node:>=0.1.0' "$GALAXY_ARGS" \
+    || fail "release-collection.yml's Galaxy dependency step does not ask for the MANIFEST's decdn.node: $(xargs <"$GALAXY_ARGS")"
+  ! run_in "$gd" "publisher-collection-v$cversion" "$galaxy_dep" \
+    || fail "release-collection.yml publishes decdn.publisher while Galaxy has no decdn.node >=0.1.0"
+  grep -qF "Galaxy has no decdn.node >=0.1.0" "$work/out" || { cat "$work/out" >&2; fail "the Galaxy dependency refusal has another message"; }
+  unset GALAXY_ARGS
+  pass "release-collection.yml publishes decdn.publisher only when Galaxy resolves its decdn.node"
   # Latest follows decdn.node only: a node release when no higher node release exists,
   # never a publisher release; chart and publisher tags never count.
   decide="$(wfstep release-collection.yml publish "Decide whether this release becomes Latest")"
@@ -1162,6 +1189,7 @@ if command -v cloud-init >/dev/null; then
   # the lint checks there must be the only one.
   ci_variant "an origin backend emptied in sponsord_hosts" 'set decdn_cache_origin_kind only in decdn_origin_nodes.vars' "s#$spnet#&\\n\\1decdn_cache_origin_kind: \"\"#" "$sponsorud"
   ci_variant "an origin backend as a host var" 'set decdn_cache_origin_url only in decdn_origin_nodes.vars' "s#$loc#&\\n\\1decdn_cache_origin_url: https://other.example/#" "$sponsorud"
+  ci_variant "an optional backend key in sponsord_hosts" 'set decdn_cache_origin_s3_endpoint_url only in decdn_origin_nodes.vars' "s#$spnet#&\\n\\1decdn_cache_origin_s3_endpoint_url: https://s3.other.example#" "$sponsorud"
   ci_variant "a backend on a cache node"   'set decdn_cache_origins only in decdn_origin_nodes.vars' "s#$net#&\\n\\1decdn_cache_origins: [{kind: fs, path: /srv}]#"
   ci_variant "an origin node built from source" 'decdn_node_install_method must be release' 's/^(\s*)decdn_node_install_method: release$/\1decdn_node_install_method: source/' "$sponsorud"
   ci_variant "S3 keys in the origin vars" 'decdn_origin_nodes.vars.decdn_extra_env looks secret-bearing' 's/^(\s*)decdn_cache_origin_kind: http$/&\n\1decdn_extra_env: {AWS_SECRET_ACCESS_KEY: x}/' "$sponsorud"

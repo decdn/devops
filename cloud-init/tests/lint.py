@@ -80,8 +80,8 @@ BASE_GROUPS = {"decdn_nodes", "sponsord_hosts"}
 # Knobs this lint checks, by the group whose role reads them: allowed only in that
 # group's vars (checked there), because a host var or another group could override the
 # checked value. The install's trust, the onramp's public RPC URL, and the origin
-# backend (ORIGIN_VARS, below), which a sponsord_* group would otherwise override: it
-# sorts after decdn_origin_nodes.
+# backend (ORIGIN_VAR, below, pinned to decdn_origin_nodes), which a sponsord_* group
+# would otherwise override: it sorts after decdn_origin_nodes.
 PINNED_VARS = {
     "decdn_node_install_method": "decdn_nodes",
     "decdn_node_generate_keystore": "decdn_nodes",
@@ -131,8 +131,9 @@ ORIGIN_KINDS = {
     "fs": (("decdn_cache_origin_path",), ("path",)),
     "s3": (("decdn_cache_origin_s3_bucket", "decdn_cache_origin_s3_region"), ("bucket", "region")),
 }
-ORIGIN_VARS = {"decdn_cache_origin_kind", "decdn_cache_origins"} | {f for k in ORIGIN_KINDS.values() for f in k[0]}
-PINNED_VARS |= dict.fromkeys(ORIGIN_VARS, "decdn_origin_nodes")
+# Every origin backend knob (decdn_cache_origins, decdn_cache_origin_*), the optional
+# ones too: set elsewhere, one would override or extend the checked backend.
+ORIGIN_VAR = re.compile(r"decdn_cache_origin(s|_\w+)")
 
 # The format roles/sponsord_onramp/tasks/main.yml asserts for sponsord_onramp_rpc_url.
 # Run here too: by the time the role refuses a keyed URL, the user-data has already
@@ -331,8 +332,9 @@ def check_inventory(inventory):
         if c != "local":
             violation(f"inventory: {g}.hosts.localhost.ansible_connection is {c!r}; every group must use local")
     for p, k in walk_keys(inventory):
-        if k in PINNED_VARS and p != f"{PINNED_VARS[k]}.vars.{k}":
-            violation(f"inventory: {p}: set {k} only in {PINNED_VARS[k]}.vars, where it is checked")
+        home = PINNED_VARS.get(k) or ("decdn_origin_nodes" if ORIGIN_VAR.fullmatch(k) else None)
+        if home and p != f"{home}.vars.{k}":
+            violation(f"inventory: {p}: set {k} only in {home}.vars, where it is checked")
         if k in FORBIDDEN_VARS:
             violation(f"inventory: {p}: {k} may not be overridden here")
     gv = {g: group.get("vars") if isinstance(group.get("vars"), dict) else {} for g, group in groups.items()}

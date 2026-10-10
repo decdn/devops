@@ -128,6 +128,20 @@ jobs:
           echo "Latest: $latest (newest node collection release: ${newest:-n/a})"
       - name: Install ansible-core
         run: python3 -m pip install --upgrade ansible-core
+      # decdn.publisher installs only if Galaxy can resolve its decdn.node dependency.
+      # scripts/release.sh checks origin's node-collection tags, but a tag is not an
+      # upload (one pushed while PUBLISH_ENABLED was off, or whose publish failed), so
+      # ask Galaxy itself, before anything is published: re-run this job once decdn.node
+      # is up.
+      - name: Require decdn.publisher's decdn.node dependency on Galaxy
+        run: |
+          [[ "$TAG" == publisher-collection-v* ]] || exit 0
+          tarball="dist/decdn-${TAG%-collection-v*}-${TAG##*-collection-v}.tar.gz"
+          need="$(tar -xzOf "$tarball" MANIFEST.json \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin)["collection_info"]["dependencies"]["decdn.node"])')"
+          echo "decdn.publisher requires decdn.node $need"
+          ansible-galaxy collection download "decdn.node:$need" --no-deps -p "$(mktemp -d)" \
+            || { echo "::error::Galaxy has no decdn.node $need: publish a node-collection release first, then re-run this job"; exit 1; }
       # Not idempotent: Galaxy refuses a version that already exists, so a re-run
       # after this step succeeded fails here. RELEASING.md covers recovery.
       - name: Publish the collection to Galaxy
