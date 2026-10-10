@@ -1,4 +1,4 @@
-# Run by bootstrap.sh on the output of
+# Run by baseline-plays.sh (for bootstrap.sh) on the output of
 #   ansible-playbook playbooks/site.yml --tags baseline --list-hosts --list-tasks
 # with -v groups="<the base groups localhost is in>" (decdn_nodes and/or sponsord_hosts).
 #
@@ -14,10 +14,10 @@
 #     hosts (1):
 #       localhost
 #     tasks:
-#       baseline : Validate the admin accounts	TAGS: [baseline]
+#       baseline : Install base packages	TAGS: [baseline]
 #
 # Exit 0 when each group has such a play and every one of them selects a baseline task;
-# 1 otherwise, with one line per group on stderr.
+# 1 otherwise, with one line per group on stderr; 2 when no groups are given.
 
 function end_play() {
   if (pattern != "" && has_localhost) {

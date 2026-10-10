@@ -407,15 +407,18 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   its own group's `vars`), and the node's wallet is host-generated. The roles are used
   unchanged, so a role change reaches this path without edits here. A new secret file
   in a role means a new entry in `bootstrap.sh`'s `SECRETS` and the lint's
-  `FORBIDDEN_VARS`, its instructions in the hint's `case` in `bootstrap.sh` (a new
-  group needs its own arm; `make test-scripts` checks), and the README's table. Phase 1 trusts
-  every `decdn_nodes`/`sponsord_hosts` play to run `baseline` tagged `baseline`
-  (checked per play at boot by `cloud-init/baseline-plays.awk`, and by
-  `make test-scripts`). When `ansible/requirements.yml` changes, re-sync the lock:
+  `FORBIDDEN_VARS`, its instructions in the per-group `case` that prints the next
+  steps at the end of `bootstrap.sh`, and the README's table. A new group also needs
+  its own `case` arm and a place in both `HOST_GROUPS` and lint.py's `GROUPS`
+  (`make test-scripts` checks all three). The baseline-only run trusts every
+  `decdn_nodes`/`sponsord_hosts` play to run `baseline` tagged `baseline` (checked per
+  play at boot by `cloud-init/baseline-plays.sh`, and by `make test-scripts`). The lint
+  allows only the templates' top-level modules and no YAML anchors, so what it reads
+  is what cloud-init and Ansible read. When `ansible/requirements.yml` changes, re-sync the lock:
   `make lint-cloud-init` checks it covers the requirements. The molecule `cloud-init`
   and `cloud-init-sponsord` scenarios boot the real templates through cloud-init
   (skipping `baseline`) against a locally signed release mirror, built from the shared
-  `molecule/cloud-init/includes/`. They are the only coverage of the node's and the
+  `molecule/cloud-init/pack.yml` and `includes/`. They are the only coverage of the node's and the
   onramp's release download and verify path.
 
 - **`compose/`** — the node and the sponsor under Docker Compose on one host. The
