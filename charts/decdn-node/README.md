@@ -250,8 +250,10 @@ secrets:
 
 With a backend set, `cache.node_to_node_pull_through_enabled` derives to `false` (misses
 fill from the backend), and the daemon defaults `cache.relay_foreign_namespaces` to
-`false`, so the node serves only the namespaces it is an origin of
-([ADR 037](https://github.com/decdn/decdn/blob/main/adr/037-regional-proxy-warming.md)).
+`false`, so the node serves only what its backend holds and declines the rest, even a
+blob already in its cache
+([ADR 002 § Retrieval by namespace](https://github.com/decdn/decdn/blob/main/adr/002-content-addressing.md#retrieval-by-namespace),
+[ADR 037](https://github.com/decdn/decdn/blob/main/adr/037-regional-proxy-warming.md#warming-is-a-relay-edge-mechanism)).
 An `fs` origin reads a path inside the pod, so the content must be on the data PVC (under
 `/var/lib/decdn`); the chart mounts no other volume. CI renders the multi-origin form
 (`ci/ci-origins.yaml`: http, fs and s3) and checks its keys against the upstream schema.
