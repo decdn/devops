@@ -30,7 +30,7 @@ only in their inventory:
 A publisher who wants fewer of them on the VM deletes the groups it does not need from
 the publisher template: an origin alone keeps `decdn_nodes` and `decdn_origin_nodes`, a
 sponsor alone keeps `sponsord_hosts` and `sponsord_onramp_hosts` (and takes the
-`baseline_*` settings into `sponsord_hosts`). Ansible applies one `baseline_sudo_users`
+`baseline_*` settings, and any `ssh_allow_cidrs`, into `sponsord_hosts`' vars). Ansible applies one `baseline_sudo_users`
 list, not the union of two groups', so the lint wants it set once. The bootstrap waits
 for the secrets of every group the host is in.
 
@@ -65,12 +65,14 @@ for the secrets of every group the host is in.
      [`collections.lock.yml`](collections.lock.yml).
 
    It then syntax-checks the playbook. It also checks that the inventory puts localhost
-   in `decdn_nodes` or `sponsord_hosts` (and in `sponsord_hosts` whenever it is in
+   in `decdn_nodes` or `sponsord_hosts` (and in `decdn_nodes` whenever it is in
+   `decdn_origin_nodes`, in `sponsord_hosts` whenever it is in
    `sponsord_onramp_hosts`). Last, it checks that `--tags baseline` still selects the
-   baseline role in every `decdn_nodes` and `sponsord_hosts` play that localhost is in
-   ([`baseline-plays.sh`](baseline-plays.sh)). Another group's play does not count,
-   so a play that lost the role or its tag stops the run before it reports a host
-   hardened that is not.
+   baseline role in every play that hardens localhost
+   ([`baseline-plays.sh`](baseline-plays.sh)): `node.yml`'s for a cache node,
+   `origin.yml`'s for an origin, `sponsord.yml`'s for a sponsor. Another group's play
+   does not count, so a play that lost the role or its tag stops the run before it
+   reports a host hardened that is not.
 4. Each of the host's groups needs its secrets on the host: `decdn.env` for the node,
    and the files in the table above for a sponsor. While any is missing, stage 2 runs
    only the `baseline` role, lists the missing paths in
@@ -318,9 +320,14 @@ Day 2 is in the role READMEs. Rotate a secret by replacing its file and running
     looks for the secrets at the roles' defaults; or of sponsord's API-token and
     treasury-wallet generation, since the token is always generated on the host and
     the wallet is the operator's;
-  - an inventory group other than `decdn_nodes`, `sponsord_hosts` and
-    `sponsord_onramp_hosts`, a group holding anything but `hosts` and `vars` (no
-    `children:`), a host other than localhost, or the onramp without `sponsord_hosts`;
+  - an inventory group other than `decdn_nodes`, `decdn_origin_nodes`,
+    `sponsord_hosts` and `sponsord_onramp_hosts`, a group holding anything but `hosts`
+    and `vars` (no `children:`), a host other than localhost, an origin without
+    `decdn_nodes`, or the onramp without `sponsord_hosts`;
+  - an origin without a complete backend in `decdn_origin_nodes.vars`
+    (`decdn_cache_origin_kind` http, fs or s3 with its fields, or
+    `decdn_cache_origins`), or a backend key set anywhere else, where it would
+    override the checked one or turn a cache node into an origin;
   - `baseline_sudo_users` set in more than one place.
 - **Everything is pinned.**
   - This repo: by commit SHA (checked after checkout), or by tag, which is weaker

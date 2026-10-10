@@ -169,8 +169,10 @@ the root-only env files whenever it creates a container.
 
 An origin is the same node with an origin backend: the canonical source of a
 publisher's namespace. Set `COMPOSE_PROFILES=origin` and give `node.toml` the
-backend. For an HTTP store, add `--origin <url>` to step 4's `config init`; for S3
-(and R2, B2, MinIO) or a local or NFS path, write the `[cache.origin]` table by hand.
+backend: add `--origin` to step 4's `config init`, with an `https://…` URL for an HTTP
+store, `file:///<path>` for a local or NFS path, or `s3://<bucket>` for S3 (and R2, B2,
+MinIO). For S3 it writes `region = "us-east-1"` for you to confirm and leaves
+`endpoint_url` (R2, B2, MinIO) commented. Or write the `[cache.origin]` table by hand.
 The [`decdn_node` role's README](../ansible/roles/decdn_node/README.md) lists the
 keys, and `decdn config validate` (step 6) checks them. Static S3 keys go in
 `/etc/decdn/decdn.env` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), never in
@@ -178,7 +180,11 @@ keys, and `decdn config validate` (step 6) checks them. Static S3 keys go in
 
 A path backend must be visible inside the container. `compose.yaml` mounts only
 `/etc/decdn` and `/var/lib/decdn`, and `make lint-compose` holds it to exactly those,
-so add the content root in a `compose.override.yaml` of your own beside it, read-only:
+so add the content root in a `compose.override.yaml` of your own beside it, read-only.
+Compose reads an override file by itself only when no `-f` is given, and every command
+in this README passes `-f compose/compose.yaml`, so add `-f compose/compose.override.yaml`
+after it on every command (`up`, `logs`, `stop`, `pull`, …): an `up` without it
+recreates the node without the mount. The override:
 
 ```yaml
 services:

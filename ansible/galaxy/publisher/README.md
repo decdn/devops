@@ -95,8 +95,8 @@ This repository's own playbooks enforce three placement rules that the roles do 
 check, so a playbook of your own must keep them: `sponsord_onramp` runs on a
 `sponsord` host (it reads the daemon's API token and calls it on loopback); an iroh
 relay does not share a host with the onramp (both want tcp/80 and tcp/443); an iroh
-DNS server shares a host with neither (all want tcp/443). Each role still refuses
-ports another process holds. See each role's README for the full variable list and
+DNS server shares a host with neither (all want tcp/443). The relay and DNS server
+roles also refuse ports another process holds; the onramp's Caddy does not check. See each role's README for the full variable list and
 day-2 ops:
 
 - [`roles/sponsord`](https://github.com/decdn/devops/tree/main/ansible/roles/sponsord)
@@ -116,8 +116,9 @@ those three. `iroh_dns_server` is public by design too: it terminates its own TL
 tcp/443 and answers DNS on udp/53 and tcp/53 at one address (its metrics and health
 listener stay on loopback), so a DNS server host opens those three. No secrets ship
 in the collection or are committed: the treasury keystore, the RPC URL and the
-Turnstile secret are host-provisioned or rendered to `0600` files, and reach the
-daemons as systemd credentials.
+Turnstile secret are host-provisioned or rendered to `0600` files. The keystore, its
+password, the API token and the Turnstile secret reach the daemons as systemd
+credentials; the RPC URL, as an `EnvironmentFile`.
 
 ## License
 

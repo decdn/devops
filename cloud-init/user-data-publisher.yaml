@@ -7,7 +7,8 @@
 # The full walkthrough is in cloud-init/README.md of github.com/decdn/devops
 # ("Publisher host"). To run fewer of them, delete the groups you do not want: an origin
 # alone keeps decdn_nodes and decdn_origin_nodes, a sponsor alone sponsord_hosts and
-# sponsord_onramp_hosts (move baseline_sudo_users into sponsord_hosts' vars then).
+# sponsord_onramp_hosts (move baseline_sudo_users, baseline_sudo_autodetect_runner and
+# any ssh_allow_cidrs into sponsord_hosts' vars then).
 #
 # Edit every value marked MUST-EDIT first. The bootstrap refuses to run while any
 # CHANGE_ME is left.
@@ -43,9 +44,8 @@ write_files:
       DEVOPS_REF=CHANGE_ME
 
   # The Ansible inventory for this host. Everything the playbook needs that is not a
-  # secret lives here. More knobs: ansible/roles/*/defaults/main.yml. To run a node on
-  # the same host, add the decdn_nodes group from user-data-node.yaml without its
-  # baseline_* settings: the admin account is set once, below.
+  # secret lives here. More knobs: ansible/roles/*/defaults/main.yml. The admin account
+  # is set once, in decdn_nodes' vars below.
   - path: /etc/decdn-bootstrap/inventory.yml
     owner: root:root
     permissions: "0600"
@@ -101,6 +101,8 @@ write_files:
       sponsord_hosts:
         hosts:
           localhost:
+            ansible_connection: local
+            ansible_python_interpreter: /usr/bin/python3
         vars:
           # sponsord, installed from the GPG-verified release tarball. The release is
           # the sponsord role's default at DEVOPS_REF (sponsord_version); set

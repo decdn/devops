@@ -170,8 +170,9 @@ firewall rule stays until baseline is re-run without it.
 An **origin node** (`decdn_origin_nodes`) decommissions the same way, and the same
 command covers it. Its operator also stays seated in `OriginAssignment` for its
 namespaces. The namespace's publisher unseats it with `decdn publish revoke`
-(`OriginAssignment.removeOrigin`; governance may too, and once the operator
-deregisters anyone may prune it as inactive)
+(`OriginAssignment.removeOrigin`; governance may too, and once the operator leaves
+`CapacityBond`'s active set, by deregistering, unbonding or ejection, anyone may prune
+it as inactive)
 ([ADR 011 § Origin Assignment Authority](https://github.com/decdn/decdn/blob/main/adr/011-content-takedown.md#origin-assignment-authority)),
 ideally after another origin is seated, since a namespace with no origin left becomes
 unassigned.

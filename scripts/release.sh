@@ -27,8 +27,9 @@
 # The first release (no tag yet, the manifest at the 0.0.0 placeholder) names its level
 # and releases the changelog's hand-written `## [Unreleased]` section instead: without a
 # previous tag, git-cliff would render the whole history. decdn.publisher depends on
-# decdn.node, so its first release is refused until origin has a node-collection tag
-# that satisfies the `decdn.node: ">=X.Y.Z"` its galaxy.yml declares.
+# decdn.node, so each of its releases is refused until origin has a node-collection tag
+# that satisfies the `decdn.node: ">=X.Y.Z"` its galaxy.yml declares (the publish job
+# then checks Galaxy itself).
 #
 # --execute runs scripts/check-release-version.sh on the result (and, for the chart,
 # scripts/chart-artifacthub-changes.py), then the artifact's make target (make
@@ -150,20 +151,23 @@ current="$(sed -nE 's/^version:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$manif
 [[ -n "$current" ]] || die "$manifest has no top-level version: line"
 today="$(date -u +%F)"
 
+# Every decdn.publisher release must be installable: the decdn.node version its
+# galaxy.yml requires has to be released already (origin's node-collection tags).
+if [[ "$artifact" == "publisher-collection" ]]; then
+  need="$(sed -nE 's/^[[:space:]]+decdn\.node:[[:space:]]*">=([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' "$manifest")"
+  [[ -n "$need" ]] || die "$manifest declares no decdn.node: \">=X.Y.Z\" dependency"
+  node_tags="$(git ls-remote --tags --refs origin 'refs/tags/node-collection-v*')" || die "git ls-remote origin failed"
+  node_prev="$(awk '{sub(/^refs\/tags\//, "", $2); print $2}' <<<"$node_tags" \
+    | { grep -E '^node-collection-v[0-9]+\.[0-9]+\.[0-9]+$' || (($? == 1)); } | sed 's/^node-collection-v//' | sort -V | tail -n1)"
+  if [[ -z "$node_prev" ]] || ver_gt "$need" "$node_prev"; then
+    die "decdn.publisher needs decdn.node >=$need, and origin's highest node-collection tag is ${node_prev:-none}: release node-collection first"
+  fi
+fi
+
 # --- version and section -----------------------------------------------------------
 if [[ -z "$prev" ]]; then
   # First release: the hand-written [Unreleased] section becomes the release's.
   [[ "$current" == "0.0.0" ]] || die "no ${prefix}X.Y.Z tag yet, but $manifest is $current, not the 0.0.0 placeholder"
-  if [[ "$artifact" == "publisher-collection" ]]; then
-    need="$(sed -nE 's/^[[:space:]]+decdn\.node:[[:space:]]*">=([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' "$manifest")"
-    [[ -n "$need" ]] || die "$manifest declares no decdn.node: \">=X.Y.Z\" dependency"
-    node_tags="$(git ls-remote --tags --refs origin 'refs/tags/node-collection-v*')" || die "git ls-remote origin failed"
-    node_prev="$(awk '{sub(/^refs\/tags\//, "", $2); print $2}' <<<"$node_tags" \
-      | { grep -E '^node-collection-v[0-9]+\.[0-9]+\.[0-9]+$' || (($? == 1)); } | sed 's/^node-collection-v//' | sort -V | tail -n1)"
-    if [[ -z "$node_prev" ]] || ver_gt "$need" "$node_prev"; then
-      die "decdn.publisher needs decdn.node >=$need, and origin's highest node-collection tag is ${node_prev:-none}: release node-collection first"
-    fi
-  fi
   case "$level" in
     auto) die "the first release names its level: minor for 0.1.0" ;;
     patch) version="0.0.1" ;;

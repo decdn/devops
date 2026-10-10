@@ -50,11 +50,20 @@ INVENTORY ?= inventory/hosts.yml
 # with no inventory present.
 strict_inventory = ANSIBLE_INVENTORY_UNPARSED_FAILED=True
 
+# $(call limit_guard,<playbook>): refuse a run in which the playbook's plays select no
+# host, or skip a host LIMIT names; ansible-playbook reports both as success (e.g.
+# `deploy-node LIMIT=<an origin>`: node.yml leaves decdn_origin_nodes to origin.yml).
+# See scripts/limit-guard.sh.
+define limit_guard
+@$(strict_inventory) ../scripts/limit-guard.sh '$(INVENTORY)' $(1) '$(LIMIT)' $(ANSIBLE_ARGS)
+endef
+
 # Fail loud on the two ways a run can look scoped but silently be fleet-wide. Scoped to
 # the playbook targets (check/deploy[-node|-origin|-publisher|-sponsord|-relay|-dns]/backup/decommission) via MAKECMDGOALS so an
-# unrelated `make lint` is never blocked. NOTE: this
-# does not catch an argument that is well-formed but selects nothing — `--tags` with a
-# typo (decdn-node vs decdn_node) runs zero tasks and still exits 0. See ansible/README.md.
+# unrelated `make lint` is never blocked. A run that selects no host, or skips one LIMIT
+# names, is refused by limit_guard, above. NOTE: neither catches a --tags that is well-formed but
+# selects nothing — a typo (decdn-node vs decdn_node) runs zero tasks and still exits 0.
+# See ansible/README.md.
 ifneq ($(filter check deploy check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns backup decommission,$(MAKECMDGOALS)),)
   # Echo back the goal the operator actually typed, so the hint never nudges a
   # `make check` dry-run toward the mutating `make deploy`.
@@ -89,70 +98,86 @@ endif
 # Dry run of everything in $(INVENTORY) (site.yml: node.yml, then publisher.yml) —
 # shows diffs, mutates nothing.
 check:
+	$(call limit_guard,playbooks/site.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/site.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
 
 # Provision every host in $(INVENTORY) (default inventory/hosts.yml).
 deploy:
+	$(call limit_guard,playbooks/site.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/site.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # Node operators: the cache nodes alone (playbooks/node.yml, decdn_nodes that are not
 # in decdn_origin_nodes).
 check-node:
+	$(call limit_guard,playbooks/node.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/node.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
 
 deploy-node:
+	$(call limit_guard,playbooks/node.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/node.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # Publishers: everything a publisher runs (playbooks/publisher.yml: origins, sponsord
 # and its onramp, iroh relays, iroh DNS servers), leaving the cache nodes untouched.
 check-publisher:
+	$(call limit_guard,playbooks/publisher.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/publisher.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
 
 deploy-publisher:
+	$(call limit_guard,playbooks/publisher.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/publisher.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # A publisher's origin nodes alone (playbooks/origin.yml, hosts in decdn_origin_nodes).
 check-origin:
+	$(call limit_guard,playbooks/origin.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/origin.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
 
 deploy-origin:
+	$(call limit_guard,playbooks/origin.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/origin.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # sponsord alone (playbooks/sponsord.yml, hosts in sponsord_hosts). check/deploy and
 # check/deploy-publisher above already include it; these leave every decdn-node untouched.
 check-sponsord:
+	$(call limit_guard,playbooks/sponsord.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/sponsord.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
 
 deploy-sponsord:
+	$(call limit_guard,playbooks/sponsord.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/sponsord.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # iroh relays alone (playbooks/iroh_relay.yml, hosts in iroh_relay_hosts). check/deploy
 # and check/deploy-publisher above already include them; these leave every other host
 # untouched.
 check-relay:
+	$(call limit_guard,playbooks/iroh_relay.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/iroh_relay.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
 
 deploy-relay:
+	$(call limit_guard,playbooks/iroh_relay.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/iroh_relay.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # iroh DNS servers alone (playbooks/iroh_dns_server.yml, hosts in iroh_dns_server_hosts).
 # check/deploy and check/deploy-publisher above already include them; these leave every
 # other host untouched.
 check-dns:
+	$(call limit_guard,playbooks/iroh_dns_server.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/iroh_dns_server.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
 
 deploy-dns:
+	$(call limit_guard,playbooks/iroh_dns_server.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/iroh_dns_server.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # Encrypted backup of each node (identity by default; -e decdn_backup_scope=full for
 # the whole data dir, which stops the node for the copy). One host at a time.
 # Needs decdn_backup_age_recipients. See docs/lifecycle.md.
 backup:
+	$(call limit_guard,playbooks/backup.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/backup.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # Stop the node and remove its unit on LIMIT (required). Keeps the identity; prints
 # the on-chain exit steps. Asks for typed confirmation. See docs/lifecycle.md.
 decommission:
+	$(call limit_guard,playbooks/decommission.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/decommission.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # --- Tests -------------------------------------------------------------------

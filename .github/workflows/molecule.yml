@@ -47,7 +47,8 @@ jobs:
   # for 14 scenarios, CPU-bound (per-task overhead roughly doubled under contention),
   # with the slowest scenarios queued last. Now the wall clock is the slowest single
   # scenario plus setup: ~10m for 18 scenarios (first run, PR #96), set by
-  # cloud-init-publisher (~9m45s), then cloud-init (~8m) and sponsord-onramp (~7m30s);
+  # cloud-init-sponsord (~9m45s; now cloud-init-publisher, which also boots an
+  # origin node), then cloud-init (~8m) and sponsord-onramp (~7m30s);
   # most others take 2-5m. By October 2026 iroh-relay and source-build had reached
   # ~11m on their side effects, which are now split over sibling scenarios (#106),
   # so no scenario should go much past ~6.5m. Re-measure against the timeout when a

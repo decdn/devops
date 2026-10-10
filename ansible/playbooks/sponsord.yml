@@ -3,7 +3,7 @@
 # and its public onramp.
 #   sponsord_hosts:        baseline -> grafana_alloy (opt-in, off by default) -> sponsord
 #   sponsord_onramp_hosts: sponsord_onramp (+ Caddy in front, unless turned off)
-# Standalone entry point (`make deploy-sponsord`), also imported by site.yml. The
+# Standalone entry point (`make deploy-sponsord`), also imported by publisher.yml. The
 # daemon needs no decdn-node on the host and listens on loopback only, for the
 # onramp on the same host. The onramp listens on loopback too; Caddy is its public
 # side (tcp/80 + tcp/443, opened by playbooks/group_vars/all.yml). A host in both
