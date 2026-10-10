@@ -181,9 +181,10 @@ services:
       - /srv/content:/srv/content:ro   # [cache.origin] path = "/srv/content"
 ```
 
-With a backend set, the node serves only the namespaces it is an origin of
-(`relay_foreign_namespaces` defaults to false) and fills misses from the backend, not
-from other nodes. The chain recognises it as an origin
+With a backend set, the node serves only what its backend holds and declines the rest,
+even a blob already in its cache (`relay_foreign_namespaces` defaults to false;
+[ADR 002 § Retrieval by namespace](https://github.com/decdn/decdn/blob/main/adr/002-content-addressing.md#retrieval-by-namespace)),
+and fills misses from the backend, not from other nodes. The chain recognises it as an origin
 only once the namespace's publisher seats its operator with
 `OriginAssignment.addOrigin`
 ([ADR 011](https://github.com/decdn/decdn/blob/main/adr/011-content-takedown.md#origin-assignment-authority)).
