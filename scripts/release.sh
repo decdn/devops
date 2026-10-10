@@ -3,17 +3,20 @@
 # section, then make a signed release commit and a signed tag and push both. There
 # is no release PR; the tag push runs the artifact's release workflow.
 #
-#   scripts/release.sh <collection|chart> [auto|patch|minor|major|X.Y.Z]
+#   scripts/release.sh <node-collection|publisher-collection|chart>
+#                      [auto|patch|minor|major|X.Y.Z]
 #                      [--execute] [--no-verify] [--allow-unconventional]
 #
-#   collection  collection-vX.Y.Z  ansible/galaxy/galaxy.yml     ansible/galaxy/CHANGELOG.md
-#   chart       decdn-node-X.Y.Z   charts/decdn-node/Chart.yaml  charts/decdn-node/CHANGELOG.md
+#   node-collection       node-collection-vX.Y.Z       ansible/galaxy/node/{galaxy.yml,CHANGELOG.md}
+#   publisher-collection  publisher-collection-vX.Y.Z  ansible/galaxy/publisher/{galaxy.yml,CHANGELOG.md}
+#   chart                 decdn-node-X.Y.Z             charts/decdn-node/{Chart.yaml,CHANGELOG.md}
 #
 # Without --execute it is a dry run: it prints the new tag and the diff it would
 # commit, and changes no file. The level defaults to `auto`, the bump git-cliff
 # derives (cliff.toml) from the conventional commits since the artifact's last tag
-# that touched what it ships: the roles galaxy/build.sh ships, the galaxy/ overlay and
-# LICENSE for the collection; the chart and monitoring/decdn-node/ for the chart.
+# that touched what it ships: the roles in its galaxy/<collection>/roles.txt, that
+# overlay, galaxy/build.sh and LICENSE for a collection; the chart and
+# monitoring/decdn-node/ for the chart.
 # Before 1.0, a feature (or, from 0.1 on, a breaking change) bumps the minor and any
 # other commit kept in the changelog bumps the patch. The section is git-cliff's
 # rendering of those commits, under a `## [X.Y.Z] — YYYY-MM-DD` heading. A commit there
@@ -23,11 +26,13 @@
 #
 # The first release (no tag yet, the manifest at the 0.0.0 placeholder) names its level
 # and releases the changelog's hand-written `## [Unreleased]` section instead: without a
-# previous tag, git-cliff would render the whole history.
+# previous tag, git-cliff would render the whole history. decdn.publisher depends on
+# decdn.node, so its first release is refused until origin has a node-collection tag
+# that satisfies the `decdn.node: ">=X.Y.Z"` its galaxy.yml declares.
 #
 # --execute runs scripts/check-release-version.sh on the result (and, for the chart,
 # scripts/chart-artifacthub-changes.py), then the artifact's make target (make
-# galaxy-check or make lint-helm) unless --no-verify: a tag that fails its workflow
+# galaxy-check-<collection> or make lint-helm) unless --no-verify: a tag that fails its workflow
 # burns the version. If any of that or the commit fails, both files are restored. Run
 # it on an up-to-date, clean main, with git configured to sign (user.signingkey), and
 # with a bypass of the main ruleset (its PR rule and its required status checks): the
@@ -35,7 +40,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 <collection|chart> [auto|patch|minor|major|X.Y.Z] [--execute] [--no-verify] [--allow-unconventional]" >&2
+  echo "usage: $0 <node-collection|publisher-collection|chart> [auto|patch|minor|major|X.Y.Z] [--execute] [--no-verify] [--allow-unconventional]" >&2
   exit 2
 }
 die() { echo "release: $*" >&2; exit 1; }
@@ -60,18 +65,22 @@ level="${level:-auto}"
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"
 case "$artifact" in
-  collection)
-    prefix="collection-v"
-    manifest="ansible/galaxy/galaxy.yml"
-    changelog="ansible/galaxy/CHANGELOG.md"
+  node-collection|publisher-collection)
+    collection="${artifact%-collection}"
+    overlay="ansible/galaxy/$collection"
+    prefix="$artifact-v"
+    manifest="$overlay/galaxy.yml"
+    changelog="$overlay/CHANGELOG.md"
     workflow="release-collection.yml"
-    check=(make -C ansible galaxy-check)
-    # What galaxy/build.sh ships: its roles, the galaxy/ overlay and LICENSE. The role
-    # list is read from build.sh, so a new role there is counted here too.
-    roles_line="$(sed -nE 's/^roles=\((.*)\)$/\1/p' ansible/galaxy/build.sh)"
-    [[ -n "$roles_line" ]] || die "cannot read the roles=(...) list from ansible/galaxy/build.sh"
-    read -r -a roles <<<"$roles_line"
-    paths=('ansible/galaxy/**' 'LICENSE')
+    check=(make -C ansible "galaxy-check-$collection")
+    # What `galaxy/build.sh <collection>` ships: the roles in its roles.txt, its
+    # overlay, and LICENSE; build.sh itself too. The role list is the one build.sh
+    # reads, so a role added there is counted here too.
+    [[ -f "$overlay/roles.txt" ]] || die "$overlay/roles.txt is missing"
+    roles=()
+    while IFS= read -r role; do roles+=("$role"); done < <(grep -vE '^[[:space:]]*(#|$)' "$overlay/roles.txt")
+    ((${#roles[@]} > 0)) || die "$overlay/roles.txt lists no role"
+    paths=("$overlay/**" 'ansible/galaxy/build.sh' 'LICENSE')
     for role in "${roles[@]}"; do paths+=("ansible/roles/$role/**"); done
     ;;
   chart)
@@ -145,6 +154,16 @@ today="$(date -u +%F)"
 if [[ -z "$prev" ]]; then
   # First release: the hand-written [Unreleased] section becomes the release's.
   [[ "$current" == "0.0.0" ]] || die "no ${prefix}X.Y.Z tag yet, but $manifest is $current, not the 0.0.0 placeholder"
+  if [[ "$artifact" == "publisher-collection" ]]; then
+    need="$(sed -nE 's/^[[:space:]]+decdn\.node:[[:space:]]*">=([0-9]+\.[0-9]+\.[0-9]+)".*/\1/p' "$manifest")"
+    [[ -n "$need" ]] || die "$manifest declares no decdn.node: \">=X.Y.Z\" dependency"
+    node_tags="$(git ls-remote --tags --refs origin 'refs/tags/node-collection-v*')" || die "git ls-remote origin failed"
+    node_prev="$(awk '{sub(/^refs\/tags\//, "", $2); print $2}' <<<"$node_tags" \
+      | { grep -E '^node-collection-v[0-9]+\.[0-9]+\.[0-9]+$' || (($? == 1)); } | sed 's/^node-collection-v//' | sort -V | tail -n1)"
+    if [[ -z "$node_prev" ]] || ver_gt "$need" "$node_prev"; then
+      die "decdn.publisher needs decdn.node >=$need, and origin's highest node-collection tag is ${node_prev:-none}: release node-collection first"
+    fi
+  fi
   case "$level" in
     auto) die "the first release names its level: minor for 0.1.0" ;;
     patch) version="0.0.1" ;;

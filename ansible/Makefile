@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN Ansible project.
 # Always run from the ansible/ directory.
-.PHONY: deps lint check deploy check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns backup decommission molecule molecule-serial molecule-list build galaxy-check
+.PHONY: deps lint check deploy check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns backup decommission molecule molecule-serial molecule-list build build-node build-publisher galaxy-check galaxy-check-node galaxy-check-publisher
 SHELL := /bin/bash
 
 # Install the required Galaxy collections (>= constraints in requirements.yml)
@@ -183,7 +183,7 @@ decommission:
 # Molecule's own --workers is not usable here: it refuses to run outside collection
 # mode ("--workers > 1 is only supported in collection mode (galaxy.yml required)"),
 # and this project deliberately has no galaxy.yml at its root — that would make
-# ansible-lint reinterpret the deploy project as a collection (see galaxy/README.md).
+# ansible-lint reinterpret the deploy project as a collection (see README.md, "Packaging as Galaxy collections").
 #
 # Fail-loud discovery, the per-scenario locks (two agents can run disjoint scenarios
 # at once, never the same one) and the lock that keeps deps from rewriting
@@ -212,26 +212,32 @@ molecule-serial:
 molecule-list:
 	@$(molecule_env) ../scripts/molecule.sh list
 
-# --- Galaxy collection (decdn.node) ------------------------------------------
-# Stage baseline + decdn_node + grafana_alloy + sponsord + sponsord_onramp + iroh_relay +
-# iroh_dns_server into a clean collection tree and build the artifact under build/. Only the
-# seven roles ship; see galaxy/README.md. Publishing
-# runs from a collection-vX.Y.Z tag in .github/workflows/release-collection.yml
-# (see RELEASING.md).
-build:
-	./galaxy/build.sh
+# --- Galaxy collections (decdn.node, decdn.publisher) -------------------------
+# Stage each collection's roles (galaxy/<collection>/roles.txt) into a clean collection
+# tree and build the artifact under build/: decdn.node is what a node operator runs
+# (baseline + decdn_node + grafana_alloy), decdn.publisher what a publisher runs beside
+# its origins (sponsord + sponsord_onramp + iroh_relay + iroh_dns_server). See
+# galaxy/*/README.md. Publishing runs from a node-collection-vX.Y.Z or
+# publisher-collection-vX.Y.Z tag in .github/workflows/release-collection.yml (see
+# RELEASING.md).
+build: build-node build-publisher
 
-# Validate the built artifact with galaxy-importer — the same checks Galaxy runs
-# on upload (metadata, license file, README, embedded ansible-lint). build.sh
-# leaves exactly one tarball, so the glob is unambiguous. We gate on BOTH the
+build-node build-publisher: build-%:
+	./galaxy/build.sh $*
+
+# Validate a built artifact with galaxy-importer — the same checks Galaxy runs on
+# upload (metadata, license file, README, embedded ansible-lint). build.sh leaves
+# exactly one tarball per collection, so the glob is unambiguous. We gate on BOTH the
 # pipeline exit (set -o pipefail catches a crash / "No module named …" that prints
 # no error keyword) AND the importer's explicit success line (it can log content
-# errors while still exiting 0). Warnings are kept in build/importer.log.
-galaxy-check: build
+# errors while still exiting 0). Warnings are kept in build/importer-<collection>.log.
+galaxy-check: galaxy-check-node galaxy-check-publisher
+
+galaxy-check-node galaxy-check-publisher: galaxy-check-%: build-%
 	@set -o pipefail; \
-	  tarball=$$(ls -1 build/decdn-node-*.tar.gz); \
+	  tarball=$$(ls -1 build/decdn-$*-*.tar.gz); \
 	  echo "galaxy-importer: $$tarball"; \
-	  if ! python -m galaxy_importer.main "$$tarball" 2>&1 | tee build/importer.log \
-	     || ! grep -q "Importer processing completed successfully" build/importer.log; then \
-	    echo "FAIL: galaxy-importer reported errors or did not complete (see build/importer.log)"; exit 1; \
+	  if ! python -m galaxy_importer.main "$$tarball" 2>&1 | tee build/importer-$*.log \
+	     || ! grep -q "Importer processing completed successfully" build/importer-$*.log; then \
+	    echo "FAIL: galaxy-importer reported errors or did not complete (see build/importer-$*.log)"; exit 1; \
 	  fi

@@ -16,6 +16,7 @@ body:
       options:
         - Ansible (this repo's playbooks)
         - Ansible (decdn.node Galaxy collection)
+        - Ansible (decdn.publisher Galaxy collection)
         - cloud-init user-data
         - Helm chart
         - Docker Compose

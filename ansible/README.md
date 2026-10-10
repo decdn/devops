@@ -1,7 +1,9 @@
 # ansible — deCDN deployment
 
 Declarative Ansible project for deploying deCDN nodes, one or a fleet, over a
-hardened host baseline. The roles also ship as the `decdn.node` Galaxy collection.
+hardened host baseline. The roles also ship as two Galaxy collections: `decdn.node`
+(what a node operator runs) and `decdn.publisher` (what a publisher runs beside its
+origin nodes).
 
 | Playbook | Purpose | Make target |
 |----------|---------|-------------|
@@ -491,27 +493,36 @@ the RPC URL when it is not provisioned on the host instead). Highlights:
 
 ---
 
-## Packaging as a Galaxy collection (`decdn.node`)
+## Packaging as Galaxy collections (`decdn.node`, `decdn.publisher`)
 
-The five roles (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`) are also packaged as the
-distributable **`decdn.node`** collection, for operators who bring their own playbooks.
+The seven roles are also packaged as two distributable collections, for operators who
+bring their own playbooks:
 
-The collection overlay lives in [`galaxy/`](galaxy/) (`galaxy.yml`, the collection
-`README.md`/`CHANGELOG.md`, `meta/runtime.yml`, `build.sh`). It is deliberately **not**
-a `galaxy.yml` at the project root: `galaxy/build.sh` stages only the five roles into a
-clean `ansible_collections/decdn/node/` tree and builds the artifact, so this project
-stays a plain Ansible project (the `make deploy`/`lint` flow is unchanged).
+| Collection | Roles | For |
+|---|---|---|
+| **`decdn.node`** | `baseline`, `decdn_node`, `grafana_alloy` | node operators, and a publisher's origin nodes |
+| **`decdn.publisher`** | `sponsord`, `sponsord_onramp`, `iroh_relay`, `iroh_dns_server` | publishers; depends on `decdn.node` |
+
+Each collection's overlay lives in [`galaxy/<collection>/`](galaxy/) (`galaxy.yml`, the
+collection `README.md`/`CHANGELOG.md`, `meta/runtime.yml`, and `roles.txt`, the one
+list of the roles it ships). It is deliberately **not** a `galaxy.yml` at the project
+root: `galaxy/build.sh <collection>` stages only that collection's roles into a clean
+`ansible_collections/decdn/<collection>/` tree and builds the artifact, so this project
+stays a plain Ansible project (the `make deploy`/`lint` flow is unchanged). Every role
+under `roles/` ships in exactly one collection (`make test-scripts` checks).
 
 ```bash
-make build          # stage + build -> build/decdn-node-<version>.tar.gz
-make galaxy-check   # build + validate with galaxy-importer (the checks Galaxy runs)
+make build          # stage + build -> build/decdn-{node,publisher}-<version>.tar.gz
+make galaxy-check   # build + validate both with galaxy-importer (the checks Galaxy runs)
+make build-node     # or galaxy-check-node, build-publisher, galaxy-check-publisher: one
 ```
 
-CI's `galaxy-build` job builds and validates the collection on every `ansible/**` change.
-Publishing happens from a `collection-vX.Y.Z` tag through
-`.github/workflows/release-collection.yml`, on the collection's own version (the Helm
-chart is released separately), cut on `main` by `scripts/release.sh`: see
-[RELEASING.md](../RELEASING.md). Each `galaxy/CHANGELOG.md` section is generated at
-release from the conventional commit subjects that touched the shipped roles or the
-`galaxy/` overlay, so give the PR a title that reads as a changelog entry. Until the
-collection's first release, also log the change under `[Unreleased]` there by hand.
+CI's `galaxy-build` job builds and validates both collections on every `ansible/**`
+change. Publishing happens from a `node-collection-vX.Y.Z` or
+`publisher-collection-vX.Y.Z` tag through `.github/workflows/release-collection.yml`,
+each collection on its own version (the Helm chart is released separately), cut on
+`main` by `scripts/release.sh`: see [RELEASING.md](../RELEASING.md). Each
+`galaxy/<collection>/CHANGELOG.md` section is generated at release from the
+conventional commit subjects that touched that collection's roles, its overlay or
+`galaxy/build.sh`, so give the PR a title that reads as a changelog entry. Until a
+collection's first release, also log the change under its `[Unreleased]` by hand.

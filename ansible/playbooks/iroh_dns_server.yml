@@ -14,7 +14,7 @@
 # and only one of them can have it. (Under site.yml, sponsord.yml and
 # iroh_relay.yml run first, so on a host in both groups the other service is
 # already up when this refuses; either way the deploy fails loudly.) The role
-# itself refuses ports another process holds, so the decdn.node collection gets
+# itself refuses ports another process holds, so the decdn.publisher collection gets
 # the same protection without this repo's groups. tests/scripts-test.sh runs this
 # play by its name.
 - name: Refuse an iroh DNS server on an iroh relay or sponsord-onramp host

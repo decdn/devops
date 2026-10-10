@@ -1,13 +1,13 @@
 ---
-# Manifest for the `decdn.node` Ansible collection — the public, distributable
-# slice of this DevOps repo: deploy + harden a deCDN node.
+# Manifest for the `decdn.node` Ansible collection — what a node operator runs:
+# deploy + harden a deCDN node. Publishers' services are `decdn.publisher`
+# (../publisher/galaxy.yml), which depends on this one.
 #
 # This file is an OVERLAY, not the project root manifest. It is assembled into a
-# clean collection tree (with the baseline, decdn_node, grafana_alloy, sponsord,
-# sponsord_onramp, iroh_relay and iroh_dns_server roles) by galaxy/build.sh;
+# clean collection tree (with the roles in roles.txt) by `galaxy/build.sh node`;
 # it is deliberately NOT placed at ansible/ root, so the deploy project stays a
 # plain Ansible project (bare role names, roles_path, production-profile
-# ansible-lint) rather than being reinterpreted as a collection. See galaxy/README.md.
+# ansible-lint) rather than being reinterpreted as a collection. See ../../README.md.
 namespace: decdn
 name: node
 # Set only by scripts/release.sh (RELEASING.md); 0.0.0 means never released.
@@ -17,8 +17,7 @@ authors:
   - deCDN Contributors
 description: >-
   Deploy and harden a public deCDN node: DevSec host baseline, the decdn_node
-  daemon and the sponsord onboarding sponsor with its public onramp (each with
-  backup and decommission), a self-hosted iroh relay and iroh DNS server, and
+  daemon (a cache node, or a publisher's origin) with backup and decommission, and
   opt-in Grafana Cloud observability.
 license:
   - MIT
@@ -39,10 +38,6 @@ tags:
 #               (authorized_key)
 #   decdn_node -> ansible.builtin only
 #   grafana_alloy -> ansible.builtin only
-#   sponsord -> ansible.builtin only
-#   sponsord_onramp -> ansible.builtin only (Caddy comes from the distro's apt)
-#   iroh_relay -> ansible.builtin only
-#   iroh_dns_server -> ansible.builtin only
 # community.general is NOT used by any role, so it is intentionally absent here.
 dependencies:
   devsec.hardening: ">=10.0.0"

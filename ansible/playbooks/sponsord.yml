@@ -16,7 +16,7 @@
 # Before anything runs: an onramp host outside sponsord_hosts would skip the play
 # below (baseline hardening included) and get no firewall holes for Caddy, which
 # playbooks/group_vars/ derive from sponsord_hosts. The role itself checks no group
-# name, so the decdn.node collection does not impose this repo's groups on others.
+# name, so the decdn.publisher collection does not impose this repo's groups on others.
 # tests/scripts-test.sh runs this play by its name.
 - name: Require every sponsord-onramp host to be a sponsord host
   hosts: sponsord_onramp_hosts

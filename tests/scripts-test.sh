@@ -191,6 +191,19 @@ elif [[ -n ${CI:-} ]]; then
 else
   skipped+=("split-scenario inventory check (needs yq)")
 fi
+# --- Galaxy collections: every role ships in exactly one --------------------------------
+# galaxy/<collection>/roles.txt is the one role list build.sh and release.sh read: a role
+# listed twice would ship in both collections, a role in neither would never ship.
+shipped="$(cat "$repo"/ansible/galaxy/{node,publisher}/roles.txt | grep -vE '^[[:space:]]*(#|$)' | LC_ALL=C sort)"
+dups="$(uniq -d <<<"$shipped")"
+[[ -z "$dups" ]] || fail "roles listed by both collections' roles.txt: $(xargs <<<"$dups")"
+roles_dir="$(cd "$repo/ansible/roles" && printf '%s\n' */ | tr -d / | LC_ALL=C sort)"
+[[ "$(xargs <<<"$shipped")" == "$(xargs <<<"$roles_dir")" ]] \
+  || fail "the collections' roles.txt list $(xargs <<<"$shipped"), not every role under ansible/roles: $(xargs <<<"$roles_dir")"
+pass "every role under ansible/roles ships in exactly one Galaxy collection"
+expect 2 "galaxy/build.sh rejects an unknown collection" "$repo/ansible/galaxy/build.sh" all
+expect 2 "galaxy/build.sh rejects no collection" "$repo/ansible/galaxy/build.sh"
+
 # --- release gate ----------------------------------------------------------------------
 gate="$repo/scripts/check-release-version.sh"
 expect 2 "release gate rejects a stray argument" "$gate" decdn-node-0.1.0 notes.md
@@ -204,52 +217,65 @@ bad_tag() {
 bad_tag "a bare version"                 0.1.0
 bad_tag "the retired shared vX.Y.Z tag"  v0.1.0
 bad_tag "a chart tag with a v"           decdn-node-v0.1.0
-bad_tag "a collection tag without a v"   collection-0.1.0
+bad_tag "the retired collection-vX.Y.Z tag" collection-v0.1.0
+bad_tag "a collection tag without a v"   node-collection-0.1.0
+bad_tag "an unknown collection"          relay-collection-v0.1.0
 bad_tag "a pre-release suffix"           decdn-node-0.1.0-rc.1
-bad_tag "a trailing character"           collection-v0.1.0x
+bad_tag "a trailing character"           publisher-collection-v0.1.0x
 expect 1 "release gate rejects a chart version mismatch" "$gate" decdn-node-9.9.9
 grep -q "Chart.yaml version is" "$work/out" || fail "release gate: no chart version mismatch reported"
-expect 1 "release gate rejects a collection version mismatch" "$gate" collection-v9.9.9
-grep -q "galaxy.yml version is" "$work/out" || fail "release gate: no collection version mismatch reported"
+for c in node publisher; do
+  expect 1 "release gate rejects a $c collection version mismatch" "$gate" "$c-collection-v9.9.9"
+  grep -q "galaxy/$c/galaxy.yml version is" "$work/out" || fail "release gate: no $c collection version mismatch reported"
+done
 # A copy of the tree where each artifact is released alone: dating one changelog lets
-# that artifact's tag through and leaves the other refused, both ways round. The copy
-# does not depend on where the real changelogs are in their release history: both
-# manifests are set to 9.9.9, and each changelog gets an undated 9.9.9 section of its
+# that artifact's tag through and leaves the others refused, each way round. The copy
+# does not depend on where the real changelogs are in their release history: every
+# manifest is set to 9.9.9, and each changelog gets an undated 9.9.9 section of its
 # own above its first `## [` heading.
 rel="$work/rel"
 relgate="$rel/scripts/check-release-version.sh"
 chart_log="$rel/charts/decdn-node/CHANGELOG.md"
-coll_log="$rel/ansible/galaxy/CHANGELOG.md"
-mkdir -p "$rel/scripts" "$rel/ansible/galaxy" "$rel/charts/decdn-node"
+mkdir -p "$rel/scripts" "$rel/charts/decdn-node"
 cp "$gate" "$rel/scripts/"
-cp "$repo/ansible/galaxy/galaxy.yml" "$repo/ansible/galaxy/CHANGELOG.md" "$rel/ansible/galaxy/"
 cp "$repo/charts/decdn-node/Chart.yaml" "$repo/charts/decdn-node/CHANGELOG.md" "$rel/charts/decdn-node/"
+for c in node publisher; do
+  mkdir -p "$rel/ansible/galaxy/$c"
+  cp "$repo/ansible/galaxy/$c/galaxy.yml" "$repo/ansible/galaxy/$c/CHANGELOG.md" "$rel/ansible/galaxy/$c/"
+done
 version="9.9.9" cversion="9.9.9"
-sed -i -E "s/^version:.*/version: $version/" "$rel/charts/decdn-node/Chart.yaml" "$rel/ansible/galaxy/galaxy.yml"
-for log in "$chart_log" "$coll_log"; do
+sed -i -E "s/^version:.*/version: $version/" "$rel/charts/decdn-node/Chart.yaml" "$rel"/ansible/galaxy/*/galaxy.yml
+# <artifact>: its tag and its changelog in the copy
+declare -A rel_tag=([chart]="decdn-node-$version" [node]="node-collection-v$cversion" [publisher]="publisher-collection-v$cversion")
+declare -A rel_log=([chart]="$chart_log" [node]="$rel/ansible/galaxy/node/CHANGELOG.md" [publisher]="$rel/ansible/galaxy/publisher/CHANGELOG.md")
+for a in chart node publisher; do
+  log="${rel_log[$a]}"
   awk -v v="$version" '!done && /^## \[/ {
       print "## [" v "] — unreleased"; print ""; print "### Added"; print ""
       print "- A fixture entry for the release gate tests."; print ""; done=1
     } {print}' "$log" > "$log.new"
   mv "$log.new" "$log"
+  cp "$log" "$work/$a-changelog-unreleased.md"
 done
-cp "$chart_log" "$work/chart-changelog-unreleased.md"
 # <description> <expected message, fixed string> <gate> <tag>
 refused() {
   expect 1 "release gate rejects $1" "$3" "$4"
   grep -qF -- "$2" "$work/out" || { cat "$work/out" >&2; fail "release gate: wrong refusal for $1"; }
 }
 date_section() { sed -i -E "s/^## \[$1\] — unreleased$/## [$1] — 2099-01-01/" "$2"; } # <version> <changelog>
-refused "an 'unreleased' chart changelog heading" "still marks" "$relgate" "decdn-node-$version"
-refused "an 'unreleased' collection changelog heading" "still marks" "$relgate" "collection-v$cversion"
-date_section "$version" "$chart_log"
-expect 0 "release gate accepts a released chart" "$relgate" "decdn-node-$version" --notes "$work/notes-chart.md"
-refused "the collection while only the chart is released" "still marks" "$relgate" "collection-v$cversion"
-cp "$work/chart-changelog-unreleased.md" "$chart_log"
-date_section "$cversion" "$coll_log"
-expect 0 "release gate accepts a released collection" "$relgate" "collection-v$cversion" --notes "$work/notes-collection.md"
-refused "the chart while only the collection is released" "still marks" "$relgate" "decdn-node-$version"
-date_section "$version" "$chart_log" # both released from here on: the release steps below read them
+for a in chart node publisher; do
+  refused "an 'unreleased' $a changelog heading" "still marks" "$relgate" "${rel_tag[$a]}"
+done
+for a in chart node publisher; do
+  date_section "$version" "${rel_log[$a]}"
+  expect 0 "release gate accepts a released $a" "$relgate" "${rel_tag[$a]}" --notes "$work/notes-$a.md"
+  for other in chart node publisher; do
+    [[ "$other" == "$a" ]] || refused "the $other while only the $a is released" "still marks" "$relgate" "${rel_tag[$other]}"
+  done
+  cp "$work/$a-changelog-unreleased.md" "${rel_log[$a]}"
+done
+# All released from here on: the release steps below read them.
+for a in chart node publisher; do date_section "$version" "${rel_log[$a]}"; done
 # <notes file> <its heading> <the other artifact's heading>
 notes_for() {
   grep -q "^## $2 " "$1" || fail "release notes $1 miss '## $2'"
@@ -258,7 +284,11 @@ notes_for() {
   ! grep -qE '^(<!--|\[[^]]+\]: )' "$1" || fail "release notes $1 carry the changelog's trailing comment or link references"
 }
 notes_for "$work/notes-chart.md" 'Helm chart' 'Ansible collection'
-notes_for "$work/notes-collection.md" 'Ansible collection' 'Helm chart'
+node_heading="Ansible collection \`decdn.node\`" publisher_heading="Ansible collection \`decdn.publisher\`"
+notes_for "$work/notes-node.md" "$node_heading" 'Helm chart'
+notes_for "$work/notes-node.md" "$node_heading" "$publisher_heading"
+notes_for "$work/notes-publisher.md" "$publisher_heading" 'Helm chart'
+notes_for "$work/notes-publisher.md" "$publisher_heading" "$node_heading"
 pass "release notes carry only their own artifact's changelog section"
 # Section boundaries and refusals, on a fixture changelog: versions that share a prefix,
 # a section above and below, and a trailing comment and link references.
@@ -315,20 +345,25 @@ fxbad "an undated heading"             "is not one '## [0.1.1] — YYYY-MM-DD'" 
 fxbad "a heading with no date"         "is not one '## [0.1.1] — YYYY-MM-DD'" 0.1.1 's/^(## \[0\.1\.1\]) — .*/\1/'
 fxbad "a duplicated section"           "is not one '## [0.1.1] — YYYY-MM-DD'" 0.1.1 's/^## \[0\.1\.0\]/## [0.1.1]/'
 fxbad "a section with no entries"      "has no '- ' entries" 0.1.2 's/^## \[0\.1\.10\].*/## [0.1.2] — 2099-01-04\n\n&/'
-# Each workflow triggers on exactly the tag shape the gate accepts for its artifact, and
-# strips exactly that prefix wherever it turns the tag into a version.
+# Each workflow triggers on exactly the tag shapes the gate accepts for its artifacts,
+# and turns the tag into a name and a version the one way that fits those shapes: the
+# chart strips its prefix; the collections split <collection>-collection-v<version>.
 if command -v yq >/dev/null; then
-  while IFS='|' read -r wf prefix glob; do
-    got="$(yq -o=json -I0 '.on.push.tags' "$repo/.github/workflows/$wf")"
-    [[ "$got" == "[\"$glob\"]" ]] || fail "$wf triggers on $got, want [\"$glob\"]"
-    # shellcheck disable=SC2016 # a literal ${TAG#...} in the workflow, not an expansion
-    got="$(grep -o '\${TAG#[^}]*}' "$repo/.github/workflows/$wf" | sort -u)"
-    [[ "$got" == "\${TAG#$prefix}" ]] || fail "$wf strips $(xargs <<<"$got"), want \${TAG#$prefix}"
-  done <<'EOF'
-release-chart.yml|decdn-node-|decdn-node-[0-9]+.[0-9]+.[0-9]+
-release-collection.yml|collection-v|collection-v[0-9]+.[0-9]+.[0-9]+
-EOF
-  pass "release-chart.yml and release-collection.yml trigger on, and strip, their own tag shapes"
+  wfdir="$repo/.github/workflows"
+  got="$(yq -o=json -I0 '.on.push.tags' "$wfdir/release-chart.yml")"
+  [[ "$got" == '["decdn-node-[0-9]+.[0-9]+.[0-9]+"]' ]] || fail "release-chart.yml triggers on $got"
+  got="$(yq -o=json -I0 '.on.push.tags' "$wfdir/release-collection.yml")"
+  [[ "$got" == '["node-collection-v[0-9]+.[0-9]+.[0-9]+","publisher-collection-v[0-9]+.[0-9]+.[0-9]+"]' ]] \
+    || fail "release-collection.yml triggers on $got"
+  # shellcheck disable=SC2016 # literal ${TAG...} expansions in the workflows
+  {
+    got="$(grep -o '\${TAG[#%][^}]*}' "$wfdir/release-chart.yml" | LC_ALL=C sort -u | xargs)"
+    [[ "$got" == '${TAG#decdn-node-}' ]] || fail "release-chart.yml derives the version with $got"
+    got="$(grep -o '\${TAG[#%][^}]*}' "$wfdir/release-collection.yml" | LC_ALL=C sort -u | xargs)"
+    [[ "$got" == '${TAG##*-collection-v} ${TAG%-collection-v*}' ]] \
+      || fail "release-collection.yml derives the collection and version with $got"
+  }
+  pass "release-chart.yml and release-collection.yml trigger on, and parse, their own tag shapes"
 elif [[ -n ${CI:-} ]]; then
   fail "yq is not on PATH in CI; the release trigger check would be skipped"
 else
@@ -445,8 +480,10 @@ SH
   files() { (cd "$1" && printf '%s\n' * | LC_ALL=C sort | xargs); }
 
   # Each workflow's gate step refuses the other artifact's tag (a manual dispatch).
-  for spec in "release-chart.yml|chart|decdn-node-$version|collection-v$cversion" \
-              "release-collection.yml|collection|collection-v$cversion|decdn-node-$version"; do
+  for spec in "release-chart.yml|chart|decdn-node-$version|node-collection-v$cversion" \
+              "release-chart.yml|chart|decdn-node-$version|publisher-collection-v$cversion" \
+              "release-collection.yml|collection|node-collection-v$cversion|decdn-node-$version" \
+              "release-collection.yml|collection|publisher-collection-v$cversion|decdn-node-$version"; do
     IFS='|' read -r wf kind own other <<<"$spec"
     gstep="$(wfstep "$wf" build "Gate the tag against the $kind and its changelog")"
     ! run_in "$rel" "$other" "$gstep" || fail "$wf's gate step accepts $other"
@@ -490,45 +527,59 @@ SH
   ! run_step "$check" || fail "release-chart.yml's check accepts a scalar artifacthub.io/changes"
   pass "release-chart.yml's check refuses an artifacthub.io/changes that is not a list"
 
-  # Collection: collect the built tarball, verify the sums, create the Release.
-  co="$work/co"
-  mkdir -p "$co/ansible/build"
-  echo stub > "$co/ansible/build/decdn-node-$cversion.tar.gz"
-  cp "$work/notes-collection.md" "$co/release-notes.md"
-  run_in "$co" "collection-v$cversion" "$(wfstep release-collection.yml build "Collect the collection and write checksums")" \
-    || { cat "$work/out" >&2; fail "release-collection.yml's collect step failed"; }
-  [[ "$(files "$co/dist")" == "SHA256SUMS decdn-node-$cversion.tar.gz release-notes.md" ]] \
-    || fail "release-collection.yml's dist/ holds $(files "$co/dist")"
-  [[ "$(awk '{print $2}' "$co/dist/SHA256SUMS")" == "decdn-node-$cversion.tar.gz" ]] \
-    || fail "release-collection.yml's SHA256SUMS lists more or less than the collection: $(cat "$co/dist/SHA256SUMS")"
-  run_in "$co/dist" "collection-v$cversion" "$(wfstep release-collection.yml publish "Verify the artifacts are the ones build checksummed")" \
-    || { cat "$work/out" >&2; fail "release-collection.yml's publish job refuses its build's checksums"; }
-  # Latest: only when no higher collection release exists; chart tags never count.
+  # Collections: each collects only its own built tarball (both are built), verifies
+  # the sums and creates its Release.
+  collect="$(wfstep release-collection.yml build "Collect the collection and write checksums")"
+  verify="$(wfstep release-collection.yml publish "Verify the artifacts are the ones build checksummed")"
+  release="$(wfstep release-collection.yml publish "Create the GitHub Release")"
+  for c in node publisher; do
+    co="$work/co-$c" other=node
+    [[ "$c" == node ]] && other=publisher
+    mkdir -p "$co/ansible/build"
+    echo stub > "$co/ansible/build/decdn-node-$cversion.tar.gz"
+    echo stub > "$co/ansible/build/decdn-publisher-$cversion.tar.gz"
+    cp "$work/notes-$c.md" "$co/release-notes.md"
+    run_in "$co" "$c-collection-v$cversion" "$collect" \
+      || { cat "$work/out" >&2; fail "release-collection.yml's collect step failed for $c"; }
+    [[ "$(files "$co/dist")" == "SHA256SUMS decdn-$c-$cversion.tar.gz release-notes.md" ]] \
+      || fail "release-collection.yml's dist/ for $c holds $(files "$co/dist")"
+    [[ "$(awk '{print $2}' "$co/dist/SHA256SUMS")" == "decdn-$c-$cversion.tar.gz" ]] \
+      || fail "release-collection.yml's SHA256SUMS for $c lists more or less than the collection: $(cat "$co/dist/SHA256SUMS")"
+    run_in "$co/dist" "$c-collection-v$cversion" "$verify" \
+      || { cat "$work/out" >&2; fail "release-collection.yml's publish job refuses its build's checksums for $c"; }
+    for want in true false; do
+      LATEST="$want" run_in "$co" "$c-collection-v$cversion" "$release" \
+        || { cat "$work/out" >&2; fail "release-collection.yml's Release step failed for $c"; }
+      grep -qx -- "--latest=$want" "$work/gh-args" || fail "release-collection.yml's Release ignores the Latest decision ($want) for $c"
+    done
+    grep -qx "decdn.$c collection $cversion" "$work/gh-args" \
+      || fail "release-collection.yml's Release title is not 'decdn.$c collection $cversion'"
+    grep -qx "dist/decdn-$c-$cversion.tar.gz" "$work/gh-args" || fail "release-collection.yml's $c Release does not attach its tarball"
+    ! grep -q "decdn-$other-" "$work/gh-args" || fail "release-collection.yml's $c Release attaches the $other collection"
+    ! LATEST="" run_in "$co" "$c-collection-v$cversion" "$release" || fail "release-collection.yml's Release runs with no Latest decision"
+  done
+  # Latest follows decdn.node only: a node release when no higher node release exists,
+  # never a publisher release; chart and publisher tags never count.
   decide="$(wfstep release-collection.yml publish "Decide whether this release becomes Latest")"
-  # <description> <want true|false> <this version> <existing release tags, newline-separated>
+  # <description> <want true|false> <tag> <existing release tags, newline-separated>
   # (the step reads only the tag, so any version will do)
   latest_case() {
     : > "$work/gh-output"
-    GH_RELEASES="$4" GITHUB_OUTPUT="$work/gh-output" run_in "$co" "collection-v$3" "$decide" \
+    GH_RELEASES="$4" GITHUB_OUTPUT="$work/gh-output" run_in "$work/co-node" "$3" "$decide" \
       || { cat "$work/out" >&2; fail "release-collection.yml's Latest step failed for $1"; }
     [[ "$(cat "$work/gh-output")" == "latest=$2" ]] \
       || fail "release-collection.yml's Latest step for $1: $(cat "$work/gh-output"), want latest=$2"
   }
-  latest_case "the first release"               true  0.1.0  ""
-  latest_case "a newer release than any"        true  0.2.0  $'collection-v0.1.0\ncollection-v0.1.1'
-  latest_case "a patch below a newer line"      false 0.1.2  $'collection-v0.1.1\ncollection-v0.2.0'
-  latest_case "0.1.9 below 0.1.10 (by version)" false 0.1.9  $'collection-v0.1.10'
-  latest_case "0.1.10 above 0.1.9 (by version)" true  0.1.10 $'collection-v0.1.9'
-  latest_case "a higher chart release only"     true  0.1.0  $'decdn-node-99.0.0'
-  release="$(wfstep release-collection.yml publish "Create the GitHub Release")"
-  for want in true false; do
-    LATEST="$want" run_in "$co" "collection-v$cversion" "$release" \
-      || { cat "$work/out" >&2; fail "release-collection.yml's Release step failed"; }
-    grep -qx -- "--latest=$want" "$work/gh-args" || fail "release-collection.yml's Release ignores the Latest decision ($want)"
-  done
-  ! LATEST="" run_in "$co" "collection-v$cversion" "$release" || fail "release-collection.yml's Release runs with no Latest decision"
-  grep -qx "decdn.node collection $cversion" "$work/gh-args" || fail "release-collection.yml's Release title is not 'decdn.node collection $cversion'"
-  pass "release-collection.yml collects only its tarball, and its publish job verifies it, decides Latest by version and attaches it"
+  n=node-collection-v p=publisher-collection-v
+  latest_case "the first node release"          true  "${n}0.1.0"  ""
+  latest_case "a newer release than any"        true  "${n}0.2.0"  "${n}0.1.0"$'\n'"${n}0.1.1"
+  latest_case "a patch below a newer line"      false "${n}0.1.2"  "${n}0.1.1"$'\n'"${n}0.2.0"
+  latest_case "0.1.9 below 0.1.10 (by version)" false "${n}0.1.9"  "${n}0.1.10"
+  latest_case "0.1.10 above 0.1.9 (by version)" true  "${n}0.1.10" "${n}0.1.9"
+  latest_case "higher chart and publisher releases only" true "${n}0.1.0" "decdn-node-99.0.0"$'\n'"${p}99.0.0"
+  latest_case "the first publisher release"     false "${p}0.1.0"  ""
+  latest_case "a publisher release above every node one" false "${p}9.0.0" "${n}0.1.0"
+  pass "release-collection.yml collects only its collection's tarball, and its publish job verifies it, decides Latest by decdn.node's versions and attaches it"
 elif [[ -n ${CI:-} ]]; then
   fail "yq, jq or helm is not on PATH in CI; the release workflow steps would be skipped"
 else
@@ -537,8 +588,8 @@ fi
 
 # --- scripts/release.sh: version, changelog section, signed commit and tag -------------
 # On a fixture repo with a bare origin: small manifests and changelogs at the 0.0.0
-# placeholder, the real scripts, cliff.toml and galaxy/build.sh (the role list), and an
-# ephemeral ssh signing key. The host's git config is kept out (GIT_CONFIG_GLOBAL). The
+# placeholder, the real scripts, cliff.toml, galaxy/build.sh and each collection's
+# roles.txt, and an ephemeral ssh signing key. The host's git config is kept out (GIT_CONFIG_GLOBAL). The
 # make checks are stubs that log their target to $RS_MAKE_LOG and fail while
 # $RS_MAKE_FAIL exists; most cases skip them with --no-verify.
 if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
@@ -589,23 +640,28 @@ if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
   rsgit config gpg.ssh.allowedSignersFile "$work/rs-allowed-signers"
   export RS_MAKE_LOG="$work/rs-make.log" RS_MAKE_FAIL="$work/rs-make-fail"
   rsgit remote add origin "$rso"
-  mkdir -p "$rs/scripts" "$rs/ansible/galaxy" "$chart"
+  mkdir -p "$rs/scripts" "$rs/ansible/galaxy/node" "$rs/ansible/galaxy/publisher" "$chart"
   cp "$repo/scripts/release.sh" "$repo/scripts/check-release-version.sh" "$repo/scripts/chart-artifacthub-changes.py" "$rs/scripts/"
   cp "$repo/cliff.toml" "$rs/"
   cp "$repo/ansible/galaxy/build.sh" "$rs/ansible/galaxy/"
   # shellcheck disable=SC2016 # $$ is make's, for the shell
   printf 'lint-helm:\n\t@echo lint-helm >> "$$RS_MAKE_LOG"; test ! -e "$$RS_MAKE_FAIL"\n' > "$rs/Makefile"
   # shellcheck disable=SC2016
-  printf 'galaxy-check:\n\t@echo galaxy-check >> "$$RS_MAKE_LOG"; test ! -e "$$RS_MAKE_FAIL"\n' > "$rs/ansible/Makefile"
+  printf 'galaxy-check-%%:\n\t@echo galaxy-check-$* >> "$$RS_MAKE_LOG"; test ! -e "$$RS_MAKE_FAIL"\n' > "$rs/ansible/Makefile"
   printf 'apiVersion: v2\nname: decdn-node\nversion: 0.0.0\nappVersion: "0.0.1"\n' > "$chart/Chart.yaml"
-  printf 'namespace: decdn\nname: node\nversion: 0.0.0                      # a comment\n' > "$rs/ansible/galaxy/galaxy.yml"
-  for log in "$chart/CHANGELOG.md" "$rs/ansible/galaxy/CHANGELOG.md"; do
+  for c in node publisher; do
+    cp "$repo/ansible/galaxy/$c/roles.txt" "$rs/ansible/galaxy/$c/"
+    printf 'namespace: decdn\nname: %s\nversion: 0.0.0                      # a comment\n' "$c" > "$rs/ansible/galaxy/$c/galaxy.yml"
+  done
+  printf 'dependencies:\n  decdn.node: ">=0.0.2"\n' >> "$rs/ansible/galaxy/publisher/galaxy.yml"
+  for log in "$chart/CHANGELOG.md" "$rs"/ansible/galaxy/{node,publisher}/CHANGELOG.md; do
     printf '# Changelog\n\nIntro.\n\n## [Unreleased]\n\nInitial.\n\n### Added\n\n- The first entry.\n' > "$log"
   done
   rsgit add -A; rsgit commit -qm "feat: the fixture"; rsgit push -q -u origin main
 
   expect 2 "release.sh rejects no arguments"        rsrel
   expect 2 "release.sh rejects an unknown artifact" rsrel compose
+  expect 2 "release.sh rejects the retired collection artifact" rsrel collection
   expect 2 "release.sh rejects an unknown level"    rsrel chart huge
   expect 2 "release.sh rejects an unknown flag"     rsrel chart --force
   expect 2 "release.sh rejects a third argument"    rsrel chart minor extra
@@ -698,7 +754,7 @@ if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
   grep -qx 'version: 0.1.0' "$chart/Chart.yaml" || fail "release.sh did not set Chart.yaml to 0.1.0"
   grep -qx "## \[0.1.0\] — $(today)" "$chart/CHANGELOG.md" || fail "release.sh did not date [Unreleased] as 0.1.0"
   ! grep -q '^## \[Unreleased\]' "$chart/CHANGELOG.md" || fail "release.sh left [Unreleased] after the first release"
-  grep -qx '## \[Unreleased\]' "$rs/ansible/galaxy/CHANGELOG.md" || fail "release.sh touched the collection's changelog"
+  grep -qx '## \[Unreleased\]' "$rs/ansible/galaxy/node/CHANGELOG.md" || fail "release.sh touched the node collection's changelog"
   rspushed decdn-node-0.1.0
   [[ "$(git -C "$rso" tag)" == "decdn-node-0.1.0" ]] || fail "release.sh pushed other tags: $(git -C "$rso" tag)"
   [[ "$(rsgit log -1 --format=%s)" == "chore(release): decdn-node-0.1.0" ]] || fail "release.sh's commit subject: $(rsgit log -1 --format=%s)"
@@ -807,30 +863,48 @@ if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
   ! grep -qE '^\+- .*(Update the values|An empty scope|A glued body)' "$work/out" \
     || fail "release.sh rendered a commit git-cliff cannot parse"
 
-  # The collection is released on its own tags and paths: build.sh's roles, galaxy/.
+  # Each collection is released on its own tags and paths: its roles.txt, its overlay.
+  # decdn.publisher depends on decdn.node, so its first release waits for node's.
+  rsrefused "decdn.publisher's first release before decdn.node's" "origin's highest node-collection tag is none" publisher-collection minor
   : > "$RS_MAKE_LOG"
-  expect 0 "release.sh cuts the collection's first release" rsrel collection patch --execute
-  rsmade galaxy-check
-  rspushed collection-v0.0.1
-  grep -qx 'version: 0.0.1                      # a comment' "$rs/ansible/galaxy/galaxy.yml" \
-    || fail "release.sh did not set galaxy.yml to 0.0.1 keeping its comment: $(grep '^version' "$rs/ansible/galaxy/galaxy.yml")"
+  expect 0 "release.sh cuts the node collection's first release" rsrel node-collection patch --execute
+  rsmade galaxy-check-node
+  rspushed node-collection-v0.0.1
+  # The fixture's publisher declares decdn.node >=0.0.2: a lower node release is not enough.
+  rsrefused "decdn.publisher's first release below its decdn.node constraint" \
+    "needs decdn.node >=0.0.2, and origin's highest node-collection tag is 0.0.1" publisher-collection patch
+  sed -i 's/">=0.0.2"/">=0.0.1"/' "$rs/ansible/galaxy/publisher/galaxy.yml"
+  rsgit commit -qam "build: lower the fixture's decdn.node constraint"; rspush
+  grep -qx 'version: 0.0.1                      # a comment' "$rs/ansible/galaxy/node/galaxy.yml" \
+    || fail "release.sh did not set node/galaxy.yml to 0.0.1 keeping its comment: $(grep '^version' "$rs/ansible/galaxy/node/galaxy.yml")"
+  grep -qx '## \[Unreleased\]' "$rs/ansible/galaxy/publisher/CHANGELOG.md" || fail "release.sh touched the publisher collection's changelog"
+  : > "$RS_MAKE_LOG"
+  expect 0 "release.sh cuts the publisher collection's first release after node's" rsrel publisher-collection patch --execute
+  rsmade galaxy-check-publisher
+  rspushed publisher-collection-v0.0.1
   rscommit ansible/molecule/default/x.yml "feat(molecule): not shipped"
-  rscommit ansible/roles/unshipped/x.yml "feat(unshipped): not in build.sh"
-  rsrefused "a collection change outside what it ships" "nothing to release" collection
+  rscommit ansible/roles/unshipped/x.yml "feat(unshipped): not in a roles.txt"
+  rsrefused "a change outside what the node collection ships" "nothing to release" node-collection
+  rsrefused "a change outside what the publisher collection ships" "nothing to release" publisher-collection
   rscommit ansible/roles/baseline/defaults/main.yml "refactor(baseline)!: a breaking change"
-  expect 0 "release.sh bumps a breaking change at 0.0.x to a patch" rsrel collection
-  rssaid "after a breaking change at 0.0.x" "collection-v0.0.1 -> collection-v0.0.2"
+  expect 0 "release.sh bumps a breaking change at 0.0.x to a patch" rsrel node-collection
+  rssaid "after a breaking change at 0.0.x" "node-collection-v0.0.1 -> node-collection-v0.0.2"
+  rsrefused "a node role change for the publisher collection" "nothing to release" publisher-collection
   rscommit ansible/roles/iroh_relay/defaults/main.yml "fix(iroh_relay): a role fix"
-  expect 0 "release.sh bumps the collection for a role fix" rsrel collection
-  rssaid "after a role fix" "collection-v0.0.1 -> collection-v0.0.2"
-  ! grep -qF "Break it" "$work/out" || fail "release.sh's collection section carries a chart commit"
-  sed -i -E 's/^roles=\((.*)\)$/roles=(\1 unshipped)/' "$rs/ansible/galaxy/build.sh"
+  expect 0 "release.sh bumps the publisher collection for a role fix" rsrel publisher-collection
+  rssaid "after a role fix" "publisher-collection-v0.0.1 -> publisher-collection-v0.0.2"
+  ! grep -qF "Break it" "$work/out" || fail "release.sh's publisher section carries a chart commit"
+  ! grep -qF "A breaking change" "$work/out" || fail "release.sh's publisher section carries a node collection commit"
+  rscommit ansible/galaxy/build.sh "fix(galaxy): a build fix"
+  expect 0 "release.sh counts galaxy/build.sh for the node collection" rsrel node-collection
+  rssaid "after a build.sh fix" "+- **galaxy**: A build fix"
+  echo unshipped >> "$rs/ansible/galaxy/publisher/roles.txt"
   rsgit commit -qam "build: ship the unshipped role"; rspush
-  expect 0 "release.sh reads the collection's roles from build.sh" rsrel collection
-  rssaid "with a role added to build.sh" "+- **unshipped**: Not in build.sh"
-  rssaid "with a feature at 0.0.x" "collection-v0.0.1 -> collection-v0.1.0"
+  expect 0 "release.sh reads the collection's roles from its roles.txt" rsrel publisher-collection
+  rssaid "with a role added to roles.txt" "+- **unshipped**: Not in a roles.txt"
+  rssaid "with a feature at 0.0.x" "publisher-collection-v0.0.1 -> publisher-collection-v0.1.0"
   ! grep -qF "Ship the unshipped role" "$work/out" || fail "release.sh's collection section lists a build commit"
-  pass "release.sh releases the collection on its own tags, build.sh's roles and galaxy/"
+  pass "release.sh releases each collection on its own tags, roles.txt and overlay, publisher after node"
   unset GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM RS_MAKE_LOG RS_MAKE_FAIL
 elif [[ -n ${CI:-} ]]; then
   fail "git-cliff or ssh-keygen is not on PATH in CI; the release.sh tests would be skipped"

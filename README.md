@@ -13,7 +13,7 @@ day-2 tooling for operators anywhere. Four ways to deploy the same node:
 
 | Path | For | Start here |
 |------|-----|------------|
-| **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published as the `decdn.node` Galaxy collection. | [`ansible/README.md`](ansible/README.md) |
+| **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published as the `decdn.node` and `decdn.publisher` Galaxy collections. | [`ansible/README.md`](ansible/README.md) |
 | **cloud-init** (`cloud-init/`) | One VM, no control machine: paste the user-data into your provider's "create server" form. It runs the Ansible playbook on the host itself, hardening included. A second template boots the onboarding sponsor (`sponsord` + its onramp). | [`cloud-init/README.md`](cloud-init/README.md) |
 | **Docker Compose** (`compose/`) | One host that already runs Docker. Also runs the onboarding sponsor (`sponsord` + its onramp) behind profiles. | [`compose/README.md`](compose/README.md) |
 | **Helm** (`charts/decdn-node/`) | Kubernetes, one release per node. | [`charts/decdn-node/README.md`](charts/decdn-node/README.md) |
@@ -103,7 +103,7 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 
 | Path | What it is |
 |------|------------|
-| [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `sponsord.yml`, `iroh_relay.yml`, `iroh_dns_server.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`, `iroh_relay`, `iroh_dns_server`), `galaxy/` (the `decdn.node` collection), `molecule/`. |
+| [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `sponsord.yml`, `iroh_relay.yml`, `iroh_dns_server.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`, `iroh_relay`, `iroh_dns_server`), `galaxy/` (the `decdn.node` and `decdn.publisher` collections), `molecule/`. |
 | [`cloud-init/`](cloud-init/README.md) | The cloud-init deploy path: `user-data.yaml` (a node), `user-data-sponsord.yaml` (a sponsor host), the on-host `bootstrap.sh`, and the pinned ansible-core and collections it installs. |
 | [`compose/`](compose/README.md) | The Docker Compose deploy path: the node, `sponsord`, `sponsord-onramp` and Caddy, one profile each. |
 | [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart; it renders the node's dashboards and alert rules from `monitoring/`. |
@@ -117,7 +117,9 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): local checks, every `make` target, what CI runs,
   and the pinning rules.
-- [`RELEASING.md`](RELEASING.md): how `scripts/release.sh` cuts a release, and how a `collection-vX.Y.Z` tag publishes the collection and a `decdn-node-X.Y.Z` tag the chart.
+- [`RELEASING.md`](RELEASING.md): how `scripts/release.sh` cuts a release, and how a
+  `node-collection-vX.Y.Z` or `publisher-collection-vX.Y.Z` tag publishes a collection
+  and a `decdn-node-X.Y.Z` tag the chart.
 - [`AGENTS.md`](AGENTS.md): the repo's hard rules (for humans and AI agents).
 - [`SECURITY.md`](SECURITY.md): reporting a vulnerability, verifying releases.
 

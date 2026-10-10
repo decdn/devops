@@ -3,7 +3,7 @@ name: PR title
 
 # The PR title becomes the commit subject on main (the repo squash-merges only, with the
 # PR title as the subject), and scripts/release.sh renders those subjects into the
-# collection's and the chart's changelogs (cliff.toml). release.sh refuses a subject that
+# collections' and the chart's changelogs (cliff.toml). release.sh refuses a subject that
 # is not a Conventional Commit; this catches it before the merge, while it can still be
 # fixed. It does that only as a required status check of the `main` ruleset. Its own
 # workflow, not a ci.yml job, because it must re-run when the title is edited, and

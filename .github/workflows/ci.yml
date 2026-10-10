@@ -135,10 +135,10 @@ jobs:
             ansible-playbook "$pb" --syntax-check -i localhost,
           done
 
-  # Build the public `decdn.node` collection and run galaxy-importer's checks —
-  # the same validation Galaxy runs on upload (metadata, license, README, embedded
-  # ansible-lint). This is a readiness GATE only: it never publishes and needs no
-  # token. Runs only when ansible/ changed.
+  # Build the public `decdn.node` and `decdn.publisher` collections and run
+  # galaxy-importer's checks on each — the same validation Galaxy runs on upload
+  # (metadata, license, README, embedded ansible-lint). This is a readiness GATE only:
+  # it never publishes and needs no token. Runs only when ansible/ changed.
   galaxy-build:
     needs: changes
     if: needs.changes.outputs.ansible == 'true'
@@ -175,16 +175,18 @@ jobs:
         with:
           path: ansible/collections
           key: galaxy-${{ runner.os }}-${{ hashFiles('ansible/requirements.yml') }}
-      - name: Build + validate the decdn.node collection
+      - name: Build + validate the decdn.node and decdn.publisher collections
         run: make galaxy-check
         env:
           ANSIBLE_COLLECTIONS_PATH: collections
-      - name: Upload collection artifact
+      - name: Upload collection artifacts
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: decdn-node-collection
-          path: ansible/build/decdn-node-*.tar.gz
+          name: decdn-collections
+          path: |
+            ansible/build/decdn-node-*.tar.gz
+            ansible/build/decdn-publisher-*.tar.gz
           if-no-files-found: ignore
 
   # Helm chart: `helm lint --strict`, positive + negative render tests, kubeconform
