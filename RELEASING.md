@@ -21,8 +21,10 @@ or `make lint-helm`), packages it, and uploads it with a `SHA256SUMS` as a workf
 artifact. The `publish` job pushes it to Galaxy or ghcr.io and creates the GitHub
 Release, but **only** when the repository variable `PUBLISH_ENABLED` is `true`. Until
 then, a tag push is a dry run. So is a manual *Run workflow* (`workflow_dispatch`) with a
-tag, which is the way to rehearse. The repo's *Latest* release follows the collection;
-chart releases are created with `--latest=false`.
+tag, which is the way to rehearse. The repo's *Latest* release is the highest collection
+version: a collection release is marked Latest only when no higher `collection-v` release
+exists (so a patch to an older line does not take it), and chart releases never are
+(`--latest=false`). Collection publishes run one at a time, so two cannot race for it.
 
 ## Cutting a release
 
@@ -127,8 +129,9 @@ upload, fix the cause and re-run. If Galaxy did accept it, finish by hand from t
 (`release-notes.md` in it is not an asset):
 
 ```bash
+# --latest=false if a higher collection-v release already exists
 gh release create collection-vX.Y.Z --repo decdn/devops --title "decdn.node collection X.Y.Z" \
-  --notes-file release-notes.md decdn-node-X.Y.Z.tar.gz SHA256SUMS
+  --latest=true --notes-file release-notes.md decdn-node-X.Y.Z.tar.gz SHA256SUMS
 ```
 
 **Never re-use a version** for different content. Cut the next patch version.

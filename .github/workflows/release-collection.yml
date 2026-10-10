@@ -80,6 +80,12 @@ jobs:
     if: vars.PUBLISH_ENABLED == 'true' && github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # One collection publish at a time, so the Latest decision below cannot race another
+    # version's. Job-level, so a dry run (which never reaches this job) cannot queue
+    # behind or displace a real publish.
+    concurrency:
+      group: ${{ github.workflow }}-publish
+      cancel-in-progress: false
     # Protect this environment with required reviewers in the repository settings.
     environment: release
     permissions:
@@ -97,6 +103,22 @@ jobs:
           GALAXY_API_KEY: ${{ secrets.GALAXY_API_KEY }}
         run: |
           [ -n "$GALAXY_API_KEY" ] || { echo "::error::secret GALAXY_API_KEY is not set"; exit 1; }
+      # Latest only when no higher collection release exists: a patch to an older line
+      # must not take Latest from a newer one. Explicit, because gh's default leaves it
+      # to GitHub's date-and-version guess across every release, the chart's included.
+      # Before Galaxy, so a failing API call stops the job while it can still re-run.
+      - name: Decide whether this release becomes Latest
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          releases="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName')"
+          newest="$(printf '%s\n' "$releases" "$TAG" \
+            | sed -nE 's/^collection-v([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' | sort -V | tail -n1)"
+          latest=false
+          if [[ "$newest" == "${TAG#collection-v}" ]]; then latest=true; fi
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "Latest: $latest (newest collection release: $newest)"
       - name: Install ansible-core
         run: python3 -m pip install --upgrade ansible-core
       # Not idempotent: Galaxy refuses a version that already exists, so a re-run
@@ -109,8 +131,10 @@ jobs:
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ steps.latest.outputs.latest }}
         run: |
+          [[ "$LATEST" == true || "$LATEST" == false ]] || { echo "::error::no Latest decision ('$LATEST')"; exit 1; }
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --title "decdn.node collection ${TAG#collection-v}" \
+            --title "decdn.node collection ${TAG#collection-v}" --latest="$LATEST" \
             --notes-file dist/release-notes.md \
             dist/decdn-node-*.tar.gz dist/SHA256SUMS

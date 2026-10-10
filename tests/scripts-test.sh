@@ -409,11 +409,14 @@ if command -v yq >/dev/null && command -v jq >/dev/null && command -v helm >/dev
     [[ -n "$run" && "$run" != null ]] || fail "$1 has no $2 step '$3'"
     printf '%s\n' "$run"
   }
-  # A gh that records its arguments and refuses a --notes-file or dist/ asset that is
-  # not a non-empty file (an unmatched glob reaches it as the literal pattern).
+  # A gh that answers `release list` with $GH_RELEASES (one tag per line, as the
+  # workflow's --jq prints them), and otherwise records its arguments and refuses a
+  # --notes-file or dist/ asset that is not a non-empty file (an unmatched glob reaches
+  # it as the literal pattern).
   mkdir -p "$work/bin"
   cat > "$work/bin/gh" <<'SH'
 #!/usr/bin/env bash
+if [[ $1 == release && $2 == list ]]; then printf '%s' "${GH_RELEASES:-}"; exit 0; fi
 printf '%s\n' "$@" > "$GH_ARGS"
 prev=""
 for a in "$@"; do
@@ -490,11 +493,32 @@ SH
     || fail "release-collection.yml's SHA256SUMS lists more or less than the collection: $(cat "$co/dist/SHA256SUMS")"
   run_in "$co/dist" "collection-v$cversion" "$(wfstep release-collection.yml publish "Verify the artifacts are the ones build checksummed")" \
     || { cat "$work/out" >&2; fail "release-collection.yml's publish job refuses its build's checksums"; }
-  run_in "$co" "collection-v$cversion" "$(wfstep release-collection.yml publish "Create the GitHub Release")" \
-    || { cat "$work/out" >&2; fail "release-collection.yml's Release step failed"; }
-  ! grep -q -- "--latest" "$work/gh-args" || fail "release-collection.yml's Release must stay eligible for Latest"
+  # Latest: only when no higher collection release exists; chart tags never count.
+  decide="$(wfstep release-collection.yml publish "Decide whether this release becomes Latest")"
+  # <description> <want true|false> <this version> <existing release tags, newline-separated>
+  # (the step reads only the tag, so any version will do)
+  latest_case() {
+    : > "$work/gh-output"
+    GH_RELEASES="$4" GITHUB_OUTPUT="$work/gh-output" run_in "$co" "collection-v$3" "$decide" \
+      || { cat "$work/out" >&2; fail "release-collection.yml's Latest step failed for $1"; }
+    [[ "$(cat "$work/gh-output")" == "latest=$2" ]] \
+      || fail "release-collection.yml's Latest step for $1: $(cat "$work/gh-output"), want latest=$2"
+  }
+  latest_case "the first release"               true  0.1.0  ""
+  latest_case "a newer release than any"        true  0.2.0  $'collection-v0.1.0\ncollection-v0.1.1'
+  latest_case "a patch below a newer line"      false 0.1.2  $'collection-v0.1.1\ncollection-v0.2.0'
+  latest_case "0.1.9 below 0.1.10 (by version)" false 0.1.9  $'collection-v0.1.10'
+  latest_case "0.1.10 above 0.1.9 (by version)" true  0.1.10 $'collection-v0.1.9'
+  latest_case "a higher chart release only"     true  0.1.0  $'decdn-node-99.0.0'
+  release="$(wfstep release-collection.yml publish "Create the GitHub Release")"
+  for want in true false; do
+    LATEST="$want" run_in "$co" "collection-v$cversion" "$release" \
+      || { cat "$work/out" >&2; fail "release-collection.yml's Release step failed"; }
+    grep -qx -- "--latest=$want" "$work/gh-args" || fail "release-collection.yml's Release ignores the Latest decision ($want)"
+  done
+  ! LATEST="" run_in "$co" "collection-v$cversion" "$release" || fail "release-collection.yml's Release runs with no Latest decision"
   grep -qx "decdn.node collection $cversion" "$work/gh-args" || fail "release-collection.yml's Release title is not 'decdn.node collection $cversion'"
-  pass "release-collection.yml collects only its tarball, and its publish job verifies and attaches it"
+  pass "release-collection.yml collects only its tarball, and its publish job verifies it, decides Latest by version and attaches it"
 elif [[ -n ${CI:-} ]]; then
   fail "yq, jq or helm is not on PATH in CI; the release workflow steps would be skipped"
 else
