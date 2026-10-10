@@ -10,6 +10,11 @@ and keeps the same guarantees:
 - one public hole (QUIC udp/4433)
 - no baked-in protocol facts
 
+It serves both kinds of operator. A **node operator** runs a cache node: no origin
+backend, so it fills a miss from other nodes. A **publisher** runs an origin node: the
+same release with an origin backend in `config`; see
+[Running an origin (publishers)](#running-an-origin-publishers).
+
 One release is one node identity: one keystore and one data dir. To run a fleet, install
 one release per node. The StatefulSet is fixed at one replica, because two pods sharing a
 keystore would double-sign.
@@ -219,6 +224,44 @@ their own token volume, so they should work with the chart's
 `automountServiceAccountToken: false` (not yet tested in a cluster). If you set
 `networkPolicy.egress`, allow STS (or the Pod Identity agent). Never put credentials in
 `config`.
+
+## Running an origin (publishers)
+
+An origin is a node with an origin backend: the canonical source of a publisher's
+namespace content
+([ADR 001](https://github.com/decdn/decdn/blob/main/adr/001-network.md)). The chart has no
+separate mode for it. Add the backend to `config.cache` (see [Origins](#configuration-config)
+above for the two forms and S3 credentials):
+
+```yaml
+# values-origin-1.yaml, on top of the required values
+config:
+  cache:
+    origin:
+      kind: s3
+      bucket: my-namespace-content
+      region: eu-central-1
+      credentials: {source: default-chain}
+secrets:
+  env:
+    existingSecret: decdn-origin-1-env
+    passthroughKeys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+```
+
+With a backend set, `cache.node_to_node_pull_through_enabled` derives to `false` (misses
+fill from the backend), and the daemon defaults `cache.relay_foreign_namespaces` to
+`false`, so the node serves only the namespaces it is an origin of
+([ADR 037](https://github.com/decdn/decdn/blob/main/adr/037-regional-proxy-warming.md)).
+An `fs` origin reads a path inside the pod, so the content must be on the data PVC (under
+`/var/lib/decdn`); the chart mounts no other volume. CI renders the multi-origin form
+(`ci/ci-origins.yaml`: http, fs and s3) and checks its keys against the upstream schema.
+
+Configuring a backend does not make the node an origin on-chain: the namespace's publisher
+seats the node's operator with `OriginAssignment.addOrigin`
+([ADR 011](https://github.com/decdn/decdn/blob/main/adr/011-content-takedown.md#origin-assignment-authority)).
+Until then it serves its bytes as a cache does. With Ansible, the same node is a
+`decdn_origin_nodes` host
+([`playbooks/origin.yml`](https://github.com/decdn/devops/blob/main/ansible/playbooks/origin.yml)).
 
 ## Network
 

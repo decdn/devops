@@ -53,6 +53,8 @@ Initial chart (pre-1.0; the values shape may still change).
   `artifacthub.io/changes`, generated from this changelog, to the packaged chart and
   pushes `artifacthub-repo.yml` (not packaged) as
   `ghcr.io/decdn/charts/decdn-node:artifacthub.io`.
+- README: running the chart as a publisher's origin node (an origin backend in
+  `config.cache`, what it changes, and the on-chain seating step).
 
 ### Changed
 
