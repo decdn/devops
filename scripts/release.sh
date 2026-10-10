@@ -27,8 +27,9 @@
 # The first release (no tag yet, the manifest at the 0.0.0 placeholder) names its level
 # and releases the changelog's hand-written `## [Unreleased]` section instead: without a
 # previous tag, git-cliff would render the whole history. decdn.publisher depends on
-# decdn.node, so its first release is refused until origin has a node-collection tag
-# that satisfies the `decdn.node: ">=X.Y.Z"` its galaxy.yml declares.
+# decdn.node, so each of its releases is refused until origin has a node-collection tag
+# that satisfies the `decdn.node: ">=X.Y.Z"` its galaxy.yml declares (the publish job
+# then checks Galaxy itself).
 #
 # --execute runs scripts/check-release-version.sh on the result (and, for the chart,
 # scripts/chart-artifacthub-changes.py), then the artifact's make target (make

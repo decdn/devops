@@ -171,8 +171,8 @@ An origin is the same node with an origin backend: the canonical source of a
 publisher's namespace. Set `COMPOSE_PROFILES=origin` and give `node.toml` the
 backend: add `--origin` to step 4's `config init`, with an `https://…` URL for an HTTP
 store, `file:///<path>` for a local or NFS path, or `s3://<bucket>` for S3 (and R2, B2,
-MinIO), whose region and endpoint it leaves as comments to fill in. Or write the
-`[cache.origin]` table by hand.
+MinIO). For S3 it writes `region = "us-east-1"` for you to confirm and leaves
+`endpoint_url` (R2, B2, MinIO) commented. Or write the `[cache.origin]` table by hand.
 The [`decdn_node` role's README](../ansible/roles/decdn_node/README.md) lists the
 keys, and `decdn config validate` (step 6) checks them. Static S3 keys go in
 `/etc/decdn/decdn.env` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), never in

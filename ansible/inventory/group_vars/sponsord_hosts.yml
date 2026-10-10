@@ -1,5 +1,5 @@
 ---
-# Shared config for sponsord hosts (playbooks/sponsord.yml, also run by site.yml).
+# Shared config for sponsord hosts (playbooks/sponsord.yml, also run by publisher.yml).
 # Uncomment and fill in; per-host values can move to host_vars/<host>/main.yml.
 # Full variable list: roles/sponsord/defaults/main.yml and roles/sponsord/README.md.
 #

@@ -129,8 +129,10 @@ of your own when hosts differ by group (disk size, an egress cap on metered band
 with a `group_vars/<group>.yml`. Origins go in `decdn_origin_nodes`, as a child of
 `decdn_nodes` (see `inventory/hosts-publisher.yml.example`). Settings every host needs regardless of
 inventory, currently the public firewall holes (the node's udp/4433, tcp/80 + tcp/443
-for Caddy on `sponsord_onramp_hosts`, tcp/80 + tcp/443 + udp/7842 on
-`iroh_relay_hosts`, tcp/443 + udp/53 + tcp/53 on `iroh_dns_server_hosts`), live in
+for Caddy on `sponsord_onramp_hosts` with `sponsord_onramp_proxy: caddy`, tcp/80 +
+tcp/443 on `iroh_relay_hosts` plus udp/7842 unless
+`iroh_relay_enable_quic_addr_discovery` is false, tcp/443 + udp/53 + tcp/53 on
+`iroh_dns_server_hosts`), live in
 `playbooks/group_vars/`, so an overlay can't drop them: `all.yml` builds the list from the
 host's groups and each group's file (`decdn_nodes.yml`, `decdn_origin_nodes.yml`,
 `sponsord_hosts.yml`, …) applies it. Override
@@ -230,10 +232,13 @@ binary bump.
 `make check`, `deploy` (and their `-node`, `-origin`, `-publisher`, … variants), `backup` and
 `decommission` refuse to run if `LIMIT`, `ANSIBLE_ARGS` or `INVENTORY` reaches them from an
 exported shell variable, or if `LIMIT` or `INVENTORY` expands empty: all ways a run looks
-scoped but silently targets something else. They also refuse a `LIMIT` that matches no host
-the playbook runs on, which Ansible itself reports as success: `make deploy-node
-LIMIT=<an origin>` (an origin is deployed by `deploy-origin`) or `make deploy-origin
-LIMIT=<a cache node>`. `make decommission` additionally requires `LIMIT` on the command line.
+scoped but silently targets something else. They also refuse a run in which the playbook
+selects no host, and a `LIMIT` that includes any host the playbook does not run on, both of
+which Ansible itself reports as success: `make deploy-node LIMIT=<an origin>` or
+`LIMIT='node-1,origin-1'` (an origin is deployed by `deploy-origin`), `make deploy-origin
+LIMIT=<a cache node>`. For a group `LIMIT` that mixes kinds, subtract what the target does
+not cover (`LIMIT='eu:!decdn_origin_nodes'`) or use `make deploy`
+([`scripts/limit-guard.sh`](../scripts/limit-guard.sh)). `make decommission` additionally requires `LIMIT` on the command line.
 
 `ANSIBLE_ARGS` passes anything else straight through. Quote the whole value at your prompt,
 or make will read the extra words as its own goals and flags (a bare `-vv` is make's `-v`);

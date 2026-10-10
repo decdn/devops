@@ -32,29 +32,36 @@ expect 2 "decommission refuses an empty LIMIT"              mk decommission LIMI
 expect 2 "decommission refuses LIMIT from the environment"  env LIMIT=h make -s -C "$repo/ansible" -n decommission
 expect 2 "deploy refuses INVENTORY from the environment"    env INVENTORY=x make -s -C "$repo/ansible" -n deploy
 expect 2 "backup refuses ANSIBLE_ARGS from the environment" env ANSIBLE_ARGS=-v make -s -C "$repo/ansible" -n backup
-mk decommission LIMIT=h | grep -q -- "playbooks/decommission.yml --limit 'h'" \
-  || fail "decommission LIMIT=h does not scope the playbook"
-pass "decommission LIMIT=h scopes playbooks/decommission.yml"
-mk backup | grep -q -- "playbooks/backup.yml" || fail "backup does not run playbooks/backup.yml"
-pass "backup runs playbooks/backup.yml fleet-wide by default"
-expect 2 "deploy-relay refuses LIMIT from the environment"  env LIMIT=h make -s -C "$repo/ansible" -n deploy-relay
-mk deploy-relay LIMIT=h | grep -q -- "playbooks/iroh_relay.yml --limit 'h'" \
-  || fail "deploy-relay LIMIT=h does not run playbooks/iroh_relay.yml scoped to h"
-pass "deploy-relay LIMIT=h scopes playbooks/iroh_relay.yml"
-expect 2 "deploy-dns refuses LIMIT from the environment"    env LIMIT=h make -s -C "$repo/ansible" -n deploy-dns
-mk deploy-dns LIMIT=h | grep -q -- "playbooks/iroh_dns_server.yml --limit 'h'" \
-  || fail "deploy-dns LIMIT=h does not run playbooks/iroh_dns_server.yml scoped to h"
-pass "deploy-dns LIMIT=h scopes playbooks/iroh_dns_server.yml"
-# The persona entry points: each goal is guarded and runs its own playbook.
-for t in check-node:node deploy-node:node check-origin:origin deploy-origin:origin \
-         check-publisher:publisher deploy-publisher:publisher; do
-  expect 2 "${t%%:*} refuses LIMIT from the environment" env LIMIT=h make -s -C "$repo/ansible" -n "${t%%:*}"
-  mk "${t%%:*}" LIMIT=h | grep -q -- "playbooks/${t##*:}.yml.* --limit 'h'" \
-    || fail "${t%%:*} LIMIT=h does not run playbooks/${t##*:}.yml scoped to h"
+for t in deploy-relay deploy-dns check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher; do
+  expect 2 "$t refuses LIMIT from the environment" env LIMIT=h make -s -C "$repo/ansible" -n "$t"
 done
-mk check-publisher | grep -q -- "playbooks/publisher.yml --check --diff" || fail "check-publisher is not a --check run"
-mk deploy | grep -q -- "playbooks/site.yml" || fail "deploy does not run playbooks/site.yml"
-pass "check/deploy-node, -origin and -publisher scope their own playbooks; deploy runs site.yml"
+# Every playbook target, read from the guard block's own list so a new one is covered:
+# exactly one ansible-playbook run, of the target's playbook, scoped to LIMIT, with
+# limit_guard checking that same playbook and LIMIT first. Captured, then matched:
+# `make -n | grep -q` can SIGPIPE make before it prints the line that matters.
+targets="$(sed -nE 's/^ifneq \(\$\(filter ([a-z -]+),\$\(MAKECMDGOALS\)\),\)$/\1/p' "$repo/ansible/Makefile")"
+(($(wc -w <<<"$targets") >= 16)) || fail "could not read the playbook targets from ansible/Makefile: $targets"
+declare -A want_pb=([check]=site [deploy]=site [backup]=backup [decommission]=decommission
+  [check-node]=node [deploy-node]=node [check-origin]=origin [deploy-origin]=origin
+  [check-publisher]=publisher [deploy-publisher]=publisher [check-sponsord]=sponsord [deploy-sponsord]=sponsord
+  [check-relay]=iroh_relay [deploy-relay]=iroh_relay [check-dns]=iroh_dns_server [deploy-dns]=iroh_dns_server)
+for t in $targets; do
+  pb="playbooks/${want_pb[$t]:?ansible/Makefile guards $t, which this test does not map to a playbook}.yml"
+  check=""; [[ $t == check* ]] && check=" --check --diff"
+  for lim in h ""; do
+    [[ -z $lim && $t == decommission ]] && continue
+    largs=(); [[ -z $lim ]] || largs=(LIMIT="$lim")
+    out="$(mk "$t" "${largs[@]}")" || fail "make -n $t ${largs[*]} failed"
+    scope=""; [[ -z $lim ]] || scope=" --limit '$lim'"
+    want_run="ANSIBLE_INVENTORY_UNPARSED_FAILED=True ansible-playbook -i 'inventory/hosts.yml' $pb$check$scope"
+    want_guard="ANSIBLE_INVENTORY_UNPARSED_FAILED=True ../scripts/limit-guard.sh 'inventory/hosts.yml' $pb '$lim'"
+    # shellcheck disable=SC2001 # per line: the recipes' trailing spaces (empty LIMIT/ANSIBLE_ARGS)
+    out="$(sed 's/ *$//' <<<"$out")"
+    [[ "$out" == "$want_guard"$'\n'"$want_run" ]] \
+      || fail "make $t ${largs[*]} does not run limit_guard on $pb, then $pb${lim:+ scoped to $lim}:"$'\n'"$out"
+  done
+done
+pass "every playbook target (${targets// /, }) runs limit_guard, then its own playbook, scoped to LIMIT"
 
 # --- molecule driver (scripts/molecule.sh): selection, guards, locks ------------------
 # Against a throwaway ansible/ layout, so nothing here can start a container or touch
@@ -588,12 +595,20 @@ SH
   [[ ! -s $GALAXY_ARGS ]] || fail "release-collection.yml's Galaxy dependency step queries Galaxy for a node release"
   GALAXY_HAS_NODE=1 run_in "$gd" "publisher-collection-v$cversion" "$galaxy_dep" \
     || { cat "$work/out" >&2; fail "release-collection.yml's Galaxy dependency step refuses a resolvable decdn.node"; }
-  grep -qx 'decdn.node:>=0.1.0' "$GALAXY_ARGS" \
-    || fail "release-collection.yml's Galaxy dependency step does not ask for the MANIFEST's decdn.node: $(xargs <"$GALAXY_ARGS")"
+  for arg in 'decdn.node:>=0.1.0' --no-deps; do
+    grep -qx -- "$arg" "$GALAXY_ARGS" \
+      || fail "release-collection.yml's Galaxy dependency step does not pass $arg: $(xargs <"$GALAXY_ARGS")"
+  done
   ! run_in "$gd" "publisher-collection-v$cversion" "$galaxy_dep" \
     || fail "release-collection.yml publishes decdn.publisher while Galaxy has no decdn.node >=0.1.0"
-  grep -qF "Galaxy has no decdn.node >=0.1.0" "$work/out" || { cat "$work/out" >&2; fail "the Galaxy dependency refusal has another message"; }
+  grep -qF "could not resolve decdn.node >=0.1.0 on Galaxy" "$work/out" || { cat "$work/out" >&2; fail "the Galaxy dependency refusal has another message"; }
   unset GALAXY_ARGS
+  # ...and it runs before anything is published.
+  # shellcheck disable=SC2016 # a yq expression
+  order="$(yq '.jobs.publish.steps | to_entries | map(select(.value.name == "Require decdn.publisher'"'"'s decdn.node dependency on Galaxy" or .value.name == "Publish the collection to Galaxy" or .value.name == "Create the GitHub Release") | .value.name) | join("|")' \
+    "$repo/.github/workflows/release-collection.yml")"
+  [[ "$order" == "Require decdn.publisher's decdn.node dependency on Galaxy|Publish the collection to Galaxy|Create the GitHub Release" ]] \
+    || fail "release-collection.yml's publish job does not check decdn.node before publishing: $order"
   pass "release-collection.yml publishes decdn.publisher only when Galaxy resolves its decdn.node"
   # Latest follows decdn.node only: a node release when no higher node release exists,
   # never a publisher release; chart and publisher tags never count.
@@ -923,7 +938,8 @@ if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
   # the collection would not install from Galaxy.
   sed -i 's/">=0.0.1"/">=0.1.0"/' "$rs/ansible/galaxy/publisher/galaxy.yml"
   rsgit commit -qam "build: raise the fixture's decdn.node constraint"; rspush
-  # Checked before anything else: no commit to release is needed to trip it.
+  # Checked before the changelog: no releasable commit is needed to trip it (the only
+  # commit since the publisher's tag is a build commit, which makes no entry).
   rsrefused "a later decdn.publisher release above its decdn.node constraint" \
     "needs decdn.node >=0.1.0, and origin's highest node-collection tag is 0.0.1" publisher-collection
   sed -i 's/">=0.1.0"/">=0.0.1"/' "$rs/ansible/galaxy/publisher/galaxy.yml"
@@ -1601,16 +1617,47 @@ if command -v ansible >/dev/null; then
     pass "site.yml runs every node exactly once: cache nodes in node.yml, origins in origin.yml"
     # ansible/Makefile refuses a LIMIT that matches no host of the target's playbook,
     # which ansible-playbook itself reports as success. ANSIBLE_ARGS keeps the run a listing.
-    mkl() { make -s -C "$repo/ansible" "$1" LIMIT="$2" INVENTORY=tests/playbook-guards/inventory.yml ANSIBLE_ARGS=--list-hosts </dev/null; }
-    expect 2 "make check-node refuses LIMIT=<an origin>" mkl check-node origin-ok
-    grep -q "matches no host that playbooks/node.yml runs on" "$work/out" \
-      || { cat "$work/out" >&2; fail "check-node's refusal of an origin did not come from limit_guard"; }
-    expect 2 "make deploy-origin refuses LIMIT=<a cache node>" mkl deploy-origin node-only
-    grep -q "matches no host that playbooks/origin.yml runs on" "$work/out" \
-      || { cat "$work/out" >&2; fail "deploy-origin's refusal of a cache node did not come from limit_guard"; }
+    # ansible/Makefile's limit_guard (scripts/limit-guard.sh) refuses a run that selects
+    # no host, or skips a host LIMIT names, both of which ansible-playbook reports as
+    # success. ANSIBLE_ARGS keeps the real run a listing.
+    mkl() { # <target> <LIMIT, or empty for none> [inventory]
+      local lim=(); [[ -z $2 ]] || lim=(LIMIT="$2")
+      make -s -C "$repo/ansible" "$1" "${lim[@]}" INVENTORY="${3:-tests/playbook-guards/inventory.yml}" \
+        ANSIBLE_ARGS=--list-hosts </dev/null
+    }
+    refused() { # <description> <message fragment> <mkl args...>
+      local desc=$1 msg=$2; shift 2
+      expect 2 "$desc" mkl "$@"
+      grep -qF -- "$msg" "$work/out" || { cat "$work/out" >&2; fail "$desc: not refused with: $msg"; }
+    }
+    refused "make check-node refuses LIMIT=<an origin>" \
+      "no play in playbooks/node.yml selects a host of tests/playbook-guards/inventory.yml within LIMIT='origin-ok'" check-node origin-ok
+    refused "make deploy-origin refuses LIMIT=<a cache node>" \
+      "no play in playbooks/origin.yml selects a host" deploy-origin node-only
+    refused "make check-node refuses a LIMIT that names an origin among cache nodes" \
+      "LIMIT='node-only,origin-ok' includes hosts no play in playbooks/node.yml selects" check-node node-only,origin-ok
+    if ! grep -qx '  origin-ok' "$work/out" || ! grep -qF 'deployed by the -origin targets' "$work/out"; then
+      cat "$work/out" >&2; fail "check-node's partial-LIMIT refusal does not name origin-ok and the -origin targets"
+    fi
+    ! grep -qx '  node-only' "$work/out" || fail "check-node's partial-LIMIT refusal names a host it runs"
+    refused "make check-relay refuses a group LIMIT that mixes in other hosts" \
+      "includes hosts no play in playbooks/iroh_relay.yml selects" check-relay 'relay-only:node-only'
+    grep -qF "Check those hosts' groups" "$work/out" || { cat "$work/out" >&2; fail "check-relay's refusal gives the node/origin hint"; }
+    refused "make backup refuses LIMIT=<a relay>" "no play in playbooks/backup.yml selects a host" backup relay-only
+    # Without a LIMIT, an inventory the playbook selects nothing in.
+    printf 'all:\n  children:\n    decdn_nodes:\n      hosts:\n        n1: {}\n' > "$work/nodes-only.yml"
+    refused "make check-relay refuses an inventory with no relay" \
+      "no play in playbooks/iroh_relay.yml selects a host of $work/nodes-only.yml: the run" check-relay "" "$work/nodes-only.yml"
+    expect 0 "make check-node takes an inventory of cache nodes, no LIMIT" mkl check-node "" "$work/nodes-only.yml"
+    # A LIMIT outside the inventory is ansible's own refusal, passed through.
+    refused "make check-node passes on ansible's refusal of an unknown LIMIT" \
+      "ansible-playbook --list-hosts failed on playbooks/node.yml" check-node no-such-host
+    grep -q "no hosts to target" "$work/out" || { cat "$work/out" >&2; fail "limit_guard hid ansible's own error"; }
     expect 0 "make check-node takes LIMIT=<a cache node>" mkl check-node node-only
     expect 0 "make deploy-origin takes LIMIT=<an origin>" mkl deploy-origin origin-ok
-    expect 0 "make check takes LIMIT=<an origin>" mkl check origin-ok
+    expect 0 "make check takes LIMIT=<a cache node and an origin>" mkl check node-only,origin-ok
+    expect 0 "make check-node with --syntax-check skips limit_guard" \
+      make -s -C "$repo/ansible" check-node LIMIT=node-only INVENTORY=tests/playbook-guards/inventory.yml ANSIBLE_ARGS=--syntax-check
     # decommission.yml's host cap covers the whole run: a node-only host and a
     # sponsord host pass each role's own per-play cap but not this one. Only the
     # cap task is lifted (the hold check needs the roles).

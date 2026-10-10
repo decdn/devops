@@ -25,7 +25,8 @@ script checks what the schema cannot:
     group's vars would override them. Nor may a user-data move the signing keys or the
     secret files bootstrap.sh's gate looks for;
   * the inventory holds only localhost, in decdn_nodes and/or sponsord_hosts (and
-    decdn_origin_nodes only beside decdn_nodes, with an origin backend in its vars;
+    decdn_origin_nodes only beside decdn_nodes, with an origin backend in its vars and
+    no backend key anywhere else;
     sponsord_onramp_hosts only beside sponsord_hosts), with `ansible_connection: local`
     set at least once and nothing else anywhere, and names a keyed admin account
     (baseline's lockout guard). A malformed shape is a violation, not a traceback;
@@ -72,8 +73,8 @@ TEST_ONLY_MARKER = "TEST-ONLY-skip-baseline"
 # sponsord_hosts too. The template lists an origin in both groups as siblings (no
 # `children:`, which this lint refuses); all four are one level deep, so Ansible
 # merges their vars by group name: decdn_origin_nodes' win over decdn_nodes', and
-# the sponsord_* groups' over both. PINNED_VARS keeps each checked key in its own
-# group, so the merge cannot override it.
+# the sponsord_* groups' over both. PINNED_VARS and ORIGIN_VAR keep each checked key
+# in its own group, so the merge cannot override it.
 GROUPS = ("decdn_nodes", "decdn_origin_nodes", "sponsord_hosts", "sponsord_onramp_hosts")
 BASE_GROUPS = {"decdn_nodes", "sponsord_hosts"}
 

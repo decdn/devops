@@ -30,7 +30,7 @@ only in their inventory:
 A publisher who wants fewer of them on the VM deletes the groups it does not need from
 the publisher template: an origin alone keeps `decdn_nodes` and `decdn_origin_nodes`, a
 sponsor alone keeps `sponsord_hosts` and `sponsord_onramp_hosts` (and takes the
-`baseline_*` settings into `sponsord_hosts`' vars). Ansible applies one `baseline_sudo_users`
+`baseline_*` settings, and any `ssh_allow_cidrs`, into `sponsord_hosts`' vars). Ansible applies one `baseline_sudo_users`
 list, not the union of two groups', so the lint wants it set once. The bootstrap waits
 for the secrets of every group the host is in.
 

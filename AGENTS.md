@@ -105,7 +105,7 @@ monitoring/             # Grafana dashboards + Prometheus alert rules (maintaine
   sponsord/             # sponsord's (+ promtool unit tests), Ansible/Compose only
   iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible only
 docs/                   # cross-path operator docs: node-operators.md + publishers.md (the front doors), requirements.md, lifecycle.md
-scripts/                # upstream-mirror generators, the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh)
+scripts/                # upstream-mirror generators, the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh), ansible/Makefile's LIMIT preflight (limit-guard.sh)
 ```
 
 **Generated mirrors of upstream — regenerate, never hand-edit:**

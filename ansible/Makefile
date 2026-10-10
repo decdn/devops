@@ -50,26 +50,18 @@ INVENTORY ?= inventory/hosts.yml
 # with no inventory present.
 strict_inventory = ANSIBLE_INVENTORY_UNPARSED_FAILED=True
 
-# $(call limit_guard,<playbook>): with LIMIT set, refuse a run in which LIMIT matches no
-# host any of the playbook's plays targets. --limit refuses a host missing from the
-# inventory, but a host the plays' own patterns exclude only prints "no hosts matched"
-# and exits 0: `deploy-node LIMIT=<an origin>` (node.yml skips decdn_origin_nodes) or
-# `deploy-origin LIMIT=<a cache node>` would report a deploy that did nothing.
+# $(call limit_guard,<playbook>): refuse a run in which the playbook's plays select no
+# host, or skip a host LIMIT names; ansible-playbook reports both as success (e.g.
+# `deploy-node LIMIT=<an origin>`: node.yml leaves decdn_origin_nodes to origin.yml).
+# See scripts/limit-guard.sh.
 define limit_guard
-@if [[ -n '$(LIMIT)' ]]; then \
-  out="$$($(strict_inventory) ansible-playbook -i '$(INVENTORY)' $(1) --list-hosts $(limit_arg) $(ANSIBLE_ARGS))" \
-    || { printf '%s\n' "$$out" >&2; exit 1; }; \
-  grep -qE '^ +hosts \([1-9][0-9]*\):' <<<"$$out" || { \
-    echo "LIMIT='$(LIMIT)' matches no host that $(1) runs on in $(INVENTORY): the run would do nothing and exit 0." >&2; \
-    echo "An origin (decdn_origin_nodes) runs under the -origin targets, a cache node under the -node ones." >&2; \
-    exit 1; }; \
-fi
+@$(strict_inventory) ../scripts/limit-guard.sh '$(INVENTORY)' $(1) '$(LIMIT)' $(ANSIBLE_ARGS)
 endef
 
 # Fail loud on the two ways a run can look scoped but silently be fleet-wide. Scoped to
 # the playbook targets (check/deploy[-node|-origin|-publisher|-sponsord|-relay|-dns]/backup/decommission) via MAKECMDGOALS so an
-# unrelated `make lint` is never blocked. A LIMIT that matches no host of the playbook is
-# refused by limit_guard, above. NOTE: neither catches a --tags that is well-formed but
+# unrelated `make lint` is never blocked. A run that selects no host, or skips one LIMIT
+# names, is refused by limit_guard, above. NOTE: neither catches a --tags that is well-formed but
 # selects nothing — a typo (decdn-node vs decdn_node) runs zero tasks and still exits 0.
 # See ansible/README.md.
 ifneq ($(filter check deploy check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns backup decommission,$(MAKECMDGOALS)),)

@@ -1,6 +1,6 @@
 ---
 # Shared config for sponsord-onramp hosts (the second play of playbooks/sponsord.yml,
-# also run by site.yml). Each host must be in sponsord_hosts too. Uncomment and fill
+# also run by publisher.yml). Each host must be in sponsord_hosts too. Uncomment and fill
 # in; per-host values can move to host_vars/<host>/main.yml.
 # Full variable list: roles/sponsord_onramp/defaults/main.yml and its README.md.
 #
