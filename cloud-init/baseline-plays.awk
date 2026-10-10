@@ -19,10 +19,18 @@
 # Exit 0 when each group has such a play and every one of them selects a baseline task;
 # 1 otherwise, with one line per group on stderr; 2 when no groups are given.
 
-function end_play() {
+# A play counts for each group its host pattern selects: the positive terms of a
+# pattern like `decdn_nodes:!decdn_origin_nodes` (decdn_nodes), not its `!` exclusions
+# or `&` intersections.
+function end_play(   n_terms, terms, i, t) {
   if (pattern != "" && has_localhost) {
-    plays[pattern]++
-    if (baseline == 0) bare[pattern]++
+    n_terms = split(pattern, terms, /[:,]/)
+    for (i = 1; i <= n_terms; i++) {
+      t = terms[i]
+      if (t == "" || t ~ /^[!&]/) continue
+      plays[t]++
+      if (baseline == 0) bare[t]++
+    }
   }
   pattern = ""; has_localhost = 0; baseline = 0; section = ""
 }

@@ -45,6 +45,16 @@ expect 2 "deploy-dns refuses LIMIT from the environment"    env LIMIT=h make -s 
 mk deploy-dns LIMIT=h | grep -q -- "playbooks/iroh_dns_server.yml --limit 'h'" \
   || fail "deploy-dns LIMIT=h does not run playbooks/iroh_dns_server.yml scoped to h"
 pass "deploy-dns LIMIT=h scopes playbooks/iroh_dns_server.yml"
+# The persona entry points: each goal is guarded and runs its own playbook.
+for t in check-node:node deploy-node:node check-origin:origin deploy-origin:origin \
+         check-publisher:publisher deploy-publisher:publisher; do
+  expect 2 "${t%%:*} refuses LIMIT from the environment" env LIMIT=h make -s -C "$repo/ansible" -n "${t%%:*}"
+  mk "${t%%:*}" LIMIT=h | grep -q -- "playbooks/${t##*:}.yml.* --limit 'h'" \
+    || fail "${t%%:*} LIMIT=h does not run playbooks/${t##*:}.yml scoped to h"
+done
+mk check-publisher | grep -q -- "playbooks/publisher.yml --check --diff" || fail "check-publisher is not a --check run"
+mk deploy | grep -q -- "playbooks/site.yml" || fail "deploy does not run playbooks/site.yml"
+pass "check/deploy-node, -origin and -publisher scope their own playbooks; deploy runs site.yml"
 
 # --- molecule driver (scripts/molecule.sh): selection, guards, locks ------------------
 # Against a throwaway ansible/ layout, so nothing here can start a container or touch
@@ -1202,6 +1212,18 @@ expect 1 "baseline guard refuses a group whose play does not list localhost" \
 grep -q 'no play targets decdn_nodes with localhost in it' "$work/out" \
   || { cat "$work/out" >&2; fail "the baseline guard refused, but not for decdn_nodes"; }
 expect 2 "baseline guard refuses an empty group list" guard_plays "" "$hardened"
+# A play's pattern counts for its positive terms only: node.yml's
+# decdn_nodes:!decdn_origin_nodes play is a decdn_nodes play, never an origin one.
+excl_out() { # <decdn_nodes play's task lines>
+  printf "  play #1 (decdn_nodes:!decdn_origin_nodes): Provision deCDN cache nodes\tTAGS: []\n    pattern: ['decdn_nodes:!decdn_origin_nodes']\n    hosts (1):\n      localhost\n    tasks:\n%b\n" "$1"
+}
+excl_plays() { excl_out "$2" | awk -v groups="$1" -f "$repo/cloud-init/baseline-plays.awk"; }
+expect 0 "baseline guard counts a decdn_nodes:!decdn_origin_nodes play for decdn_nodes" excl_plays decdn_nodes "$hardened"
+expect 1 "baseline guard does not count an excluded group's play" excl_plays decdn_origin_nodes "$hardened"
+grep -q 'no play targets decdn_origin_nodes with localhost in it' "$work/out" \
+  || { cat "$work/out" >&2; fail "the baseline guard counted the exclusion as a decdn_origin_nodes play"; }
+expect 1 "baseline guard refuses a bare decdn_nodes:!decdn_origin_nodes play" \
+  excl_plays decdn_nodes '      Apply DevSec OS hardening\tTAGS: [baseline]'
 # bootstrap.sh's gate and lint.py agree on the groups a user-data may use, and the
 # bootstrap's hint has its own instructions for each.
 boot="$repo/cloud-init/bootstrap.sh"
@@ -1218,17 +1240,19 @@ pass "bootstrap.sh's groups match lint.py's, each with its secrets and its hint"
 # run the guard too, but in Docker and only for the groups their inventories use.
 # `hosts` and `tags` may each be a string or a list; tags match exactly.
 if command -v yq >/dev/null; then
-  for g in decdn_nodes sponsord_hosts; do
+  for g in decdn_nodes decdn_origin_nodes sponsord_hosts; do
     n=0
-    for pb in site.yml sponsord.yml; do
-      plays="[.[] | select([.hosts] | flatten | any_c(. == \"$g\"))]"
+    for pb in node.yml origin.yml sponsord.yml; do
+      # A play's positive pattern terms: decdn_nodes:!decdn_origin_nodes targets
+      # decdn_nodes only.
+      plays="[.[] | select([.hosts] | flatten | map(split(\":\")) | flatten | map(split(\",\")) | flatten | any_c(. == \"$g\"))]"
       n=$((n + $(yq "$plays | length" "$repo/ansible/playbooks/$pb")))
       [[ "$(yq "$plays | map(select((.roles // []) | map(select(.role == \"baseline\" and ([.tags // []] | flatten | any_c(. == \"baseline\")))) | length == 0)) | length" "$repo/ansible/playbooks/$pb")" == 0 ]] \
         || fail "playbooks/$pb: a $g play lacks the baseline role tagged baseline (cloud-init's phase 1 relies on it)"
     done
-    ((n >= 1)) || fail "no play in site.yml or sponsord.yml targets $g"
+    ((n >= 1)) || fail "no play in node.yml, origin.yml or sponsord.yml targets $g"
   done
-  pass "every decdn_nodes and sponsord_hosts play runs baseline under the baseline tag"
+  pass "every decdn_nodes, decdn_origin_nodes and sponsord_hosts play runs baseline under the baseline tag"
   # baseline-plays.sh, the command bootstrap.sh runs, against the real playbooks and the
   # templates' inventories, then against a copy whose sponsord play lost the tag (#90).
   # Listing tasks needs ansible-core only, not the collections.
@@ -1443,6 +1467,34 @@ if command -v ansible >/dev/null; then
     expect 2 "sponsord.yml refuses an onramp host outside sponsord_hosts" guard onramp-only
     grep -q "is in sponsord_onramp_hosts but not in sponsord_hosts" "$work/out" \
       || { cat "$work/out" >&2; fail "the onramp-only refusal did not come from the placement check"; }
+    # playbooks/origin.yml refuses an origin outside decdn_nodes or without an origin
+    # backend; node.yml warns about an origin backend outside decdn_origin_nodes. The
+    # plays' pre_tasks are lifted out as tasks, without the roles or fact gathering.
+    lift() { # <playbook> <play name>
+      yq "[.[] | select(.name == \"$2\") | {\"name\": .name, \"hosts\": .hosts, \"gather_facts\": false, \"tasks\": .pre_tasks}]" \
+        "$repo/ansible/playbooks/$1" > "$work/guard.yml"
+      [[ "$(yq 'length' "$work/guard.yml")" == 1 && "$(yq '.[0].tasks | length' "$work/guard.yml")" -ge 1 ]] \
+        || fail "playbooks/$1 has no single '$2' play with pre_tasks"
+    }
+    lift origin.yml "Provision deCDN origin nodes"
+    expect 0 "origin.yml accepts an origin in decdn_nodes with decdn_cache_origin_kind" guard origin-ok
+    expect 0 "origin.yml accepts an origin in decdn_nodes with decdn_cache_origins" guard origin-list
+    expect 2 "origin.yml refuses an origin outside decdn_nodes" guard origin-orphan
+    grep -q "is in decdn_origin_nodes but not in decdn_nodes" "$work/out" \
+      || { cat "$work/out" >&2; fail "the origin-orphan refusal did not come from the decdn_nodes check"; }
+    expect 2 "origin.yml refuses an origin without an origin backend" guard origin-none
+    grep -q "is in decdn_origin_nodes but has no origin backend" "$work/out" \
+      || { cat "$work/out" >&2; fail "the origin-none refusal did not come from the backend check"; }
+    lift node.yml "Provision deCDN cache nodes"
+    expect 0 "node.yml runs a node with an origin backend outside decdn_origin_nodes" guard node-with-origin
+    grep -q "WARNING: node-with-origin has an origin backend" "$work/out" \
+      || { cat "$work/out" >&2; fail "node.yml does not warn about an origin backend outside decdn_origin_nodes"; }
+    expect 0 "node.yml runs a cache node" guard node-only
+    ! grep -q "WARNING:" "$work/out" || { cat "$work/out" >&2; fail "node.yml warns about a cache node"; }
+    guard origin-ok >"$work/out" 2>&1 || true
+    grep -q "skipping: no hosts matched" "$work/out" \
+      || { cat "$work/out" >&2; fail "node.yml's play matches an origin (decdn_origin_nodes) host"; }
+    pass "node.yml's play leaves decdn_origin_nodes to origin.yml"
     # decommission.yml's host cap covers the whole run: a node-only host and a
     # sponsord host pass each role's own per-play cap but not this one. Only the
     # cap task is lifted (the hold check needs the roles).

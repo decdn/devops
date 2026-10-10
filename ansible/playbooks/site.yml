@@ -1,32 +1,11 @@
 ---
-# PRIMARY deployment: a hardened, public deCDN node.
-#   baseline -> grafana_alloy (opt-in, off by default) -> decdn-node
-# The node listens on public QUIC udp/4433; metrics + admin RPC stay loopback.
-# On-chain stake + registration (ADR 019 Phase 2) is an operator action, not
-# automated here — see roles/decdn_node/README.md.
-- name: Provision a hardened deCDN node
-  hosts: decdn_nodes
-  become: true
-  roles:
-    - role: baseline
-      tags: [baseline]
-    # Opt-in Grafana Cloud observability (off by default; one mirrored inventory
-    # flag drives this + the otlp_endpoint injection inside decdn_node). Runs
-    # BEFORE decdn_node so Alloy's receivers exist before the daemon exports.
-    - role: grafana_alloy
-      tags: [observability, decdn_node, node]
-    - role: decdn_node
-      tags: [decdn_node, node]
+# Everything in the inventory: what node operators run, then what publishers run.
+#   node.yml       decdn_nodes that are not origins (node operators)
+#   publisher.yml  origins, sponsord (+ onramp), iroh relays, iroh DNS servers
+# A host is in as many of those groups as it runs services; each play matches nothing
+# unless the inventory defines its group.
+- name: Provision deCDN cache nodes
+  ansible.builtin.import_playbook: node.yml
 
-# sponsord on hosts in sponsord_hosts (none unless the inventory defines the group).
-- name: Provision sponsord
-  ansible.builtin.import_playbook: sponsord.yml
-
-# iroh relays on hosts in iroh_relay_hosts (none unless the inventory defines the group).
-- name: Provision iroh relays
-  ansible.builtin.import_playbook: iroh_relay.yml
-
-# iroh DNS servers on hosts in iroh_dns_server_hosts (none unless the inventory
-# defines the group).
-- name: Provision iroh DNS servers
-  ansible.builtin.import_playbook: iroh_dns_server.yml
+- name: Provision the publisher's services
+  ansible.builtin.import_playbook: publisher.yml

@@ -7,12 +7,15 @@ origin nodes).
 
 | Playbook | Purpose | Make target |
 |----------|---------|-------------|
-| **`site.yml`** | Harden the host and deploy the public **deCDN node** (`decdn-node`). | `make check` / `make deploy` |
+| **`site.yml`** | Everything in the inventory: `node.yml`, then `publisher.yml`. | `make check` / `make deploy` |
+| **`node.yml`** | **Node operators.** Harden the host and deploy a public deCDN **cache node** (`decdn-node`) on hosts in `decdn_nodes` that are not in `decdn_origin_nodes`. | `make check-node` / `make deploy-node` |
+| **`publisher.yml`** | **Publishers.** `origin.yml`, `sponsord.yml`, `iroh_relay.yml` and `iroh_dns_server.yml`, in that order. | `make check-publisher` / `make deploy-publisher` |
+| `origin.yml` | Harden the host and deploy a publisher's **origin node**: `decdn-node` with an origin backend, on hosts in `decdn_origin_nodes` (a child of `decdn_nodes`). Refuses an origin outside `decdn_nodes` or without a backend. | `make check-origin` / `make deploy-origin` |
 | `backup.yml` | Encrypted backup of a node's identity or full state, and of sponsord's credentials. | `make backup` |
 | `decommission.yml` | Stop a node, an iroh relay, an iroh DNS server, the onramp and sponsord and remove their services (keeps the keys; no on-chain steps). | `make decommission` |
-| `sponsord.yml` | Harden the host and deploy **sponsord**, the onboarding sponsor, on hosts in `sponsord_hosts`, with or without a node; then its public **sponsord-onramp** (behind Caddy) on hosts in `sponsord_onramp_hosts`. Also run by `site.yml`. | `make check-sponsord` / `make deploy-sponsord` |
-| `iroh_relay.yml` | Harden the host and deploy a self-hosted **iroh relay** (`iroh-relay`), the fallback path for peers that cannot hole-punch, on hosts in `iroh_relay_hosts`. Also run by `site.yml`. | `make check-relay` / `make deploy-relay` |
-| `iroh_dns_server.yml` | Harden the host and deploy a self-hosted **iroh DNS server** (`iroh-dns-server`), the pkarr relay and DNS server nodes are discovered through, on hosts in `iroh_dns_server_hosts`. Also run by `site.yml`. | `make check-dns` / `make deploy-dns` |
+| `sponsord.yml` | Harden the host and deploy **sponsord**, the onboarding sponsor, on hosts in `sponsord_hosts`, with or without a node; then its public **sponsord-onramp** (behind Caddy) on hosts in `sponsord_onramp_hosts`. Also run by `publisher.yml`. | `make check-sponsord` / `make deploy-sponsord` |
+| `iroh_relay.yml` | Harden the host and deploy a self-hosted **iroh relay** (`iroh-relay`), the fallback path for peers that cannot hole-punch, on hosts in `iroh_relay_hosts`. Also run by `publisher.yml`. | `make check-relay` / `make deploy-relay` |
+| `iroh_dns_server.yml` | Harden the host and deploy a self-hosted **iroh DNS server** (`iroh-dns-server`), the pkarr relay and DNS server nodes are discovered through, on hosts in `iroh_dns_server_hosts`. Also run by `publisher.yml`. | `make check-dns` / `make deploy-dns` |
 
 ```
 baseline        host hardening: DevSec os/ssh, nftables default-deny inbound,
@@ -66,7 +69,7 @@ specific to this path:
     which doesn't honor the custom `-p` become prompt Ansible relies on — so
     `--ask-become-pass` hangs with "Timeout waiting for privilege escalation prompt". On
     an affected host uncomment `ansible_become_exe: /usr/bin/sudo.ws` for that host in
-    `hosts.yml` (see the note in `inventory/hosts.yml.example`) to route become through
+    `hosts.yml` (see the note in `inventory/hosts-node.yml.example`) to route become through
     classic sudo.
 
 ## Setup
@@ -74,8 +77,9 @@ specific to this path:
 ```bash
 cd ansible
 make deps                                    # vendor pinned collections into ./collections
-cp inventory/hosts.yml.example inventory/hosts.yml
-$EDITOR inventory/hosts.yml                   # set hosts for decdn_nodes
+cp inventory/hosts-node.yml.example inventory/hosts.yml       # node operators
+cp inventory/hosts-publisher.yml.example inventory/hosts.yml  # or publishers
+$EDITOR inventory/hosts.yml                   # set your hosts
 $EDITOR inventory/group_vars/all.yml          # optional: override admin user/keys, allowlists
 ```
 
@@ -91,8 +95,9 @@ canonical copy; don't duplicate them here.
 **Or** carry it in inventory, and the role authors `decdn.env` from those values on every run:
 
 ```bash
-cp inventory/host_vars/decdn-node-1/secret.yml.example inventory/host_vars/decdn-node-1/secret.yml
-$EDITOR inventory/host_vars/decdn-node-1/secret.yml   # set decdn_rpc_url
+HOST=decdn-node-1   # or origin-1, the publisher example's host
+cp inventory/host_vars/$HOST/secret.yml.example inventory/host_vars/$HOST/secret.yml
+$EDITOR inventory/host_vars/$HOST/secret.yml   # set decdn_rpc_url
 ```
 
 The role fails loud when neither exists, and — once it has recorded a checksum for the file —
@@ -110,7 +115,7 @@ point the deploy targets at it:
 
 ```bash
 mkdir -p ../../decdn-fleet                                  # a PRIVATE repo/dir
-cp inventory/hosts.yml.example ../../decdn-fleet/hosts.yml  # then fill it in
+cp inventory/hosts-node.yml.example ../../decdn-fleet/hosts.yml  # then fill it in
 make check  INVENTORY=../../decdn-fleet/hosts.yml LIMIT=<host>
 make deploy INVENTORY=../../decdn-fleet/hosts.yml LIMIT=<host>
 ```
@@ -120,12 +125,14 @@ the overlay carries its own: create them next to its `hosts.yml`, starting from 
 `inventory/group_vars/` and `inventory/host_vars/` templates. Git-ignore
 `host_vars/*/secret.*` in the private repo, so it never tracks a per-node secret. The public
 `inventory/group_vars/` and `inventory/host_vars/` are **not** loaded for it. Add child groups
-of your own when hosts differ by group (an origin, an egress cap on metered bandwidth), each
-with a `group_vars/<group>.yml`. Settings every host needs regardless of
+of your own when hosts differ by group (disk size, an egress cap on metered bandwidth), each
+with a `group_vars/<group>.yml`. Origins go in `decdn_origin_nodes`, as a child of
+`decdn_nodes` (see `inventory/hosts-publisher.yml.example`). Settings every host needs regardless of
 inventory, currently the public firewall holes (the node's udp/4433, and tcp/80 +
 tcp/443 for Caddy on `sponsord_onramp_hosts`), live in
 `playbooks/group_vars/`, so an overlay can't drop them: `all.yml` builds the list from the
-host's groups and `decdn_nodes.yml` / `sponsord_hosts.yml` apply it. Override
+host's groups and each group's file (`decdn_nodes.yml`, `decdn_origin_nodes.yml`,
+`sponsord_hosts.yml`, …) applies it. Override
 `baseline_extra_inbound` per host in `host_vars` if you have to. Playbook group_vars beat
 inventory group_vars.
 
@@ -194,10 +201,12 @@ ignored on the first converge.
 
 ```bash
 make check          # dry run (--check --diff); asserts fire if required knobs are missing
-make deploy         # provision + start the node
+make deploy         # provision + start every service in the inventory
+make deploy-node    # node operators: the cache nodes only
+make deploy-publisher  # publishers: origins, sponsord, relays, DNS servers only
 ```
 
-Both targets are **fleet-wide by default** — every host in `decdn_nodes`. Scope a run with
+All of them are **fleet-wide by default** — every host their playbooks target. Scope a run with
 `LIMIT`:
 
 ```bash

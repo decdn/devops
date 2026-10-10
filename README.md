@@ -55,13 +55,15 @@ end to end (with `--dry-run`); this repo stops at host prep and startup.
 ```bash
 cd ansible
 make deps                                          # vendor pinned Galaxy collections
-cp inventory/hosts.yml.example inventory/hosts.yml
-$EDITOR inventory/hosts.yml                         # your hosts in decdn_nodes
-$EDITOR inventory/host_vars/decdn-node-1/main.yml   # binaries, region, origin; chain via decdn_network
+cp inventory/hosts-node.yml.example inventory/hosts.yml   # node operators; its host is decdn-node-1
+# publishers instead: cp inventory/hosts-publisher.yml.example inventory/hosts.yml  (host origin-1)
+HOST=decdn-node-1                                   # or origin-1
+$EDITOR inventory/hosts.yml                         # your hosts
+$EDITOR inventory/host_vars/$HOST/main.yml          # binaries, region (an origin: its backend); chain via decdn_network
 # RPC URL: provision 0600 /etc/decdn/decdn.env on the host (preferred), or secret.yml
-make check  LIMIT=decdn-node-1 ANSIBLE_ARGS='-u root'   # dry run; -u root only until the first converge
-make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='-u root'   # first converge creates your admin account
-make deploy LIMIT=decdn-node-1                          # every run after that
+make check  LIMIT=$HOST ANSIBLE_ARGS='-u root'      # dry run; -u root only until the first converge
+make deploy LIMIT=$HOST ANSIBLE_ARGS='-u root'      # first converge creates your admin account
+make deploy LIMIT=$HOST                             # every run after that
 ```
 
 The full flow (bootstrap user, keystore, secrets, fleets in a private inventory) is in
@@ -103,7 +105,7 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 
 | Path | What it is |
 |------|------------|
-| [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `sponsord.yml`, `iroh_relay.yml`, `iroh_dns_server.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`, `iroh_relay`, `iroh_dns_server`), `galaxy/` (the `decdn.node` and `decdn.publisher` collections), `molecule/`. |
+| [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `node.yml` for node operators, `publisher.yml` for publishers with `origin.yml`, `sponsord.yml`, `iroh_relay.yml` and `iroh_dns_server.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`, `iroh_relay`, `iroh_dns_server`), `galaxy/` (the `decdn.node` and `decdn.publisher` collections), `molecule/`. |
 | [`cloud-init/`](cloud-init/README.md) | The cloud-init deploy path: `user-data.yaml` (a node), `user-data-sponsord.yaml` (a sponsor host), the on-host `bootstrap.sh`, and the pinned ansible-core and collections it installs. |
 | [`compose/`](compose/README.md) | The Docker Compose deploy path: the node, `sponsord`, `sponsord-onramp` and Caddy, one profile each. |
 | [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart; it renders the node's dashboards and alert rules from `monitoring/`. |

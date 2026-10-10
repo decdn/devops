@@ -1,6 +1,8 @@
 ---
-# Per-node deployment values for decdn-node-1 (COMMITTED — non-secret config only).
-# Ansible merges every *.yml in this directory for host decdn-node-1. The sensitive
+# Per-node deployment values for origin-1, a publisher's origin node (COMMITTED —
+# non-secret config only). Ansible merges every *.yml in this directory for host
+# origin-1. An origin is a node like decdn-node-1 (see that host's main.yml) plus
+# the origin backend below. The sensitive
 # values (decdn_rpc_url, and any environment-borne secrets) live OFF this file:
 # either in a 0600 /etc/decdn/decdn.env provisioned on the target host (preferred —
 # nothing sensitive on the control machine), or in the sibling git-ignored
@@ -44,11 +46,21 @@ decdn_node_install_method: release
 # decdn_*_address here only to override it deliberately; the role reports overrides.
 decdn_network: arbitrum-sepolia
 
-# --- Cache -------------------------------------------------------------------
-# A cache node has no origin backend (decdn_cache_origin_kind stays unset): it fills
-# a cache miss by pulling from other nodes (node-to-node pull-through, on by default
-# when no origin is set) and relays every namespace. An origin backend makes a node a
-# publisher's origin instead: see host_vars/origin-1/ and hosts-publisher.yml.example.
+# --- Origin backend (the canonical source of the namespace's content) ---------
+# MUST-EDIT — where this origin reads the content it serves (NOT a chain fact).
+# http shown; fs (a local disk or an NFS mount: decdn_cache_origin_path) and s3
+# (S3/R2/B2/MinIO: decdn_cache_origin_s3_*) are in roles/decdn_node/defaults/main.yml,
+# and decdn_cache_origins takes an ordered fallback list. S3 access keys never go
+# here: put them in /etc/decdn/decdn.env on the host (AWS_ACCESS_KEY_ID, …) with
+# decdn_cache_origin_s3_use_default_chain: true, or in secret.yml's decdn_extra_env.
+# playbooks/origin.yml refuses a decdn_origin_nodes host without a backend.
+decdn_cache_origin_kind: "http"
+decdn_cache_origin_url: "https://your-origin.example/"
+# Being configured is not being recognised: the namespace's publisher seats this
+# node's operator with OriginAssignment.addOrigin (decdn/adr/011-content-takedown.md,
+# Origin Assignment Authority). With a backend set, the node serves only what the
+# backend holds (decdn_relay_foreign_namespaces defaults to false) and does not pull
+# from other nodes (decdn_node_to_node_pull_through_enabled).
 
 # --- Node identity / locale ---------------------------------------------------
 decdn_region: "US"            # MUST-EDIT — ISO 3166-1 alpha-2 of the node's physical location

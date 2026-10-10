@@ -9,6 +9,21 @@ all:
       hosts:
         node-only: {}
         dns-node: {}
+        node-with-origin:
+          decdn_cache_origin_kind: http
+        origin-ok: {}
+        origin-list: {}
+        origin-none: {}
+    # A top-level group here, not decdn_nodes' child, so a host can be in it alone.
+    decdn_origin_nodes:
+      hosts:
+        origin-ok:
+          decdn_cache_origin_kind: http
+        origin-list:
+          decdn_cache_origins: [{kind: fs, path: /srv/content}]
+        origin-none: {}
+        origin-orphan:
+          decdn_cache_origin_kind: http
     sponsord_hosts:
       hosts:
         both: {}

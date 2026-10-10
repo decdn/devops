@@ -14,9 +14,18 @@ all:
         co-located-onramp: {}
         relay-node: {}
         dns-node: {}
+        origin-listed: {}
+      # A publisher's origins: a child group, so its hosts are decdn_nodes too.
+      children:
+        decdn_origin_nodes:
+          hosts:
+            origin: {}
+            origin-listed: {}
+            origin-onramp: {}
     sponsord_hosts:
       hosts:
         sponsord: {}
+        origin-onramp: {}
         co-located: {}
         onramp: {}
         onramp-own-proxy: {}
@@ -29,6 +38,7 @@ all:
         onramp-own-proxy:
           sponsord_onramp_proxy: none
         co-located-onramp: {}
+        origin-onramp: {}
     iroh_relay_hosts:
       hosts:
         relay: {}

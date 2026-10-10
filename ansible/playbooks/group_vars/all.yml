@@ -21,12 +21,13 @@ grafana_alloy_iroh_relay_enabled: "{{ 'iroh_relay_hosts' in group_names }}"
 grafana_alloy_iroh_dns_server_enabled: "{{ 'iroh_dns_server_hosts' in group_names }}"
 
 # The public holes in the baseline firewall, from the groups a host is in. Each
-# group that runs baseline (decdn_nodes.yml, sponsord_hosts.yml, iroh_relay_hosts.yml,
-# iroh_dns_server_hosts.yml) sets baseline_extra_inbound to this, so every play on a
-# host renders the same rules.
+# group that runs baseline (decdn_nodes.yml, decdn_origin_nodes.yml, sponsord_hosts.yml,
+# iroh_relay_hosts.yml, iroh_dns_server_hosts.yml) sets baseline_extra_inbound to this,
+# so every play on a host renders the same rules.
 # Only genuinely public listeners belong here: metrics, admin RPC and the sponsord
 # API stay on loopback and get no hole.
-#   decdn_nodes: the node's QUIC listener. decdn_bind_port is a decdn_node role
+#   decdn_nodes: the node's QUIC listener, an origin's included (decdn_origin_nodes
+#     are decdn_nodes too; origin.yml refuses one that is not). decdn_bind_port is a decdn_node role
 #     default, which a play without that role (sponsord.yml) does not load; the
 #     fallback must match roles/decdn_node/defaults/main.yml.
 #   sponsord_onramp_hosts: Caddy, the onramp's TLS front (80 for the ACME challenge

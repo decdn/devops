@@ -1,0 +1,7 @@
+---
+# Playbook-adjacent group_vars for decdn_origin_nodes (see decdn_nodes.yml beside
+# this for why playbook-adjacent). An origin is also in decdn_nodes, as a child group
+# or by name, and inherits that file's value; it is set here as well because every
+# group whose play runs baseline sets it, so no group ordering can leave an origin's
+# play without the node's QUIC hole (all.yml builds the list from the host's groups).
+baseline_extra_inbound: "{{ _baseline_service_inbound }}"

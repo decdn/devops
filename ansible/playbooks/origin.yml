@@ -1,0 +1,48 @@
+---
+# PUBLISHERS: origin nodes, the decdn-node daemon with an origin backend (S3/R2/B2/
+# MinIO, NFS or local disk, or an HTTP upstream) as its namespace's canonical source.
+#   decdn_origin_nodes: baseline -> grafana_alloy (opt-in, off by default) -> decdn-node
+# Standalone entry point (`make deploy-origin`), also imported by publisher.yml. The
+# same roles as node.yml: an origin is a node, configured with
+# decdn_cache_origin_kind (+ its fields) or decdn_cache_origins. Being recognised as
+# the origin is on-chain: the namespace's publisher seats the operator with
+# OriginAssignment.addOrigin (decdn/adr/011-content-takedown.md, Origin Assignment
+# Authority); without that, its bytes are served as cache. Stake + registration are
+# the same operator steps as any node's — see roles/decdn_node/README.md.
+- name: Provision deCDN origin nodes
+  hosts: decdn_origin_nodes
+  become: true
+  pre_tasks:
+    # The firewall hole, backup, decommission, the relay allowlist and Alloy's node
+    # scrape all follow decdn_nodes, so an origin outside it would lose them. The role
+    # checks no group name, so the decdn.node collection does not impose this repo's
+    # groups on others. tests/scripts-test.sh runs these tasks by the play's name.
+    - name: Require the origin in decdn_nodes too
+      ansible.builtin.assert:
+        that:
+          - "'decdn_nodes' in group_names"
+        fail_msg: >-
+          {{ inventory_hostname }} is in decdn_origin_nodes but not in decdn_nodes. An
+          origin is a deCDN node: list it under decdn_nodes too (as a child group, or
+          by name), which gives it the node's firewall hole, backup, decommission and
+          observability.
+      tags: [always]
+    - name: Require an origin backend
+      ansible.builtin.assert:
+        that:
+          - >-
+            (decdn_cache_origin_kind | default('') | length > 0)
+            or (decdn_cache_origins | default([]) | length > 0)
+        fail_msg: >-
+          {{ inventory_hostname }} is in decdn_origin_nodes but has no origin backend:
+          set decdn_cache_origin_kind (http, fs or s3) and its fields, or
+          decdn_cache_origins (see roles/decdn_node/README.md), or move the host out
+          of decdn_origin_nodes to run it as a cache node.
+      tags: [always]
+  roles:
+    - role: baseline
+      tags: [baseline]
+    - role: grafana_alloy
+      tags: [observability, decdn_node, node]
+    - role: decdn_node
+      tags: [decdn_node, node]

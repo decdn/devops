@@ -13,9 +13,10 @@ inventory/*/host_vars/*/secret.*
 !inventory/*/host_vars/*/secret.*.example
 
 # The real inventory. This repo is PUBLIC, so real host IPs must never land here.
-# Copy hosts.yml.example to hosts.yml for a local run, or keep a fleet's inventory
-# in a private overlay and pass INVENTORY=<path> (see README.md "Private fleet
-# inventory"). The .example templates stay tracked.
+# Copy hosts-node.yml.example (node operators) or hosts-publisher.yml.example
+# (publishers) to hosts.yml for a local run, or keep a fleet's inventory in a private
+# overlay and pass INVENTORY=<path> (see README.md "Private fleet inventory"). The
+# .example templates stay tracked.
 inventory/hosts.yml
 inventory/hosts.yaml
 

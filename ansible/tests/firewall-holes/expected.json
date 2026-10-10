@@ -48,5 +48,12 @@
     {"proto": "tcp", "port": 443, "comment": "iroh-dns-server (https, pkarr, ACME)"},
     {"proto": "udp", "port": 53, "comment": "iroh-dns-server (dns)"},
     {"proto": "tcp", "port": 53, "comment": "iroh-dns-server (dns over tcp)"}
+  ],
+  "origin": [{"proto": "udp", "port": 4433, "comment": "decdn QUIC"}],
+  "origin-listed": [{"proto": "udp", "port": 4433, "comment": "decdn QUIC"}],
+  "origin-onramp": [
+    {"proto": "udp", "port": 4433, "comment": "decdn QUIC"},
+    {"proto": "tcp", "port": 80, "comment": "sponsord-onramp (Caddy, http)"},
+    {"proto": "tcp", "port": 443, "comment": "sponsord-onramp (Caddy, https)"}
   ]
 }

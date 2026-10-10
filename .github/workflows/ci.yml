@@ -127,8 +127,8 @@ jobs:
       - name: Lint (yamllint + ansible-lint)
         run: make lint
       - name: Syntax-check playbooks
-        # Dummy inventory: no real hosts.yml is committed upstream (only hosts.yml.example),
-        # and --syntax-check only parses, it never connects. Every playbook, so a new
+        # Dummy inventory: no real hosts.yml is committed upstream (only the
+        # hosts-*.yml.example files), and --syntax-check only parses, it never connects. Every playbook, so a new
         # one (backup, decommission, ...) is covered without editing this step.
         run: |
           for pb in playbooks/*.yml; do
