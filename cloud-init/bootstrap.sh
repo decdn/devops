@@ -149,8 +149,8 @@ for g in "${HOST_GROUPS[@]}"; do
 done
 [[ -n ${member[decdn_nodes]:-} || -n ${member[sponsord_hosts]:-} ]] \
   || die "$INVENTORY puts localhost in neither decdn_nodes nor sponsord_hosts (site.yml would match nothing)"
-# playbooks/origin.yml asserts the same, but under `--tags baseline` only after the
-# host waited for its secrets.
+# playbooks/origin.yml asserts the same (tagged always, so in phase 1 too), but only
+# once a play runs; this says so before any does.
 [[ -z ${member[decdn_origin_nodes]:-} || -n ${member[decdn_nodes]:-} ]] \
   || die "$INVENTORY puts localhost in decdn_origin_nodes but not in decdn_nodes (an origin is a deCDN node)"
 # playbooks/sponsord.yml asserts the same, in a play that `--tags baseline` skips.

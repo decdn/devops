@@ -11,8 +11,10 @@ The repo publishes three artifacts, each on its own version and released by its 
 Release an artifact when it has changes; the others are not touched. Their versions are
 independent. The one dependency is Galaxy's: `decdn.publisher` requires `decdn.node`
 (its playbooks run `decdn.node`'s baseline, Alloy and origin nodes), so the publisher
-collection's first release comes after the node collection's, and `scripts/release.sh`
-refuses it before. What the artifacts must agree on is checked by CI, not by a shared
+collection's first release comes after the node collection's. `scripts/release.sh`
+refuses any publisher release whose `decdn.node: ">=X.Y.Z"` no `node-collection-v*`
+tag on origin satisfies yet. A tag is not a Galaxy upload, so release the node
+collection while `PUBLISH_ENABLED` is `true` before raising that constraint. What the artifacts must agree on is checked by CI, not by a shared
 version: the decdn version (the chart's `appVersion` and the role's
 `decdn_node_version`) on every PR (`make test-scripts`), and the config keys each one
 renders against the same upstream schema-key inventory whenever either changes

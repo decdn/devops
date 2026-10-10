@@ -43,7 +43,8 @@ same hardening, port and day-2 tooling as a cache node. Three things differ:
 - **The backend.** Set `decdn_cache_origin_kind` (`http`, `fs` or `s3`) and its fields,
   or `decdn_cache_origins` for an ordered fallback list
   ([`decdn_node` role](../ansible/roles/decdn_node/README.md)).
-  S3 keys go in `/etc/decdn/decdn.env` on the host, never in inventory or user-data.
+  S3 keys go in `/etc/decdn/decdn.env` on the host (or a git-ignored `secret.yml`),
+  never in tracked inventory or user-data.
   `playbooks/origin.yml` refuses a `decdn_origin_nodes` host without a backend, or one
   outside `decdn_nodes`.
 - **What it serves.** With a backend, the node fills misses from it rather than from
@@ -78,6 +79,7 @@ details: [`iroh_relay`](../ansible/roles/iroh_relay/README.md),
 [`lifecycle.md`](lifecycle.md) covers backup, restore, migration and decommission for
 every service above. Decommissioning an origin stops the node but leaves its operator
 seated on-chain, where `OriginAssignment.getOrigins` still lists it. Unseat it with
-`decdn publish revoke` (`OriginAssignment.removeOrigin`); once the operator deregisters,
-anyone may also prune it as inactive
+`decdn publish revoke` (`OriginAssignment.removeOrigin`); once the operator leaves
+`CapacityBond`'s active set (it deregisters, unbonds or is ejected), anyone may also
+prune it as inactive
 ([ADR 011 § Origin Assignment Authority](https://github.com/decdn/decdn/blob/main/adr/011-content-takedown.md#origin-assignment-authority)).

@@ -1,6 +1,7 @@
 # Run by baseline-plays.sh (for bootstrap.sh) on the output of
 #   ansible-playbook playbooks/site.yml --tags baseline --list-hosts --list-tasks
-# with -v groups="<the base groups localhost is in>" (decdn_nodes and/or sponsord_hosts).
+# with -v groups="<the base groups localhost is in>" (decdn_nodes, or decdn_origin_nodes
+# for an origin, and/or sponsord_hosts).
 #
 # Phase 1 relies on `--tags baseline` hardening the host, which is true only if every
 # play that targets one of those groups, and lists localhost, still selects a baseline

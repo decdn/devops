@@ -892,6 +892,15 @@ if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
   expect 0 "release.sh cuts the publisher collection's first release after node's" rsrel publisher-collection patch --execute
   rsmade galaxy-check-publisher
   rspushed publisher-collection-v0.0.1
+  # A later release is held to the constraint too: raised past the highest node tag,
+  # the collection would not install from Galaxy.
+  sed -i 's/">=0.0.1"/">=0.1.0"/' "$rs/ansible/galaxy/publisher/galaxy.yml"
+  rsgit commit -qam "build: raise the fixture's decdn.node constraint"; rspush
+  # Checked before anything else: no commit to release is needed to trip it.
+  rsrefused "a later decdn.publisher release above its decdn.node constraint" \
+    "needs decdn.node >=0.1.0, and origin's highest node-collection tag is 0.0.1" publisher-collection
+  sed -i 's/">=0.1.0"/">=0.0.1"/' "$rs/ansible/galaxy/publisher/galaxy.yml"
+  rsgit commit -qam "build: restore the fixture's decdn.node constraint"; rspush
   rscommit ansible/molecule/default/x.yml "feat(molecule): not shipped"
   rscommit ansible/roles/unshipped/x.yml "feat(unshipped): not in a roles.txt"
   rsrefused "a change outside what the node collection ships" "nothing to release" node-collection
@@ -1149,6 +1158,11 @@ if command -v cloud-init >/dev/null; then
   ci_variant "an s3 origin without a region" 'an origin of kind s3 needs decdn_cache_origin_s3_bucket and decdn_cache_origin_s3_region' 's/^(\s*)decdn_cache_origin_kind: http$/\1decdn_cache_origin_kind: s3\n\1decdn_cache_origin_s3_bucket: b/' "$sponsorud"
   ci_variant "an empty origin in the list" 'decdn_cache_origins[0] needs a kind of http, fs or s3' '/^\s*decdn_cache_origin_url:/d; s/^(\s*)decdn_cache_origin_kind: http$/\1decdn_cache_origins: [{}]/' "$sponsorud"
   ci_variant "a list origin without its path" 'decdn_cache_origins[0] (fs) needs path' '/^\s*decdn_cache_origin_url:/d; s/^(\s*)decdn_cache_origin_kind: http$/\1decdn_cache_origins: [{kind: fs}]/' "$sponsorud"
+  # The sponsord_* groups and host vars outrank decdn_origin_nodes.vars, so the backend
+  # the lint checks there must be the only one.
+  ci_variant "an origin backend emptied in sponsord_hosts" 'set decdn_cache_origin_kind only in decdn_origin_nodes.vars' "s#$spnet#&\\n\\1decdn_cache_origin_kind: \"\"#" "$sponsorud"
+  ci_variant "an origin backend as a host var" 'set decdn_cache_origin_url only in decdn_origin_nodes.vars' "s#$loc#&\\n\\1decdn_cache_origin_url: https://other.example/#" "$sponsorud"
+  ci_variant "a backend on a cache node"   'set decdn_cache_origins only in decdn_origin_nodes.vars' "s#$net#&\\n\\1decdn_cache_origins: [{kind: fs, path: /srv}]#"
   ci_variant "an origin node built from source" 'decdn_node_install_method must be release' 's/^(\s*)decdn_node_install_method: release$/\1decdn_node_install_method: source/' "$sponsorud"
   ci_variant "S3 keys in the origin vars" 'decdn_origin_nodes.vars.decdn_extra_env looks secret-bearing' 's/^(\s*)decdn_cache_origin_kind: http$/&\n\1decdn_extra_env: {AWS_SECRET_ACCESS_KEY: x}/' "$sponsorud"
   ci_variant "a second connection"         "sponsord_onramp_hosts.hosts.localhost.ansible_connection is 'ssh'" '/^\s*sponsord_onramp_hosts:$/,/^\s*vars:$/ s/^(\s*)localhost:$/&\n\1  ansible_connection: ssh/' "$sponsorud"
@@ -1168,6 +1182,18 @@ if command -v cloud-init >/dev/null; then
     "$userdata" > "$work/ci-colocated.yaml"
   expect 0 "lint-cloud-init accepts a node co-located with sponsord" \
     make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-colocated.yaml"
+  # The publisher template cut down as its header says: a sponsor alone (the admin
+  # account moved into sponsord_hosts' vars) and an origin alone.
+  sed -E '/^      decdn_nodes:$/,/^      sponsord_hosts:$/{/^      sponsord_hosts:$/!d}
+    s/^(\s*)sponsord_network: arbitrum-sepolia$/&\n\1baseline_sudo_users: [{name: alice, keys: ["ssh-ed25519 AAAA alice"]}]\n\1baseline_sudo_autodetect_runner: false/' \
+    "$sponsorud" > "$work/ci-sponsor-alone.yaml"
+  grep -q '^      decdn_nodes:$' "$work/ci-sponsor-alone.yaml" && fail "the sponsor-alone variant kept decdn_nodes"
+  expect 0 "lint-cloud-init accepts the publisher template as a sponsor alone" \
+    make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-sponsor-alone.yaml"
+  sed -E '/^      sponsord_hosts:$/,/^$/d; /^      # The onramp runs beside/,/^$/d' "$sponsorud" > "$work/ci-origin-alone.yaml"
+  grep -qE '^      sponsord_(onramp_)?hosts:$' "$work/ci-origin-alone.yaml" && fail "the origin-alone variant kept a sponsord group"
+  expect 0 "lint-cloud-init accepts the publisher template as an origin alone" \
+    make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-origin-alone.yaml"
   ci_variant "one sponsord version moved" 'set sponsord_version and sponsord_onramp_version together' 's/^(\s*)sponsord_onramp_install_method: release$/&\n\1sponsord_onramp_version: "0.0.9"/' "$sponsorud"
   ci_variant "an onramp pin without its digest" 'set all of sponsord_onramp_decdn_release' 's/^(\s*)sponsord_onramp_install_method: release$/&\n\1sponsord_onramp_cli_release: v0.0.9/' "$sponsorud"
   ci_variant "onramp nested under children" 'sponsord_hosts may hold only hosts and vars, not' '/^      sponsord_onramp_hosts:$/,/^$/{s/^      /          /}; s/^          sponsord_onramp_hosts:$/        children:\n&/' "$sponsorud"
@@ -1515,6 +1541,48 @@ if command -v ansible >/dev/null; then
     grep -q "skipping: no hosts matched" "$work/out" \
       || { cat "$work/out" >&2; fail "node.yml's play matches an origin (decdn_origin_nodes) host"; }
     pass "node.yml's play leaves decdn_origin_nodes to origin.yml"
+    # Every pre_task is tagged always: lift() runs them untagged, but a --tags run
+    # (cloud-init's phase 1 is --tags baseline) would otherwise skip the refusals.
+    for pb in node.yml origin.yml; do
+      untagged="$(yq '[.[] | select(.pre_tasks) | .pre_tasks[] | select([.tags] | flatten | any_c(. == "always") | not) | .name] | .[]' \
+        "$repo/ansible/playbooks/$pb")" || fail "yq could not read playbooks/$pb"
+      [[ -z $untagged ]] || fail "playbooks/$pb has pre_tasks not tagged always: $untagged"
+    done
+    pass "node.yml's and origin.yml's guards run under any --tags"
+    # site.yml runs each node once: node.yml's play on the cache nodes and origin.yml's
+    # (through publisher.yml) on the origins, disjoint, together every decdn_nodes and
+    # decdn_origin_nodes host. Read from --list-hosts, which needs no collections.
+    play_hosts() { # <playbook>: "<play name>\t<host>" per host, "<play name>\t" per play
+      (cd "$repo/ansible" && ANSIBLE_DEPRECATION_WARNINGS=0 \
+        ansible-playbook -i tests/playbook-guards/inventory.yml "playbooks/$1" --list-hosts </dev/null) \
+        | awk '/^  play #/ {sub(/^  play #[0-9]+ \([^)]*\): /, ""); sub(/\tTAGS:.*/, ""); p = $0; print p "\t"; next}
+               /^      [^ ]/ {print p "\t" $1}'
+    }
+    play_hosts site.yml > "$work/site-plays" || fail "ansible-playbook --list-hosts failed on site.yml"
+    play_hosts publisher.yml > "$work/publisher-plays" || fail "ansible-playbook --list-hosts failed on publisher.yml"
+    cache=$'Provision deCDN cache nodes\t' orig=$'Provision deCDN origin nodes\t'
+    [[ "$(grep -cx "$cache" "$work/site-plays")" == 1 && "$(grep -cx "$orig" "$work/site-plays")" == 1 ]] \
+      || fail "site.yml does not run the cache-node play and the origin play exactly once each"
+    [[ "$(grep -cx "$orig" "$work/publisher-plays")" == 1 ]] || fail "publisher.yml does not run the origin play once"
+    ! grep -qx "$cache" "$work/publisher-plays" || fail "publisher.yml runs the cache-node play"
+    want="$(cd "$repo/ansible" && ansible -i tests/playbook-guards/inventory.yml 'decdn_nodes:decdn_origin_nodes' --list-hosts \
+      | awk 'NR > 1 {print $1}' | sort)"
+    got="$(grep -E "^($cache|$orig)." "$work/site-plays" | cut -f2 | sort)"
+    [[ -n $want && "$got" == "$want" ]] \
+      || fail "site.yml's node and origin plays do not cover each node exactly once: got [$(xargs <<<"$got")], want [$(xargs <<<"$want")]"
+    pass "site.yml runs every node exactly once: cache nodes in node.yml, origins in origin.yml"
+    # ansible/Makefile refuses a LIMIT that matches no host of the target's playbook,
+    # which ansible-playbook itself reports as success. ANSIBLE_ARGS keeps the run a listing.
+    mkl() { make -s -C "$repo/ansible" "$1" LIMIT="$2" INVENTORY=tests/playbook-guards/inventory.yml ANSIBLE_ARGS=--list-hosts </dev/null; }
+    expect 2 "make check-node refuses LIMIT=<an origin>" mkl check-node origin-ok
+    grep -q "matches no host that playbooks/node.yml runs on" "$work/out" \
+      || { cat "$work/out" >&2; fail "check-node's refusal of an origin did not come from limit_guard"; }
+    expect 2 "make deploy-origin refuses LIMIT=<a cache node>" mkl deploy-origin node-only
+    grep -q "matches no host that playbooks/origin.yml runs on" "$work/out" \
+      || { cat "$work/out" >&2; fail "deploy-origin's refusal of a cache node did not come from limit_guard"; }
+    expect 0 "make check-node takes LIMIT=<a cache node>" mkl check-node node-only
+    expect 0 "make deploy-origin takes LIMIT=<an origin>" mkl deploy-origin origin-ok
+    expect 0 "make check takes LIMIT=<an origin>" mkl check origin-ok
     # decommission.yml's host cap covers the whole run: a node-only host and a
     # sponsord host pass each role's own per-play cap but not this one. Only the
     # cap task is lifted (the hold check needs the roles).

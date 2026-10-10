@@ -5,7 +5,7 @@
 #   iroh_relay_hosts: read the deCDN nodes' IDs (the allowlist) -> baseline ->
 #                     grafana_alloy (opt-in, off by default) -> iroh_relay, one relay
 #                     at a time
-# Standalone entry point (`make deploy-relay`), also imported by site.yml. The
+# Standalone entry point (`make deploy-relay`), also imported by publisher.yml. The
 # relay is public by design: it terminates its own TLS (Let's Encrypt) on tcp/443
 # and binds tcp/80 and udp/7842, opened by playbooks/group_vars/all.yml; its
 # metrics stay on loopback. Point nodes at it with decdn_relay_urls — see

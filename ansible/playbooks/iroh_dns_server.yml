@@ -4,7 +4,7 @@
 # self-hosted in place of n0's dns.iroh.link.
 #   iroh_dns_server_hosts: baseline -> grafana_alloy (opt-in, off by default) ->
 #                          iroh_dns_server
-# Standalone entry point (`make deploy-dns`), also imported by site.yml. The server
+# Standalone entry point (`make deploy-dns`), also imported by publisher.yml. The server
 # is public by design: it terminates its own TLS (Let's Encrypt) on tcp/443 and
 # answers DNS on udp+tcp/53, opened by playbooks/group_vars/all.yml; its metrics
 # and health listener stay on loopback. Point nodes at it with

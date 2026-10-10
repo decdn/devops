@@ -39,7 +39,7 @@ tags:
 # decdn.node. The dependency is for the playbooks that run these roles: a publisher
 # host takes decdn.node.baseline first and decdn.node.grafana_alloy for
 # observability, and its origin nodes are decdn.node.decdn_node. scripts/release.sh
-# refuses this collection's first release before decdn.node has one.
+# refuses a release of this collection while no node-collection tag satisfies it.
 dependencies:
   decdn.node: ">=0.1.0"
 repository: https://github.com/decdn/devops

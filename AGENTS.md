@@ -17,7 +17,8 @@ split along that line:
   ADR 002/011), and optionally `sponsord` + its onramp, iroh relays and an iroh DNS
   server: `publisher.yml` / `make deploy-publisher` (`origin.yml` + the component
   playbooks), `cloud-init/user-data-publisher.yaml`, Compose's `origin`/`onramp`
-  profiles, the `decdn.publisher` collection. Front door: `docs/publishers.md`.
+  profiles, the chart (an origin node only), the `decdn.publisher` collection. Front
+  door: `docs/publishers.md`.
 
 There are four deploy paths:
 **Ansible** (`ansible/`, VMs/bare metal, the primary path, also the `decdn.node` and
@@ -465,7 +466,8 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   `node` and `origin` (both start the one `decdn-node`: a node operator's cache node,
   or a publisher's origin, whose `node.toml` carries `[cache.origin]`), `sponsord`,
   `onramp` (also starts `sponsord`) and `caddy`. An fs origin's content mount goes in
-  the operator's own `compose.override.yaml`, so the committed mounts stay exact.
+  the operator's own `compose.override.yaml` (passed as a second `-f` on every
+  command: Compose skips it when `-f` is given), so the committed mounts stay exact.
   - **sponsord / onramp:** the roles' `/etc/sponsord/` layout, except that the
     credential files belong to a host `sponsord` account (bind mounts keep owner and
     mode, and upstream rejects a group-readable keystore). They are mounted
@@ -581,11 +583,12 @@ which depends on `decdn.node`). Each overlay lives in `ansible/galaxy/<collectio
 `make test-scripts` checks every role ships in exactly one), and is staged into a clean
 collection tree by `galaxy/build.sh <collection>` — there is **no** `galaxy.yml` at the
 `ansible/` root (that would make ansible-lint treat the deploy project as a collection).
-A new role goes in one `roles.txt`. Build/validate with `make build` / `make galaxy-check`
-(both; `-node`/`-publisher` suffixes for one). **Publishing** is per artifact, each on
+A new role goes in one `roles.txt`. Build/validate from `ansible/` with `make build` /
+`make galaxy-check` (both; `-node`/`-publisher` suffixes for one; the root's
+`galaxy-build`/`galaxy-check` run both). **Publishing** is per artifact, each on
 its own version: `release-collection.yml` on a `node-collection-vX.Y.Z` or
-`publisher-collection-vX.Y.Z` tag (the repo's Latest follows `decdn.node`; the publisher
-collection's first release waits for node's), `release-chart.yml` on a
+`publisher-collection-vX.Y.Z` tag (the repo's Latest follows `decdn.node`; release.sh
+refuses a publisher release until a node tag satisfies its `decdn.node` constraint), `release-chart.yml` on a
 `decdn-node-X.Y.Z` tag (that file name and tag prefix are the chart's cosign identity:
 never rename them), and only while the `PUBLISH_ENABLED` repository variable is `true`
 (RELEASING.md). The chart's publish also pushes its

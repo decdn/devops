@@ -128,8 +128,9 @@ the overlay carries its own: create them next to its `hosts.yml`, starting from 
 of your own when hosts differ by group (disk size, an egress cap on metered bandwidth), each
 with a `group_vars/<group>.yml`. Origins go in `decdn_origin_nodes`, as a child of
 `decdn_nodes` (see `inventory/hosts-publisher.yml.example`). Settings every host needs regardless of
-inventory, currently the public firewall holes (the node's udp/4433, and tcp/80 +
-tcp/443 for Caddy on `sponsord_onramp_hosts`), live in
+inventory, currently the public firewall holes (the node's udp/4433, tcp/80 + tcp/443
+for Caddy on `sponsord_onramp_hosts`, tcp/80 + tcp/443 + udp/7842 on
+`iroh_relay_hosts`, tcp/443 + udp/53 + tcp/53 on `iroh_dns_server_hosts`), live in
 `playbooks/group_vars/`, so an overlay can't drop them: `all.yml` builds the list from the
 host's groups and each group's file (`decdn_nodes.yml`, `decdn_origin_nodes.yml`,
 `sponsord_hosts.yml`, …) applies it. Override
@@ -226,10 +227,13 @@ connects as your `$USER` with no flag. You do not want that bootstrap play — o
 — reaching nodes already serving paid traffic. Same when re-running a single node after a config change, a failed play, or a
 binary bump.
 
-`make check`, `deploy`, `backup` and `decommission` refuse to run if `LIMIT`,
-`ANSIBLE_ARGS` or `INVENTORY` reaches them from an exported shell variable, or if `LIMIT`
-or `INVENTORY` expands empty: all ways a run looks scoped but silently targets something
-else. `make decommission` additionally requires `LIMIT` on the command line.
+`make check`, `deploy` (and their `-node`, `-origin`, `-publisher`, … variants), `backup` and
+`decommission` refuse to run if `LIMIT`, `ANSIBLE_ARGS` or `INVENTORY` reaches them from an
+exported shell variable, or if `LIMIT` or `INVENTORY` expands empty: all ways a run looks
+scoped but silently targets something else. They also refuse a `LIMIT` that matches no host
+the playbook runs on, which Ansible itself reports as success: `make deploy-node
+LIMIT=<an origin>` (an origin is deployed by `deploy-origin`) or `make deploy-origin
+LIMIT=<a cache node>`. `make decommission` additionally requires `LIMIT` on the command line.
 
 `ANSIBLE_ARGS` passes anything else straight through. Quote the whole value at your prompt,
 or make will read the extra words as its own goals and flags (a bare `-vv` is make's `-v`);
@@ -243,8 +247,8 @@ make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='--start-at-task="Install decdn-node
 
 > **Watch the PLAY RECAP.** A *well-formed* argument that selects nothing is not an error:
 > `--tags decdn-node` (hyphen, vs the real `decdn_node`) runs zero tasks and still exits 0,
-> as does a `--limit` matching a host outside `decdn_nodes`. A malformed flag fails loudly;
-> these do not. Confirm the recap lists the hosts you expected.
+> and so does a `--limit` passed in `ANSIBLE_ARGS` (only `LIMIT` is checked). A malformed
+> flag fails loudly; these do not. Confirm the recap lists the hosts you expected.
 
 Then confirm:
 
