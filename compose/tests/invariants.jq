@@ -105,8 +105,9 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
   (inline_secrets | to_entries[] | .key as $n | .value[] as $k
    | check($n; "no inline \($k)"; ($all[$n].environment // {}) | has($k) | not)),
 
-  # Profiles: the onramp needs its daemon on the same host, so `onramp` starts both.
-  check("decdn-node"; "profiles are [node]"; $all["decdn-node"].profiles == ["node"]),
+  # Profiles: the onramp needs its daemon on the same host, so `onramp` starts both;
+  # a cache node (`node`) and an origin (`origin`) are the same decdn-node.
+  check("decdn-node"; "profiles are [node, origin]"; $all["decdn-node"].profiles == ["node", "origin"]),
   check("sponsord"; "profiles are [sponsord, onramp]"; $all.sponsord.profiles == ["sponsord", "onramp"]),
   check("sponsord-onramp"; "profiles are [onramp]"; $all["sponsord-onramp"].profiles == ["onramp"]),
   check("caddy"; "profiles are [caddy]"; $all.caddy.profiles == ["caddy"])
