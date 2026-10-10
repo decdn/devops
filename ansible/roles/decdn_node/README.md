@@ -717,7 +717,9 @@ weekly `upstream-drift` workflow fails on it), move every pin in one change:
 6. `files/decdn-release-KEYS.asc`, if upstream's `KEYS` changed (and the sponsord
    copy, and `SECURITY.md`'s fingerprints).
 7. The prose that names the version: `git grep -n '<old version>'` outside the
-   changelogs, and a `[Unreleased]` entry in `ansible/galaxy/CHANGELOG.md` and
+   changelogs. The changelog entry is the PR title (`feat`, `fix` or `chore`, not `ci` or
+   `build`, which the changelogs leave out; RELEASING.md); before an artifact's first
+   release, also a `[Unreleased]` entry in `ansible/galaxy/CHANGELOG.md` and
    `charts/decdn-node/CHANGELOG.md`.
 
 `make test-scripts` fails while the role, the onramp pins (role and Compose

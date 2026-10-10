@@ -1,0 +1,70 @@
+# git-cliff configuration for scripts/release.sh, which renders one artifact's
+# changelog section from the conventional commit subjects since its last tag. The
+# script passes the artifact's --tag-pattern and --include-path, so this one file
+# serves both the collection and the chart, and it writes the
+# `## [X.Y.Z] — YYYY-MM-DD` heading itself: the body below renders only the
+# `### <Kind>` groups.
+#
+# Every group is a Keep a Changelog kind and every entry one `- ` line, because
+# scripts/chart-artifacthub-changes.py turns the chart's section into Artifact Hub's
+# `artifacthub.io/changes` and refuses any other heading or a nested list.
+[changelog]
+header = ""
+body = """
+{%- macro line(commit) -%}
+- {% if commit.breaking %}**Breaking:** {% endif %}\
+  {% if commit.scope %}**{{ commit.scope }}**: {% endif %}\
+  {{ commit.message | split(pat="\n") | first | trim | upper_first }}
+{%- endmacro -%}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+
+{% for commit in commits -%}
+{{ self::line(commit=commit) }}
+{% endfor %}
+{% endfor -%}
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+# A subject that does not parse as conventional is dropped from the changelog and
+# the bump: scripts/release.sh lists such commits and refuses them, and
+# .github/workflows/pr-title.yml keeps PR titles, the squash-merge subjects,
+# conventional.
+filter_unconventional = true
+split_commits = false
+# A breaking commit is kept even when a `skip` parser below matches it.
+protect_breaking_commits = true
+filter_commits = false
+sort_commits = "newest"
+# The first match wins, case-insensitively ((?i): git-cliff parses `Feat:` as a
+# Conventional Commit too). The kinds come first; then the release commit is skipped;
+# then a breaking commit of a type with no kind (`ci!:`, which protect_breaking_commits
+# keeps) goes under Changed; then the skips; then everything else, `chore` and any
+# other type, under Changed. That last catch-all keeps a type this list does not know
+# from rendering a `### <type>` heading.
+commit_parsers = [
+  { message = "(?i)^feat", group = "<!-- 0 -->Added" },
+  { message = "(?i)^perf", group = "<!-- 1 -->Changed" },
+  { message = "(?i)^refactor", group = "<!-- 1 -->Changed" },
+  { message = "(?i)^doc", group = "<!-- 1 -->Changed" },
+  { message = "(?i)^revert", group = "<!-- 2 -->Removed" },
+  { message = "(?i)^fix", group = "<!-- 3 -->Fixed" },
+  { message = "(?i)^security", group = "<!-- 4 -->Security" },
+  { message = "(?i)^chore\\(release\\)", skip = true },
+  { field = "breaking", pattern = "true", group = "<!-- 1 -->Changed" },
+  { message = "(?i)^ci", skip = true },
+  { message = "(?i)^test", skip = true },
+  { message = "(?i)^style", skip = true },
+  { message = "(?i)^build", skip = true },
+  { message = "^Merge", skip = true },
+  { message = ".*", group = "<!-- 1 -->Changed" },
+]
+
+[bump]
+# Before 1.0: a feature bumps the minor, and so does a breaking change from 0.1 on (at
+# 0.0.x it bumps the patch); any other commit kept in the changelog bumps the patch.
+features_always_bump_minor = true
+breaking_always_bump_major = false

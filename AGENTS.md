@@ -91,7 +91,7 @@ monitoring/             # Grafana dashboards + Prometheus alert rules (maintaine
   sponsord/             # sponsord's (+ promtool unit tests), Ansible/Compose only
   iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible only
 docs/                   # cross-path operator docs: requirements.md, lifecycle.md
-scripts/                # upstream-mirror generators, the release gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh)
+scripts/                # upstream-mirror generators, the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh)
 ```
 
 **Generated mirrors of upstream — regenerate, never hand-edit:**
@@ -544,12 +544,22 @@ never rename them), and only while the `PUBLISH_ENABLED` repository variable is 
 Artifact Hub metadata (`charts/decdn-node/artifacthub-repo.yml`, `.helmignore`d), and
 the packaged `Chart.yaml` gets an `artifacthub.io/changes` annotation generated from the
 release's chart CHANGELOG section (`scripts/chart-artifacthub-changes.py`): never write
-that annotation by hand. Log changes under `[Unreleased]` in
-`ansible/galaxy/CHANGELOG.md` and `charts/decdn-node/CHANGELOG.md`.
+that annotation by hand. **Releases are cut on `main` by `scripts/release.sh`** (a
+git-cliff wrapper, dry run unless `--execute`; RELEASING.md): it bumps the manifest,
+generates the dated section of `ansible/galaxy/CHANGELOG.md` or
+`charts/decdn-node/CHANGELOG.md` from the conventional commit subjects since the
+artifact's tag (`cliff.toml`), and pushes a signed `chore(release)` commit and tag, with
+no release PR. The repo squash-merges with the PR title as the subject, so the PR title
+is the changelog entry (`pr-title.yml` checks it is conventional); release.sh refuses a
+commit whose subject is not. Until an artifact's first release, its manifest stays at
+the `0.0.0` placeholder and its changelog changes are logged by hand under
+`[Unreleased]`, which becomes the first release's section; after it, do not edit the
+changelogs by hand.
 
 **CI.** `ci.yml` is the blocking gate: `pre-commit`, `scripts` and `actionlint` on every PR, the
 Ansible, chart, compose and cloud-init jobs path-filtered, KICS on the first three (KICS has
-no cloud-init platform); `molecule.yml` runs the molecule suite on `ansible/**`,
+no cloud-init platform); `pr-title.yml` checks PR titles are Conventional Commits (they
+become the changelog); `molecule.yml` runs the molecule suite on `ansible/**`,
 `cloud-init/**` and `scripts/molecule.sh`, one runner per scenario (matrix from `make molecule-list`), with the
 `molecule` job as the single aggregate check. `ansible-lint` is **not** a per-commit hook (it needs
 collections vendored): run `make lint-ansible`.

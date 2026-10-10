@@ -395,6 +395,19 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.0
+      # For the scripts/release.sh cases: the release tarball, pinned by sha256.
+      # release.sh needs git-cliff 2.x or later; RELEASING.md names this version as
+      # the one CI tests with, so bump the two together.
+      - name: Install git-cliff
+        env:
+          GIT_CLIFF_VERSION: 2.14.1
+          GIT_CLIFF_SHA256: dfe9bef0c7a00d05fafe78e6e591a1a280d39dd495b8066764db0a559acde67f
+        run: |
+          f="git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$f" "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/$f"
+          echo "${GIT_CLIFF_SHA256}  $RUNNER_TEMP/$f" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/git-cliff-${GIT_CLIFF_VERSION}" >> "$GITHUB_PATH"
       - name: Script and guard tests
         run: make test-scripts
 
