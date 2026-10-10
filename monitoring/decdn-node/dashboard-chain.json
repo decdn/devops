@@ -2831,7 +2831,7 @@
       },
       "title": "Pool-open failures by cause",
       "type": "timeseries",
-      "description": "Sibling counters for the openChannel tx. The aggregate decdn_node_pull_pool_open_failures_total on the delivery dashboard is larger: it also counts store and expired-reclaim causes that never reach a transaction.",
+      "description": "Sibling counters for the openPool tx. The aggregate decdn_node_pull_pool_open_failures_total on the delivery dashboard is larger: it also counts store and expired-reclaim causes that never reach a transaction.",
       "targets": [
         {
           "datasource": {

@@ -644,7 +644,7 @@ groups:
       # fault", not a ratio over decdn_streams_{failed,completed}_total: the
       # failed family counts every refusal, and every other
       # decdn_serve_stream_rejected_* value is a client-side or policy outcome
-      # (unfunded channel, unknown channel, denied hash) that a healthy node
+      # (unfunded pool, unknown lane, denied hash) that a healthy node
       # produces on purpose, so a failure ratio would page on normal traffic.
       - alert: DecdnServeInternalErrorRate
         expr: sum by (instance) (rate(decdn_serve_stream_rejected_internal_error_total[5m])) > 0
@@ -775,7 +775,7 @@ groups:
           summary: "Settlement watcher not ticking on {{ $labels.instance }}"
           description: |
             No successful payment-settlement poll tick for several intervals —
-            channel open/settle/close events are not being ingested, so
+            pool open/top-up/redeem/close events are not being ingested, so
             voucher redemption and reconciliation stall. Check the RPC
             provider, then restart.
 
@@ -808,13 +808,13 @@ groups:
           runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#refusing-paying-clients-insufficient-deposit"
           summary: "Sustained insufficient-deposit refusals on {{ $labels.instance }}"
           description: |
-            This node is refusing delivery because the requesting channel's
+            This node is refusing delivery because the requesting pool's
             remaining deposit cannot cover the reserved cost, and has been for 15
             minutes. Two causes with opposite remedies, and this series cannot tell
             them apart — read the node's throttled `warn!` line, which carries the
-            channel and the shortfall:
+            pool and the shortfall:
             (a) clients genuinely running dry, which needs no action; or
-            (b) this node's chain watcher lagging an on-chain `ChannelToppedUp`, in
+            (b) this node's chain watcher lagging an on-chain `PoolToppedUp`, in
             which case funded clients are being turned away — check RPC health and
             `decdn_settlement_watcher_last_tick_timestamp_seconds`.
             Long `for:` because a burst of dry clients is normal.
