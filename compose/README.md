@@ -6,14 +6,16 @@ commands and the same hardening as the roles' systemd units.
 
 | Profile | Service | Image | Ansible equivalent |
 |---------|---------|-------|--------------------|
-| `node` | `decdn-node`, the deCDN node | `ghcr.io/decdn/decdn-node` | `decdn_node` |
+| `node` | `decdn-node`, a deCDN cache node (node operators) | `ghcr.io/decdn/decdn-node` | `decdn_node` (`playbooks/node.yml`) |
+| `origin` | the same `decdn-node`, run as a publisher's origin ([below](#run-it-as-an-origin-publishers)) | `ghcr.io/decdn/decdn-node` | `decdn_node` on `decdn_origin_nodes` (`playbooks/origin.yml`) |
 | `sponsord` | `sponsord`, the onboarding sponsor: treasury signer and PaymentPool keeper | `ghcr.io/decdn/sponsord` | `sponsord` |
 | `onramp` | `sponsord-onramp`, its public side (Turnstile gate, installers); also starts `sponsord` | `ghcr.io/decdn/sponsord-onramp` | `sponsord_onramp` |
 | `caddy` | Caddy, TLS in front of the onramp; leave it out to bring your own proxy | `caddy` (official) | `sponsord_onramp_proxy: caddy` |
 
-Pick the profiles with `COMPOSE_PROFILES` in `.env`: `node` for a node,
-`onramp,caddy` for a sponsor, `node,onramp,caddy` for both on one host. The sponsor
-is independent of the node.
+Pick the profiles with `COMPOSE_PROFILES` in `.env`. A **node operator** runs `node`.
+A **publisher** runs `origin` for an origin node, `onramp,caddy` for a sponsor, or
+`origin,onramp,caddy` for both on one host. The sponsor is independent of the node.
+`node` and `origin` start the same service, so a host runs one or the other.
 
 Pick this path for a single machine you already run Docker on. For a fleet, or a host
 you want hardened from scratch (firewall, SSH, auto-patching), use the
@@ -80,13 +82,18 @@ anything past your firewall. The node's only public port is QUIC **udp/4433**.
 
 4. **Config.** Let the CLI write it with the chain's contract addresses already filled
    in, then point it at `/var/lib/decdn` and set the node's region (ISO 3166-1
-   alpha-2). Add `--origin <url>` to `config init` if this node has a backing origin.
+   alpha-2). A cache node has no origin backend and fills a miss from other nodes,
+   which the daemon does only with `node_to_node_pull_through_enabled = true` in
+   `[cache]` (its default is off; the Ansible role turns it on for a node without an
+   origin). An origin has a backend instead ([below](#run-it-as-an-origin-publishers)):
+   leave that line out for one.
 
    ```bash
    sudo -u decdn decdn config init --chain arbitrum-sepolia --output /etc/decdn/node.toml
    sudo -u decdn sed -i \
      -e 's|^# data_dir = .*|data_dir = "/var/lib/decdn"|' \
-     -e '0,/^# region = /s|^# region = .*|region = "DE"|' /etc/decdn/node.toml
+     -e '0,/^# region = /s|^# region = .*|region = "DE"|' \
+     -e '/^\[cache\]$/a node_to_node_pull_through_enabled = true' /etc/decdn/node.toml
    ```
 
 5. **The RPC endpoint**, which may embed an API key, goes in a root-only env file:
@@ -151,6 +158,35 @@ the root-only env files whenever it creates a container.
   metrics listener serves only `/metrics`. Probe `http://127.0.0.1:9090/metrics` from
   the host, or ship metrics with Grafana Alloy / Prometheus. Dashboards and alert rules
   are in [`monitoring/`](../monitoring/README.md).
+
+### Run it as an origin (publishers)
+
+An origin is the same node with an origin backend: the canonical source of a
+publisher's namespace. Set `COMPOSE_PROFILES=origin` and give `node.toml` the
+backend. For an HTTP store, add `--origin <url>` to step 4's `config init`; for S3
+(and R2, B2, MinIO) or a local or NFS path, write the `[cache.origin]` table by hand.
+The [`decdn_node` role's README](../ansible/roles/decdn_node/README.md) lists the
+keys, and `decdn config validate` (step 6) checks them. Static S3 keys go in
+`/etc/decdn/decdn.env` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), never in
+`node.toml`.
+
+A path backend must be visible inside the container. `compose.yaml` mounts only
+`/etc/decdn` and `/var/lib/decdn`, and `make lint-compose` holds it to exactly those,
+so add the content root in a `compose.override.yaml` of your own beside it, read-only:
+
+```yaml
+services:
+  decdn-node:
+    volumes:
+      - /srv/content:/srv/content:ro   # [cache.origin] path = "/srv/content"
+```
+
+With a backend set, the node serves only the namespaces it is an origin of
+(`relay_foreign_namespaces` defaults to false) and fills misses from the backend, not
+from other nodes. The chain recognises it as an origin
+only once the namespace's publisher seats its operator with
+`OriginAssignment.addOrigin`
+([ADR 011](https://github.com/decdn/decdn/blob/main/adr/011-content-takedown.md#origin-assignment-authority)).
 
 ## sponsord and its onramp
 

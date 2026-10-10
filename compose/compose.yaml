@@ -5,7 +5,9 @@
 #   sudo docker compose up -d
 #
 # Each service sits behind a profile, chosen with COMPOSE_PROFILES in .env:
-#   node      the deCDN node
+#   node      the deCDN node, a cache node (node operators)
+#   origin    the same deCDN node, run as a publisher's origin: node.toml carries its
+#             origin backend ([cache.origin]); one decdn-node either way
 #   sponsord  the onboarding sponsor daemon (treasury signer + PaymentPool keeper)
 #   onramp    sponsord-onramp, its public side; also starts sponsord, which it needs
 #   caddy     TLS in front of the onramp (leave it out to bring your own proxy)
@@ -35,7 +37,9 @@ x-logging: &logging
 
 services:
   decdn-node:
-    profiles: [node]
+    # One service for both: a cache node and an origin are the same daemon, and they
+    # would share the host's ports and /var/lib/decdn. node.toml makes the difference.
+    profiles: [node, origin]
     # Always by digest, structurally: the reference is built here as repo@digest, so
     # no .env can swap in a mutable tag. The release's signed image-digest.txt names
     # the digest; upstream only tags an image after a maintainer signs the release.

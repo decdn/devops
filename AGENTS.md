@@ -77,7 +77,7 @@ ansible/                # the deployment project (DevSec-hardened, lean roles)
   inventory/ galaxy/ molecule/    # see ansible/README.md
 cloud-init/             # user-data{,-sponsord}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
 compose/                # Docker Compose deploy path for a single host (see its README.md)
-  compose.yaml          # profiles: node, sponsord, onramp (+ sponsord), caddy
+  compose.yaml          # profiles: node / origin (one decdn-node), sponsord, onramp (+ sponsord), caddy
   Caddyfile             # mirrors roles/sponsord_onramp/templates/Caddyfile.j2
   tests/*.jq            # lint-compose: invariants, inline-env, fail-closed
 charts/
@@ -428,7 +428,10 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   read-only, `/var/lib/decdn`), host networking (so loopback metrics/admin stay
   loopback and Docker publishes no ports), read-only rootfs, no capabilities, 300 s
   SIGTERM grace. Every service sits behind a profile (`COMPOSE_PROFILES` in `.env`):
-  `node`, `sponsord`, `onramp` (also starts `sponsord`) and `caddy`.
+  `node` and `origin` (both start the one `decdn-node`: a node operator's cache node,
+  or a publisher's origin, whose `node.toml` carries `[cache.origin]`), `sponsord`,
+  `onramp` (also starts `sponsord`) and `caddy`. An fs origin's content mount goes in
+  the operator's own `compose.override.yaml`, so the committed mounts stay exact.
   - **sponsord / onramp:** the roles' `/etc/sponsord/` layout, except that the
     credential files belong to a host `sponsord` account (bind mounts keep owner and
     mode, and upstream rejects a group-readable keystore). They are mounted
