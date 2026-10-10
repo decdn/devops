@@ -8,6 +8,9 @@
 # (RELEASING.md, "First release only"). The next publish pushes it, which earns the
 # Verified Publisher badge.
 # repositoryID: 00000000-0000-0000-0000-000000000000
+#
+# owners: a signed-in Artifact Hub user with one of these emails can claim the
+# repository if another account added it.
 owners:
   - name: deCDN
     email: info@decdn.org

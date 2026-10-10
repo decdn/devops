@@ -31,8 +31,8 @@ both (see [RELEASING.md](../../RELEASING.md)).
 
 ### Changed
 
-- The README links into the rest of the repo are absolute GitHub URLs, so they resolve
-  where the packaged README is shown (Artifact Hub, `helm show readme`).
+- The README links into the rest of the repo are absolute GitHub URLs, so they work
+  wherever the packaged README is shown (Artifact Hub, `helm show readme`).
 - Dashboards follow decdn/decdn#2354, so they need a node built with it: the pull
   leg's `decdn_node_pull_reactive_topup{,_refused}_total` become
   `decdn_node_pull_recovery_step{,_refused}_total`, both refusal panels and the

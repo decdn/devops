@@ -61,7 +61,8 @@ pass "schema-key checker: good/bad/empty fixtures"
 # The node's dashboards and rules live in the repo's monitoring/decdn-node/, which
 # operators on every deploy path import from; the chart reaches them through
 # files/monitoring, a relative symlink, because .Files cannot read outside the chart.
-# helm package must turn it into regular files, and nothing of sponsord's may ship.
+# helm package must turn it into regular files, and nothing of sponsord's or
+# iroh-relay's may ship, nor artifacthub-repo.yml (release.yml pushes it on its own).
 link_target="../../../monitoring/decdn-node"
 # Prints what is wrong and returns non-zero, so the negatives below can call it too.
 check_monitoring_link() { # <chart dir> <monitoring dir> <empty scratch dir>

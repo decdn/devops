@@ -10,8 +10,8 @@ type: application
 version: 0.1.0
 # The decdn/decdn release the chart's config rendering is synced against, and the
 # image tag used when neither image.tag nor image.digest is set. Keep it equal to
-# the decdn_node role's decdn_node_version, and the tag in the artifacthub.io/images
-# annotation below (make test-scripts checks both).
+# the decdn_node role's decdn_node_version, and the tag of the one image in the
+# artifacthub.io/images annotation below (make test-scripts checks both).
 appVersion: "0.0.1"
 kubeVersion: ">=1.25.0-0"
 home: https://decdn.org

@@ -721,7 +721,7 @@ weekly `upstream-drift` workflow fails on it), move every pin in one change:
    `charts/decdn-node/CHANGELOG.md`.
 
 `make test-scripts` fails while the role, the onramp pins (role and Compose
-example), the chart's `appVersion` and `artifacthub.io/images` or the KEYS and
-SECURITY.md disagree; the weekly
-`upstream-drift` job checks the digests against the release. A decdn/sponsord release is bumped the same way
+example), the chart's `appVersion` and its `artifacthub.io/images` image, or the KEYS
+and SECURITY.md disagree; the weekly `upstream-drift` job checks the digests against
+the release. A decdn/sponsord release is bumped the same way
 ([sponsord's README](../sponsord/README.md#bumping-the-sponsord-release)).

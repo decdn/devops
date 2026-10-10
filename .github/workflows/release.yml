@@ -7,9 +7,10 @@ name: Release
 # `build` always runs: it gates the tag (collection, chart and both changelogs must
 # agree on X.Y.Z), re-runs the chart and collection checks, packages both, and
 # uploads them with SHA256SUMS as a workflow artifact. `publish` makes them public
-# (Galaxy, oci://ghcr.io/decdn/charts with a keyless cosign signature and the Artifact
-# Hub repository metadata, and a GitHub Release) ONLY when the repository variable PUBLISH_ENABLED is 'true'. Until then
-# a tag push is a dry run. A manual dispatch is always a dry run.
+# (Galaxy; oci://ghcr.io/decdn/charts, cosign-signed keyless, plus the Artifact Hub
+# repository metadata; and a GitHub Release) ONLY when the repository variable
+# PUBLISH_ENABLED is 'true'. Until then a tag push is a dry run. A manual dispatch is
+# always a dry run.
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
@@ -30,6 +31,12 @@ env:
   TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
   CHART_REGISTRY: oci://ghcr.io/decdn/charts
 
+# `bash -eo pipefail`, not the default `bash -e`, so a failure anywhere in a pipe
+# fails the step.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -41,8 +48,8 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-      # Helm is pinned four times: ci.yml's helm and kics jobs, and both jobs here.
-      # Bump all four together.
+      # Helm is pinned five times: ci.yml's helm, kics and scripts jobs, and both jobs
+      # here. Bump all five together.
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: v4.3.0
@@ -58,8 +65,9 @@ jobs:
       - name: Chart lint and render tests
         run: make lint-helm
       # Artifact Hub reads a release's changes from Chart.yaml, not CHANGELOG.md, so
-      # generate the annotation from the changelog section the gate just checked. Only
-      # the packaged copy carries it; lint ran on the chart as committed.
+      # generate the annotation from the changelog section the gate just checked. The
+      # package carries it, the commit never does; lint ran on the chart as committed.
+      # tests/scripts-test.sh runs this step and the check below by name.
       - name: Add the artifacthub.io/changes annotation
         run: |
           CHANGES="$(scripts/chart-artifacthub-changes.py charts/decdn-node/CHANGELOG.md "${TAG#v}")"
@@ -70,13 +78,18 @@ jobs:
           mkdir -p dist
           cp ansible/build/decdn-node-*.tar.gz dist/
           helm package charts/decdn-node --destination dist
-          helm show chart dist/decdn-node-"${TAG#v}".tgz \
-            | yq -e '.annotations["artifacthub.io/changes"] | from_yaml | length > 0' >/dev/null
           (cd dist && sha256sum -- * > SHA256SUMS)
           # Not release assets, so outside SHA256SUMS: the notes become the Release
           # body, the Artifact Hub metadata is pushed next to the chart.
           cp release-notes.md charts/decdn-node/artifacthub-repo.yml dist/
           cat dist/SHA256SUMS
+      - name: Check the packaged artifacthub.io/changes
+        run: |
+          helm show chart dist/decdn-node-"${TAG#v}".tgz \
+            | yq -o=json '.annotations["artifacthub.io/changes"] | from_yaml' \
+            | jq -e 'type == "array" and length > 0 and all(.[];
+                (.kind | IN("added", "changed", "deprecated", "removed", "fixed", "security"))
+                and (.description | type == "string" and length > 0))' >/dev/null
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ env.TAG }}
@@ -134,11 +147,13 @@ jobs:
           [ -n "$digest" ] || { echo "::error::no digest in helm push output"; exit 1; }
           cosign sign --yes "ghcr.io/decdn/charts/decdn-node@$digest"
           echo "chart: ${CHART_REGISTRY}/decdn-node:${TAG#v} ($digest)" >> "$GITHUB_STEP_SUMMARY"
-      # Repeatable: every publish re-pushes the same tag. oras reads Docker's
-      # credential store, which `cosign login` filled above.
+      # Repeatable: oras push just moves the artifacthub.io tag.
       - name: Push the Artifact Hub repository metadata
         working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          echo "$GH_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           oras push ghcr.io/decdn/charts/decdn-node:artifacthub.io \
             --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
             artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml

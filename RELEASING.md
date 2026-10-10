@@ -18,8 +18,9 @@ creates the GitHub Release, but **only** when the repository variable
 ## Cutting a release
 
 1. **Versions.** Set the same `X.Y.Z` in `ansible/galaxy/galaxy.yml` (`version:`) and
-   `charts/decdn-node/Chart.yaml` (`version:`). Bump the chart's `appVersion` if it now
-   targets a newer decdn release.
+   `charts/decdn-node/Chart.yaml` (`version:`). Bump the chart's `appVersion` (and the
+   image tag in its `artifacthub.io/images` annotation) if it now targets a newer decdn
+   release.
 2. **Changelogs.** Both `ansible/galaxy/CHANGELOG.md` and `charts/decdn-node/CHANGELOG.md`
    collect changes under `## [Unreleased]`. At release time, move those entries under a
    dated `## [X.Y.Z] — YYYY-MM-DD` heading and leave an empty `[Unreleased]` above it.
@@ -61,13 +62,17 @@ After the first publish (the package does not exist before it):
   package as **private**. Make it public under the org's *Packages* settings, or
   nobody outside the org can pull it, Artifact Hub included.
 - **Artifact Hub.** Sign in to artifacthub.io with the `info@decdn.org` account and add
-  a Helm repository with the URL `oci://ghcr.io/decdn/charts/decdn-node`. It lists the
-  chart from then on. For the Verified Publisher badge and the ownership claim, put the
-  repository ID it shows into `repositoryID` in `charts/decdn-node/artifacthub-repo.yml`
-  and merge that. Every publish pushes the file as
-  `ghcr.io/decdn/charts/decdn-node:artifacthub.io`, so the next release carries it. To
-  have it sooner, push it by hand with a token that has `write:packages`
-  (`gh auth refresh -s write:packages` adds it to gh's):
+  a Helm repository with the URL `oci://ghcr.io/decdn/charts/decdn-node`. That account
+  owns it and Artifact Hub lists the chart from then on. (`owners` in
+  `charts/decdn-node/artifacthub-repo.yml` is what lets the account claim the repository
+  if someone else added it first.) For the Verified Publisher badge, put the repository
+  ID it shows into `repositoryID` in that file and merge it: every publish pushes the
+  file as `ghcr.io/decdn/charts/decdn-node:artifacthub.io`, so a later publish without
+  the ID would drop it. Artifact Hub re-reads the file only when a new chart version
+  appears, so the badge comes with the next release. To have it with the first one,
+  push the file by hand right after adding the repository, before Artifact Hub first
+  processes it, with a token that has `write:packages` (`gh auth refresh -s
+  write:packages` adds it to gh's):
 
   ```bash
   gh auth token | oras login ghcr.io --username "$(gh api user --jq .login)" --password-stdin
@@ -87,8 +92,10 @@ Release. The Release is last, so it only appears once both artifacts are live.
 - **Galaxy publish failed after the chart was pushed:** fix the cause and re-run. The
   chart push is repeatable for the same version (the tag just moves to an identical
   digest), but **Galaxy refuses a version that already exists**. If Galaxy actually
-  accepted the upload before the job failed, finish by hand: create the Release with
-  `gh release create vX.Y.Z` and the files from the `release-vX.Y.Z` workflow artifact.
+  accepted the upload before the job failed, finish by hand from the `release-vX.Y.Z`
+  workflow artifact, with the same assets as the workflow (`release-notes.md` and
+  `artifacthub-repo.yml` in it are not assets): `gh release create vX.Y.Z --title vX.Y.Z
+  --notes-file release-notes.md decdn-node-*.tar.gz decdn-node-*.tgz SHA256SUMS`.
 - **Never re-use a version** for different content. Cut `vX.Y.Z+1`.
 
 ## Verifying a release
