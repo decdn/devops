@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for the repo's own guard rails that no molecule scenario or chart render
 # exercises: the ansible/ Makefile's scoping guards, the molecule driver's guards
-# and locks (scripts/molecule.sh), the release gate, the
+# and locks (scripts/molecule.sh), the release gate and scripts/release.sh, the
 # lint-compose and lint-cloud-init invariants (negative cases), the firewall holes
 # playbooks/group_vars/ derives per host, ci.yml's helm path filter, and — with
 # UPSTREAM=<decdn checkout> — the upstream-mirror generators' exit codes.
@@ -212,7 +212,10 @@ grep -q "Chart.yaml version is" "$work/out" || fail "release gate: no chart vers
 expect 1 "release gate rejects a collection version mismatch" "$gate" collection-v9.9.9
 grep -q "galaxy.yml version is" "$work/out" || fail "release gate: no collection version mismatch reported"
 # A copy of the tree where each artifact is released alone: dating one changelog lets
-# that artifact's tag through and leaves the other refused, both ways round.
+# that artifact's tag through and leaves the other refused, both ways round. The copy
+# does not depend on where the real changelogs are in their release history: both
+# manifests are set to 9.9.9, and each changelog gets an undated 9.9.9 section of its
+# own above its first `## [` heading.
 rel="$work/rel"
 relgate="$rel/scripts/check-release-version.sh"
 chart_log="$rel/charts/decdn-node/CHANGELOG.md"
@@ -221,8 +224,15 @@ mkdir -p "$rel/scripts" "$rel/ansible/galaxy" "$rel/charts/decdn-node"
 cp "$gate" "$rel/scripts/"
 cp "$repo/ansible/galaxy/galaxy.yml" "$repo/ansible/galaxy/CHANGELOG.md" "$rel/ansible/galaxy/"
 cp "$repo/charts/decdn-node/Chart.yaml" "$repo/charts/decdn-node/CHANGELOG.md" "$rel/charts/decdn-node/"
-version="$(sed -nE 's/^version:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$rel/charts/decdn-node/Chart.yaml")"
-cversion="$(sed -nE 's/^version:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$rel/ansible/galaxy/galaxy.yml")"
+version="9.9.9" cversion="9.9.9"
+sed -i -E "s/^version:.*/version: $version/" "$rel/charts/decdn-node/Chart.yaml" "$rel/ansible/galaxy/galaxy.yml"
+for log in "$chart_log" "$coll_log"; do
+  awk -v v="$version" '!done && /^## \[/ {
+      print "## [" v "] — unreleased"; print ""; print "### Added"; print ""
+      print "- A fixture entry for the release gate tests."; print ""; done=1
+    } {print}' "$log" > "$log.new"
+  mv "$log.new" "$log"
+done
 cp "$chart_log" "$work/chart-changelog-unreleased.md"
 # <description> <expected message, fixed string> <gate> <tag>
 refused() {
@@ -391,10 +401,10 @@ bad "a code block in an entry"      "a nested list or code block" 's/^- Second e
 bad "an empty '-' entry"            "an empty '-' entry"          's/^- A fix\.$/-/'
 bad "an empty '- ' entry"           "an empty '-' entry"          's/^- A fix\.$/- /'
 bad "a duplicated section"          "appears 2 times"             's/^## \[1\.2\.2\] — 2098-01-01$/## [1.2.3] — 2098-01-01/'
-# The real changelog must parse before release day: the section for this version, and
-# [Unreleased], which the release PR folds into it.
-expect 0 "changes generator reads charts/decdn-node/CHANGELOG.md [$version]" \
-  "$changes" "$repo/charts/decdn-node/CHANGELOG.md" "$version"
+# The copy's fixture section parses, and so does the real changelog's [Unreleased]
+# while it exists, which the first release (scripts/release.sh) turns into its section.
+expect 0 "changes generator reads the released copy's charts/decdn-node/CHANGELOG.md [$version]" \
+  "$changes" "$chart_log" "$version"
 if sed -n '/^## \[Unreleased\]/,/^## \[[0-9]/p' "$repo/charts/decdn-node/CHANGELOG.md" | grep -q '^### '; then
   expect 0 "changes generator reads charts/decdn-node/CHANGELOG.md [Unreleased]" \
     "$changes" "$repo/charts/decdn-node/CHANGELOG.md" Unreleased
@@ -453,7 +463,7 @@ SH
   mkdir -p "$ah/scripts" "$ah/charts"
   cp "$changes" "$ah/scripts/"
   cp -RL "$repo/charts/decdn-node" "$ah/charts/"
-  cp "$chart_log" "$ah/charts/decdn-node/"
+  cp "$chart_log" "$rel/charts/decdn-node/Chart.yaml" "$ah/charts/decdn-node/"
   cp "$work/notes-chart.md" "$ah/release-notes.md"
   run_step() { run_in "$ah" "decdn-node-$version" "$1"; }
   run_step "$annotate" || { cat "$work/out" >&2; fail "release-chart.yml's annotation step failed"; }
@@ -524,6 +534,336 @@ elif [[ -n ${CI:-} ]]; then
 else
   skipped+=("release workflow steps (needs yq, jq and helm)")
 fi
+
+# --- scripts/release.sh: version, changelog section, signed commit and tag -------------
+# On a fixture repo with a bare origin: small manifests and changelogs at the 0.0.0
+# placeholder, the real scripts, cliff.toml and galaxy/build.sh (the role list), and an
+# ephemeral ssh signing key. The host's git config is kept out (GIT_CONFIG_GLOBAL). The
+# make checks are stubs that log their target to $RS_MAKE_LOG and fail while
+# $RS_MAKE_FAIL exists; most cases skip them with --no-verify.
+if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
+  rs="$work/rs" rso="$work/rs-origin.git"
+  export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+  today() { date -u +%F; }
+  rsgit() { git -C "$rs" "$@"; }
+  rsrel() { "$rs/scripts/release.sh" "$@"; }
+  rspush() { rsgit push -q origin main; }
+  # <path> <subject>: change <path> in the fixture, commit and push.
+  rscommit() { mkdir -p "$(dirname "$rs/$1")"; echo "$RANDOM" >> "$rs/$1"; rsgit add -A; rsgit commit -qm "$2"; rspush; }
+  # <description> <expected message, fixed string> <release.sh args...>
+  rsrefused() {
+    local desc="$1" msg="$2"; shift 2
+    expect 1 "release.sh refuses $desc" rsrel "$@"
+    grep -qF -- "$msg" "$work/out" || { cat "$work/out" >&2; fail "release.sh: wrong refusal for $desc"; }
+  }
+  # Each git runs on its own line, so a failing one fails the test instead of comparing
+  # an empty string.
+  rsclean() {
+    local st; st="$(rsgit status --porcelain)" || fail "git status failed in the fixture"
+    [[ -z "$st" ]] || fail "release.sh $1 left the tree dirty: $st"
+  }
+  rssaid() { grep -qF -- "$2" "$work/out" || { cat "$work/out" >&2; fail "release.sh $1: no '$2' in its output"; }; }
+  rsnotag() {
+    local mine theirs
+    mine="$(rsgit tag)" || fail "git tag failed in the fixture"
+    theirs="$(git -C "$rso" tag)" || fail "git tag failed in the fixture origin"
+    [[ -z "$mine" && -z "$theirs" ]] || fail "release.sh made a tag $1"
+  }
+  # <tag>: origin has it, and its main is the local HEAD.
+  rspushed() {
+    local theirs mine
+    git -C "$rso" rev-parse -q --verify "refs/tags/$1" >/dev/null || fail "release.sh did not push $1"
+    theirs="$(git -C "$rso" rev-parse main)" || fail "git rev-parse failed in the fixture origin"
+    mine="$(rsgit rev-parse HEAD)" || fail "git rev-parse failed in the fixture"
+    [[ "$theirs" == "$mine" ]] || fail "release.sh did not push the $1 release commit"
+  }
+  # <target>: the make check ran, alone.
+  rsmade() { [[ "$(cat "$RS_MAKE_LOG")" == "$1" ]] || fail "release.sh ran '$(cat "$RS_MAKE_LOG")', not make $1"; }
+  chart="$rs/charts/decdn-node"
+  git init -q --bare -b main "$rso"
+  git init -q -b main "$rs"
+  rsgit config user.name test; rsgit config user.email test@example.invalid
+  ssh-keygen -q -t ed25519 -N '' -C test -f "$work/rs-key"
+  rsgit config gpg.format ssh; rsgit config user.signingkey "$work/rs-key.pub"
+  printf 'test@example.invalid %s\n' "$(cat "$work/rs-key.pub")" > "$work/rs-allowed-signers"
+  rsgit config gpg.ssh.allowedSignersFile "$work/rs-allowed-signers"
+  export RS_MAKE_LOG="$work/rs-make.log" RS_MAKE_FAIL="$work/rs-make-fail"
+  rsgit remote add origin "$rso"
+  mkdir -p "$rs/scripts" "$rs/ansible/galaxy" "$chart"
+  cp "$repo/scripts/release.sh" "$repo/scripts/check-release-version.sh" "$repo/scripts/chart-artifacthub-changes.py" "$rs/scripts/"
+  cp "$repo/cliff.toml" "$rs/"
+  cp "$repo/ansible/galaxy/build.sh" "$rs/ansible/galaxy/"
+  # shellcheck disable=SC2016 # $$ is make's, for the shell
+  printf 'lint-helm:\n\t@echo lint-helm >> "$$RS_MAKE_LOG"; test ! -e "$$RS_MAKE_FAIL"\n' > "$rs/Makefile"
+  # shellcheck disable=SC2016
+  printf 'galaxy-check:\n\t@echo galaxy-check >> "$$RS_MAKE_LOG"; test ! -e "$$RS_MAKE_FAIL"\n' > "$rs/ansible/Makefile"
+  printf 'apiVersion: v2\nname: decdn-node\nversion: 0.0.0\nappVersion: "0.0.1"\n' > "$chart/Chart.yaml"
+  printf 'namespace: decdn\nname: node\nversion: 0.0.0                      # a comment\n' > "$rs/ansible/galaxy/galaxy.yml"
+  for log in "$chart/CHANGELOG.md" "$rs/ansible/galaxy/CHANGELOG.md"; do
+    printf '# Changelog\n\nIntro.\n\n## [Unreleased]\n\nInitial.\n\n### Added\n\n- The first entry.\n' > "$log"
+  done
+  rsgit add -A; rsgit commit -qm "feat: the fixture"; rsgit push -q -u origin main
+
+  expect 2 "release.sh rejects no arguments"        rsrel
+  expect 2 "release.sh rejects an unknown artifact" rsrel compose
+  expect 2 "release.sh rejects an unknown level"    rsrel chart huge
+  expect 2 "release.sh rejects an unknown flag"     rsrel chart --force
+  expect 2 "release.sh rejects a third argument"    rsrel chart minor extra
+
+  # Refusals before anything is written never touch the operator's own edits.
+  echo "- my own edit" >> "$chart/CHANGELOG.md"
+  rsrefused "--execute on a dirty tree" "not clean" chart minor --execute --no-verify
+  grep -qx -- "- my own edit" "$chart/CHANGELOG.md" || fail "release.sh's refusal of a dirty tree discarded an uncommitted edit"
+  rsgit switch -q -c topic
+  rsrefused "--execute on a branch other than main" "not 'topic'" chart minor --execute --no-verify
+  grep -qx -- "- my own edit" "$chart/CHANGELOG.md" || fail "release.sh's refusal of a branch discarded an uncommitted edit"
+  rsgit checkout -q -- "$chart/CHANGELOG.md"
+  rsgit switch -q main; rsgit branch -q -D topic
+  pass "release.sh's refusals keep uncommitted edits"
+  touch "$rs/stray"
+  rsrefused "an untracked file" "not clean" chart minor
+  rm "$rs/stray"
+  echo x >> "$rs/README"; rsgit add -A; rsgit commit -qm "docs: unpushed"
+  rsrefused "a main ahead of origin" "not origin/main" chart minor
+  rscommit README "docs: pushed"; rsgit reset -q --hard HEAD~1
+  rsrefused "a main behind origin" "not origin/main" chart minor
+  rsgit reset -q --hard origin/main
+  rsgit switch -q --detach
+  rsrefused "a detached HEAD" "not 'a detached HEAD'" chart minor
+  rsgit switch -q main
+  rsgit config --unset user.signingkey
+  rsrefused "--execute without a signing key" "no user.signingkey" chart minor --execute
+  rsgit config user.signingkey "$work/no-such-key.pub"
+  rsrefused "--execute with a key that cannot sign" "cannot sign" chart minor --execute
+  rsgit config user.signingkey "$work/rs-key.pub"
+
+  # First-release refusals, each on a committed variant of the fixture.
+  # <description> <message> <sed script for the chart file> <file> [release.sh args]
+  rsfirst() {
+    local desc="$1" msg="$2" script="$3" file="$4"; shift 4
+    cp "$chart/$file" "$work/rs-saved"
+    sed -i -E "$script" "$chart/$file"; rsgit commit -qam "test: $desc"; rspush
+    rsrefused "$desc" "$msg" chart "${@:-minor}"
+    cp "$work/rs-saved" "$chart/$file"; rsgit commit -qam "test: undo $desc"; rspush
+  }
+  rsrefused "auto for the first release" "names its level" chart
+  rsrefused "0.0.0 as the first release" "not above 0.0.0" chart 0.0.0
+  rsfirst "a first release from a manifest not at 0.0.0" "not the 0.0.0 placeholder" 's/^version: .*/version: 0.3.0/' Chart.yaml
+  rsfirst "a first release with no [Unreleased]" "no '## [Unreleased]' section" 's/^## \[Unreleased\]$/## [Later]/' CHANGELOG.md
+  rsfirst "a first release with an empty [Unreleased]" "has no '- ' entries" '/^- /d' CHANGELOG.md
+
+  expect 0 "release.sh dry-runs the chart's first release" rsrel chart minor
+  rssaid "dry run" "release chart: decdn-node-0.1.0"
+  rssaid "dry run" "+## [0.1.0] — $(today)"
+  rssaid "dry run" "scripts/check-release-version.sh decdn-node-0.1.0"
+  rsclean "a dry run"
+  rsnotag "in a dry run"
+
+  # Failures after the files are written restore them and commit nothing. The stub gate
+  # proves it ran on the written files.
+  printf '#!/bin/sh\ngrep -q "^version: 0.1.0" charts/decdn-node/Chart.yaml && echo GATE-SAW-0.1.0\nexit 1\n' \
+    > "$rs/scripts/check-release-version.sh"
+  rsgit commit -qam "test: break the gate"; rspush
+  rsrefused "to commit when the gate fails" "the release gate refused" chart minor --execute --no-verify
+  rssaid "with a failing gate" "GATE-SAW-0.1.0"
+  rsclean "with a failing gate"; rsnotag "after the gate failed"
+  cp "$repo/scripts/check-release-version.sh" "$rs/scripts/"
+  rsgit commit -qam "test: restore the gate"; rspush
+  : > "$RS_MAKE_LOG"; touch "$RS_MAKE_FAIL"
+  rsrefused "to commit when the make check fails" "make lint-helm failed: nothing was committed" chart minor --execute
+  rsmade lint-helm
+  rm "$RS_MAKE_FAIL"
+  rsclean "with a failing make check"; rsnotag "after the make check failed"
+  printf '#!/bin/sh\nexit 1\n' > "$rs/.git/hooks/pre-commit"; chmod +x "$rs/.git/hooks/pre-commit"
+  rsrefused "to go on when a pre-commit hook fails" "git commit failed" chart minor --execute --no-verify
+  rsclean "with a failing hook"; rsnotag "after a hook failed"
+  [[ "$(rsgit log -1 --format=%s)" == "test: restore the gate" ]] || fail "release.sh committed past a failing hook"
+  rm "$rs/.git/hooks/pre-commit"
+  pass "release.sh restores the files and commits nothing when a check or the commit fails"
+
+  # A rejected push leaves origin as it was (--atomic: the tag is refused, so is main).
+  # shellcheck disable=SC2016 # a literal $1 in the hook
+  printf '#!/bin/sh\ncase "$1" in refs/tags/*) exit 1 ;; esac\n' > "$rso/hooks/update"; chmod +x "$rso/hooks/update"
+  before="$(git -C "$rso" rev-parse main)"
+  rsrefused "to report success when origin rejects the push" "nothing reached origin" chart minor --execute --no-verify
+  [[ "$(git -C "$rso" rev-parse main)" == "$before" && -z "$(git -C "$rso" tag)" ]] \
+    || fail "release.sh's rejected push moved origin (main or a tag)"
+  rm "$rso/hooks/update"
+  rsgit tag -d decdn-node-0.1.0 >/dev/null; rsgit reset -q --hard origin/main
+  pass "release.sh's rejected push is all-or-nothing, and its undo works"
+
+  : > "$RS_MAKE_LOG"
+  expect 0 "release.sh cuts the chart's first release" rsrel chart minor --execute
+  rsmade lint-helm
+  grep -qx 'version: 0.1.0' "$chart/Chart.yaml" || fail "release.sh did not set Chart.yaml to 0.1.0"
+  grep -qx "## \[0.1.0\] — $(today)" "$chart/CHANGELOG.md" || fail "release.sh did not date [Unreleased] as 0.1.0"
+  ! grep -q '^## \[Unreleased\]' "$chart/CHANGELOG.md" || fail "release.sh left [Unreleased] after the first release"
+  grep -qx '## \[Unreleased\]' "$rs/ansible/galaxy/CHANGELOG.md" || fail "release.sh touched the collection's changelog"
+  rspushed decdn-node-0.1.0
+  [[ "$(git -C "$rso" tag)" == "decdn-node-0.1.0" ]] || fail "release.sh pushed other tags: $(git -C "$rso" tag)"
+  [[ "$(rsgit log -1 --format=%s)" == "chore(release): decdn-node-0.1.0" ]] || fail "release.sh's commit subject: $(rsgit log -1 --format=%s)"
+  rsgit verify-commit HEAD 2>/dev/null || fail "release.sh's release commit is not signed with user.signingkey"
+  rsgit verify-tag decdn-node-0.1.0 2>/dev/null || fail "release.sh's tag is not signed with user.signingkey"
+  rsclean "--execute"
+  pass "release.sh's first release dates [Unreleased], sets the version, runs make lint-helm and pushes a signed commit and tag"
+
+  rsrefused "nothing since the tag" "nothing to release" chart
+  rscommit other/file "feat(compose): elsewhere"
+  rscommit charts/decdn-node/values.yaml "ci: not a change"
+  rsrefused "only commits outside the chart, or skipped ones" "nothing to release" chart
+  rsrefused "nothing, even with a level" "nothing to release" chart minor
+  rsgit tag decdn-node-0.9.0
+  rsrefused "a local tag origin does not have" "delete it with git tag -d" chart
+  rsgit tag -d decdn-node-0.9.0 >/dev/null
+  sed -i 's/^version: .*/version: 0.5.0/' "$chart/Chart.yaml"
+  rsgit commit -qam "test: drift the version"; rspush
+  rsrefused "a manifest that is not the last tag's version" "fix the manifest first" chart
+  sed -i 's/^version: .*/version: 0.1.0/' "$chart/Chart.yaml"
+  rsgit commit -qam "test: restore the version"; rspush
+  cp "$chart/CHANGELOG.md" "$work/rs-saved"
+  sed -i 's/^## \[0\.1\.0\]/## [Unreleased]\n\n- Hand-written.\n\n&/' "$chart/CHANGELOG.md"
+  rsgit commit -qam "test: an [Unreleased] section"; rspush
+  rsrefused "an [Unreleased] section after the first release" "has an [Unreleased] section" chart
+  cp "$work/rs-saved" "$chart/CHANGELOG.md"; rsgit commit -qam "test: drop [Unreleased]"; rspush
+
+  rscommit charts/decdn-node/values.yaml "fix(chart): a fix (#12)"
+  expect 0 "release.sh bumps a fix to a patch" rsrel chart
+  rssaid "after a fix" "decdn-node-0.1.0 -> decdn-node-0.1.1"
+  rscommit monitoring/decdn-node/alerts.yml "feat(monitoring): an alert"
+  expect 0 "release.sh bumps a feature to a minor" rsrel chart
+  rssaid "after a feature" "decdn-node-0.1.0 -> decdn-node-0.2.0"
+  expect 0 "release.sh takes an explicit level" rsrel chart patch
+  rssaid "with patch" "decdn-node-0.1.0 -> decdn-node-0.1.1"
+  rsrefused "a version not above the last" "not above the last release" chart 0.1.0
+  # One commit of each other kind, and release commits the tag does not mark: the exact
+  # section below pins where each goes, or that it is left out.
+  rscommit charts/decdn-node/values.yaml "perf(chart): a faster probe"
+  rscommit charts/decdn-node/values.yaml "docs(chart): a values comment"
+  rscommit charts/decdn-node/values.yaml "revert(chart): restore the old probe"
+  rscommit charts/decdn-node/values.yaml "security(chart): drop a capability"
+  rscommit charts/decdn-node/values.yaml "style(chart): whitespace"
+  rscommit charts/decdn-node/values.yaml "chore(release): decdn-node-9.9.9"
+  rscommit charts/decdn-node/values.yaml "chore(release)!: decdn-node-9.9.10"
+  expect 0 "release.sh cuts the chart's second release" rsrel chart --execute --no-verify
+  rspushed decdn-node-0.2.0
+  sec="$(awk '/^## \[0\.2\.0\]/{on=1;next} /^## \[/{on=0} on' "$chart/CHANGELOG.md")"
+  want='### Added
+- **monitoring**: An alert
+### Changed
+- **chart**: A values comment
+- **chart**: A faster probe
+### Removed
+- **chart**: Restore the old probe
+### Fixed
+- **chart**: A fix (#12)
+### Security
+- **chart**: Drop a capability'
+  [[ "$(grep '^###\|^- ' <<<"$sec")" == "$want" ]] \
+    || fail "release.sh's 0.2.0 section is not the chart's commits, each under its kind: $sec"
+  grep -qx "## \[0.2.0\] — $(today)" "$chart/CHANGELOG.md" || fail "release.sh: no dated 0.2.0 heading"
+  [[ "$(grep -n '^## \[' "$chart/CHANGELOG.md" | cut -d: -f2 | cut -c1-10 | xargs)" == "## [0.2.0] ## [0.1.0]" ]] \
+    || fail "release.sh did not put 0.2.0 above 0.1.0"
+  expect 0 "the 0.2.0 section passes the changes generator" "$rs/scripts/chart-artifacthub-changes.py" "$chart/CHANGELOG.md" 0.2.0
+  rsclean "a second --execute"
+  pass "release.sh's later release renders the chart's commits since its tag, newest version first"
+
+  rscommit charts/decdn-node/templates/x.yaml "refactor(chart)!: break it"
+  expect 0 "release.sh bumps a breaking change to a minor" rsrel chart
+  rssaid "after a breaking change" "decdn-node-0.2.0 -> decdn-node-0.3.0"
+  rssaid "after a breaking change" "+- **Breaking:** **chart**: Break it"
+  expect 0 "release.sh takes an explicit major" rsrel chart major
+  rssaid "with major" "decdn-node-0.2.0 -> decdn-node-1.0.0"
+  # A breaking commit of a skipped type is kept, under Changed: a `### ci` heading
+  # would fail the changes generator. So are a capitalised type and one cliff.toml does
+  # not list.
+  rscommit charts/decdn-node/templates/y.yaml "ci(chart)!: drop a value"
+  rscommit charts/decdn-node/templates/z.yaml "Feat(chart): a capitalised type"
+  rscommit charts/decdn-node/templates/w.yaml "deps(chart): an unlisted type"
+  expect 0 "release.sh renders unusual types under Keep a Changelog kinds" rsrel chart
+  rssaid "with a breaking ci commit" "+- **Breaking:** **chart**: Drop a value"
+  rssaid "with a capitalised type" "+- **chart**: A capitalised type"
+  rssaid "with an unlisted type" "+- **chart**: An unlisted type"
+  [[ "$(grep '^+### ' "$work/out" | xargs)" == "+### Added +### Changed" ]] \
+    || { cat "$work/out" >&2; fail "release.sh: unusual types rendered other headings"; }
+  # Without the catch-all, the unlisted type renders a `### deps` heading: the script's
+  # own guard refuses it.
+  sed -i '/{ message = "\.\*"/d' "$rs/cliff.toml"
+  ! cmp -s "$repo/cliff.toml" "$rs/cliff.toml" || fail "cliff.toml has no catch-all parser to drop"
+  rsgit commit -qam "test: drop the catch-all"; rspush
+  rsrefused "a heading that is not a Keep a Changelog kind" "not a Keep a Changelog kind" chart
+  cp "$repo/cliff.toml" "$rs/"; rsgit commit -qam "test: restore the catch-all"; rspush
+  expect 0 "release.sh takes an explicit version" rsrel chart 0.2.7
+  rssaid "with 0.2.7" "decdn-node-0.2.0 -> decdn-node-0.2.7"
+  # git-cliff drops each of these, the last two though they look conventional on one line.
+  rscommit charts/decdn-node/values.yaml "Update the values"
+  rscommit charts/decdn-node/values.yaml "feat(): an empty scope"
+  rscommit charts/decdn-node/values.yaml $'fix(chart): a glued body\nright under the subject'
+  rsrefused "commits git-cliff cannot parse" "cannot parse these commits" chart
+  rssaid "with an unconventional subject" " Update the values"
+  rssaid "with an empty scope" " feat(): an empty scope"
+  rssaid "with a body right under the subject" " fix(chart): a glued body"
+  expect 0 "release.sh releases past unconventional commits when allowed" rsrel chart --allow-unconventional
+  rssaid "when allowed" "cannot parse these commits"
+  ! grep -qE '^\+- .*(Update the values|An empty scope|A glued body)' "$work/out" \
+    || fail "release.sh rendered a commit git-cliff cannot parse"
+
+  # The collection is released on its own tags and paths: build.sh's roles, galaxy/.
+  : > "$RS_MAKE_LOG"
+  expect 0 "release.sh cuts the collection's first release" rsrel collection patch --execute
+  rsmade galaxy-check
+  rspushed collection-v0.0.1
+  grep -qx 'version: 0.0.1                      # a comment' "$rs/ansible/galaxy/galaxy.yml" \
+    || fail "release.sh did not set galaxy.yml to 0.0.1 keeping its comment: $(grep '^version' "$rs/ansible/galaxy/galaxy.yml")"
+  rscommit ansible/molecule/default/x.yml "feat(molecule): not shipped"
+  rscommit ansible/roles/unshipped/x.yml "feat(unshipped): not in build.sh"
+  rsrefused "a collection change outside what it ships" "nothing to release" collection
+  rscommit ansible/roles/baseline/defaults/main.yml "refactor(baseline)!: a breaking change"
+  expect 0 "release.sh bumps a breaking change at 0.0.x to a patch" rsrel collection
+  rssaid "after a breaking change at 0.0.x" "collection-v0.0.1 -> collection-v0.0.2"
+  rscommit ansible/roles/iroh_relay/defaults/main.yml "fix(iroh_relay): a role fix"
+  expect 0 "release.sh bumps the collection for a role fix" rsrel collection
+  rssaid "after a role fix" "collection-v0.0.1 -> collection-v0.0.2"
+  ! grep -qF "Break it" "$work/out" || fail "release.sh's collection section carries a chart commit"
+  sed -i -E 's/^roles=\((.*)\)$/roles=(\1 unshipped)/' "$rs/ansible/galaxy/build.sh"
+  rsgit commit -qam "build: ship the unshipped role"; rspush
+  expect 0 "release.sh reads the collection's roles from build.sh" rsrel collection
+  rssaid "with a role added to build.sh" "+- **unshipped**: Not in build.sh"
+  rssaid "with a feature at 0.0.x" "collection-v0.0.1 -> collection-v0.1.0"
+  ! grep -qF "Ship the unshipped role" "$work/out" || fail "release.sh's collection section lists a build commit"
+  pass "release.sh releases the collection on its own tags, build.sh's roles and galaxy/"
+  unset GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM RS_MAKE_LOG RS_MAKE_FAIL
+elif [[ -n ${CI:-} ]]; then
+  fail "git-cliff or ssh-keygen is not on PATH in CI; the release.sh tests would be skipped"
+else
+  skipped+=("release.sh (needs git-cliff and ssh-keygen)")
+fi
+
+# --- pr-title.yml: the Conventional Commit check on PR titles --------------------------
+# Its step's run script, read out of the workflow and run as Actions runs it, against
+# titles it must take or refuse: the exit status is what blocks a merge.
+title_run="$(awk '/^ *run: \|$/ {on=1; next} on && /^          / {sub(/^          /, ""); print; next} on {exit}' \
+  "$repo/.github/workflows/pr-title.yml")"
+grep -q '=~' <<<"$title_run" || fail "pr-title.yml has no run: | step with a regex"
+while IFS='|' read -r want title; do
+  got=refuse; TITLE="$title" bash --noprofile --norc -eo pipefail -c "$title_run" >/dev/null 2>&1 && got=take
+  [[ "$got" == "$want" ]] || fail "pr-title.yml should $want '$title'"
+done <<'EOF'
+take|feat(iroh_relay): admit only listed endpoint IDs (#108)
+take|fix(roles/x)!: break it
+take|feat!: no scope
+take|docs: a doc
+take|chore: sync upstream decdn/decdn @ 3ebf5f17 (#80)
+take|ci(deps): Bump the actions group with 2 updates (#127)
+take|security(chart): drop a capability
+refuse|Feat: a capitalised type
+refuse|deps: an unlisted type
+refuse|features: a prefix of a type
+refuse|feat(): an empty scope
+refuse|fix(chart):no space
+refuse|fix(chart):  a double space
+refuse|Update values.yaml
+EOF
+pass "pr-title.yml takes Conventional Commit titles and refuses the rest"
 
 # --- lint-compose: the real file passes, each broken variant is rejected -------------
 compose="$repo/compose/compose.yaml"

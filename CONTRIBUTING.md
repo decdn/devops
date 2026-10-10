@@ -6,7 +6,15 @@ templates for them and commits non-secret config directly. There is no dedicated
 secret scanner in the pipeline: keep secrets out by design (and rely on GitHub's push
 protection).
 
-Commits follow [Conventional Commits](https://www.conventionalcommits.org).
+Commits follow [Conventional Commits](https://www.conventionalcommits.org). PRs are
+squash-merged with the PR title as the commit subject, and `scripts/release.sh` renders
+the subjects into the collection's and the chart's changelogs at release (see
+[RELEASING.md](RELEASING.md)). Write a title an operator can read as a changelog entry;
+the `pr-title.yml` workflow refuses a title that is not conventional, with a lowercase
+type, one of `feat` `fix` `perf` `refactor` `docs` `chore` `revert` `security` `ci`
+`test` `style` `build`. Until an
+artifact's first release, also add an entry under `[Unreleased]` in its changelog by
+hand: that section becomes the first release's notes.
 
 ## One-time setup
 
@@ -34,7 +42,7 @@ targets, so a local pass means a CI pass. Deploy targets live in
 | `make lint-alloy` | renders `roles/grafana_alloy`'s templates and validates them with the **real** digest-pinned Alloy binary. The molecule stub exits 0 for everything, so this is the only gate that proves the config loads. `ALLOY_BIN=<path>` skips the download. |
 | `make lint-compose` | renders `compose/compose.yaml` with every profile on (with its example env, without env files, with an empty `.env`) and asserts `compose/tests/invariants.jq`, `inline-env.jq` and `fail-closed.jq` |
 | `make lint-cloud-init` | `cloud-init schema` on `cloud-init/user-data.yaml` and `cloud-init/user-data-sponsord.yaml`, then `cloud-init/tests/lint.py` on each: only the templates' top-level modules and no YAML anchors, no secrets (only the bootstrap's own files, once each, plain `content` only, no secret-looking keys or assignments), no hardening skip, `release` installs verified against the vendored keys with a host-generated node wallet (trust knobs only in their own group's `vars`, no moved keyring or secret path), only localhost, in `decdn_nodes` and/or `sponsord_hosts` (the onramp only beside sponsord), a keyed admin account, `runcmd` exactly stage 1, shellcheck-clean scripts, and a collection lock that covers `ansible/requirements.yml` (needs `cloud-init`, `shellcheck`, `yq`). `CLOUD_INIT_FILE=<path>` checks your own filled-in copy. |
-| `make test-scripts` | `tests/scripts-test.sh`: the `ansible/Makefile` scoping guards (dry runs), the molecule driver's selection guards and locks (no containers), the split scenarios' shared inventories, the release gate, the negative cases of `lint-compose` and `lint-cloud-init` (the latter skipped without `cloud-init` on PATH), and the cloud-init bootstrap's contracts: `baseline-plays.sh` on fixtures and on the real playbooks (every `decdn_nodes`/`sponsord_hosts` play runs `baseline` tagged `baseline`), the two templates' shared stage 1, login hint and `final_message`, `bootstrap.sh`'s groups against lint.py's, and lint.py's `FORBIDDEN_VARS` against the roles' keyrings and secret paths. `UPSTREAM=<decdn checkout>` adds the sync generators' exit codes. |
+| `make test-scripts` | `tests/scripts-test.sh`: the `ansible/Makefile` scoping guards (dry runs), the molecule driver's selection guards and locks (no containers), the split scenarios' shared inventories, the release gate, `scripts/release.sh` on a fixture repo and `pr-title.yml`'s check (the former skipped without `git-cliff` or `ssh-keygen` on PATH, failed in CI), the negative cases of `lint-compose` and `lint-cloud-init` (the latter skipped without `cloud-init` on PATH), and the cloud-init bootstrap's contracts: `baseline-plays.sh` on fixtures and on the real playbooks (every `decdn_nodes`/`sponsord_hosts` play runs `baseline` tagged `baseline`), the two templates' shared stage 1, login hint and `final_message`, `bootstrap.sh`'s groups against lint.py's, and lint.py's `FORBIDDEN_VARS` against the roles' keyrings and secret paths. `UPSTREAM=<decdn checkout>` adds the sync generators' exit codes. |
 | `make security` | KICS IaC scan of `ansible/`, the rendered chart and `compose/` (digest-pinned engine, fail on HIGH) |
 | `make galaxy-check` | build the `decdn.node` collection and run galaxy-importer's checks |
 
@@ -88,8 +96,13 @@ they are maintained here. See [its README](monitoring/README.md).
   a short sibling that already shares its converge. `source-build`, its two siblings
   and `sponsord-onramp-source` download rustup and a Rust toolchain from
   static.rust-lang.org.
+- **`pr-title.yml`**: on every PR, and again when its title is edited: the title (the
+  squash-merge subject, which `scripts/release.sh` renders into the changelogs) must be
+  a Conventional Commit. It blocks a merge only as a required status check of the
+  `main` ruleset.
 - **`release-collection.yml`** / **`release-chart.yml`**: on `collection-vX.Y.Z` /
-  `decdn-node-X.Y.Z` tags; see [RELEASING.md](RELEASING.md).
+  `decdn-node-X.Y.Z` tags, which `scripts/release.sh` pushes; see
+  [RELEASING.md](RELEASING.md).
 - **`upstream-drift.yml`**: weekly, non-blocking; see "Upstream mirrors" above.
 - **Every job is bounded** by `timeout-minutes`. The values are bounds sized off
   observed runtimes, not targets. Without one a hung job burns the 360-minute default,

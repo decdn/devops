@@ -252,7 +252,9 @@ fails on it), move every pin in one change:
 5. Re-check the env var names the Compose file and the role render against the new
    `crates/*/src/config.rs` (AGENTS.md, `compose/`).
 6. The prose that names the version: `git grep -n '<old version>'` outside the
-   changelogs, and a `[Unreleased]` entry in `ansible/galaxy/CHANGELOG.md`.
+   changelogs. The changelog entry is the PR title (`feat`, `fix` or `chore`, not `ci` or
+   `build`, which the changelogs leave out; RELEASING.md); before the collection's
+   first release, also a `[Unreleased]` entry in `ansible/galaxy/CHANGELOG.md`.
 
 `make test-scripts` fails while the two versions or the CLI pins (role and Compose
 example) disagree; the weekly `upstream-drift` job checks the digests against the

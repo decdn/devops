@@ -20,46 +20,108 @@ Each workflow's `build` job runs on every matching tag push. It gates the tag
 or `make lint-helm`), packages it, and uploads it with a `SHA256SUMS` as a workflow
 artifact. The `publish` job pushes it to Galaxy or ghcr.io and creates the GitHub
 Release, but **only** when the repository variable `PUBLISH_ENABLED` is `true`. Until
-then, a tag push is a dry run. So is a manual *Run workflow* (`workflow_dispatch`) with a
-tag, which is the way to rehearse. The repo's *Latest* release is the highest collection
+then, a tag push is a dry run. So is a manual *Run workflow* (`workflow_dispatch`) with an
+existing tag. Before a tag exists, the rehearsal is `scripts/release.sh`'s dry run and the
+artifact's make target (below). The repo's *Latest* release is the highest collection
 version: a collection release is marked Latest only when no higher `collection-v` release
 exists (so a patch to an older line does not take it), and chart releases never are
 (`--latest=false`). Collection publishes run one at a time, so two cannot race for it.
 
 ## Cutting a release
 
-For the collection, everything below is under `ansible/galaxy/`; for the chart, under
-`charts/decdn-node/`.
+A release is cut on `main`, with no release PR, by
+[`scripts/release.sh`](scripts/release.sh), a wrapper around
+[git-cliff](https://git-cliff.org) in the manner of `cargo release`:
 
-1. **Version.** Set `X.Y.Z` as `version:` in `galaxy.yml` (collection) or `Chart.yaml`
-   (chart). The chart's `appVersion` and its `artifacthub.io/images` tag already follow
-   the role's `decdn_node_version` (`make test-scripts` refuses a PR where they
-   differ), so a decdn bump is a chart change too: log it in the chart's changelog and
-   release the chart.
-2. **Changelog.** `CHANGELOG.md` collects changes under `## [Unreleased]`. At release
-   time, move those entries under a dated `## [X.Y.Z] — YYYY-MM-DD` heading and leave an
-   empty `[Unreleased]` above it. **First release only:** each changelog already holds
-   a `## [0.1.0] — unreleased` section describing the initial state; fold
-   `[Unreleased]` into it and replace "unreleased" with the date. The gate rejects a
-   missing section, one not dated `YYYY-MM-DD` (so one still marked "unreleased"), and
-   one with no bulleted entries. The section becomes the GitHub Release notes. The
-   chart's section also becomes the packaged chart's `artifacthub.io/changes`
-   annotation (`scripts/chart-artifacthub-changes.py`), so its `###` headings must be
-   Keep a Changelog kinds (Added, Changed, Deprecated, Removed, Fixed, Security) and
-   every change a bulleted entry; `make test-scripts` checks the section parses.
-3. **Check locally:** `scripts/check-release-version.sh collection-vX.Y.Z` then
-   `make -C ansible galaxy-check`, or `scripts/check-release-version.sh decdn-node-X.Y.Z`
-   then `make lint-helm`.
-4. **Merge** that as a PR, then tag the merge commit on `main` with the artifact's tag
-   and push it (both lines if you are releasing both):
+```bash
+scripts/release.sh chart                     # dry run: the new tag and the diff
+scripts/release.sh chart --execute           # bump, check, commit, tag, push
+scripts/release.sh collection minor --execute
+```
 
-   ```bash
-   git tag -s collection-vX.Y.Z -m "collection-vX.Y.Z" && git push origin collection-vX.Y.Z
-   git tag -s decdn-node-X.Y.Z -m "decdn-node-X.Y.Z" && git push origin decdn-node-X.Y.Z
-   ```
+The first argument is the artifact (`collection` or `chart`); the second is the level:
+`auto` (the default), `patch`, `minor`, `major` or an explicit `X.Y.Z`. Without
+`--execute`, it is a dry run: it runs steps 1 to 4, prints the new tag and the diff it
+would commit, and changes no file. The script:
 
-5. **Watch** the *Release collection* or *Release chart* workflow. With publishing
-   enabled, the `publish` job waits for approval on the `release` environment.
+1. **Refuses unconventional commits.** It looks at the commits since the artifact's
+   last tag that touched what it ships: for the collection, the roles
+   `ansible/galaxy/build.sh` lists (read from it), the `ansible/galaxy/` overlay and
+   `LICENSE`; for the chart, `charts/decdn-node/` and `monitoring/decdn-node/`.
+   git-cliff drops a commit it cannot parse as a Conventional Commit, from the
+   changelog and from the bump, and only logs a count. That covers an unconventional
+   subject, but also an empty scope (`feat(): …`) and a body right under the subject
+   with no blank line. The script has git-cliff name every such commit
+   (`require_conventional`) and stops; `--allow-unconventional` releases without them.
+2. **Picks the version.** `auto` is the bump git-cliff derives (`cliff.toml`) from
+   those commits. Before 1.0, a feature bumps the minor, and so does a breaking change
+   from 0.1 on (at 0.0.x it bumps the patch); any other commit kept in the changelog
+   bumps the patch. It refuses when none of those commits makes a changelog entry
+   (they are all `ci`, `test`, `style`, `build` or release commits, or unconventional
+   ones `--allow-unconventional` leaves out), whatever the level.
+3. **Sets `version:`** in `ansible/galaxy/galaxy.yml` or `charts/decdn-node/Chart.yaml`.
+   The chart's `appVersion` and its `artifacthub.io/images` tag already follow the
+   role's `decdn_node_version` (`make test-scripts` refuses a PR where they differ), so
+   a decdn bump is a chart change too: release the chart.
+4. **Writes the changelog section.** It renders the same commits into a dated
+   `## [X.Y.Z] — YYYY-MM-DD` section at the top of the artifact's `CHANGELOG.md`:
+   `feat` under Added, `fix` under Fixed, `revert` under Removed, `security` under
+   Security, and `perf`, `refactor`, `docs`, `chore` and any other type under Changed
+   (types match case-insensitively). `ci`, `test`, `style` and `build` commits are
+   left out unless breaking (those go under Changed); release commits always are. A
+   commit is breaking
+   with a `!` or a `BREAKING CHANGE:` footer, and its entry starts with **Breaking:**.
+   An entry is the subject without its type, the scope in bold and the first letter
+   capitalised: `fix(chart): drop a label (#12)` becomes `- **chart**: Drop a label
+   (#12)`. PRs are squash-merged with the PR title as the subject, so write the title
+   as a changelog line for an operator; `pr-title.yml` checks it is conventional. The
+   section becomes the GitHub Release notes, and the chart's also becomes the packaged
+   chart's `artifacthub.io/changes` annotation (`scripts/chart-artifacthub-changes.py`),
+   so the script refuses any heading that is not a Keep a Changelog kind.
+5. **Checks** (`--execute` only) with `scripts/check-release-version.sh <tag>`, plus
+   `scripts/chart-artifacthub-changes.py` for the chart, then the artifact's make
+   target, `make -C ansible galaxy-check` or `make lint-helm` (`--no-verify` skips the
+   make target only). A tag whose workflow fails burns its version, so the checks run
+   before anything is committed.
+6. **Commits** (`--execute` only) `chore(release): <tag>` and tags `<tag>`, both
+   signed, and pushes them with `git push --atomic origin main <tag>`: origin gets both
+   or neither. If a check or the commit (a pre-commit hook, say) fails, both files are
+   restored and nothing is committed. If tagging or the push fails, or the script is
+   stopped after the commit, the commit (and the tag) stay local, and it says whether
+   origin got anything and how to undo. A refusal before step 5 never touches the
+   working tree.
+
+While `PUBLISH_ENABLED` is not `true`, the script says so before it writes anything (it
+reads the variable with `gh`, when it can): the tag push then only builds the artifact,
+and the version is used up all the same.
+
+Then **watch** the *Release collection* or *Release chart* workflow (`gh run list
+--workflow release-chart.yml`). With publishing enabled, the `publish` job waits for
+approval on the `release` environment. Release each artifact on its own run; when a
+change lands in both, run the script twice.
+
+**Prerequisites.**
+
+- [git-cliff](https://git-cliff.org) 2.9 or later, for `require_conventional`
+  (`cargo install git-cliff`; CI tests with 2.14.1). The first release does not use it.
+- Git configured to sign, with `user.signingkey` set explicitly. The script signs a
+  throwaway commit object first, so a key that cannot sign fails before the checks.
+- A clean `main` equal to `origin/main`, and no local tag of the artifact above
+  origin's highest. Release a commit whose CI is green.
+- A bypass of the `main` ruleset, because the release commit goes straight to `main`:
+  its pull-request rule and its required status checks (`pr-title` among them) both
+  apply to a direct push.
+- The repository settings the changelog relies on: squash merges only, with the PR title
+  as the squash commit's subject (*Settings → General → Pull Requests*, and the `main`
+  ruleset's allowed merge methods), and `pr-title` a required status check.
+
+**The first release** of each artifact starts from the `0.0.0` placeholder in its
+manifest and names its level: `scripts/release.sh chart minor --execute` cuts `0.1.0`.
+Without a tag, git-cliff would render the whole history, so the first release does not
+use it. It renames the changelog's hand-written `## [Unreleased]` section to the dated
+version instead, so until then, changes are logged there by hand. After that, no
+`[Unreleased]` section is kept: the script refuses one, because every later section is
+generated.
 
 The chart's tag shape (`decdn-node-`) and workflow file name (`release-chart.yml`) are
 part of its cosign certificate identity (see [Verifying a release](#verifying-a-release)):
@@ -76,7 +138,8 @@ Before the first publish:
   reviewers, and put `GALAXY_API_KEY` there rather than as a repository secret if you
   want the reviewer gate to guard it too.
 - **Enable:** set the repository variable `PUBLISH_ENABLED` to `true`, then cut the
-  releases as above. Both artifacts start at `0.1.0`, so the first two tags are
+  releases as above. Both artifacts sit at the `0.0.0` placeholder, so
+  `scripts/release.sh <artifact> minor --execute` makes the first two tags
   `collection-v0.1.0` and `decdn-node-0.1.0`; their versions diverge from then on.
 
 After the first chart publish (the package does not exist before it):

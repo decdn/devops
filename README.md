@@ -117,7 +117,7 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): local checks, every `make` target, what CI runs,
   and the pinning rules.
-- [`RELEASING.md`](RELEASING.md): how a `collection-vX.Y.Z` tag publishes the collection and a `decdn-node-X.Y.Z` tag the chart.
+- [`RELEASING.md`](RELEASING.md): how `scripts/release.sh` cuts a release, and how a `collection-vX.Y.Z` tag publishes the collection and a `decdn-node-X.Y.Z` tag the chart.
 - [`AGENTS.md`](AGENTS.md): the repo's hard rules (for humans and AI agents).
 - [`SECURITY.md`](SECURITY.md): reporting a vulnerability, verifying releases.
 

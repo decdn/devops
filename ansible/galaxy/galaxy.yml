@@ -10,7 +10,8 @@
 # ansible-lint) rather than being reinterpreted as a collection. See galaxy/README.md.
 namespace: decdn
 name: node
-version: 0.1.0                      # pre-1.0: published shape not yet stable
+# Set only by scripts/release.sh (RELEASING.md); 0.0.0 means never released.
+version: 0.0.0                      # pre-1.0: published shape not yet stable
 readme: README.md
 authors:
   - deCDN Contributors

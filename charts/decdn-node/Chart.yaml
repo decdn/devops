@@ -6,8 +6,9 @@ description: >-
   persistent data dir holding the operator-provisioned node identity, and a
   ClusterIP-only metrics endpoint behind a NetworkPolicy.
 type: application
-# Chart version: bump on any chart change (SemVer).
-version: 0.1.0
+# Chart version (SemVer), set only by scripts/release.sh (RELEASING.md); 0.0.0 means
+# never released.
+version: 0.0.0
 # The decdn/decdn release the chart's config rendering is synced against, and the
 # image tag used when neither image.tag nor image.digest is set. Keep it equal to
 # the decdn_node role's decdn_node_version, and the tag of the one image in the
