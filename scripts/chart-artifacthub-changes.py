@@ -12,8 +12,8 @@ Each `### <Kind>` subsection (Keep a Changelog: Added, Changed, Deprecated, Remo
 Fixed, Security) maps to Artifact Hub's `kind`, and each `- ` bullet in it becomes one
 entry, its wrapped lines joined with single spaces. Text before the first `###` (the
 section's intro) is skipped. Anything else stops the script rather than drop a change:
-an unknown heading, a non-bullet line under a heading, a missing or empty section.
-Whether the section is still "unreleased" is scripts/check-release-version.sh's gate.
+an unknown heading, a non-bullet line under a heading, an empty entry, a missing or
+empty section. Whether the section is still "unreleased" is scripts/check-release-version.sh's gate.
 
 Prints a YAML list with JSON-quoted descriptions (JSON strings are YAML). Exit status:
 0 printed, 1 the changelog does not give a usable section, 2 usage.
@@ -46,7 +46,10 @@ def changes(body):
 
     def flush():
         if entry is not None:
-            out.append({"kind": kind, "description": " ".join(entry)})
+            description = " ".join(part for part in entry if part)
+            if not description:
+                fail(f"an empty '-' entry under '### {kind.capitalize()}'")
+            out.append({"kind": kind, "description": description})
 
     for n, line in enumerate(body, 1):
         if line.startswith("### "):
@@ -57,9 +60,9 @@ def changes(body):
                 fail(f"unknown heading '{line.strip()}' (want one of {', '.join(sorted(KINDS))})")
         elif kind is None or not line.strip():
             continue  # the section's intro, or a blank line
-        elif line.startswith("- "):
+        elif line.rstrip() == "-" or line.startswith("- "):
             flush()
-            entry = [line[2:].strip()]
+            entry = [line[1:].strip()]
         elif re.match(r"\s", line) and entry is not None:
             entry.append(line.strip())
         else:

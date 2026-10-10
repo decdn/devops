@@ -256,6 +256,10 @@ sed 's/^### Fixed$/### Notes/' "$work/changelog.md" > "$work/changelog-bad.md"
 expect 1 "changes generator rejects an unknown heading" "$changes" "$work/changelog-bad.md" 1.2.3
 sed 's/^- A fix\.$/A paragraph./' "$work/changelog.md" > "$work/changelog-bad.md"
 expect 1 "changes generator rejects a stray paragraph" "$changes" "$work/changelog-bad.md" 1.2.3
+for empty in '-' '- '; do
+  sed "s/^- A fix\\.\$/$empty/" "$work/changelog.md" > "$work/changelog-bad.md"
+  expect 1 "changes generator rejects an empty '$empty' entry" "$changes" "$work/changelog-bad.md" 1.2.3
+done
 # The real changelog's section for this version must already parse, so a heading the
 # generator refuses fails here rather than on release day.
 expect 0 "changes generator reads charts/decdn-node/CHANGELOG.md [$version]" \

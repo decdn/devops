@@ -44,7 +44,7 @@ creates the GitHub Release, but **only** when the repository variable
 
 ## First release only
 
-Do these before setting `PUBLISH_ENABLED`:
+Before the first publish:
 
 - **Galaxy namespace.** The `decdn` namespace must exist on galaxy.ansible.com and the
   account behind `GALAXY_API_KEY` must be allowed to publish to it. Add the key as the
@@ -52,22 +52,34 @@ Do these before setting `PUBLISH_ENABLED`:
 - **`release` environment.** Create it under *Settings → Environments* with required
   reviewers, and put `GALAXY_API_KEY` there rather than as a repository secret if you
   want the reviewer gate to guard it too.
+- **Enable:** set the repository variable `PUBLISH_ENABLED` to `true`, then cut the
+  release as above.
+
+After the first publish (the package does not exist before it):
+
 - **GHCR visibility.** The first `helm push` creates the `decdn/charts/decdn-node`
   package as **private**. Make it public under the org's *Packages* settings, or
-  nobody outside the org can pull it.
-- **Artifact Hub.** Once the chart package is public, sign in to artifacthub.io with
-  the `info@decdn.org` account and add a Helm repository with the URL
-  `oci://ghcr.io/decdn/charts/decdn-node`. Put the repository ID it shows into
-  `repositoryID` in `charts/decdn-node/artifacthub-repo.yml`. Every publish pushes that
-  file as `ghcr.io/decdn/charts/decdn-node:artifacthub.io`, which earns the Verified
-  Publisher badge and lets the `owners` listed there claim the repository.
-- **Enable:** set the repository variable `PUBLISH_ENABLED` to `true`.
+  nobody outside the org can pull it, Artifact Hub included.
+- **Artifact Hub.** Sign in to artifacthub.io with the `info@decdn.org` account and add
+  a Helm repository with the URL `oci://ghcr.io/decdn/charts/decdn-node`. It lists the
+  chart from then on. For the Verified Publisher badge and the ownership claim, put the
+  repository ID it shows into `repositoryID` in `charts/decdn-node/artifacthub-repo.yml`
+  and merge that. Every publish pushes the file as
+  `ghcr.io/decdn/charts/decdn-node:artifacthub.io`, so the next release carries it. To
+  have it sooner, push it by hand with a token that has `write:packages`
+  (`gh auth refresh -s write:packages` adds it to gh's):
+
+  ```bash
+  gh auth token | oras login ghcr.io --username "$(gh api user --jq .login)" --password-stdin
+  cd charts/decdn-node && oras push ghcr.io/decdn/charts/decdn-node:artifacthub.io \
+    --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
+    artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
+  ```
 
 ## When a publish fails half-way
 
 The steps run chart (with its Artifact Hub metadata), then Galaxy, then the GitHub
-Release. The Release is last, so it
-only appears once both artifacts are live.
+Release. The Release is last, so it only appears once both artifacts are live.
 
 - **Chart push failed:** nothing is public yet. Fix the cause and re-run the job.
 - **Artifact Hub metadata push failed:** the chart is live. Fix the cause and re-run;
