@@ -412,6 +412,35 @@
         grafana_alloy_bin_effective: /usr/bin/alloy
         grafana_alloy_iroh_dns_server_enabled: true
 
+    # The Compose runtime: compose/alloy/config.alloy, the generated mirror every
+    # Compose host runs (scripts/render-compose-alloy.sh renders this one task,
+    # tag `compose`, and commits its output; validate.sh renders it with the rest
+    # and checks the committed file is identical). No host value is rendered in:
+    # the template reads the identity and the active profiles from the
+    # container's environment. Every daemon Compose can run is enabled, each scrape
+    # gated at runtime on the profiles that start it (compose/compose.yaml's
+    # `profiles:`; compose/tests/test_decdn_compose.py checks they agree), and
+    # the containers' journal streams are mapped to their roles' unit names.
+    - name: Render the Compose configuration
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/grafana_alloy/templates/config.alloy.j2"
+        dest: "{{ _ga_render_dir }}/compose.alloy"
+        mode: "0644"
+      tags: [compose]
+      vars:
+        _ga_runtime: compose
+        _ga_compose_profiles:
+          decdn_node: [node, origin]
+          sponsord: [sponsord, onramp]
+          iroh_relay: [relay]
+          iroh_dns_server: [dns]
+        _ga_compose_units: [decdn-node, sponsord, sponsord-onramp, caddy, iroh-relay, iroh-dns-server, alloy]
+        grafana_alloy_node_enabled: true
+        grafana_alloy_sponsord_enabled: true
+        grafana_alloy_sponsord_onramp_enabled: true
+        grafana_alloy_iroh_relay_enabled: true
+        grafana_alloy_iroh_dns_server_enabled: true
+
     - name: Export the pinned release for the validation script
       ansible.builtin.copy:
         dest: "{{ _ga_render_dir }}/pin.env"

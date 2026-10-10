@@ -1010,7 +1010,7 @@ expect 0 "lint-compose accepts compose/compose.yaml" make -s -C "$repo" lint-com
 # <name> <expected message fragment> <sed expression>: the fragment pins WHICH
 # invariant fired (compose/tests/*.jq print "<service>: <invariant>"), since one
 # edit can trip several. Scope an edit to one service by prefixing a sed range:
-# "${node}", "${sd}", "${onr}", "${cdy}", "${rly}" or "${dns}".
+# "${node}", "${sd}", "${onr}", "${cdy}", "${rly}", "${dns}" or "${aly}".
 variant() {
   sed -E "$3" "$compose" > "$work/$1.yaml"
   cmp -s "$compose" "$work/$1.yaml" && fail "variant $1 did not change compose.yaml"
@@ -1032,6 +1032,7 @@ onr='/^  sponsord-onramp:$/,/^ {0,2}[a-z]/'
 cdy='/^  caddy:$/,/^ {0,2}[a-z]/'
 rly='/^  iroh-relay:$/,/^ {0,2}[a-z]/'
 dns='/^  iroh-dns-server:$/,/^ {0,2}[a-z]/'
+aly='/^  alloy:$/,/^ {0,2}[a-z]/'
 h='s/^(\s*)<<: \*hardened$/&\n\1'
 # Shape
 variant "unexpected service"       "compose.yaml: services are exactly"           "s/^  caddy:$/  proxy:/"
@@ -1147,6 +1148,23 @@ variant "dns by tag"               "iroh-dns-server: image is pinned"           
 variant "dns inline secret"        "iroh-dns-server: sets only allowed environment keys inline (extra: ACME_KEY)" "${dns} s/^(\s*)RUST_LOG: (.*)$/&\n\1ACME_KEY: x/"
 variant "dns always on"            "iroh-dns-server: profiles are [dns]"          "${dns} {/^    profiles: \[dns\]$/d}"
 
+# alloy
+variant "alloy writable host root" "alloy: mounts are exactly"                    "${aly} {/target: \/host\/root$/{n;s/read_only: true/read_only: false/}}"
+variant "alloy root not rslave"    "alloy: the host root is mounted with rslave"  "${aly} s/propagation: rslave, //"
+variant "caddy rshared state"     "caddy: only alloy's read-only host root sets a mount propagation" "${cdy} {/target: \/data$/{n;s/bind: \{create_host_path: false\}/bind: {propagation: rshared, create_host_path: false}/}}"
+variant "alloy extra mount"        "alloy: mounts are exactly"                    "${aly} s#^(\s*)volumes:\$#&\n\1  - /etc/sponsord:/host/etc/sponsord:ro#"
+variant "alloy docker socket"      "alloy: mounts are exactly"                    "${aly} s#^(\s*)volumes:\$#&\n\1  - /var/run/docker.sock:/var/run/docker.sock:ro#"
+variant "alloy as root"            "alloy: runs as a non-root uid:gid"            "${aly} s/^(\s*)user: .*/\1user: \"0:0\"/"
+variant "alloy root group"         "alloy: group_add is one non-root gid"         "${aly} s/^(\s*)- \".*JOURNAL_GID.*/\1- \"0\"/"
+variant "alloy capability"         "alloy: sets only allowed keys (extra: cap_add)" "${aly} ${h}cap_add: [DAC_READ_SEARCH]/"
+variant "alloy host pid"           "alloy: sets only allowed keys (extra: pid)"   "${aly} ${h}pid: host/"
+variant "alloy published port"     "alloy: publishes no ports"                    "${aly} ${h}ports: [\"12345:12345\"]/"
+variant "alloy UI on 0.0.0.0"      "alloy: --server.http.listen-addr is 127.x"    "${aly} s/listen-addr=127\.0\.0\.1:12345/listen-addr=0.0.0.0:12345/"
+variant "alloy extra flag"         "alloy: command is exactly"                    "${aly} s#^(\s*)- /etc/alloy/config.alloy\$#\1- --config.format=static\n&#"
+variant "alloy inline token"       "alloy: sets only allowed environment keys inline (extra: GC_API_TOKEN)" "${aly} s/^(\s*)ALLOY_REGION: (.*)$/&\n\1GC_API_TOKEN: glc_x/"
+variant "alloy always on"          "alloy: profiles are [alloy]"                  "${aly} {/^    profiles: \[alloy\]$/d}"
+variant "alloy journal gid default" "alloy: unset journal gid"                    "${aly} s/ALLOY_JOURNAL_GID:-unset-ALLOY_JOURNAL_GID/ALLOY_JOURNAL_GID:-101/"
+variant "alloy uid default"        "alloy: unset uid/gid"                         "${aly} s/^(\s*)user: .*/\1user: \"\\\${ALLOY_UID:-996}:\\\${ALLOY_GID:-996}\"/"
 # --- compose/decdn-compose: the wrapper's decisions (no root, no docker) -----------
 expect 0 "decdn-compose unit tests pass" \
   env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$repo/compose/tests" -p 'test_*.py'
@@ -1521,12 +1539,19 @@ app="$(sed -nE 's/^appVersion: *"?([^" #]*)"?.*/\1/p' "$repo/charts/decdn-node/C
 for p in "iroh_relay iroh-relay" "iroh_dns_server iroh-dns-server"; do
   role="${p% *}" img="${p#* }"
   named="$(sed -nE "s#.*n0computer/$img v([0-9][0-9.]*[0-9]).*#\1#p" "$repo/compose/compose.yaml")"
-  [ "$named" = "$(pin "$role" "${role}_version")" ] \
+  want="$(pin "$role" "${role}_version")"
+  # Two empty strings agree: a missing comment or pin must not.
+  if [ -z "$named" ] || [ -z "$want" ]; then
+    fail "no n0computer/$img version in compose/compose.yaml, or no ${role}_version"
+  fi
+  [ "$named" = "$want" ] \
     || fail "compose/compose.yaml names n0computer/$img v$named, not ${role}_version $(pin "$role" "${role}_version")"
   grep -qE "image: \\$\\{[A-Z_]+:-docker\.io/n0computer/$img\}@\\$\\{[A-Z_]+:-sha256:[0-9a-f]{64}\}$" "$repo/compose/compose.yaml" \
     || fail "compose/compose.yaml: n0computer/$img is not pinned by a default digest"
 done
-[ "$(sed -nE 's/^DNS_VERSION = "([^"]*)"$/\1/p' "$repo/compose/decdn-compose")" = "$(pin iroh_dns_server iroh_dns_server_version)" ] \
+dns_version="$(sed -nE 's/^DNS_VERSION = "([^"]*)"$/\1/p' "$repo/compose/decdn-compose")"
+[ -n "$dns_version" ] || fail "compose/decdn-compose has no DNS_VERSION"
+[ "$dns_version" = "$(pin iroh_dns_server iroh_dns_server_version)" ] \
   || fail "compose/decdn-compose DNS_VERSION is not iroh_dns_server_version"
 # Artifact Hub scans the images the annotation lists, so it must name the one the
 # chart deploys by default.
@@ -1556,6 +1581,22 @@ want_fprs="$(fprs "$repo/ansible/roles/decdn_node/files/decdn-release-KEYS.asc")
 [ "$(sed -nE 's/^Fingerprint: *//p' "$repo/SECURITY.md" | tr -d ' ' | sort)" = "$want_fprs" ] \
   || fail "SECURITY.md's Fingerprint: lines differ from the vendored KEYS"
 pass "release pins agree across roles, Compose (incl. its iroh images), the chart and its artifacthub.io/images; the vendored KEYS match SECURITY.md"
+# Compose's Alloy image is the release the grafana_alloy role installs: the comment
+# above its digest names the tag the digest was taken from.
+alloy_tag="$(sed -nE 's|^ *# grafana/alloy v([0-9][0-9.]*), the grafana_alloy role.*|\1|p' "$repo/compose/compose.yaml")"
+[ -n "$alloy_tag" ] || fail "compose/compose.yaml: no '# grafana/alloy v<version>, the grafana_alloy role…' comment above the alloy image"
+[ "$alloy_tag" = "$(pin grafana_alloy grafana_alloy_version)" ] \
+  || fail "compose/compose.yaml pins grafana/alloy v$alloy_tag, but grafana_alloy_version is $(pin grafana_alloy grafana_alloy_version): re-pin the image's index digest"
+pass "Compose's grafana/alloy image is grafana_alloy_version"
+# compose/alloy/config.alloy is generated from the grafana_alloy role's template.
+if command -v ansible-playbook >/dev/null; then
+  expect 0 "compose/alloy/config.alloy is a fresh render of the grafana_alloy template" \
+    "$repo/scripts/render-compose-alloy.sh" --check
+elif [[ -n ${CI:-} ]]; then
+  fail "ansible-playbook is not on PATH in CI; the compose/alloy/config.alloy mirror check would be skipped"
+else
+  skipped+=("compose/alloy/config.alloy mirror check (needs ansible-core)")
+fi
 # iroh_relay's tasks_from node-ids runs `decdn whoami` on the inventory's nodes, where
 # decdn_node's defaults are not loaded: its fallbacks must be those defaults.
 ids="$repo/ansible/roles/iroh_relay/tasks/node-ids.yml"

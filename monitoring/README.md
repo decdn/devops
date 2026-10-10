@@ -36,11 +36,11 @@ that `.helmignore`.
 `DecdnNodeDown`, `SponsordDown` and `IrohRelayDown` fire on `up == 0`, and also on an
 instance whose `up` stopped arriving after it reported in the last day.
 
-- **Why.** On the Ansible path the scraper is the Alloy agent on the same host, so
-  when the host, its network or Alloy dies, no `up == 0` is ever written. The
-  absence arm is what catches that outage. A central Prometheus (the chart's
-  ServiceMonitor, or your own on Compose) writes `up == 0` itself, and there the arm
-  fires once the target leaves service discovery.
+- **Why.** On the Ansible path, and with Compose's `alloy` profile, the scraper is
+  the Alloy agent on the same host, so when the host, its network or Alloy dies, no
+  `up == 0` is ever written. The absence arm is what catches that outage. A central
+  Prometheus (the chart's ServiceMonitor, or your own on Compose) writes `up == 0`
+  itself, and there the arm fires once the target leaves service discovery.
 - **When.** Without a staleness marker (a dead host), about 5 minutes (Prometheus's
   lookback) plus the rule's `for:` after the last sample. With one (the target left
   service discovery), after the `for:`.
@@ -52,8 +52,10 @@ instance whose `up` stopped arriving after it reported in the last day.
   target does not fire, and a target fires once even when an older label set is
   still in the window.
 - **Silence it** before you decommission a host, move a service to a new inventory
-  host, or rename its `job` (`grafana_alloy_*_job`, `metrics.serviceMonitor.jobLabel`)
-  or `instance`: the old series fires for a day. On Kubernetes, the same goes for
+  host, drop its profile from a Compose host's `COMPOSE_PROFILES` (Alloy stops
+  scraping it), or rename its `job` (`grafana_alloy_*_job`,
+  `metrics.serviceMonitor.jobLabel`) or `instance` (`ALLOY_INSTANCE_ID` on Compose):
+  the old series fires for a day. On Kubernetes, the same goes for
   scaling a release to zero, or uninstalling one while another release still
   carries the rules. A pod replacement that takes longer than the `for:` (1m) pages.
 
@@ -67,11 +69,16 @@ turns into regular files. `metrics.prometheusRule.enabled` creates a `Prometheus
 dashboard. `metrics.serviceMonitor` adds the target labels they select on (`job`,
 `region`, `deployment_environment`, `instance`).
 
-## On the Ansible path (Grafana Cloud)
+## On the Ansible and Compose paths (Grafana Cloud)
 
 The `grafana_alloy` role already stamps the labels these assets expect: the node's
 metrics carry `job="decdn-node"`, `region` and `deployment_environment`; machine
-metrics and logs carry `job="integrations/node_exporter"`. So:
+metrics and logs carry `job="integrations/node_exporter"`. Compose's `alloy` profile
+runs a configuration generated from the role's template
+([compose/README.md](../compose/README.md#grafana-cloud-alloy)), with the same labels,
+and its containers' journal lines carry the units the roles install
+(`unit="decdn-node.service"`, `unit="sponsord.service"`, …), so the log panels match
+on both. So:
 
 - **Dashboards:** in Grafana, *Dashboards → New → Import*, upload each
   `decdn-node/*.json`, and
@@ -93,7 +100,8 @@ the packaged chart carries nothing else.
 | `sponsord/dashboard-sponsord.json` | `uid: decdn-sponsord`: pool balance, the top-up hold, keeper reads and top-ups, capabilities issued, errors by code, the daemon's and the onramp's logs. |
 | `sponsord/prometheus-alerts.yml` | Rule group `sponsord`: down, keeper failing, a stale pool read (or none since start), a held top-up (and one held over 2 h), an empty pool, sponsord's own request errors. `runbook_url` points at upstream's `docs/operator.md`, "Monitor". |
 
-They select `job="sponsord"`, which the `grafana_alloy` role stamps on sponsord's
+They select `job="sponsord"`, which the `grafana_alloy` role (and Compose's `alloy`
+profile) stamps on sponsord's
 `/metrics` (`grafana_alloy_sponsord_job`); log panels select `unit="sponsord.service"`
 and `unit="sponsord-onramp.service"` with the `level` label the role parses. Import
 them as above, e.g. `mimirtool rules load sponsord/prometheus-alerts.yml`. Every
@@ -119,10 +127,11 @@ path and as Compose's `relay` profile. The chart never renders it.
 
 They select `job="iroh-relay"`, which the `grafana_alloy` role stamps on the relay's
 `/metrics` (`grafana_alloy_iroh_relay_job`); the log panel selects
-`unit="iroh-relay.service"` with the parsed `level`. On Compose, scrape
-`127.0.0.1:9092/metrics` with `job="iroh-relay"` yourself; the log panel's `unit`
-selector finds nothing there (the container logs to the journal under
-`CONTAINER_NAME=decdn-iroh-relay-1`). Import them as above, e.g.
+`unit="iroh-relay.service"` with the parsed `level`. On Compose, the `alloy` profile
+on the relay's host scrapes `127.0.0.1:9092/metrics` as `job="iroh-relay"` and labels
+the container's journal lines `unit="iroh-relay.service"`, so the dashboard and its
+log panel work unchanged; without that profile, the scrape is your own. Import them
+as above, e.g.
 `mimirtool rules load iroh-relay/prometheus-alerts.yml`. `make lint-helm` also runs
 `promtool check rules` and the unit tests in `iroh-relay/prometheus-alerts_test.yml`.
 

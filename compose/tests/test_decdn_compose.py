@@ -1374,5 +1374,164 @@ class DnsHealth(TmpDir):
         self.assertFalse(ok or warn)
 
 
+class EnvFileDefaults(unittest.TestCase):
+    def test_defaults_match_compose_yaml(self) -> None:
+        # cmd_config redacts every env file's values by pointing these at /dev/null.
+        text = (HERE.parent / "compose.yaml").read_text()
+        for key, default in dc.DEFAULT_ENV_FILES.items():
+            self.assertIn(f"${{{key}:-{default}}}", text)
+
+
+class AlloyConfig(unittest.TestCase):
+    """compose/alloy/config.alloy decides at run time what to scrape, from the
+    profiles compose.yaml passes in as DECDN_COMPOSE_PROFILES."""
+
+    TEXT = (HERE.parent / "alloy" / "config.alloy").read_text()
+
+    def keep_regex(self, component: str) -> str:
+        m = re.search(rf'(?ms)^discovery\.relabel "{component}_targets" \{{.*?regex\s*=\s*`([^`]*)`', self.TEXT)
+        self.assertIsNotNone(m, f"no {component}_targets keep rule")
+        return m[1]
+
+    def scraped(self, component: str, compose_profiles: str) -> bool:
+        # Prometheus relabel regexes are anchored; ",%s," is config.alloy's format.
+        return re.fullmatch(self.keep_regex(component), f",{compose_profiles},") is not None
+
+    def test_each_target_follows_the_profiles_that_start_its_service(self) -> None:
+        for component, service in (
+            ("decdn_node", "decdn-node"),
+            ("sponsord", "sponsord"),
+            ("iroh_relay", "iroh-relay"),
+            ("iroh_dns_server", "iroh-dns-server"),
+        ):
+            starts = {p for p, svcs in dc.PROFILES.items() if service in svcs}
+            for profile in dc.PROFILES:
+                with self.subTest(component=component, profile=profile):
+                    self.assertEqual(self.scraped(component, f"{profile},alloy"), profile in starts)
+
+    def test_profile_lists_as_compose_reads_them(self) -> None:
+        self.assertTrue(self.scraped("decdn_node", "origin, onramp,caddy,alloy"))
+        self.assertTrue(self.scraped("decdn_node", "*"))
+        self.assertFalse(self.scraped("decdn_node", "nodes,alloy"))
+        self.assertFalse(self.scraped("decdn_node", ""))
+        self.assertTrue(self.scraped("sponsord", "alloy,onramp"))
+        self.assertFalse(self.scraped("sponsord", "node,alloy"))
+
+    def test_every_service_maps_to_its_unit(self) -> None:
+        m = re.search(r'regex\s*=\s*"decdn-\(([^)]*)\)-\[0-9\]\+"', self.TEXT)
+        self.assertIsNotNone(m, "no container-name to unit rule")
+        self.assertEqual(set(m[1].split("|")), set(dc.SERVICES))
+
+    def test_compose_passes_the_profiles_in(self) -> None:
+        text = (HERE.parent / "compose.yaml").read_text()
+        self.assertIn("DECDN_COMPOSE_PROFILES: ${COMPOSE_PROFILES:-}", text)
+        self.assertIn('sys.env("DECDN_COMPOSE_PROFILES")', self.TEXT)
+
+
+class AlloyHealth(unittest.TestCase):
+    def test_unhealthy_components_are_named(self) -> None:
+        body = json.dumps(
+            [
+                {"localID": "loki.write.cloud", "health": {"state": "healthy", "message": "started"}},
+                {
+                    "localID": "otelcol.processor.transform.decdn_identity",
+                    "health": {"state": "unhealthy", "message": "bad OTTL"},
+                },
+                {"localID": "x", "health": {"state": "exited"}},
+            ]
+        )
+        self.assertEqual(dc.unhealthy_components(body), ["otelcol.processor.transform.decdn_identity (bad OTTL)", "x"])
+
+    def test_all_healthy_and_garbage(self) -> None:
+        self.assertEqual(dc.unhealthy_components("[]"), [])
+        self.assertEqual(dc.unhealthy_components("<html>"), ["(unreadable component list)"])
+
+
+class AlloyProblems(TmpDir):
+    def setUp(self) -> None:
+        super().setUp()
+        self.env_path = self.tmp / "grafana-alloy.env"
+        (self.tmp / "state").mkdir()
+        (self.tmp / "journal").mkdir()
+        (self.tmp / "machine-id").write_text("x\n")
+        self.patches = [
+            mock.patch.object(dc, "VAR_ALLOY", self.tmp / "state"),
+            mock.patch.object(dc, "JOURNAL_DIR", self.tmp / "journal"),
+            mock.patch.object(dc, "MACHINE_ID", self.tmp / "machine-id"),
+            mock.patch.object(dc.grp, "getgrnam", return_value=mock.Mock(gr_gid=101)),
+            # The test runs unprivileged: the file's owner stands in for root.
+            mock.patch.object(dc, "file_problem", lambda p, uid, **kw: None if p.exists() else f"{p} is missing"),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self) -> None:
+        for p in self.patches:
+            p.stop()
+        super().tearDown()
+
+    def problems(self, **env: str) -> list[str]:
+        base = {"ALLOY_ENV_FILE": str(self.env_path), "ALLOY_JOURNAL_GID": "101", "ALLOY_INSTANCE_ID": "host-1"}
+        return dc.alloy_problems(dc.Project({**base, **env}), None)
+
+    def test_a_complete_host_passes(self) -> None:
+        self.env_path.write_text("".join(f"{k}=v\n" for k in dc.ALLOY_REQUIRED))
+        self.assertEqual(self.problems(ALLOY_REGION="DE"), [])
+
+    def test_missing_settings_are_named(self) -> None:
+        self.env_path.write_text("GC_API_TOKEN=glc_example_token_replace_me\nGC_LOKI_URL=\n")
+        found = "\n".join(self.problems())
+        for key in dc.ALLOY_REQUIRED[1:]:
+            self.assertIn(key, found)
+        self.assertIn("example value", found)
+
+    def test_identity_and_journal_group(self) -> None:
+        self.env_path.write_text("".join(f"{k}=v\n" for k in dc.ALLOY_REQUIRED))
+        found = "\n".join(self.problems(ALLOY_JOURNAL_GID="4", ALLOY_REGION="eu west", ALLOY_INSTANCE_ID=""))
+        self.assertIn("ALLOY_JOURNAL_GID", found)
+        self.assertIn("ALLOY_REGION='eu west'", found)
+        self.assertIn("set ALLOY_INSTANCE_ID", found)
+        # compose.yaml's placeholder for an unset instance is refused like an empty one.
+        placeholder = "\n".join(self.problems(ALLOY_INSTANCE_ID="unset-ALLOY_INSTANCE_ID"))
+        self.assertIn("set ALLOY_INSTANCE_ID", placeholder)
+
+    def test_a_volatile_journal_is_refused(self) -> None:
+        self.env_path.write_text("".join(f"{k}=v\n" for k in dc.ALLOY_REQUIRED))
+        (self.tmp / "journal").rmdir()
+        self.assertIn("not persistent", "\n".join(self.problems()))
+
+    def test_backup_takes_the_token_file(self) -> None:
+        self.env_path.write_text("GC_API_TOKEN=x\n")
+        project = dc.Project({"COMPOSE_PROFILES": "alloy", "ALLOY_ENV_FILE": str(self.env_path)})
+        self.assertEqual(dc.backup_paths(project), [self.env_path])
+
+
+class NodeRegion(TmpDir):
+    def test_reads_identity_region_only(self) -> None:
+        p = self.tmp / "node.toml"
+        p.write_text('[identity]\nregion = "DE"\n\n[cache.origin]\nregion = "us-east-1"\n')
+        with mock.patch.object(dc, "NODE_TOML", p):
+            self.assertEqual(dc.node_region(), "DE")
+            p.write_text('[identity]\n# region = "US"\n[cache]\nregion = "x"\n')
+            self.assertEqual(dc.node_region(), "")
+
+
+class AlloyDelivery(unittest.TestCase):
+    def test_failed_sends_are_summed_and_zero_is_quiet(self) -> None:
+        body = (
+            "# HELP prometheus_remote_storage_samples_failed_total x\n"
+            'prometheus_remote_storage_samples_failed_total{url="a"} 3\n'
+            'prometheus_remote_storage_samples_failed_total{url="b"} 2\n'
+            "loki_write_dropped_entries_total 0\n"
+            'otelcol_exporter_send_failed_spans{exporter="otlphttp"} 7\n'
+            "prometheus_remote_storage_samples_total 100\n"
+        )
+        self.assertEqual(
+            dc.failed_sends(body),
+            {"prometheus_remote_storage_samples_failed_total": 5.0, "otelcol_exporter_send_failed_spans": 7.0},
+        )
+        self.assertEqual(dc.failed_sends("loki_write_dropped_entries_total 0\n"), {})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import grp
 import ipaddress
 import json
 import math
@@ -66,6 +67,7 @@ PROFILES: dict[str, tuple[str, ...]] = {
     "caddy": ("caddy",),
     "relay": ("iroh-relay",),
     "dns": ("iroh-dns-server",),
+    "alloy": ("alloy",),
 }
 # Profiles that cannot share a host: each pair wants the same public ports (the
 # Ansible playbooks refuse the same pairs).
@@ -82,6 +84,12 @@ ETC_DECDN = Path("/etc/decdn")
 VAR_DECDN = Path("/var/lib/decdn")
 ETC_SPONSORD = Path("/etc/sponsord")
 VAR_CADDY = Path("/var/lib/caddy")
+VAR_ALLOY = Path("/var/lib/alloy")
+# The Alloy configuration compose.yaml mounts: generated from the grafana_alloy
+# role's template (scripts/render-compose-alloy.sh), never edited here.
+ALLOY_CONFIG = HERE / "alloy" / "config.alloy"
+JOURNAL_DIR = Path("/var/log/journal")
+MACHINE_ID = Path("/etc/machine-id")
 NODE_TOML = ETC_DECDN / "node.toml"
 NODE_PASSWORD = ETC_DECDN / "keystore.password"
 NODE_SECRET = VAR_DECDN / "node.secret"
@@ -111,6 +119,7 @@ NOT_ORIGIN = (
     "/var/lib/caddy",
     str(VAR_RELAY),
     str(VAR_DNS),
+    str(VAR_ALLOY),
     "/etc",
     "/root",
     "/proc",
@@ -125,7 +134,32 @@ DEFAULT_ENV_FILES = {
     "SPONSORD_ENV_FILE": "/etc/sponsord/sponsord.env",
     "SPONSORD_SECRET_ENV_FILE": "/etc/sponsord/secret.env",
     "SPONSORD_ONRAMP_ENV_FILE": "/etc/sponsord/sponsord-onramp.env",
+    "ALLOY_ENV_FILE": "/etc/grafana-alloy.env",
 }
+
+# What /etc/grafana-alloy.env must set for the Compose configuration, which has no
+# inventory to take the endpoints from (GC_OTLP_USERNAME is optional).
+ALLOY_REQUIRED = (
+    "GC_API_TOKEN",
+    "GC_PROM_REMOTE_WRITE_URL",
+    "GC_PROM_USERNAME",
+    "GC_LOKI_URL",
+    "GC_LOKI_USERNAME",
+    "GC_OTLP_ENDPOINT",
+)
+# The identity config.alloy stamps on every series and log line, from .env: the
+# grafana_alloy role's low-cardinality charset (its preflight).
+ALLOY_IDENTITY = ("ALLOY_INSTANCE_ID", "ALLOY_REGION", "ALLOY_DEPLOYMENT_ENVIRONMENT")
+IDENTITY_RE = re.compile(r"[A-Za-z0-9._/-]{1,63}")
+ALLOY_READY = "http://127.0.0.1:12345/-/ready"
+ALLOY_COMPONENTS = "http://127.0.0.1:12345/api/v0/web/components"
+ALLOY_METRICS = "http://127.0.0.1:12345/metrics"
+# Alloy's own counters of what it failed to deliver: healthy components can still
+# be sending nothing (a wrong token or URL answers 401/404 on every write).
+ALLOY_FAILED_SENDS = re.compile(
+    r"^(prometheus_remote_storage_samples_failed_total|loki_write_dropped_entries_total"
+    r"|otelcol_exporter_send_failed_[a-z_]+)(?:\{[^}]*\})?\s+([0-9.eE+-]+)"
+)
 
 # Loopback listeners compose.yaml pins (tests/invariants.jq).
 SPONSORD_METRICS = "http://127.0.0.1:8090/metrics"
@@ -145,6 +179,7 @@ PORTS: dict[str, tuple[tuple[str, int], ...]] = {
     "iroh-relay": (("tcp", 80), ("tcp", 443), ("udp", 7842), ("tcp", 9092)),
     # Port 53 counts only on the DNS bind address (or a wildcard): dns_port_problems.
     "iroh-dns-server": (("tcp", 443), ("udp", 53), ("tcp", 53), ("tcp", 9117), ("tcp", 9118)),
+    "alloy": (("tcp", 12345), ("tcp", 4317), ("tcp", 4318)),
 }
 
 # The keys iroh-relay 1.3.0 deserialises (iroh-relay/src/main.rs: Config, TlsConfig,
@@ -637,6 +672,13 @@ def init(args: argparse.Namespace) -> None:
     if "caddy" in wanted:
         uid, gid = ensure_account("caddy")
         updates |= {"CADDY_UID": str(uid), "CADDY_GID": str(gid)}
+    if "alloy" in wanted:
+        try:
+            journal_gid = grp.getgrnam("systemd-journal").gr_gid
+        except KeyError:
+            raise Refused("no systemd-journal group on this host: the alloy profile reads the host journal") from None
+        uid, gid = ensure_account("alloy", home=VAR_ALLOY)
+        updates |= {"ALLOY_UID": str(uid), "ALLOY_GID": str(gid), "ALLOY_JOURNAL_GID": str(journal_gid)}
     if args.domain:
         updates["SPONSORD_ONRAMP_DOMAIN"] = args.domain
     origin_url = args.origin
@@ -661,6 +703,9 @@ def init(args: argparse.Namespace) -> None:
         init_relay(args)
     if "dns" in wanted:
         init_dns(args)
+    if "alloy" in wanted:
+        init_alloy(project, args)
+        project = Project(parse_env(DOTENV))
 
     todo = problems(project, files_only=True)
     say("")
@@ -670,7 +715,7 @@ def init(args: argparse.Namespace) -> None:
             say(f"  - {t}")
     else:
         say("Nothing left to provide: run `sudo compose/decdn-compose up`.")
-    say(next_steps(wanted))
+    say(next_steps(wanted, project))
 
 
 def init_node(project: Project, args: argparse.Namespace, origin_url: str | None) -> None:
@@ -1040,7 +1085,40 @@ def init_dns(args: argparse.Namespace) -> None:
         )
 
 
-def next_steps(wanted: list[str]) -> str:
+def init_alloy(project: Project, args: argparse.Namespace) -> None:
+    """The alloy account's state directory, the Grafana Cloud env file (the role's
+    path, so a host that ran the Ansible role keeps its own), and the identity
+    config.alloy stamps: the instance is the host name, the region the node's.
+    A value already in .env is kept."""
+    uid, gid = int(project.env["ALLOY_UID"]), int(project.env["ALLOY_GID"])
+    ensure_dir(VAR_ALLOY, 0o700, uid, gid)
+    env_path = project.env_file("ALLOY_ENV_FILE")
+    if not install_template("grafana-alloy.env.example", env_path, 0o600):
+        say(f"kept the existing {env_path}")
+    updates = {}
+    if not project.env.get("ALLOY_INSTANCE_ID"):
+        host = socket.gethostname().split(".")[0]
+        if IDENTITY_RE.fullmatch(host):
+            updates["ALLOY_INSTANCE_ID"] = host
+    if not project.env.get("ALLOY_REGION"):
+        region = args.region or node_region()
+        if region:
+            updates["ALLOY_REGION"] = region
+    if updates:
+        set_env(DOTENV, updates)
+        say(f"set {', '.join(f'{k}={v}' for k, v in updates.items())} in {DOTENV}")
+
+
+def node_region() -> str:
+    """The region node.toml's [identity] sets, if any."""
+    if not NODE_TOML.exists():
+        return ""
+    ident = re.search(r"(?ms)^\[identity\]\n(.*?)(?=^\[|\Z)", NODE_TOML.read_text())
+    m = re.search(r'(?m)^region\s*=\s*"([^"]*)"', ident[1]) if ident else None
+    return m[1] if m and IDENTITY_RE.fullmatch(m[1]) else ""
+
+
+def next_steps(wanted: list[str], project: Project) -> str:
     steps = ["", "Then:"]
     if {"node", "origin"} & set(wanted):
         steps.append("  - open udp/4433 in the host firewall and your provider's security group")
@@ -1052,6 +1130,10 @@ def next_steps(wanted: list[str]) -> str:
         steps.append(
             "  - delegate the hostname to this host at the parent zone (NS + glue A, README.md); "
             "open tcp/443, udp/53 and tcp/53"
+        )
+    if "alloy" in wanted:
+        steps.append(
+            f"  - fill in the Grafana Cloud token and endpoints: sudoedit {project.env_file('ALLOY_ENV_FILE')}"
         )
     steps.append("  - sudo compose/decdn-compose up && sudo compose/decdn-compose health")
     if {"node", "origin"} & set(wanted):
@@ -1220,6 +1302,8 @@ def problems(project: Project, files_only: bool = False) -> list[str]:
         digest = env.get(key)
         if digest is not None and not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
             out.append(f".env: {key} is set but not a sha256 digest (unset it for compose.yaml's pin)")
+    if "alloy" in svcs:
+        out += alloy_problems(project, uid_of("ALLOY", "alloy"), values("alloy", project.env_file("ALLOY_ENV_FILE")))
     if not files_only:
         for svc in sorted(svcs):
             key = {
@@ -1229,6 +1313,54 @@ def problems(project: Project, files_only: bool = False) -> list[str]:
             }.get(svc)
             if key and not re.fullmatch(r"sha256:[0-9a-f]{64}", env.get(key, "")):
                 out.append(f".env: {key} is not a sha256 digest")
+    return out
+
+
+def alloy_problems(project: Project, uid: int | None, values: Mapping[str, str] | None = None) -> list[str]:
+    """The alloy profile: its state directory, the journal it reads and the group
+    that reads it, the Grafana Cloud env file (root, 0600, every key the Compose
+    configuration reads), the identity it stamps, and the generated config.
+    `values`: Alloy's environment as Compose renders it (problems()), else the env
+    file as parse_env reads it."""
+    out: list[str] = []
+    env = project.env
+    if not VAR_ALLOY.is_dir():
+        out.append(f"{VAR_ALLOY} is missing (`init alloy`)")
+    elif uid is not None and VAR_ALLOY.stat().st_uid != uid:
+        out.append(f"{VAR_ALLOY} is not owned by the alloy account")
+    try:
+        journal_gid = grp.getgrnam("systemd-journal").gr_gid
+    except KeyError:
+        out.append("no systemd-journal group on this host: Alloy could not read the journal")
+    else:
+        if env.get("ALLOY_JOURNAL_GID") != str(journal_gid):
+            out.append(
+                f".env: ALLOY_JOURNAL_GID={env.get('ALLOY_JOURNAL_GID', '')!r}, but the systemd-journal "
+                f"group is {journal_gid} (`init alloy` sets it)"
+            )
+    if not JOURNAL_DIR.is_dir():
+        out.append(
+            f"{JOURNAL_DIR} is missing: the journal is not persistent. Make it so "
+            "(mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal && "
+            "journalctl --flush), or drop the alloy profile"
+        )
+    if not MACHINE_ID.is_file():
+        out.append(f"{MACHINE_ID} is missing")
+    if not ALLOY_CONFIG.is_file():
+        out.append(f"{ALLOY_CONFIG} is missing (scripts/render-compose-alloy.sh generates it)")
+    env_path = project.env_file("ALLOY_ENV_FILE")
+    out += filter(None, [file_problem(env_path, 0, what="the Grafana Cloud token and endpoints")])
+    if values is None:
+        values = parse_env(env_path) if env_path.exists() else {}
+    out += env_problems(env_path, values, list(ALLOY_REQUIRED), f"sudoedit {env_path}; README.md, Grafana Cloud")
+    if "replace_me" in values.get("GC_API_TOKEN", ""):
+        out.append(f"{env_path}: GC_API_TOKEN is still the example value")
+    if not env.get("ALLOY_INSTANCE_ID") or env["ALLOY_INSTANCE_ID"].startswith("unset-"):
+        out.append(".env: set ALLOY_INSTANCE_ID, the host's name in Grafana Cloud (`init alloy` sets the host name)")
+    for key in ALLOY_IDENTITY:
+        value = env.get(key, "")
+        if value and not IDENTITY_RE.fullmatch(value):
+            out.append(f".env: {key}={value!r} is not 1-63 of letters, digits, . _ / - (a low-cardinality label)")
     return out
 
 
@@ -2105,7 +2237,36 @@ def cmd_health(args: argparse.Namespace) -> None:
         pinned = not project.env.get("IROH_DNS_SERVER_IMAGE_DIGEST")
         for name, ok, detail, warn_only in dns_health(DNS_TOML, pinned):
             report(name, ok, detail, warn_only)
+    if "alloy" in svcs:
+        status, body = fetch(ALLOY_READY)
+        report("alloy", status == 200, f"{ALLOY_READY} {status} {body.strip()}")
+        status, body = fetch(ALLOY_COMPONENTS)
+        sick = unhealthy_components(body) if status == 200 else ["(no answer)"]
+        report("alloy components", not sick, ", ".join(sick) or "all healthy")
+        status, body = fetch(ALLOY_METRICS)
+        failed = failed_sends(body) if status == 200 else {"(no answer from /metrics)": 1.0}
+        report(
+            "alloy delivery",
+            not failed,
+            ", ".join(f"{k} {v:g}" for k, v in failed.items()) + " (check GC_API_TOKEN and the endpoints)"
+            if failed
+            else "nothing dropped",
+            True,
+        )
     sys.exit(1 if bad else 0)
+
+
+def failed_sends(body: str) -> dict[str, float]:
+    """Alloy's dropped/failed-send counters that are above 0, summed per metric."""
+    out: dict[str, float] = {}
+    for line in body.splitlines():
+        m = ALLOY_FAILED_SENDS.match(line)
+        if m:
+            try:
+                out[m[1]] = out.get(m[1], 0.0) + float(m[2])
+            except ValueError:
+                continue
+    return {k: v for k, v in out.items() if v > 0}
 
 
 def dig_soa(origin: str, addr: str, tcp: bool) -> str:
@@ -2210,6 +2371,21 @@ def relay_health(path: Path) -> list[tuple[str, bool, str, bool]]:
     return out
 
 
+def unhealthy_components(body: str) -> list[str]:
+    """The components Alloy's UI API reports as anything but healthy: a config
+    that loads can still fail at run time (an OTTL statement, an unreadable
+    journal). A remote-write error is not one: read Alloy's log for those."""
+    try:
+        components = json.loads(body)
+    except ValueError:
+        return ["(unreadable component list)"]
+    return sorted(
+        f"{c.get('localID', '?')} ({(c.get('health') or {}).get('message', '')})".replace(" ()", "")
+        for c in components
+        if (c.get("health") or {}).get("state") != "healthy"
+    )
+
+
 def backup_paths(project: Project) -> list[Path]:
     svcs = project.services
     paths: list[Path] = []
@@ -2232,6 +2408,8 @@ def backup_paths(project: Project) -> list[Path]:
     if "iroh-dns-server" in svcs:
         # The config only, likewise: nodes republish their records every 5 minutes.
         paths += [DNS_TOML]
+    if "alloy" in svcs:
+        paths += [project.env_file("ALLOY_ENV_FILE")]
     return paths
 
 
@@ -2290,7 +2468,9 @@ def parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("init", help="set up the host for one or more profiles")
     p.add_argument("profiles", nargs="+", metavar="PROFILE", help=", ".join(PROFILES))
-    p.add_argument("--region", help="node/origin: the node's ISO 3166-1 alpha-2 region, e.g. DE")
+    p.add_argument(
+        "--region", help="node/origin: the node's ISO 3166-1 alpha-2 region, e.g. DE (alloy: its region label)"
+    )
     p.add_argument(
         "--chain",
         default="arbitrum-sepolia",

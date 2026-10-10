@@ -16,7 +16,7 @@ facts (bond sizing, fees) are not here: they come from the deCDN ADRs.
 | Secrets | host file or git-ignored inventory | host file, written over SSH | host file | operator-created Secrets |
 | Install source | signed release tarball, build on the host from a git ref, or local build | signed release tarball | image by digest (enforced) | image by digest (recommended) or tag |
 | Chain config | `decdn_network` profile | `decdn_network` profile | `decdn config init --chain` | explicit values |
-| Monitoring | opt-in Grafana Cloud agent | opt-in Grafana Cloud agent (token in a host file) | bring your own | ServiceMonitor, PrometheusRule, dashboards |
+| Monitoring | opt-in Grafana Cloud agent | opt-in Grafana Cloud agent (token in a host file) | opt-in Grafana Cloud agent (`alloy` profile, token in a host file) | ServiceMonitor, PrometheusRule, dashboards |
 | Backup / decommission | `make backup` / `make decommission` | the Ansible targets, from a workstation inventory | `decdn-compose backup` / `down` | PVC snapshot |
 | Guide | [ansible/README.md](../ansible/README.md) | [cloud-init/README.md](../cloud-init/README.md) | [compose/README.md](../compose/README.md) | [charts/decdn-node/README.md](../charts/decdn-node/README.md) |
 
@@ -140,5 +140,5 @@ elsewhere and use `manual`.
 - An **operator wallet**: the eth keystore `decdn key-gen` creates, funded for gas and
   the bond before `decdn setup`. The bond comes from the on-chain
   `bondRequired(mbps)` curve (ADR 026).
-- Optional: a **Grafana Cloud** stack (Ansible `grafana_alloy`), and an **age key pair**
+- Optional: a **Grafana Cloud** stack (Ansible `grafana_alloy`, Compose `alloy`), and an **age key pair**
   for encrypted backups ([docs/lifecycle.md](lifecycle.md)).

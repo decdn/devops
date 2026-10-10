@@ -364,6 +364,18 @@ Two couplings between roles are pinned by constants plus molecule assertions:
 If you move either default, update BOTH sides and the molecule guard in
 `ansible/molecule/grafana-cloud/`.
 
+### The Compose path renders this template too
+
+`templates/config.alloy.j2` is also the source of Compose's
+[`compose/alloy/config.alloy`](../../../compose/alloy/config.alloy) (the `alloy`
+profile): `scripts/render-compose-alloy.sh` renders it with the internal
+`_ga_runtime: compose`, which reads the host's identity and the active Compose
+profiles from the container's environment, reaches the host through `/host` mounts,
+drops the `systemd` collector and maps the containers' journal lines to this repo's
+unit names. A change here reaches Compose only by regenerating that file (`make
+test-scripts` fails until you do), and must leave the systemd renders unchanged
+unless it means to change them. See [compose/README.md](../../../compose/README.md#grafana-cloud-alloy).
+
 ## Testing
 
 Three layers, because the first one cannot prove correctness on its own:
@@ -376,15 +388,19 @@ Three layers, because the first one cannot prove correctness on its own:
    container with no D-Bus and no real journal, so the `systemd` collector and
    journald collect nothing there — expected, and not what this layer proves.
 2. **`make lint-alloy`** (CI job `alloy-config`) — renders these templates in
-   fifteen variable combinations (defaults, minimal identity, fully overridden,
+   seventeen variable combinations (defaults, minimal identity, fully overridden,
    host-metrics-only, logs-only, every sub-knob off, inventory-supplied
    endpoints, OTLP username fallback, vetoed collector + blanked node job,
    info-dropping guardrail, sponsord-only, node + sponsord co-located, the
-   same with the onramp, relay-only, and node + relay co-located) and feeds them to the REAL pinned Alloy binary: `alloy validate`
+   same with the onramp, relay-only, node + relay co-located, DNS-only and node + DNS
+   co-located, plus Compose's runtime) and feeds them to the REAL pinned Alloy binary: `alloy validate`
    (component graph, not just syntax), a check that every `ExecStart` flag exists
    in `alloy run --help`, and greps proving each Jinja branch actually switched —
    including that "every sub-knob off" reproduces the pre-machine-monitoring
-   pipeline and that no token is ever rendered as a literal. See
+   pipeline and that no token is ever rendered as a literal. It also renders the
+   Compose runtime, checks `compose/alloy/config.alloy` is that render, pushes
+   container journal lines through its stages, and runs it in Alloy (every
+   component healthy, each daemon's target present only under its profiles). See
    `ansible/tests/alloy-config/`.
 3. **Deploy time** — the role runs `alloy validate` against the just-rendered
    file with the installed binary before any restart.

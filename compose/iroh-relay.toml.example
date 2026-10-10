@@ -40,7 +40,8 @@ access = { allowlist = [] }
 [tls]
 https_bind_addr = "[::]:443"
 quic_bind_addr = "[::]:7842"
-# The DNS name nodes reach the relay at (decdn_relay_urls = ["https://<hostname>"]);
+# The DNS name nodes reach the relay at (each node's [network] relay_urls =
+# ["https://<hostname>"]; decdn_relay_urls on Ansible);
 # its A/AAAA records must point at this host.
 hostname = "relay.example.org"
 cert_mode = "LetsEncrypt"

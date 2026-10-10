@@ -18,7 +18,8 @@ def allowed_keys: {
   "sponsord-onramp": (base_keys + ["depends_on", "secrets", "stop_grace_period"]),
   "caddy": (base_keys + ["cap_add", "tmpfs"]),
   "iroh-relay": (base_keys + ["cap_add", "stop_grace_period", "ulimits"]),
-  "iroh-dns-server": (base_keys + ["cap_add", "stop_grace_period", "ulimits"])
+  "iroh-dns-server": (base_keys + ["cap_add", "stop_grace_period", "ulimits"]),
+  "alloy": (base_keys + ["group_add", "stop_grace_period"])
 };
 
 # The only services that may run as uid 0, and then only holding NET_BIND_SERVICE
@@ -36,13 +37,16 @@ def stop_signal($n): {"iroh-relay": "SIGINT", "iroh-dns-server": "SIGINT"}[$n] /
 # Every mount, exactly: [source, target, read-only?, created?], volumes and secrets
 # alike (a secret is a read-only bind of its host file, listed as "secret:<file>").
 # Each container sees only its own files; the only writable ones are the node's
-# data dir and the state of Caddy and the iroh services. "created?" is Docker
-# creating a missing source (create_host_path, true unless set false): only for
-# the onramp's optional gate-page directory, so a mistyped path or an NFS mount
-# that is not up fails the start instead of mounting an empty directory. The
-# Caddyfile's source is absolute (compose.yaml's directory), so it is matched by
-# name; the origin content's source is the operator's DECDN_ORIGIN_DIR, so only
-# its target and mode are pinned.
+# data dir, the state of Caddy and the iroh services, and Alloy's WAL. Alloy sees
+# the host read-only (/proc, /sys and / for host metrics, the journal for logs).
+# "created?" is Docker creating a missing source (create_host_path, true unless set
+# false): only for the onramp's optional gate-page directory and the volatile
+# journal (/run, a tmpfs that journald recreates), so a mistyped path or an NFS
+# mount that is not up fails the start instead of mounting an empty directory, and
+# /var/log/journal is never created (that would switch journald to persistent
+# storage). The Caddyfile's and config.alloy's sources are absolute (compose.yaml's
+# directory), so they are matched by name; the origin content's source is the
+# operator's DECDN_ORIGIN_DIR, so only its target and mode are pinned.
 def allowed_mounts: {
   "decdn-node": [["/etc/decdn", "/etc/decdn", true, false], ["/var/lib/decdn", "/var/lib/decdn", false, false],
                  ["DECDN_ORIGIN_DIR", "/srv/decdn-origin", true, false]],
@@ -56,11 +60,18 @@ def allowed_mounts: {
   "iroh-relay": [["/etc/iroh-relay/iroh-relay.toml", "/etc/iroh-relay/iroh-relay.toml", true, false],
                  ["/var/lib/iroh-relay", "/var/lib/iroh-relay", false, false]],
   "iroh-dns-server": [["/etc/iroh-dns-server/config.toml", "/etc/iroh-dns-server/config.toml", true, false],
-                      ["/var/lib/iroh-dns-server", "/var/lib/iroh-dns-server", false, false]]
+                      ["/var/lib/iroh-dns-server", "/var/lib/iroh-dns-server", false, false]],
+  "alloy": [["/proc", "/host/proc", true, false], ["/sys", "/host/sys", true, false],
+            ["/", "/host/root", true, false],
+            ["/var/log/journal", "/var/log/journal", true, false], ["/run/log/journal", "/run/log/journal", true, true],
+            ["/etc/machine-id", "/etc/machine-id", true, false],
+            ["alloy/config.alloy", "/etc/alloy/config.alloy", true, false],
+            ["/var/lib/alloy", "/var/lib/alloy", false, false]]
 };
 def mounts($secrets): [((.volumes // [])[]
     | [(if .type == "bind" then .source else "\(.type):\(.source)" end
-        | if endswith("/Caddyfile") then "Caddyfile" else . end),
+        | if endswith("/Caddyfile") then "Caddyfile"
+          elif endswith("/alloy/config.alloy") then "alloy/config.alloy" else . end),
        .target, (.read_only == true), (.type == "bind" and .bind.create_host_path != false)]
     | if .[1] == "/srv/decdn-origin" then .[0] = "DECDN_ORIGIN_DIR" else . end),
   ((.secrets // [])[] | ["secret:\($secrets[.source].file // "?")", (.target // "/run/secrets/\(.source)"), true, false])]
@@ -79,14 +90,21 @@ def inline_secrets: {
   "sponsord-onramp": ["ONRAMP_DAEMON_TOKEN", "ONRAMP_TURNSTILE_SECRET"]
 };
 
+# Alloy's command, as the unit's ExecStart: its UI and API on loopback, the WAL
+# in the state mount, and the generated config. Nothing else: a flag could move
+# the listener or load another config.
+def alloy_command: ["run", "--server.http.listen-addr=127.0.0.1:12345", "--storage.path=/var/lib/alloy/data",
+  "/etc/alloy/config.alloy"];
+
 # The onramp's entrypoint, as `config` renders it ($$ is Compose's escape for $):
 # refuse an ONRAMP_GATE_TEMPLATE outside /etc/sponsord/onramp-gate/, then exec the
 # binary with no arguments. A change to compose.yaml's script must be made here too.
+
 def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ -n \"$$t\" ]; then\n  r=\"$$(realpath -e -- \"$$t\")\" || { echo \"ONRAMP_GATE_TEMPLATE $$t is not readable\" >&2; exit 1; }\n  case \"$$r\" in\n    /etc/sponsord/onramp-gate/*) ;;\n    *) echo \"ONRAMP_GATE_TEMPLATE must be a file in /etc/sponsord/onramp-gate/ (it resolves to $$r)\" >&2; exit 1 ;;\n  esac\nfi\nexec sponsord-onramp\n"];
 
 .services as $all
 | (.secrets // {}) as $secrets
-| (["caddy", "decdn-node", "iroh-dns-server", "iroh-relay", "sponsord", "sponsord-onramp"] as $want
+| (["alloy", "caddy", "decdn-node", "iroh-dns-server", "iroh-relay", "sponsord", "sponsord-onramp"] as $want
    | check("compose.yaml"; "services are exactly \($want | join(", "))"; ($all | keys) == $want)),
 
   # Every service: host networking and nothing published, so loopback listeners
@@ -130,6 +148,7 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
   check("decdn-node"; "stop_grace_period is 300s"; $all["decdn-node"].stop_grace_period == "5m0s"),
   check("sponsord"; "stop_grace_period is 120s"; $all.sponsord.stop_grace_period == "2m0s"),
   check("sponsord-onramp"; "stop_grace_period is 30s"; $all["sponsord-onramp"].stop_grace_period == "30s"),
+  check("alloy"; "stop_grace_period is 90s"; $all.alloy.stop_grace_period == "1m30s"),
   check("iroh-relay"; "stop_grace_period is 30s"; $all["iroh-relay"].stop_grace_period == "30s"),
   check("iroh-dns-server"; "stop_grace_period is 30s"; $all["iroh-dns-server"].stop_grace_period == "30s"),
 
@@ -163,6 +182,27 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
   check("sponsord-onramp"; "ONRAMP_BIND is 127.x"; ($all["sponsord-onramp"].environment.ONRAMP_BIND // "") | loopback),
   check("sponsord-onramp"; "ONRAMP_DAEMON_URL is http://127.x"; ($all["sponsord-onramp"].environment.ONRAMP_DAEMON_URL // "") | loopback),
 
+  # Alloy's UI and API stay on loopback (it answers /-/ready and the component
+  # graph there, unauthenticated), and it runs exactly the unit's command.
+  check("alloy"; "--server.http.listen-addr is 127.x";
+    [($all.alloy.command // [])[] | select(startswith("--server.http.listen-addr"))]
+    | length == 1 and (.[0] | ltrimstr("--server.http.listen-addr=") | loopback)),
+  check("alloy"; "command is exactly the unit's ExecStart, with no entrypoint";
+    $all.alloy.command == alloy_command and $all.alloy.entrypoint == null),
+  # One extra group, the host's systemd-journal (journald's files are readable by
+  # it), never root's.
+  check("alloy"; "group_add is one non-root gid"; ($all.alloy.group_add // []) | length == 1 and (.[0] | test("^[1-9][0-9]*$"))),
+  # Mounts made on the host after the start (a new disk) show up in the
+  # read-only view of /.
+  check("alloy"; "the host root is mounted with rslave propagation";
+    [($all.alloy.volumes // [])[] | select(.target == "/host/root") | .bind.propagation] == ["rslave"]),
+  # ...and no other mount propagates anything: rslave only receives, and on a
+  # read-only mount; shared/slave elsewhere would let mounts cross between the
+  # host and a container (the Makefile's KICS exclusion relies on this check).
+  ($all | to_entries[] | .key as $n | (.value.volumes // [])[]
+   | select(.bind.propagation != null and ($n != "alloy" or .target != "/host/root"))
+   | check($n; "only alloy's read-only host root sets a mount propagation (\(.target))"; false)),
+
   (secret_files | to_entries[] | .key as $n | .value | to_entries[]
    | check($n; "\(.key) is \(.value)"; ($all[$n].environment // {})[.key] == .value)),
   (inline_secrets | to_entries[] | .key as $n | .value[] as $k
@@ -175,4 +215,5 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
   check("sponsord-onramp"; "profiles are [onramp]"; $all["sponsord-onramp"].profiles == ["onramp"]),
   check("caddy"; "profiles are [caddy]"; $all.caddy.profiles == ["caddy"]),
   check("iroh-relay"; "profiles are [relay]"; $all["iroh-relay"].profiles == ["relay"]),
-  check("iroh-dns-server"; "profiles are [dns]"; $all["iroh-dns-server"].profiles == ["dns"])
+  check("iroh-dns-server"; "profiles are [dns]"; $all["iroh-dns-server"].profiles == ["dns"]),
+  check("alloy"; "profiles are [alloy]"; $all.alloy.profiles == ["alloy"])

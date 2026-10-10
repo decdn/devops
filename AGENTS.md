@@ -103,7 +103,8 @@ ansible/                # the deployment project (DevSec-hardened, lean roles)
   inventory/ galaxy/ molecule/    # see ansible/README.md
 cloud-init/             # user-data-{node,publisher}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
 compose/                # Docker Compose deploy path for a single host (see its README.md)
-  compose.yaml          # profiles: node / origin (one decdn-node), sponsord, onramp (+ sponsord), caddy, relay, dns
+  compose.yaml          # profiles: node / origin (one decdn-node), sponsord, onramp (+ sponsord), caddy, relay, dns, alloy
+  alloy/config.alloy    # GENERATED from roles/grafana_alloy's config.alloy.j2 (scripts/render-compose-alloy.sh)
   decdn-compose         # the operator's wrapper: init, check, guarded up/stop/restart/down, health, cli, backup
   Caddyfile             # mirrors roles/sponsord_onramp/templates/Caddyfile.j2
   tests/*.jq            # lint-compose: invariants, inline-env, fail-closed
@@ -119,7 +120,7 @@ monitoring/             # Grafana dashboards + Prometheus alert rules (maintaine
   sponsord/             # sponsord's (+ promtool unit tests), Ansible/Compose only
   iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible and Compose
 docs/                   # cross-path operator docs: node-operators.md + publishers.md (the front doors), requirements.md, lifecycle.md
-scripts/                # upstream-mirror generators, the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh), ansible/Makefile's LIMIT preflight (limit-guard.sh)
+scripts/                # upstream-mirror generators, the compose Alloy config generator (render-compose-alloy.sh), the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh), ansible/Makefile's LIMIT preflight (limit-guard.sh)
 ```
 
 **Generated mirrors of upstream — regenerate, never hand-edit:**
@@ -131,6 +132,13 @@ generated from the decdn/decdn tag `decdn_node_version` pins. The weekly
 `upstream-drift` workflow flags staleness against that tag, and a newer upstream
 release of either repo. These are the only protocol facts (contract addresses) the
 repo carries, and `networks.yml` carries its upstream commit.
+
+**Generated from this repo — regenerate, never hand-edit:** `compose/alloy/config.alloy`
+is the `grafana_alloy` role's `templates/config.alloy.j2` rendered in its `compose`
+runtime (`scripts/render-compose-alloy.sh`, which runs the `compose`-tagged task of
+`ansible/tests/alloy-config/render.yml`). Change the template and regenerate; `make
+test-scripts` fails while the committed file differs from a fresh render, and `make
+lint-alloy` validates and runs it.
 
 **Pinned upstream releases.** One decdn/decdn release (`decdn_node_version`, today
 `0.0.2`) and one decdn/sponsord release (`sponsord_version` = `sponsord_onramp_version`,
@@ -256,6 +264,25 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   touched. **`make lint-alloy` is the gate that matters** — the molecule stub exits 0 for
   everything, so only the real pinned binary proves the rendered config loads. See
   `ansible/roles/grafana_alloy/README.md`.
+  **One template, two runtimes.** `config.alloy.j2` also renders Compose's
+  `compose/alloy/config.alloy` (the generated mirror above) when `_ga_runtime` is
+  `compose` (an internal var the render playbook sets, never an operator knob): the
+  host's identity becomes `sys.env("ALLOY_INSTANCE_ID"|"ALLOY_REGION"|
+  "ALLOY_DEPLOYMENT_ENVIRONMENT")` (the `ga_str` macro renders values carrying a
+  `sys.env:` prefix as lookups; OTTL statements are built with `string.format` and a
+  `where` guard), every daemon's scrape (node, sponsord, relay, DNS server) goes through a `discovery.relabel` keep
+  rule on `DECDN_COMPOSE_PROFILES` (Compose's `COMPOSE_PROFILES`), so a daemon is
+  scraped only under the profiles that start it (`_ga_compose_profiles`; the wrapper's
+  unit tests check they match `PROFILES`), the host exporter reads `/host/{proc,sys,root}`
+  and drops `systemd`, and journal lines get `container` from `CONTAINER_NAME` and, for
+  `decdn-<service>-<n>`, the unit the role installs (`_ga_compose_units`), so every
+  `unit`-keyed rule (level, guardrail exemption, service_name) and the dashboards'
+  log panels apply unchanged; `redact_urls` still runs ahead of every level stage.
+  The systemd renders are unchanged by the compose branch: keep it that way (diff
+  `render.yml`'s output before and after a template change). `make lint-alloy` runs
+  the compose render's journal stages on container lines and runs the whole file in
+  Alloy (every component healthy, the targets per profile), since `alloy validate`
+  neither parses OTTL nor evaluates `sys.env`.
 
 - **`ansible/roles/sponsord`** — the deCDN onboarding sponsor (`decdn/sponsord`): the
   treasury wallet's signer for capped capabilities plus the PaymentPool keeper. It is
@@ -485,7 +512,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   `molecule/cloud-init/pack.yml` and `includes/`. They are the only coverage of the node's and the
   onramp's release download and verify path.
 
-- **`compose/`** — the node, the sponsor, an iroh relay and an iroh DNS server under Docker Compose on one host. The
+- **`compose/`** — the node, the sponsor, an iroh relay, an iroh DNS server and Grafana Alloy under Docker Compose on one host. The
   node: the upstream image, always by digest (`compose.yaml` builds
   `DECDN_IMAGE_REPO@DECDN_IMAGE_DIGEST`), the role's host layout (`/etc/decdn`
   read-only, `/var/lib/decdn`), host networking (so loopback metrics/admin stay
@@ -493,8 +520,8 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   SIGTERM grace. Every service sits behind a profile (`COMPOSE_PROFILES` in `.env`):
   `node` and `origin` (both start the one `decdn-node`: a node operator's cache node,
   or a publisher's origin, whose `node.toml` carries `[cache.origin]`), `sponsord`,
-  `onramp` (also starts `sponsord`), `caddy`, `relay` and `dns` (`relay` and `dns`
-  each refused with one another, `onramp` or `caddy`: all want 443). The shared hardening (host network,
+  `onramp` (also starts `sponsord`), `caddy`, `relay`, `dns` and `alloy` (`relay` and
+  `dns` each refused with one another, `onramp` or `caddy`: all want 443). The shared hardening (host network,
   read-only rootfs, `cap_drop: [ALL]`, `no-new-privileges`, SIGTERM, journald logging)
   is one `x-hardened` anchor merged by `<<: *hardened`; the lint checks the rendered
   result, so a service-level override is caught like an inline one. An fs origin's
@@ -565,6 +592,19 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     `DNSStubListener=no`). `health`: loopback `/healthz` must report `DNS_VERSION`
     (unless `.env` overrides the digest), each origin's SOA via `dig` over udp and
     tcp (skipped with a warning without `dig`), then the certificate.
+  - **Alloy (`alloy` profile):** `grafana/alloy` by its index digest (the comment
+    names the tag; `make test-scripts` checks it is `grafana_alloy_version`), the
+    role's command (UI on `127.0.0.1:12345`), as a host `alloy` account plus
+    `group_add` of the host's `systemd-journal` gid, no capability. It mounts the host
+    read-only (`/proc`, `/sys`, `/` at `/host/root` with `rslave`, the journal dirs,
+    `/etc/machine-id`), the generated `alloy/config.alloy`, and `/var/lib/alloy`
+    read-write. The token and endpoints come from the role's own
+    `/etc/grafana-alloy.env` (`ALLOY_ENV_FILE`, an env file, so never inline: the
+    `inline-env.jq` allow-list is the identity keys and `DECDN_COMPOSE_PROFILES:
+    ${COMPOSE_PROFILES:-}`). `/var/log/journal` is never created (that would switch
+    journald to persistent storage); the wrapper refuses without it. KICS flags the
+    `rslave` propagation HIGH (query `baa452f0`, excluded with its reason in the
+    root `Makefile`; `invariants.jq` refuses propagation on any other mount).
   - **No `${VAR:?}`:** Compose interpolates disabled services too, so a required
     variable would break other profiles. An unset variable renders a value its
     service refuses instead (invalid image reference, unknown user, a domain with a

@@ -15,12 +15,14 @@ Compose cannot make by itself.
 | `caddy` | Caddy, TLS in front of the onramp; leave it out to bring your own proxy | `caddy` (official) | `sponsord_onramp_proxy: caddy` |
 | `relay` | `iroh-relay`, a self-hosted iroh relay ([below](#an-iroh-relay-publishers)) | `n0computer/iroh-relay` (official) | `iroh_relay` ([`playbooks/iroh_relay.yml`](../ansible/playbooks/iroh_relay.yml)) |
 | `dns` | `iroh-dns-server`, a self-hosted iroh DNS server ([below](#an-iroh-dns-server-publishers)) | `n0computer/iroh-dns-server` (official) | `iroh_dns_server` ([`playbooks/iroh_dns_server.yml`](../ansible/playbooks/iroh_dns_server.yml)) |
+| `alloy` | Grafana Alloy: this host's metrics and logs to Grafana Cloud ([below](#grafana-cloud-alloy)) | `grafana/alloy` (official) | `grafana_alloy` (`decdn_grafana_cloud_enabled`) |
 
 A **node operator** runs `node`. A **publisher** runs `origin` for an origin node,
 `onramp caddy` for a sponsor, or all three on one host, and `relay` and `dns` on hosts
 of their own. The sponsor is independent of the node. `node` and `origin` start the
 same service, so a host runs one or the other; `relay` and `dns` cannot share a host
-with each other, `onramp` or `caddy`, which want the same ports.
+with each other, `onramp` or `caddy`, which want the same ports. Any host adds
+`alloy` to ship its metrics and logs to Grafana Cloud.
 
 Pick this path for a single machine you already run Docker on. For a fleet, or a host
 you want hardened from scratch (firewall, SSH, auto-patching), use the
@@ -54,7 +56,7 @@ against [`compose.yaml`](compose.yaml), plus `compose.override.yaml` when you ha
 | `check` | the preflight `up` also runs: every file present, owned and moded as the services need, the settings filled in, `decdn config validate` against the pinned image, the relay's and DNS server's configs, and no other process on the ports the stopped services bind |
 | `up [svc…]` | `check`, then `docker compose up -d` |
 | `stop`, `restart`, `down` | `docker compose …`, but refused while sponsord holds an unconfirmed pool top-up ([below](#the-top-up-hold)) |
-| `health` | probes every running service: the node's admin RPC and metrics, each `/healthz`, sponsord's hold, the onramp's certificate through Caddy, the relay's metrics and certificate, the DNS server's version, SOA answers and certificate |
+| `health` | probes every running service: the node's admin RPC and metrics, each `/healthz`, sponsord's hold, the onramp's certificate through Caddy, the relay's metrics and certificate, the DNS server's version, SOA answers and certificate, Alloy's readiness and components |
 | `cli <args>` | the `decdn` CLI from the node image, with the node's config and keys and your RPC endpoint from `decdn.env`: `cli whoami`, `cli node status`, `cli setup` |
 | `backup -r <age recipient>` | an age-encrypted archive of the active profiles' keys and secrets |
 | `config` | `docker compose config`, with every value that came from an env file shown as `<redacted>` (the plain command prints `DECDN_RPC_URL` and the rest in clear) |
@@ -465,8 +467,9 @@ the gnu build, whose glibc allocator serves a busy relay better. To change it, s
 - **Backup:** `backup` takes the config only. The relay creates its ACME account and
   certificate itself and gets new ones on a new host.
 - **Dashboard and alerts:** in
-  [`monitoring/iroh-relay/`](../monitoring/README.md#iroh-relay). Its scrape is your
-  own on this path: `127.0.0.1:9092/metrics`, `job="iroh-relay"`.
+  [`monitoring/iroh-relay/`](../monitoring/README.md#iroh-relay). The
+  [`alloy` profile](#grafana-cloud-alloy) on the same host scrapes
+  `127.0.0.1:9092/metrics` as `job="iroh-relay"`; otherwise the scrape is your own.
 
 ## An iroh DNS server (publishers)
 
@@ -571,7 +574,8 @@ holder), and tcp/443 and the loopback ports held by anything.
 The image is n0's `n0computer/iroh-dns-server`, the release the role pins
 (`iroh_dns_server_version`), by its multi-arch digest in `compose.yaml`: unsigned
 upstream and a musl build on Alpine, as the relay's. `IROH_DNS_SERVER_IMAGE_REPO` /
-`_DIGEST` in `.env` change it (then `health` no longer insists on the pinned version).
+`_DIGEST` in `.env` change it (with another `IROH_DNS_SERVER_IMAGE_DIGEST`, `health`
+no longer insists on the pinned version).
 
 ### Operate
 
@@ -586,7 +590,94 @@ upstream and a musl build on Alpine, as the relay's. `IROH_DNS_SERVER_IMAGE_REPO
 - **Backup:** `backup` takes the config only. Nodes republish their records every 5
   minutes, and the server gets a new certificate on a new host.
 - **Monitoring:** no dashboard or alert rules yet. Its metrics are on
-  `127.0.0.1:9117/metrics`.
+  `127.0.0.1:9117/metrics`, which the [`alloy` profile](#grafana-cloud-alloy) on the
+  same host scrapes as `job="iroh-dns-server"`.
+
+## Grafana Cloud (alloy)
+
+The `alloy` profile runs [Grafana Alloy](https://grafana.com/docs/alloy/), the agent
+the Ansible [`grafana_alloy`](../ansible/roles/grafana_alloy/README.md) role installs,
+with the same pipeline: its configuration,
+[`alloy/config.alloy`](alloy/config.alloy), is generated from the role's own
+template (`scripts/render-compose-alloy.sh`; never edit it by hand, and
+`make test-scripts` fails while it differs from a fresh render). It is opt-in, like
+`decdn_grafana_cloud_enabled` on the Ansible path.
+
+```bash
+sudo compose/decdn-compose init alloy           # the alloy account, /var/lib/alloy, the env file
+sudoedit /etc/grafana-alloy.env                 # the token and endpoints (below)
+sudo compose/decdn-compose up && sudo compose/decdn-compose health
+```
+
+`init alloy` adds `alloy` to `COMPOSE_PROFILES` and writes the account's uid/gid, the
+host's `systemd-journal` gid, the instance name (the host name) and the region (the
+node's, or `--region`) to `.env`.
+
+**Credentials.** `/etc/grafana-alloy.env` (`root`, `0600`) holds the Grafana Cloud
+access-policy token (`GC_API_TOKEN`, with metrics, logs and traces write) and the
+endpoints and instance IDs: `GC_PROM_REMOTE_WRITE_URL` / `GC_PROM_USERNAME`,
+`GC_LOKI_URL` / `GC_LOKI_USERNAME`, `GC_OTLP_ENDPOINT` (and `GC_OTLP_USERNAME` when
+your stack's OTLP instance ID is not the Prometheus one). It is the file, at the path,
+the Ansible role reads, so a host moving between the paths keeps it; Compose has no
+inventory, so every endpoint goes in it
+([`grafana-alloy.env.example`](grafana-alloy.env.example)). Compose reads it when it
+creates the container; it is never in `compose.yaml` or `.env`, and
+`decdn-compose config` prints its values as `<redacted>`.
+
+| Host path | In the container | Holds |
+|-----------|------------------|-------|
+| `/etc/grafana-alloy.env` | read by Docker, injected as env | the token and endpoints (`root`, `0600`) |
+| `compose/alloy/config.alloy` | `/etc/alloy/config.alloy`, read-only | the generated configuration |
+| `/var/lib/alloy/` | same, read-write | the WAL, the journal positions, the send queue (`alloy`, `0700`) |
+| `/proc`, `/sys`, `/` | `/host/proc`, `/host/sys`, `/host/root` (`rslave`), read-only | what the host metrics read |
+| `/var/log/journal`, `/run/log/journal`, `/etc/machine-id` | same, read-only | the host journal |
+
+**What it collects**, labelled as on the Ansible path (`instance` = `ALLOY_INSTANCE_ID`,
+plus `region` and `deployment_environment` from `.env`):
+
+- the node's `/metrics` (`job="decdn-node"`), only while `COMPOSE_PROFILES` has `node`
+  or `origin`; sponsord's (`job="sponsord"`), only with `sponsord` or `onramp`; the
+  relay's (`127.0.0.1:9092`, `job="iroh-relay"`) with `relay`, and the DNS server's
+  (`127.0.0.1:9117`, `job="iroh-dns-server"`) with `dns`. A host without the daemon
+  has no target, so no `up == 0` for `DecdnNodeDown` (or `SponsordDown`,
+  `IrohRelayDown`) to fire on. Compose passes `COMPOSE_PROFILES` in as `DECDN_COMPOSE_PROFILES`, so a profile
+  change recreates the container with the new targets (a profile chosen with
+  `--profile` on the command line instead is not seen);
+- the host: Alloy's in-process node_exporter (CPU, memory, disks, filesystems,
+  network, load, pressure), `job="integrations/node_exporter"`, reading the host's
+  `/proc`, `/sys` and `/` through the read-only mounts. The `systemd` collector is
+  off (it would need the host's D-Bus socket);
+- Alloy's own health (`job="integrations/alloy"`);
+- the host journal to Loki, every unit's and every container's lines. The
+  containers' lines arrive as `docker.service` with a `container` label; this
+  project's get their role's unit (`decdn-decdn-node-1` becomes
+  `unit="decdn-node.service"`, likewise `sponsord`, `sponsord-onramp`, `caddy`,
+  `iroh-relay`, `iroh-dns-server` and `alloy`), so the level parsing, the debug/trace guardrail and the dashboards' log
+  panels work as on the Ansible path;
+- OTLP on `127.0.0.1:4317` (gRPC) and `:4318` (HTTP), sampled and forwarded.
+
+**URL redaction.** Every journal line passes the role's `redact_urls` stage before
+any level stage: a URL keeps its scheme and host and loses its userinfo, path, query
+and fragment, so an RPC URL a daemon quotes in an error ships without its API key.
+`make lint-alloy` runs these stages, and a container's line through them, in the real
+Alloy.
+
+**Hardening.** The shared `x-hardened` block, as the account `alloy` with the
+`systemd-journal` group added and no capability: what that account cannot read on the
+host (the `0600` key files, `/root`), Alloy does not collect, as under the role's
+unit. Its UI and API (`/-/ready`, the component graph) listen on `127.0.0.1:12345`
+only. `health` checks `/-/ready` and that every component is healthy; a Grafana
+Cloud rejection (a wrong token or instance ID) shows in `decdn-compose logs alloy`
+instead.
+
+**In Grafana Cloud**, install the *Linux Server* integration (Connections → Linux
+Server): its dashboards and alerts select `job="integrations/node_exporter"` and
+`instance`, which these series and log lines carry. The deCDN dashboards and alert
+rules are in [`monitoring/`](../monitoring/README.md).
+
+The persistent journal must exist (`/var/log/journal`): `check` refuses without it,
+and `compose.yaml` never lets Docker create it, which would switch journald to
+persistent storage behind your back.
 
 ## Logs
 
@@ -669,10 +760,15 @@ is given.
 
 ## Security notes
 
-- Every container runs as a dedicated host account (`decdn`, `sponsord`, `caddy`) with
-  a read-only root filesystem, every capability dropped and `no-new-privileges`, from
-  one shared block (`x-hardened`). Caddy keeps `NET_BIND_SERVICE` and nothing else,
-  for tcp/80 and tcp/443.
+- Every container runs as a dedicated host account (`decdn`, `sponsord`, `caddy`,
+  `alloy`) with a read-only root filesystem, every capability dropped and
+  `no-new-privileges`, from one shared block (`x-hardened`). Caddy keeps
+  `NET_BIND_SERVICE` and nothing else, for tcp/80 and tcp/443. Alloy gets the host's
+  `systemd-journal` group and read-only views of the host (`/proc`, `/sys`, `/`, the
+  journal): no other container mounts any of them. "Read-only" holds for what is
+  mounted at start (submounts too only on Docker 25+ with kernel 5.12+); a
+  filesystem the host mounts later keeps its own flags, which Alloy, as a non-root
+  account with no capability, can still only read as file modes allow.
 - **The exception is the iroh services, the relay and the DNS server, which run as
   uid 0** holding `NET_BIND_SERVICE` and nothing else. Each must bind its public
   ports itself (the relay tcp/80, tcp/443 and udp/7842, the DNS server tcp/443 and
@@ -697,20 +793,27 @@ is given.
   URL cut to its scheme and host.
 - The remaining KICS findings are the design, not an oversight: host networking
   (loopback-only backends, no Docker-published ports), no healthchecks on the sponsor's
-  images (they have no HTTP client), the one added capability of Caddy and the iroh
-  services, the iroh services running as root (above), and the API token both
-  sponsord containers mount. The "Volume Has Sensitive Host Directory" query,
-  which flags every host-path mount (the roles' host layout), is excluded for the
-  reason given in the root `Makefile`.
+  images, Caddy's and Alloy's (they have no HTTP client) and the iroh services'
+  (`decdn-compose health` probes them all from the host), the one added capability of
+  Caddy and the iroh services, the iroh services running as root (above), and the API
+  token both sponsord containers mount. The "Volume Has Sensitive Host Directory"
+  query, which flags every host-path mount (the roles' host layout, and Alloy's view
+  of the host), and "Volume Mounted In Multiple Containers", which flags the `rslave`
+  propagation of Alloy's read-only host root, are excluded for the reasons given in
+  the root `Makefile`; `make lint-compose` pins every mount instead, and refuses
+  propagation on any other.
 - Every image is referenced by digest: `compose.yaml` builds `REPO@DIGEST` itself,
   so no `.env` value can turn it into a mutable tag.
 - Compose cannot require a variable without breaking the profiles that do not use
   it, so an unset one renders a value its service refuses: an invalid image
   reference, an unknown user, an onramp domain with a non-numeric port. That service
   fails to start; the others are unaffected.
-- No secret is written in this file: each service may set only its listener,
-  secret-file paths and public URL inline, and everything else (`DECDN_RPC_URL`,
-  `SPONSORD_RPC_URL`, …) comes from its env file on the host.
+- No secret is written in this file: each service may set inline only the keys
+  [`tests/inline-env.jq`](tests/inline-env.jq) allows (listeners, secret-file
+  paths, URLs, log settings and, for Alloy, the identity and active profiles), and
+  everything else
+  (`DECDN_RPC_URL`, `SPONSORD_RPC_URL`, `GC_API_TOKEN`, …) comes from its env file on
+  the host.
 - `make lint-compose` (CI job `compose`) renders this file with every profile on:
   with the example `.env`, without the env files, and with an empty `.env`. It fails
   if any of those properties regress ([`tests/invariants.jq`](tests/invariants.jq),

@@ -8,7 +8,7 @@
 def check($svc; $what; $ok): if $ok then empty else "\($svc): unset \($what)" end;
 
 # The images compose.yaml pins itself by digest, rather than taking them from .env.
-def pinned_images: ["caddy", "iroh-relay", "iroh-dns-server"];
+def pinned_images: ["caddy", "iroh-relay", "iroh-dns-server", "alloy"];
 # The services whose account compose.yaml fixes (uid 0, which invariants.jq allows
 # for these only) instead of naming a host account's uid from .env.
 def fixed_user: ["iroh-relay", "iroh-dns-server"];
@@ -27,5 +27,13 @@ def fixed_user: ["iroh-relay", "iroh-dns-server"];
   # ("invalid port number") and Caddy refuses the site address.
   check("sponsord-onramp"; "domain renders an unparsable ONRAMP_PUBLIC_URL";
     ($all["sponsord-onramp"].environment.ONRAMP_PUBLIC_URL // "") | test("^https://unset-[A-Z_]+:[^0-9]")),
+  # A group name the container has no entry for: Docker refuses to start it.
+  check("alloy"; "journal gid renders an unknown group";
+    ($all.alloy.group_add // []) | length == 1 and (.[0] | test("^unset-[A-Z_]+$"))),
+  # Alloy accepts any instance label, so this one cannot render a refused value:
+  # a placeholder naming the variable, never "" (every host would then share the
+  # scrape address as its instance). decdn-compose refuses it.
+  check("alloy"; "instance id renders a placeholder";
+    ($all.alloy.environment.ALLOY_INSTANCE_ID // "") | test("^unset-[A-Z_]+$")),
   check("caddy"; "domain renders an unparsable site address";
     ($all.caddy.environment.SPONSORD_ONRAMP_DOMAIN // "") | test("^unset-[A-Z_]+:[^0-9]"))
