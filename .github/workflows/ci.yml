@@ -396,7 +396,7 @@ jobs:
         with:
           version: v4.3.0
       # For the scripts/release.sh cases: the release tarball, pinned by sha256.
-      # release.sh needs git-cliff 2.x or later; RELEASING.md names this version as
+      # release.sh needs git-cliff 2.9 or later; RELEASING.md names this version as
       # the one CI tests with, so bump the two together.
       - name: Install git-cliff
         env:

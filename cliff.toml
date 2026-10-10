@@ -29,22 +29,24 @@ trim = true
 
 [git]
 conventional_commits = true
-# A subject that does not parse as conventional is dropped from the changelog and
-# the bump: scripts/release.sh lists such commits and refuses them, and
+# A commit that does not parse as conventional is dropped from the changelog and the
+# bump: scripts/release.sh has git-cliff name such commits (require_conventional, set
+# from the environment for its --unreleased range only) and refuses them, and
 # .github/workflows/pr-title.yml keeps PR titles, the squash-merge subjects,
 # conventional.
 filter_unconventional = true
 split_commits = false
-# A breaking commit is kept even when a `skip` parser below matches it.
-protect_breaking_commits = true
+# Off: which breaking commits are kept is the parsers' order below, not this flag. On,
+# it would keep a breaking release commit, which has no kind to go under.
+protect_breaking_commits = false
 filter_commits = false
 sort_commits = "newest"
 # The first match wins, case-insensitively ((?i): git-cliff parses `Feat:` as a
-# Conventional Commit too). The kinds come first; then the release commit is skipped;
-# then a breaking commit of a type with no kind (`ci!:`, which protect_breaking_commits
-# keeps) goes under Changed; then the skips; then everything else, `chore` and any
-# other type, under Changed. That last catch-all keeps a type this list does not know
-# from rendering a `### <type>` heading.
+# Conventional Commit too). The kinds come first; then the release commit is skipped,
+# breaking or not; then a breaking commit of a type with no kind (`ci!:`) goes under
+# Changed, because the breaking parser sits above the skips; then the skips; then
+# everything else, `chore` and any other type, under Changed. That last catch-all keeps
+# a type this list does not know from rendering a `### <type>` heading.
 commit_parsers = [
   { message = "(?i)^feat", group = "<!-- 0 -->Added" },
   { message = "(?i)^perf", group = "<!-- 1 -->Changed" },

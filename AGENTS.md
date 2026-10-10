@@ -551,7 +551,8 @@ generates the dated section of `ansible/galaxy/CHANGELOG.md` or
 artifact's tag (`cliff.toml`), and pushes a signed `chore(release)` commit and tag, with
 no release PR. The repo squash-merges with the PR title as the subject, so the PR title
 is the changelog entry (`pr-title.yml` checks it is conventional); release.sh refuses a
-commit whose subject is not. Until an artifact's first release, its manifest stays at
+commit that touched the artifact and that git-cliff cannot parse as conventional, unless
+`--allow-unconventional`. Until an artifact's first release, its manifest stays at
 the `0.0.0` placeholder and its changelog changes are logged by hand under
 `[Unreleased]`, which becomes the first release's section; after it, do not edit the
 changelogs by hand.

@@ -718,9 +718,9 @@ weekly `upstream-drift` workflow fails on it), move every pin in one change:
    copy, and `SECURITY.md`'s fingerprints).
 7. The prose that names the version: `git grep -n '<old version>'` outside the
    changelogs. The changelog entry is the PR title (`feat`, `fix` or `chore`, not `ci` or
-   `build`, which the changelogs leave out; RELEASING.md); before an artifact's first
-   release, also a `[Unreleased]` entry in `ansible/galaxy/CHANGELOG.md` and
-   `charts/decdn-node/CHANGELOG.md`.
+   `build`, which the changelogs leave out; RELEASING.md); also a `[Unreleased]`
+   entry in each of `ansible/galaxy/CHANGELOG.md` and `charts/decdn-node/CHANGELOG.md`
+   whose artifact is not released yet.
 
 `make test-scripts` fails while the role, the onramp pins (role and Compose
 example), the chart's `appVersion` and its `artifacthub.io/images` image, or the KEYS

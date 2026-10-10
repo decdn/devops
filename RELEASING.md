@@ -41,20 +41,24 @@ scripts/release.sh collection minor --execute
 
 The first argument is the artifact (`collection` or `chart`); the second is the level:
 `auto` (the default), `patch`, `minor`, `major` or an explicit `X.Y.Z`. Without
-`--execute`, it prints the new tag and the diff it would commit and changes no file.
-With it, the script:
+`--execute`, it is a dry run: it runs steps 1 to 4, prints the new tag and the diff it
+would commit, and changes no file. The script:
 
-1. **Picks the version.** `auto` is the bump git-cliff derives (`cliff.toml`) from the
-   conventional commits since the artifact's last tag that touched what it ships: for
-   the collection, the roles `ansible/galaxy/build.sh` lists (read from it), the
-   `ansible/galaxy/` overlay and `LICENSE`; for the chart, `charts/decdn-node/` and
-   `monitoring/decdn-node/`. Before 1.0, a feature bumps the minor, and so does a
-   breaking change from 0.1 on (at 0.0.x it bumps the patch); any other commit kept in
-   the changelog bumps the patch. It refuses when none of those commits makes a
-   changelog entry (they are all `ci`, `test`, `style` or `build`), whatever the level.
-2. **Refuses unconventional subjects.** git-cliff drops a commit whose subject is not
-   a Conventional Commit, from the changelog and from the bump. The script lists any
-   such commit and stops; `--allow-unconventional` releases without them.
+1. **Refuses unconventional commits.** It looks at the commits since the artifact's
+   last tag that touched what it ships: for the collection, the roles
+   `ansible/galaxy/build.sh` lists (read from it), the `ansible/galaxy/` overlay and
+   `LICENSE`; for the chart, `charts/decdn-node/` and `monitoring/decdn-node/`.
+   git-cliff drops a commit it cannot parse as a Conventional Commit, from the
+   changelog and from the bump, and only logs a count. That covers an unconventional
+   subject, but also an empty scope (`feat(): …`) and a body right under the subject
+   with no blank line. The script has git-cliff name every such commit
+   (`require_conventional`) and stops; `--allow-unconventional` releases without them.
+2. **Picks the version.** `auto` is the bump git-cliff derives (`cliff.toml`) from
+   those commits. Before 1.0, a feature bumps the minor, and so does a breaking change
+   from 0.1 on (at 0.0.x it bumps the patch); any other commit kept in the changelog
+   bumps the patch. It refuses when none of those commits makes a changelog entry
+   (they are all `ci`, `test`, `style`, `build` or release commits, or unconventional
+   ones `--allow-unconventional` leaves out), whatever the level.
 3. **Sets `version:`** in `ansible/galaxy/galaxy.yml` or `charts/decdn-node/Chart.yaml`.
    The chart's `appVersion` and its `artifacthub.io/images` tag already follow the
    role's `decdn_node_version` (`make test-scripts` refuses a PR where they differ), so
@@ -63,8 +67,9 @@ With it, the script:
    `## [X.Y.Z] — YYYY-MM-DD` section at the top of the artifact's `CHANGELOG.md`:
    `feat` under Added, `fix` under Fixed, `revert` under Removed, `security` under
    Security, and `perf`, `refactor`, `docs`, `chore` and any other type under Changed
-   (types match case-insensitively). `ci`, `test`, `style`, `build` and release
-   commits are left out, unless breaking: those go under Changed. A commit is breaking
+   (types match case-insensitively). `ci`, `test`, `style` and `build` commits are
+   left out unless breaking (those go under Changed); release commits always are. A
+   commit is breaking
    with a `!` or a `BREAKING CHANGE:` footer, and its entry starts with **Breaking:**.
    An entry is the subject without its type, the scope in bold and the first letter
    capitalised: `fix(chart): drop a label (#12)` becomes `- **chart**: Drop a label
@@ -73,15 +78,22 @@ With it, the script:
    section becomes the GitHub Release notes, and the chart's also becomes the packaged
    chart's `artifacthub.io/changes` annotation (`scripts/chart-artifacthub-changes.py`),
    so the script refuses any heading that is not a Keep a Changelog kind.
-5. **Checks** with `scripts/check-release-version.sh <tag>`, plus
+5. **Checks** (`--execute` only) with `scripts/check-release-version.sh <tag>`, plus
    `scripts/chart-artifacthub-changes.py` for the chart, then the artifact's make
    target, `make -C ansible galaxy-check` or `make lint-helm` (`--no-verify` skips the
    make target only). A tag whose workflow fails burns its version, so the checks run
    before anything is committed.
-6. **Commits** `chore(release): <tag>` and tags `<tag>`, both signed, and pushes them
-   with `git push --atomic origin main <tag>`: origin gets both or neither. If a check
-   or the commit (a pre-commit hook, say) fails, both files are restored and nothing is
-   committed. A refusal before that never touches the working tree.
+6. **Commits** (`--execute` only) `chore(release): <tag>` and tags `<tag>`, both
+   signed, and pushes them with `git push --atomic origin main <tag>`: origin gets both
+   or neither. If a check or the commit (a pre-commit hook, say) fails, both files are
+   restored and nothing is committed. If tagging or the push fails, or the script is
+   stopped after the commit, the commit (and the tag) stay local, and it says whether
+   origin got anything and how to undo. A refusal before step 5 never touches the
+   working tree.
+
+While `PUBLISH_ENABLED` is not `true`, the script says so before it writes anything (it
+reads the variable with `gh`, when it can): the tag push then only builds the artifact,
+and the version is used up all the same.
 
 Then **watch** the *Release collection* or *Release chart* workflow (`gh run list
 --workflow release-chart.yml`). With publishing enabled, the `publish` job waits for
@@ -90,14 +102,15 @@ change lands in both, run the script twice.
 
 **Prerequisites.**
 
-- [git-cliff](https://git-cliff.org) 2.x or later (`cargo install git-cliff`; CI tests
-  with 2.14.1). The first release does not use it.
+- [git-cliff](https://git-cliff.org) 2.9 or later, for `require_conventional`
+  (`cargo install git-cliff`; CI tests with 2.14.1). The first release does not use it.
 - Git configured to sign, with `user.signingkey` set explicitly. The script signs a
   throwaway commit object first, so a key that cannot sign fails before the checks.
-- A clean `main` equal to `origin/main`, and no local tag of the artifact that origin
-  does not have. Release a commit whose CI is green.
-- The right to push to `main` past its pull-request rule, because the release commit
-  goes straight to `main`.
+- A clean `main` equal to `origin/main`, and no local tag of the artifact above
+  origin's highest. Release a commit whose CI is green.
+- A bypass of the `main` ruleset, because the release commit goes straight to `main`:
+  its pull-request rule and its required status checks (`pr-title` among them) both
+  apply to a direct push.
 - The repository settings the changelog relies on: squash merges only, with the PR title
   as the squash commit's subject (*Settings → General → Pull Requests*, and the `main`
   ruleset's allowed merge methods), and `pr-title` a required status check.
