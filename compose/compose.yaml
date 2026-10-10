@@ -17,6 +17,8 @@
 #   caddy     TLS in front of the onramp (leave it out to bring your own proxy)
 #   relay     a self-hosted iroh relay (publishers); not with onramp or caddy, since
 #             all of them want tcp/80 and tcp/443
+#   dns       a self-hosted iroh DNS server (publishers); not with relay, onramp or
+#             caddy, which want tcp/443 too
 #
 # Compose interpolates every service, enabled or not, so no variable here may be
 # required with `:?`: a host without the node would then need the node's digest.
@@ -30,15 +32,16 @@
 # for Docker to publish, which also means Docker's own iptables rules never punch a
 # hole past the host firewall. The public ports are the node's QUIC udp/4433; with
 # the caddy profile, tcp/80 + tcp/443; with the relay profile, tcp/80, tcp/443 and
-# udp/7842. Open them in the host firewall.
+# udp/7842; with the dns profile, tcp/443, udp/53 and tcp/53. Open them in the host
+# firewall.
 name: decdn
 
 # What every service shares: the host network, a read-only root filesystem, no
 # capabilities, no privilege escalation, a graceful SIGTERM stop, and logs in the
 # host journal like the systemd units (`journalctl CONTAINER_NAME=decdn-decdn-node-1`;
 # `docker compose logs` reads them back). A service overrides a key only to add to
-# it (Caddy's one capability) or for a documented exception (the iroh relay's uid 0
-# and SIGINT); tests/invariants.jq checks the rendered result.
+# it (Caddy's one capability) or for a documented exception (the iroh services' uid
+# 0 and SIGINT); tests/invariants.jq checks the rendered result.
 x-hardened: &hardened
   network_mode: host
   read_only: true
@@ -260,10 +263,11 @@ services:
     # It is upstream's musl build on Alpine; the role installs the gnu build, whose
     # glibc allocator serves a busy relay better.
     image: ${IROH_RELAY_IMAGE_REPO:-docker.io/n0computer/iroh-relay}@${IROH_RELAY_IMAGE_DIGEST:-sha256:7a51e3826531dba5eee73d8b48a8f27284684d98c4d0da271d99127cc43b9d57}
-    # uid 0: the one exception to the non-root rule (README.md, Security notes). The
-    # relay binds tcp/80, tcp/443 and udp/7842 itself (TLS-ALPN-01 and QUIC address
-    # discovery need its certificate in-process, so no proxy can take the ports),
-    # and on the host network Docker cannot give a non-root process
+    # uid 0: the exception to the non-root rule, with the DNS server (README.md,
+    # Security notes). The relay binds tcp/80, tcp/443 and udp/7842 itself
+    # (TLS-ALPN-01 and QUIC address discovery need its certificate in-process, so
+    # no proxy can take the ports), and on the host network Docker cannot give a
+    # non-root process
     # NET_BIND_SERVICE: it sets no ambient capabilities, the binary carries no file
     # capability, and the net.ipv4.ip_unprivileged_port_start sysctl is refused with
     # host networking. So it runs as root holding NET_BIND_SERVICE and nothing else,
@@ -303,6 +307,48 @@ services:
       nofile: 65536
     # No healthcheck: `decdn-compose health` reads its loopback /metrics and checks
     # its certificate from the host.
+
+  iroh-dns-server:
+    <<: *hardened
+    profiles: [dns]
+    # The official image, n0computer/iroh-dns-server v1.3.0 (the role's
+    # iroh_dns_server_version, the iroh decdn builds against), pinned by its
+    # multi-arch index digest; unsigned upstream and a musl build on Alpine, as the
+    # relay's.
+    image: ${IROH_DNS_SERVER_IMAGE_REPO:-docker.io/n0computer/iroh-dns-server}@${IROH_DNS_SERVER_IMAGE_DIGEST:-sha256:c76d204bdcd3a354de9bb2e30e43669bbd5c903ee5c8c62772d8dd42779701aa}
+    # uid 0 holding NET_BIND_SERVICE alone, for the relay's reason: it binds tcp/443
+    # (its own TLS-ALPN-01 certificate) and udp+tcp/53 itself on the host network.
+    user: "0:0"
+    cap_add: [NET_BIND_SERVICE]
+    # The unit's ExecStart (the image's entrypoint is the binary).
+    command: ["--config", "/etc/iroh-dns-server/config.toml"]
+    # It logs only errors without RUST_LOG; plain text into the journal.
+    environment:
+      RUST_LOG: info
+      NO_COLOR: "1"
+    volumes:
+      # It ignores keys it does not know, so `decdn-compose check` reads the config
+      # first; a read-only bind of a file that must exist.
+      - type: bind
+        source: /etc/iroh-dns-server/config.toml
+        target: /etc/iroh-dns-server/config.toml
+        read_only: true
+        bind: {create_host_path: false}
+      # data_dir: the record store and cert_cache/ (the ACME account and
+      # certificates), kept across restarts.
+      - type: bind
+        source: /var/lib/iroh-dns-server
+        target: /var/lib/iroh-dns-server
+        bind: {create_host_path: false}
+    # It shuts down gracefully, flushing its record writes, on SIGINT only: as the
+    # container's PID 1 it ignores SIGTERM. The unit's KillSignal and TimeoutStopSec.
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+    # A socket per DNS-over-TCP and https client: the unit's LimitNOFILE.
+    ulimits:
+      nofile: 65536
+    # No healthcheck: `decdn-compose health` reads its loopback /healthz, asks each
+    # origin's SOA and checks its certificate from the host.
 
 # The sponsor's credentials, each a single host file owned by the `sponsord` account
 # at 0600 (README.md). Only `file:` sources: an `environment:` source would read the

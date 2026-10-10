@@ -14,12 +14,13 @@ Compose cannot make by itself.
 | `onramp` | `sponsord-onramp`, its public side (Turnstile gate, installers); also starts `sponsord` | `ghcr.io/decdn/sponsord-onramp` | `sponsord_onramp` |
 | `caddy` | Caddy, TLS in front of the onramp; leave it out to bring your own proxy | `caddy` (official) | `sponsord_onramp_proxy: caddy` |
 | `relay` | `iroh-relay`, a self-hosted iroh relay ([below](#an-iroh-relay-publishers)) | `n0computer/iroh-relay` (official) | `iroh_relay` ([`playbooks/iroh_relay.yml`](../ansible/playbooks/iroh_relay.yml)) |
+| `dns` | `iroh-dns-server`, a self-hosted iroh DNS server ([below](#an-iroh-dns-server-publishers)) | `n0computer/iroh-dns-server` (official) | `iroh_dns_server` ([`playbooks/iroh_dns_server.yml`](../ansible/playbooks/iroh_dns_server.yml)) |
 
 A **node operator** runs `node`. A **publisher** runs `origin` for an origin node,
-`onramp caddy` for a sponsor, or all three on one host, and `relay` on hosts of its
-own. The sponsor is independent of the node. `node` and `origin` start the same
-service, so a host runs one or the other; `relay` cannot share a host with `onramp`
-or `caddy`, which want the same ports.
+`onramp caddy` for a sponsor, or all three on one host, and `relay` and `dns` on hosts
+of their own. The sponsor is independent of the node. `node` and `origin` start the
+same service, so a host runs one or the other; `relay` and `dns` cannot share a host
+with each other, `onramp` or `caddy`, which want the same ports.
 
 Pick this path for a single machine you already run Docker on. For a fleet, or a host
 you want hardened from scratch (firewall, SSH, auto-patching), use the
@@ -50,10 +51,10 @@ against [`compose.yaml`](compose.yaml), plus `compose.override.yaml` when you ha
 | Command | Does |
 |---------|------|
 | `init <profile>…` | creates the system accounts and directories, writes `.env` with their real uids, installs the env-file templates to `/etc`, fills in the chain's contract addresses from this repo's [generated mirror](../ansible/roles/sponsord/vars/main/networks.yml), and generates every secret that is generated on the host. It never replaces a secret, and ends with the list of what you still have to provide. Re-run it any time. |
-| `check` | the preflight `up` also runs: every file present, owned and moded as the services need, the settings filled in, `decdn config validate` against the pinned image, the relay's config, and no other process on the ports the stopped services bind |
+| `check` | the preflight `up` also runs: every file present, owned and moded as the services need, the settings filled in, `decdn config validate` against the pinned image, the relay's and DNS server's configs, and no other process on the ports the stopped services bind |
 | `up [svc…]` | `check`, then `docker compose up -d` |
 | `stop`, `restart`, `down` | `docker compose …`, but refused while sponsord holds an unconfirmed pool top-up ([below](#the-top-up-hold)) |
-| `health` | probes every running service: the node's admin RPC and metrics, each `/healthz`, sponsord's hold, the onramp's certificate through Caddy, the relay's metrics and certificate |
+| `health` | probes every running service: the node's admin RPC and metrics, each `/healthz`, sponsord's hold, the onramp's certificate through Caddy, the relay's metrics and certificate, the DNS server's version, SOA answers and certificate |
 | `cli <args>` | the `decdn` CLI from the node image, with the node's config and keys and your RPC endpoint from `decdn.env`: `cli whoami`, `cli node status`, `cli setup` |
 | `backup -r <age recipient>` | an age-encrypted archive of the active profiles' keys and secrets |
 | `config` | `docker compose config`, with every value that came from an env file shown as `<redacted>` (the plain command prints `DECDN_RPC_URL` and the rest in clear) |
@@ -361,7 +362,7 @@ relay in depth; this section covers the Compose side.
 The relay is public by design and terminates its own TLS: it gets a Let's Encrypt
 certificate itself (TLS-ALPN-01 on tcp/443), and QAD needs that certificate
 in-process, so no proxy can stand in front of it. It binds tcp/80, tcp/443 and
-udp/7842 itself, so it cannot share a host with `onramp` or `caddy`.
+udp/7842 itself, so it cannot share a host with `onramp`, `caddy` or `dns`.
 
 ### Set up
 
@@ -467,6 +468,126 @@ the gnu build, whose glibc allocator serves a busy relay better. To change it, s
   [`monitoring/iroh-relay/`](../monitoring/README.md#iroh-relay). Its scrape is your
   own on this path: `127.0.0.1:9092/metrics`, `job="iroh-relay"`.
 
+## An iroh DNS server (publishers)
+
+`iroh-dns-server` is n0's pkarr relay and DNS server for iroh: a deCDN node `PUT`s its
+signed address record to `https://<hostname>/pkarr`, and peers resolve it as the TXT
+record `_iroh.<z32 node id>.<origin>`, in place of n0's `dns.iroh.link`
+([ADR 001 § Node Discovery](https://github.com/decdn/decdn/blob/main/adr/001-network.md#node-discovery-registry)).
+The [`iroh_dns_server` role's README](../ansible/roles/iroh_dns_server/README.md)
+explains it in depth; this section covers the Compose side.
+
+It is public by design and terminates its own TLS (Let's Encrypt over TLS-ALPN-01 on
+tcp/443), and it is authoritative for its zone on udp/53 and tcp/53. It cannot share a
+host with `relay`, `onramp` or `caddy`, which want tcp/443 too. Run **one server per
+origin**: upstream does not replicate, so two instances would be two independent
+stores.
+
+### Set up
+
+1. **Delegate a zone to the host.** The server is authoritative for its hostname
+   (say `dns.example.org`), which is also its https name. At the parent zone
+   (`example.org`), add an NS record and a glue record:
+
+   ```text
+   dns.example.org.  NS  dns.example.org.
+   dns.example.org.  A   203.0.113.10        ; glue: the host's public IPv4
+   ```
+
+   The server answers the matching NS, A and SOA records itself. Let's Encrypt
+   resolves the hostname through this delegation, so the certificate comes only once
+   it works: `dig +trace A dns.example.org` must end at this host.
+
+2. **Prepare the host:**
+
+   ```bash
+   sudo compose/decdn-compose init dns --hostname dns.example.org --contact you@your-domain
+   ```
+
+   This writes [`iroh-dns-server.toml.example`](iroh-dns-server.toml.example) to
+   `/etc/iroh-dns-server/config.toml` and creates `/var/lib/iroh-dns-server` (the
+   record store and the ACME account and certificates). DNS binds **one** address,
+   for udp and tcp: by default the host's default-route IPv4 (`--dns-bind` picks
+   another), so systemd-resolved's stub on `127.0.0.53:53` keeps resolving for the
+   host. The apex A record (`rr_a`) is that address when it is public; behind 1:1
+   NAT (most clouds), pass the public one, the glue's, with `--public-ipv4`, and
+   leave the bind on the private address the provider forwards port 53 to.
+   `--staging` uses Let's Encrypt's staging CA for a trial; nodes cannot publish to
+   it until you set `letsencrypt_prod = true`. It never replaces an existing config:
+   edit that file instead.
+
+3. **Firewall.** Open **tcp/443** (record `PUT`s, DNS-over-HTTPS and Let's Encrypt's
+   challenge), **udp/53** and **tcp/53** in the host firewall and the cloud security
+   group, from anywhere.
+
+4. **Start it:**
+
+   ```bash
+   sudo compose/decdn-compose up
+   sudo compose/decdn-compose health
+   ```
+
+   `health` reads the version from the loopback `/healthz` (the binary has no
+   `--version`), asks each origin's SOA over udp and tcp at the bind address (with
+   `dig`, when installed: `apt install bind9-dnsutils`), then fetches
+   `https://<hostname>/healthz` against the host's trust store (only a warning with
+   `letsencrypt_prod = false`).
+
+5. **Point the nodes at it.** In each node's `node.toml` (the Ansible path:
+   `decdn_discovery_pkarr_url` and `decdn_discovery_dns_origin`), then
+   `restart decdn-node`:
+
+   ```toml
+   [network.discovery]
+   pkarr_url = "https://dns.example.org/pkarr"
+   dns_origin = "dns.example.org"
+   ```
+
+   Either setting **drops the node's n0 leg**: it publishes here only. A client on
+   defaults resolves through `dns.iroh.link` and cannot find those nodes by pkarr
+   (dials still work through the registry's multiaddrs), so **clients need the same
+   `dns_origin`** in their `[network.discovery]`.
+
+### How it is laid out
+
+| Host path | Owner, mode | In the container | Holds |
+|-----------|-------------|------------------|-------|
+| `/etc/iroh-dns-server/config.toml` | `root`, `0644` | same, read-only | the config; nothing secret |
+| `/var/lib/iroh-dns-server/` | `root`, `0700` | same, read-write | `signed-packets-1.db` (the records), `cert_cache/` (the ACME account key and the certificate with its private key) |
+
+It runs as uid 0 holding `NET_BIND_SERVICE` alone, for the relay's reason
+([Security notes](#security-notes)). iroh-dns-server ignores keys it does not know,
+so `check` refuses: a key 1.3.0 does not define, an origin without its trailing dot
+(1.3.0 then answers SOA but no record at the apex), a missing `"."` origin (it refuses
+to start), origins that do not cover the hostname, `pkarr_put_rate_limit = "smart"`
+(it reads `X-Forwarded-For`, which a client can forge with no proxy in front), the
+loopback `/healthz` and metrics listeners off loopback, a `data_dir` outside the
+mount, a non-Let's Encrypt `cert_mode`, placeholders, a private or missing `rr_a`
+while the server answers its own hostname, and `::` under `net.ipv6.bindv6only=1`.
+Before `up` it refuses port 53 held on the DNS bind address (or anywhere, for a
+wildcard bind, naming `DNSStubListener=no` when systemd-resolved's stub is the
+holder), and tcp/443 and the loopback ports held by anything.
+
+The image is n0's `n0computer/iroh-dns-server`, the release the role pins
+(`iroh_dns_server_version`), by its multi-arch digest in `compose.yaml`: unsigned
+upstream and a musl build on Alpine, as the relay's. `IROH_DNS_SERVER_IMAGE_REPO` /
+`_DIGEST` in `.env` change it (then `health` no longer insists on the pinned version).
+
+### Operate
+
+- **Logs:** `sudo compose/decdn-compose logs -f iroh-dns-server`, at `RUST_LOG=info`,
+  which logs every query.
+- **Stop:** `sudo compose/decdn-compose stop iroh-dns-server` sends SIGINT, the only
+  signal it shuts down gracefully on, flushing its record writes; as PID 1 it ignores
+  SIGTERM.
+- **Config change:** edit `/etc/iroh-dns-server/config.toml`, then
+  `sudo compose/decdn-compose restart iroh-dns-server`, which checks the file first
+  (iroh-dns-server ignores a mistyped key) and refuses to restart on a problem.
+- **Backup:** `backup` takes the config only. Nodes republish their records every 5
+  minutes, and the server gets a new certificate on a new host.
+- **Monitoring:** no dashboard or alert rules yet. Its metrics are on
+  `127.0.0.1:9117/metrics`.
+
 ## Logs
 
 Every container logs to the host journal (Compose's `journald` driver), like the
@@ -552,19 +673,20 @@ is given.
   a read-only root filesystem, every capability dropped and `no-new-privileges`, from
   one shared block (`x-hardened`). Caddy keeps `NET_BIND_SERVICE` and nothing else,
   for tcp/80 and tcp/443.
-- **The one exception is the iroh relay, which runs as uid 0** holding
-  `NET_BIND_SERVICE` and nothing else. It must bind tcp/80, tcp/443 and udp/7842
-  itself (TLS-ALPN-01 and QUIC address discovery need its certificate in-process, so
-  no proxy can take the ports), and on the host network Docker cannot give a non-root
-  process that capability: Docker sets no ambient capabilities, the image's binary
-  carries no file capability (Caddy's does), and the
-  `net.ipv4.ip_unprivileged_port_start` sysctl cannot be set on a host-network
-  container. The rest of the hardening stays: read-only root filesystem,
-  `no-new-privileges`, every other capability dropped (its effective set is
-  `0x400`, `CAP_NET_BIND_SERVICE` alone, so root's file-permission and other
-  overrides are gone), and its only writable mount is its own state directory.
-  [`tests/invariants.jq`](tests/invariants.jq) allows uid 0 for the iroh services
-  only, and only with `cap_add` exactly `[NET_BIND_SERVICE]`.
+- **The exception is the iroh services, the relay and the DNS server, which run as
+  uid 0** holding `NET_BIND_SERVICE` and nothing else. Each must bind its public
+  ports itself (the relay tcp/80, tcp/443 and udp/7842, the DNS server tcp/443 and
+  udp+tcp/53; each terminates its own TLS, and the relay's QUIC address discovery
+  needs the certificate in-process, so no proxy can take the ports), and on the host
+  network Docker cannot give a non-root process that capability: Docker sets no
+  ambient capabilities, the images' binaries carry no file capability (Caddy's
+  does), and the `net.ipv4.ip_unprivileged_port_start` sysctl cannot be set on a
+  host-network container. The rest of the hardening stays: read-only root
+  filesystem, `no-new-privileges`, every other capability dropped (the effective set
+  is `0x400`, `CAP_NET_BIND_SERVICE` alone, so root's file-permission and other
+  overrides are gone), and the only writable mount is the service's own state
+  directory. [`tests/invariants.jq`](tests/invariants.jq) allows uid 0 for these two
+  services only, and only with `cap_add` exactly `[NET_BIND_SERVICE]`.
 - Secret files reach the sponsor's containers as Compose secrets: read-only, one file
   each, from a host file only (never an environment source), so a container sees only
   its own. A missing secret file fails the start; Docker never creates one in its
@@ -575,9 +697,9 @@ is given.
   URL cut to its scheme and host.
 - The remaining KICS findings are the design, not an oversight: host networking
   (loopback-only backends, no Docker-published ports), no healthchecks on the sponsor's
-  images (they have no HTTP client), Caddy's and the relay's one added capability,
-  the relay running as root (above), and the API token both sponsord containers
-  mount. The "Volume Has Sensitive Host Directory" query,
+  images (they have no HTTP client), the one added capability of Caddy and the iroh
+  services, the iroh services running as root (above), and the API token both
+  sponsord containers mount. The "Volume Has Sensitive Host Directory" query,
   which flags every host-path mount (the roles' host layout), is excluded for the
   reason given in the root `Makefile`.
 - Every image is referenced by digest: `compose.yaml` builds `REPO@DIGEST` itself,

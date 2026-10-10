@@ -1010,7 +1010,7 @@ expect 0 "lint-compose accepts compose/compose.yaml" make -s -C "$repo" lint-com
 # <name> <expected message fragment> <sed expression>: the fragment pins WHICH
 # invariant fired (compose/tests/*.jq print "<service>: <invariant>"), since one
 # edit can trip several. Scope an edit to one service by prefixing a sed range:
-# "${node}", "${sd}", "${onr}", "${cdy}" or "${rly}".
+# "${node}", "${sd}", "${onr}", "${cdy}", "${rly}" or "${dns}".
 variant() {
   sed -E "$3" "$compose" > "$work/$1.yaml"
   cmp -s "$compose" "$work/$1.yaml" && fail "variant $1 did not change compose.yaml"
@@ -1031,6 +1031,7 @@ sd='/^  sponsord:$/,/^ {0,2}[a-z]/'
 onr='/^  sponsord-onramp:$/,/^ {0,2}[a-z]/'
 cdy='/^  caddy:$/,/^ {0,2}[a-z]/'
 rly='/^  iroh-relay:$/,/^ {0,2}[a-z]/'
+dns='/^  iroh-dns-server:$/,/^ {0,2}[a-z]/'
 h='s/^(\s*)<<: \*hardened$/&\n\1'
 # Shape
 variant "unexpected service"       "compose.yaml: services are exactly"           "s/^  caddy:$/  proxy:/"
@@ -1124,6 +1125,27 @@ variant "relay low fd limit"       "iroh-relay: ulimits.nofile is 65536"        
 variant "relay by tag"             "iroh-relay: image is pinned"                  "${rly} s#^(\s*)image: .*#\1image: docker.io/n0computer/iroh-relay:v1.3.0#"
 variant "relay inline secret"      "iroh-relay: sets only allowed environment keys inline (extra: ACME_KEY)" "${rly} s/^(\s*)RUST_LOG: (.*)$/&\n\1ACME_KEY: x/"
 variant "relay always on"          "iroh-relay: profiles are [relay]"             "${rly} {/^    profiles: \[relay\]$/d}"
+# iroh-dns-server: the relay's exception and shape
+variant "dns extra capability"     "iroh-dns-server: runs as uid 0 only with cap_add exactly [NET_BIND_SERVICE]" "${dns} s/cap_add: \[NET_BIND_SERVICE\]/cap_add: [NET_BIND_SERVICE, NET_RAW]/"
+variant "dns root, no cap_add"     "iroh-dns-server: runs as uid 0 only with cap_add exactly [NET_BIND_SERVICE]" "${dns} {/^    cap_add: /d}"
+variant "dns keeps capabilities"   "iroh-dns-server: cap_drop is [ALL]"           "${dns} ${h}cap_drop: []/"
+variant "dns as root by name"      "iroh-dns-server: runs as a non-root uid:gid"  "${dns} s/^(\s*)user: .*/\1user: root/"
+variant "dns SIGTERM"              "iroh-dns-server: stop_signal is SIGINT"       "${dns} s/^(\s*)stop_signal: SIGINT$/\1stop_signal: SIGTERM/"
+variant "dns short grace"          "iroh-dns-server: stop_grace_period is 30s"    "${dns} s/^(\s*)stop_grace_period: 30s$/\1stop_grace_period: 5s/"
+variant "dns writable config"      "iroh-dns-server: mounts are exactly"          "${dns} {/target: \/etc\/iroh-dns-server\/config.toml$/{n;s/read_only: true/read_only: false/}}"
+variant "dns config directory"     "iroh-dns-server: mounts are exactly"          "${dns} s#^(\s*)(source|target): /etc/iroh-dns-server/config\.toml\$#\1\2: /etc/iroh-dns-server#"
+variant "dns docker socket"        "iroh-dns-server: mounts are exactly"          "${dns} s#^(\s*)volumes:\$#\1volumes:\n\1  - /var/run/docker.sock:/var/run/docker.sock:ro#"
+variant "dns published port"       "iroh-dns-server: publishes no ports"          "${dns} ${h}ports: [\"53:53\/udp\"]/"
+variant "dns bridge network"       "iroh-dns-server: network_mode is host"        "${dns} ${h}network_mode: bridge/"
+variant "dns writable rootfs"      "iroh-dns-server: read_only rootfs"            "${dns} ${h}read_only: false/"
+variant "dns privileged"           "iroh-dns-server: sets only allowed keys (extra: privileged)" "${dns} ${h}privileged: true/"
+variant "dns entrypoint swap"      "iroh-dns-server: command is exactly"          "${dns} ${h}entrypoint: [\"\/bin\/sh\"]/"
+variant "dns other config"         "iroh-dns-server: command is exactly"          "${dns} s#^(\s*)command: .*#\1command: [\"--config\", \"/tmp/config.toml\"]#"
+variant "dns quiet log"            "iroh-dns-server: RUST_LOG is set"             "${dns} {/^      RUST_LOG: /d}"
+variant "dns low fd limit"         "iroh-dns-server: ulimits.nofile is 65536"     "${dns} s/^(\s*)nofile: 65536$/\1nofile: 1024/"
+variant "dns by tag"               "iroh-dns-server: image is pinned"             "${dns} s#^(\s*)image: .*#\1image: docker.io/n0computer/iroh-dns-server:v1.3.0#"
+variant "dns inline secret"        "iroh-dns-server: sets only allowed environment keys inline (extra: ACME_KEY)" "${dns} s/^(\s*)RUST_LOG: (.*)$/&\n\1ACME_KEY: x/"
+variant "dns always on"            "iroh-dns-server: profiles are [dns]"          "${dns} {/^    profiles: \[dns\]$/d}"
 
 # --- compose/decdn-compose: the wrapper's decisions (no root, no docker) -----------
 expect 0 "decdn-compose unit tests pass" \
@@ -1494,9 +1516,9 @@ app="$(sed -nE 's/^appVersion: *"?([^" #]*)"?.*/\1/p' "$repo/charts/decdn-node/C
 [ "$app" = "$(pin decdn_node decdn_node_version)" ] \
   || fail "charts/decdn-node/Chart.yaml appVersion '$app' is not decdn_node_version"
 # compose.yaml pins n0's iroh images by digest, with the release they are named in
-# the comment above each image line; it must be the release the roles install.
-# shellcheck disable=SC2043  # one image for now; the list is "<role> <image>" pairs
-for p in "iroh_relay iroh-relay"; do
+# the comment above each image line; it must be the release the roles install. The
+# wrapper's DNS_VERSION (the DNS server has no --version; health reads /healthz) too.
+for p in "iroh_relay iroh-relay" "iroh_dns_server iroh-dns-server"; do
   role="${p% *}" img="${p#* }"
   named="$(sed -nE "s#.*n0computer/$img v([0-9][0-9.]*[0-9]).*#\1#p" "$repo/compose/compose.yaml")"
   [ "$named" = "$(pin "$role" "${role}_version")" ] \
@@ -1504,6 +1526,8 @@ for p in "iroh_relay iroh-relay"; do
   grep -qE "image: \\$\\{[A-Z_]+:-docker\.io/n0computer/$img\}@\\$\\{[A-Z_]+:-sha256:[0-9a-f]{64}\}$" "$repo/compose/compose.yaml" \
     || fail "compose/compose.yaml: n0computer/$img is not pinned by a default digest"
 done
+[ "$(sed -nE 's/^DNS_VERSION = "([^"]*)"$/\1/p' "$repo/compose/decdn-compose")" = "$(pin iroh_dns_server iroh_dns_server_version)" ] \
+  || fail "compose/decdn-compose DNS_VERSION is not iroh_dns_server_version"
 # Artifact Hub scans the images the annotation lists, so it must name the one the
 # chart deploys by default.
 if command -v yq >/dev/null; then

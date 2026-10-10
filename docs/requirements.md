@@ -67,12 +67,13 @@ On Ubuntu 25.10 and later, `sudo` is sudo-rs; see the `ansible_become_exe` note 
   list the IDs in its config yourself). decdn clients
   cannot be listed (a fresh key per fetch), so a node behind NAT that serves clients
   needs relays with `iroh_relay_access: everyone`.
-- **An iroh DNS server host (Ansible only) needs inbound tcp/443, udp/53 and tcp/53**
+- **An iroh DNS server host (Ansible, or Compose's `dns` profile) needs inbound tcp/443, udp/53 and tcp/53**
   from anywhere: 443 carries nodes' record `PUT`s and Let's Encrypt's TLS-ALPN-01
-  challenge, 53 answers resolvers (tcp for answers too large for udp). `baseline`
-  opens them for hosts in `iroh_dns_server_hosts`; open them in the provider's
-  firewall too. It also needs a **delegated zone**: at the parent zone, an NS record
-  for `iroh_dns_server_hostname` naming that hostname, and a glue A record with the
+  challenge, 53 answers resolvers (tcp for answers too large for udp). On Ansible,
+  `baseline` opens them for hosts in `iroh_dns_server_hosts`; on Compose you open them
+  in the host firewall. Either way, open them in the provider's firewall too. It also
+  needs a **delegated zone**: at the parent zone, an NS record for the server's
+  hostname naming that hostname, and a glue A record with the
   host's public address. It needs outbound HTTPS to Let's Encrypt. Port 53 is bound
   on one address (the host's default IPv4), so systemd-resolved's stub listener can
   stay. It cannot share a host with an iroh relay or sponsord-onramp (all want 443).

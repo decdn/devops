@@ -17,7 +17,8 @@ def allowed_keys: {
   "sponsord": (base_keys + ["secrets", "stop_grace_period"]),
   "sponsord-onramp": (base_keys + ["depends_on", "secrets", "stop_grace_period"]),
   "caddy": (base_keys + ["cap_add", "tmpfs"]),
-  "iroh-relay": (base_keys + ["cap_add", "stop_grace_period", "ulimits"])
+  "iroh-relay": (base_keys + ["cap_add", "stop_grace_period", "ulimits"]),
+  "iroh-dns-server": (base_keys + ["cap_add", "stop_grace_period", "ulimits"])
 };
 
 # The only services that may run as uid 0, and then only holding NET_BIND_SERVICE
@@ -25,17 +26,17 @@ def allowed_keys: {
 # host network, where Docker cannot give a non-root process that capability
 # (compose.yaml, README.md "Security notes"). Every other service runs as its own
 # non-root host account.
-def root_allowed: ["iroh-relay"];
+def root_allowed: ["iroh-relay", "iroh-dns-server"];
 def nonroot: test("^[1-9][0-9]*:[1-9][0-9]*$");
 
 # The signal each daemon drains on (the units' KillSignal): iroh's servers shut
 # down gracefully on SIGINT only.
-def stop_signal($n): {"iroh-relay": "SIGINT"}[$n] // "SIGTERM";
+def stop_signal($n): {"iroh-relay": "SIGINT", "iroh-dns-server": "SIGINT"}[$n] // "SIGTERM";
 
 # Every mount, exactly: [source, target, read-only?, created?], volumes and secrets
 # alike (a secret is a read-only bind of its host file, listed as "secret:<file>").
 # Each container sees only its own files; the only writable ones are the node's
-# data dir and the ACME state of Caddy and the relay. "created?" is Docker
+# data dir and the state of Caddy and the iroh services. "created?" is Docker
 # creating a missing source (create_host_path, true unless set false): only for
 # the onramp's optional gate-page directory, so a mistyped path or an NFS mount
 # that is not up fails the start instead of mounting an empty directory. The
@@ -53,7 +54,9 @@ def allowed_mounts: {
                       ["secret:/etc/sponsord/turnstile-secret", "/run/secrets/turnstile-secret", true, false]],
   "caddy": [["Caddyfile", "/etc/caddy/Caddyfile", true, false], ["/var/lib/caddy", "/data", false, false]],
   "iroh-relay": [["/etc/iroh-relay/iroh-relay.toml", "/etc/iroh-relay/iroh-relay.toml", true, false],
-                 ["/var/lib/iroh-relay", "/var/lib/iroh-relay", false, false]]
+                 ["/var/lib/iroh-relay", "/var/lib/iroh-relay", false, false]],
+  "iroh-dns-server": [["/etc/iroh-dns-server/config.toml", "/etc/iroh-dns-server/config.toml", true, false],
+                      ["/var/lib/iroh-dns-server", "/var/lib/iroh-dns-server", false, false]]
 };
 def mounts($secrets): [((.volumes // [])[]
     | [(if .type == "bind" then .source else "\(.type):\(.source)" end
@@ -83,7 +86,7 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
 
 .services as $all
 | (.secrets // {}) as $secrets
-| (["caddy", "decdn-node", "iroh-relay", "sponsord", "sponsord-onramp"] as $want
+| (["caddy", "decdn-node", "iroh-dns-server", "iroh-relay", "sponsord", "sponsord-onramp"] as $want
    | check("compose.yaml"; "services are exactly \($want | join(", "))"; ($all | keys) == $want)),
 
   # Every service: host networking and nothing published, so loopback listeners
@@ -121,12 +124,14 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
   # at all: allowed_keys).
   check("caddy"; "cap_add is exactly [NET_BIND_SERVICE]"; $all.caddy.cap_add == ["NET_BIND_SERVICE"]),
   check("iroh-relay"; "cap_add is exactly [NET_BIND_SERVICE]"; $all["iroh-relay"].cap_add == ["NET_BIND_SERVICE"]),
+  check("iroh-dns-server"; "cap_add is exactly [NET_BIND_SERVICE]"; $all["iroh-dns-server"].cap_add == ["NET_BIND_SERVICE"]),
 
   # Stop grace long enough for each daemon's drain (the units' TimeoutStopSec).
   check("decdn-node"; "stop_grace_period is 300s"; $all["decdn-node"].stop_grace_period == "5m0s"),
   check("sponsord"; "stop_grace_period is 120s"; $all.sponsord.stop_grace_period == "2m0s"),
   check("sponsord-onramp"; "stop_grace_period is 30s"; $all["sponsord-onramp"].stop_grace_period == "30s"),
   check("iroh-relay"; "stop_grace_period is 30s"; $all["iroh-relay"].stop_grace_period == "30s"),
+  check("iroh-dns-server"; "stop_grace_period is 30s"; $all["iroh-dns-server"].stop_grace_period == "30s"),
 
   # The relay: the unit's ExecStart and nothing else (no `--dev`, which serves plain
   # http, and no entrypoint swap), its log level set (it logs only errors without
@@ -136,6 +141,13 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
     and $all["iroh-relay"].entrypoint == null),
   check("iroh-relay"; "RUST_LOG is set"; ($all["iroh-relay"].environment.RUST_LOG // "") != ""),
   check("iroh-relay"; "ulimits.nofile is 65536"; $all["iroh-relay"].ulimits == {"nofile": 65536}),
+
+  # The DNS server likewise: the unit's ExecStart only, its log level, LimitNOFILE.
+  check("iroh-dns-server"; "command is exactly --config /etc/iroh-dns-server/config.toml, with no entrypoint";
+    $all["iroh-dns-server"].command == ["--config", "/etc/iroh-dns-server/config.toml"]
+    and $all["iroh-dns-server"].entrypoint == null),
+  check("iroh-dns-server"; "RUST_LOG is set"; ($all["iroh-dns-server"].environment.RUST_LOG // "") != ""),
+  check("iroh-dns-server"; "ulimits.nofile is 65536"; $all["iroh-dns-server"].ulimits == {"nofile": 65536}),
 
   # The sponsord daemons run the image's binary with no flags: a flag beats the
   # environment, so `--bind 0.0.0.0:…` would get past the loopback checks below.
@@ -162,4 +174,5 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
   check("sponsord"; "profiles are [sponsord, onramp]"; $all.sponsord.profiles == ["sponsord", "onramp"]),
   check("sponsord-onramp"; "profiles are [onramp]"; $all["sponsord-onramp"].profiles == ["onramp"]),
   check("caddy"; "profiles are [caddy]"; $all.caddy.profiles == ["caddy"]),
-  check("iroh-relay"; "profiles are [relay]"; $all["iroh-relay"].profiles == ["relay"])
+  check("iroh-relay"; "profiles are [relay]"; $all["iroh-relay"].profiles == ["relay"]),
+  check("iroh-dns-server"; "profiles are [dns]"; $all["iroh-dns-server"].profiles == ["dns"])

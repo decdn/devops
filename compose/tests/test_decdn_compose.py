@@ -673,6 +673,15 @@ class Profiles(unittest.TestCase):
         found = dc.problems(dc.Project({"COMPOSE_PROFILES": "relay,caddy"}), files_only=True)
         self.assertTrue(any("cannot share a host" in p for p in found), found)
 
+    def test_dns_conflicts_with_every_tcp_443_profile(self) -> None:
+        self.assertEqual(dc.conflicts(["origin", "dns"]), [])
+        for other in ("relay", "onramp", "caddy"):
+            with self.subTest(other=other):
+                self.assertIn("tcp/443", dc.conflicts(["dns", other])[0])
+                with mock.patch.object(dc, "require_root"), self.assertRaises(dc.Refused) as cm:
+                    dc.init(init_args(["dns", other], hostname="dns.example.net", contact="noc@decdn.org"))
+                self.assertIn("cannot share a host", str(cm.exception))
+
 
 def init_args(profiles: list[str], **kw: object) -> argparse.Namespace:
     base = dict(
@@ -686,6 +695,8 @@ def init_args(profiles: list[str], **kw: object) -> argparse.Namespace:
         contact=None,
         access="allowlist",
         staging=False,
+        dns_bind=None,
+        public_ipv4=None,
     )
     return argparse.Namespace(**(base | kw))
 
@@ -794,16 +805,7 @@ class RelayConfig(TmpDir):
         self.assertEqual(dc.relay_ports(p), dc.PORTS["iroh-relay"])
 
     def test_keys_match_the_molecule_stub(self) -> None:
-        import ast
-
-        stub = HERE.parent.parent / "ansible" / "molecule" / "iroh-relay" / "files" / "iroh-relay-stub"
-        sets = {
-            t.id: ast.literal_eval(node.value)
-            for node in ast.parse(stub.read_text()).body
-            if isinstance(node, ast.Assign)
-            for t in node.targets
-            if isinstance(t, ast.Name) and t.id.endswith("_KEYS")
-        }
+        sets = stub_key_sets("iroh-relay", "iroh-relay-stub")
         self.assertEqual(dc.RELAY_KEYS["the top level"], sets["TOP_KEYS"])
         self.assertEqual(dc.RELAY_KEYS["[tls]"], sets["TLS_KEYS"])
         self.assertEqual(dc.RELAY_KEYS["[limits]"], sets["LIMIT_KEYS"])
@@ -879,6 +881,9 @@ class RestartChecksConfig(TmpDir):
             ):
                 dc.cmd_stopping(argparse.Namespace(command="restart", rest=rest, ignore_topup_hold=False))
             compose.assert_not_called()
+
+    def test_every_iroh_service_is_checked(self) -> None:
+        self.assertEqual(set(dc.CONFIG_CHECKS), {"iroh-relay", "iroh-dns-server"})
 
     def test_restart_of_another_service_skips_it(self) -> None:
         project = dc.Project({"COMPOSE_PROFILES": "node,relay"})
@@ -1159,6 +1164,214 @@ class InstallTemplate(TmpDir):
         with self.assertRaises(dc.Refused):
             dc.install_template("decdn.env.example", dst, 0o600)
         self.assertFalse((self.tmp / "nowhere").exists())
+
+
+def stub_key_sets(scenario: str, stub: str) -> dict[str, set[str]]:
+    """The *_KEYS sets a role's molecule stub enforces."""
+    import ast
+
+    path = HERE.parent.parent / "ansible" / "molecule" / scenario / "files" / stub
+    return {
+        t.id: ast.literal_eval(node.value)
+        for node in ast.parse(path.read_text()).body
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Set)
+        for t in node.targets
+        if isinstance(t, ast.Name) and t.id.endswith("_KEYS")
+    }
+
+
+class DnsConfig(TmpDir):
+    """The DNS server's config checks (`check`)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.v6only = self.tmp / "bindv6only"
+        self.v6only.write_text("0\n")
+        patcher = mock.patch.object(dc, "BINDV6ONLY", self.v6only)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.good = dc.render_dns_toml("dns.example.net", "noc@decdn.org", "198.51.100.7", "203.0.113.10", False)
+
+    def problems(self, text: str) -> list[str]:
+        p = self.tmp / "config.toml"
+        p.write_text(text)
+        return dc.dns_problems(p)
+
+    def refused(self, text: str, fragment: str) -> None:
+        found = self.problems(text)
+        self.assertTrue(any(fragment in f for f in found), f"no {fragment!r} in {found}")
+
+    def sub(self, old: str, new: str) -> str:
+        """Replace <old> in the first setting (not comment) line that holds it."""
+        lines = self.good.splitlines(keepends=True)
+        for i, line in enumerate(lines):
+            if not line.startswith("#") and old in line:
+                lines[i] = line.replace(old, new, 1)
+                return "".join(lines)
+        self.fail(f"no setting line holds {old!r}")
+
+    def test_rendered_config_passes(self) -> None:
+        self.assertEqual(self.problems(self.good), [])
+        cfg = dc.tomllib.loads(self.good)
+        self.assertEqual(cfg["dns"]["origins"], ["dns.example.net.", "."])
+        self.assertEqual(cfg["dns"]["bind_addr"], "198.51.100.7")
+        self.assertEqual(cfg["https"]["domains"], ["dns.example.net"])
+        self.assertEqual(cfg["data_dir"], str(dc.VAR_DNS))
+
+    def test_render_without_a_public_address_leaves_rr_a_out(self) -> None:
+        text = dc.render_dns_toml("dns.example.net", "noc@decdn.org", "10.0.0.5", None, True)
+        cfg = dc.tomllib.loads(text)
+        self.assertNotIn("rr_a", cfg["dns"])
+        self.assertIs(cfg["https"]["letsencrypt_prod"], False)
+        self.refused(text, "no rr_a")
+
+    def test_example_needs_its_placeholders(self) -> None:
+        found = self.problems((HERE.parent / "iroh-dns-server.toml.example").read_text())
+        for fragment in ("domains is still", "letsencrypt_contact is still", "bind_addr is still", "rr_a is still"):
+            self.assertTrue(any(fragment in f for f in found), (fragment, found))
+
+    def test_unknown_keys(self) -> None:
+        self.refused("dataa_dir = 1\n" + self.good, "unknown key(s) at the top level: dataa_dir")
+        self.refused(self.sub("default_ttl = 30", "default_ttl = 30\nttl = 5"), "unknown key(s) in [dns]: ttl")
+        self.refused(
+            self.sub("letsencrypt_prod = true", "letsencrypt_prod = true\ncontact = 'x'"), "in [https]: contact"
+        )
+
+    def test_origins(self) -> None:
+        self.refused(self.sub('["dns.example.net.", "."]', '["dns.example.net", "."]'), "trailing dot")
+        self.refused(self.sub('["dns.example.net.", "."]', '["dns.example.net."]'), 'must include "."')
+        self.refused(self.sub('["dns.example.net.", "."]', '["other.example.net.", "."]'), "do not cover the hostname")
+
+    def test_rate_limit(self) -> None:
+        self.refused(self.sub('"simple"', '"smart"'), "X-Forwarded-For")
+        self.assertEqual(self.problems(self.sub('"simple"', '"disabled"')), [])
+
+    def test_loopback_listeners(self) -> None:
+        self.refused(self.sub('bind_addr = "127.0.0.1"', 'bind_addr = "0.0.0.0"'), "[http] bind_addr must be loopback")
+        self.refused(self.sub('"127.0.0.1:9117"', '"0.0.0.0:9117"'), "[metrics] bind_addr must be loopback")
+        self.refused(self.sub("disabled = false", "disabled = true"), "[metrics] disabled must be false")
+
+    def test_addresses(self) -> None:
+        self.refused(self.sub('rr_a = "203.0.113.10"', 'rr_a = "10.1.2.3"'), "is private")
+        self.refused(self.sub('rr_a = "203.0.113.10"', 'rr_a = "2001:db8::1"'), "must be a public IPv4")
+        self.refused(self.sub('bind_addr = "198.51.100.7"', 'bind_addr = "127.0.0.1"'), "serves no peer")
+        self.v6only.write_text("1\n")
+        self.refused(self.good, "bindv6only=1")
+        self.assertEqual(self.problems(self.sub('bind_addr = "::"', 'bind_addr = "0.0.0.0"')), [])
+
+    def test_tls_and_state(self) -> None:
+        self.refused(self.sub('"noc@decdn.org"', '"ops@example.com"'), "reserved domain")
+        self.refused(self.sub('cert_mode = "lets_encrypt"', 'cert_mode = "manual"'), "cert_mode must be")
+        self.refused(self.sub('data_dir = "/var/lib/iroh-dns-server"', 'data_dir = "/tmp/dns"'), "data_dir must be")
+        self.refused(self.sub("port = 443", "port = 8443"), "[https] port must be 443")
+
+    def test_keys_match_the_molecule_stub(self) -> None:
+        sets = stub_key_sets("iroh-dns-server", "iroh-dns-server-stub")
+        names = {"TOP_KEYS": "the top level", "HTTP_KEYS": "[http]", "HTTPS_KEYS": "[https]", "DNS_KEYS": "[dns]"}
+        names |= {"METRICS_KEYS": "[metrics]", "MAINLINE_KEYS": "[mainline]", "STORE_KEYS": "[zone_store]"}
+        self.assertEqual(set(sets), set(names))
+        for stub_name, section in names.items():
+            self.assertEqual(dc.DNS_KEYS[section], sets[stub_name], section)
+
+
+class DnsPorts(unittest.TestCase):
+    SS = (
+        'udp UNCONN 0 0 127.0.0.53%lo:53 0.0.0.0:* users:(("systemd-resolve",pid=1,fd=13))\n'
+        'tcp LISTEN 0 4096 127.0.0.54:53 0.0.0.0:* users:(("systemd-resolve",pid=1,fd=14))\n'
+        'tcp LISTEN 0 4096 [::]:22 [::]:* users:(("sshd",pid=2,fd=3))\n'
+    )
+
+    def test_rows(self) -> None:
+        rows = dc.listener_rows(self.SS)
+        self.assertEqual(rows[0], ("udp", "127.0.0.53%lo", 53, "systemd-resolve"))
+        self.assertEqual(rows[2], ("tcp", "[::]", 22, "sshd"))
+
+    def test_the_resolved_stub_is_fine_beside_one_address(self) -> None:
+        self.assertEqual(dc.dns_port_problems("198.51.100.7", dc.listener_rows(self.SS)), [])
+
+    def test_a_wildcard_bind_names_the_stub(self) -> None:
+        found = dc.dns_port_problems("::", dc.listener_rows(self.SS))
+        self.assertEqual(len(found), 2)
+        self.assertIn("DNSStubListener=no", found[0])
+
+    def test_a_holder_on_the_bind_address_or_a_wildcard(self) -> None:
+        rows = dc.listener_rows(
+            'udp UNCONN 0 0 198.51.100.7:53 0.0.0.0:* users:(("dnsmasq",pid=3,fd=4))\n'
+            'tcp LISTEN 0 64 *:53 *:* users:(("named",pid=4,fd=5))\n'
+        )
+        found = dc.dns_port_problems("198.51.100.7", rows)
+        self.assertEqual(len(found), 2)
+        self.assertIn("dnsmasq", found[0])
+
+    def test_port_53_is_left_to_the_address_aware_check(self) -> None:
+        self.assertNotIn(53, [p for _, p in dc.service_ports("iroh-dns-server")])
+
+
+class DnsInit(TmpDir):
+    def test_inputs(self) -> None:
+        with mock.patch.object(dc, "DNS_TOML", self.tmp / "absent.toml"):
+            self.assertIn("--hostname", dc.check_dns_args(init_args(["dns"])) or "")
+            ok = dict(hostname="dns.example.net", contact="noc@decdn.org")
+            self.assertIsNone(dc.check_dns_args(init_args(["dns"], **ok)))
+            self.assertIn("--dns-bind", dc.check_dns_args(init_args(["dns"], dns_bind="::1", **ok)) or "")
+            self.assertIn("--dns-bind", dc.check_dns_args(init_args(["dns"], dns_bind="dns", **ok)) or "")
+            self.assertIn("private", dc.check_dns_args(init_args(["dns"], public_ipv4="10.0.0.1", **ok)) or "")
+            self.assertIn(
+                "reserved", dc.check_dns_args(init_args(["dns"], hostname="d.example.net", contact="a@b.test")) or ""
+            )
+
+    def test_writes_once_with_a_public_bind_as_rr_a(self) -> None:
+        etc = self.tmp / "etc"
+        with (
+            mock.patch.object(dc, "ETC_DNS", etc),
+            mock.patch.object(dc, "DNS_TOML", etc / "config.toml"),
+            mock.patch.object(dc, "VAR_DNS", self.tmp / "var"),
+            mock.patch.object(dc.os, "chown", lambda *a: None),
+            mock.patch.object(dc, "write_new", lambda p, data, *a: p.write_bytes(data) or True),
+        ):
+            dc.init_dns(init_args(["dns"], hostname="dns.example.net", contact="noc@decdn.org", dns_bind="8.8.4.4"))
+            cfg = dc.tomllib.loads((etc / "config.toml").read_text())
+            self.assertEqual(cfg["dns"]["rr_a"], "8.8.4.4")
+            dc.init_dns(init_args(["dns"], hostname="other.example.net", contact="noc@decdn.org"))
+            self.assertIn("dns.example.net", (etc / "config.toml").read_text())
+        self.assertEqual((self.tmp / "var").stat().st_mode & 0o777, 0o700)
+
+
+class DnsHealth(TmpDir):
+    def run_with(self, body: str, prod: bool = True, dig: str | None = "dns.example.net.", pinned: bool = True):
+        p = self.tmp / "config.toml"
+        p.write_text(dc.render_dns_toml("dns.example.net", "noc@decdn.org", "198.51.100.7", "203.0.113.10", not prod))
+        with (
+            mock.patch.object(dc, "fetch", return_value=(200, body)),
+            mock.patch.object(dc, "tls_healthz", return_value="certificate verify failed"),
+            mock.patch.object(dc.shutil, "which", return_value=None if dig is None else "/usr/bin/dig"),
+            mock.patch.object(dc, "dig_soa", return_value=dig) as ds,
+        ):
+            out = dc.dns_health(p, pinned)
+        return {name: (ok, detail, warn) for name, ok, detail, warn in out}, ds
+
+    def test_version_soa_and_staging(self) -> None:
+        out, ds = self.run_with(f'{{"status":"ok","version":"{dc.DNS_VERSION}"}}', prod=False)
+        self.assertTrue(out["iroh-dns-server"][0])
+        self.assertTrue(out["iroh-dns-server SOA dns.example.net. udp"][0])
+        self.assertTrue(out["iroh-dns-server SOA dns.example.net. tcp"][0])
+        ds.assert_any_call("dns.example.net.", "198.51.100.7", True)
+        ok, _, warn = out["iroh-dns-server certificate"]
+        self.assertTrue(warn and not ok)
+
+    def test_another_version_fails_only_on_the_pinned_image(self) -> None:
+        out, _ = self.run_with('{"status":"ok","version":"9.9.9"}')
+        self.assertFalse(out["iroh-dns-server"][0])
+        out, _ = self.run_with('{"status":"ok","version":"9.9.9"}', pinned=False)
+        self.assertTrue(out["iroh-dns-server"][0])
+
+    def test_a_wrong_soa_fails_and_no_dig_warns(self) -> None:
+        out, _ = self.run_with(f'{{"version":"{dc.DNS_VERSION}"}}', dig="no answer")
+        self.assertFalse(out["iroh-dns-server SOA dns.example.net. udp"][0])
+        out, _ = self.run_with(f'{{"version":"{dc.DNS_VERSION}"}}', dig=None)
+        self.assertEqual(out["iroh-dns-server DNS"][2], True)
+        ok, _, warn = out["iroh-dns-server certificate"]
+        self.assertFalse(ok or warn)
 
 
 if __name__ == "__main__":

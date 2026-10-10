@@ -13,7 +13,8 @@ def allowed: {
   "sponsord-onramp": ["NO_COLOR", "ONRAMP_BIND", "ONRAMP_DAEMON_TOKEN_FILE", "ONRAMP_DAEMON_URL",
                       "ONRAMP_PUBLIC_URL", "ONRAMP_TURNSTILE_SECRET_FILE"],
   "caddy": ["SPONSORD_ONRAMP_DOMAIN"],
-  "iroh-relay": ["NO_COLOR", "RUST_LOG"]
+  "iroh-relay": ["NO_COLOR", "RUST_LOG"],
+  "iroh-dns-server": ["NO_COLOR", "RUST_LOG"]
 };
 
 .services | to_entries[] | .key as $n

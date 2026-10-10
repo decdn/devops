@@ -65,12 +65,16 @@ PROFILES: dict[str, tuple[str, ...]] = {
     "onramp": ("sponsord", "sponsord-onramp"),
     "caddy": ("caddy",),
     "relay": ("iroh-relay",),
+    "dns": ("iroh-dns-server",),
 }
 # Profiles that cannot share a host: each pair wants the same public ports (the
 # Ansible playbooks refuse the same pairs).
 CONFLICTS: tuple[tuple[str, str, str], ...] = (
     ("relay", "onramp", "tcp/80 and tcp/443"),
     ("relay", "caddy", "tcp/80 and tcp/443"),
+    ("dns", "relay", "tcp/443"),
+    ("dns", "onramp", "tcp/443"),
+    ("dns", "caddy", "tcp/443"),
 )
 
 # Host layout: the Ansible roles' paths (README.md, "How it is laid out").
@@ -95,6 +99,9 @@ RELAY_TOML = ETC_RELAY / "iroh-relay.toml"
 # The relay's metrics listener: loopback, and the port the alloy profile scrapes.
 RELAY_METRICS = "127.0.0.1:9092"
 RELAY_CERT_DIR = VAR_RELAY / "acme"
+ETC_DNS = Path("/etc/iroh-dns-server")
+VAR_DNS = Path("/var/lib/iroh-dns-server")
+DNS_TOML = ETC_DNS / "config.toml"
 BINDV6ONLY = Path("/proc/sys/net/ipv6/bindv6only")
 # Never an origin's content: the hosts' secrets and state.
 NOT_ORIGIN = (
@@ -103,6 +110,7 @@ NOT_ORIGIN = (
     "/var/lib/decdn",
     "/var/lib/caddy",
     str(VAR_RELAY),
+    str(VAR_DNS),
     "/etc",
     "/root",
     "/proc",
@@ -135,6 +143,8 @@ PORTS: dict[str, tuple[tuple[str, int], ...]] = {
     # udp/7842 only with QUIC address discovery on, and the metrics port as
     # configured: relay_ports() reads both from the config.
     "iroh-relay": (("tcp", 80), ("tcp", 443), ("udp", 7842), ("tcp", 9092)),
+    # Port 53 counts only on the DNS bind address (or a wildcard): dns_port_problems.
+    "iroh-dns-server": (("tcp", 443), ("udp", 53), ("tcp", 53), ("tcp", 9117), ("tcp", 9118)),
 }
 
 # The keys iroh-relay 1.3.0 deserialises (iroh-relay/src/main.rs: Config, TlsConfig,
@@ -176,6 +186,26 @@ RELAY_FIXED_PORTS = {"http_bind_addr": 80, "https_bind_addr": 443, "quic_bind_ad
 RELAY_PLACEHOLDERS = {"hostname": "relay.example.org", "contact": "admin@example.org"}
 # One series the relay always exports (monitoring/iroh-relay/exported-metrics.txt).
 RELAY_GATE_METRIC = "relayserver_accepts_total"
+
+# The keys iroh-dns-server 1.3.0 deserialises (iroh-dns-server/src/config.rs), the
+# same sets as the role's molecule stub
+# (ansible/molecule/iroh-dns-server/files/iroh-dns-server-stub; the unit tests
+# compare them). It too ignores any other key.
+DNS_KEYS: dict[str, set[str]] = {
+    "the top level": {"http", "https", "dns", "metrics", "mainline", "zone_store", "pkarr_put_rate_limit", "data_dir"},
+    "[http]": {"port", "bind_addr"},
+    "[https]": {"port", "bind_addr", "domains", "cert_mode", "letsencrypt_contact", "letsencrypt_prod"},
+    "[dns]": {"port", "bind_addr", "default_soa", "default_ttl", "origins", "rr_a", "rr_aaaa", "rr_ns"},
+    "[metrics]": {"disabled", "bind_addr"},
+    "[mainline]": {"enabled", "bootstrap"},
+    "[zone_store]": {"max_batch_size", "max_batch_time", "eviction", "eviction_interval"},
+}
+# iroh-dns-server.toml.example's placeholders, which `init dns` replaces.
+DNS_PLACEHOLDERS = {"hostname": "dns.example.org", "contact": "admin@example.org", "address": "192.0.2.1"}
+# The release compose.yaml pins (the role's iroh_dns_server_version; `make
+# test-scripts` checks both): the binary has no --version, its /healthz says.
+DNS_VERSION = "1.3.0"
+DNS_NAME_RE = r"(?=.{1,254}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\."
 
 
 DOMAIN_RE = r"(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}"
@@ -578,6 +608,10 @@ def init(args: argparse.Namespace) -> None:
         relay_args_problem = check_relay_args(args)
         if relay_args_problem:
             raise Refused(relay_args_problem)
+    if "dns" in wanted:
+        dns_args_problem = check_dns_args(args)
+        if dns_args_problem:
+            raise Refused(dns_args_problem)
     if shutil.which("docker") is None:
         raise Refused("docker is not installed")
 
@@ -625,6 +659,8 @@ def init(args: argparse.Namespace) -> None:
         ensure_dir(VAR_CADDY, 0o700, uid, gid)
     if "relay" in wanted:
         init_relay(args)
+    if "dns" in wanted:
+        init_dns(args)
 
     todo = problems(project, files_only=True)
     say("")
@@ -862,6 +898,11 @@ def check_relay_args(args: argparse.Namespace) -> str | None:
             "init relay needs --hostname <the relay's DNS name> and --contact <email for Let's Encrypt> "
             "(iroh-relay refuses to start without a contact)"
         )
+    return hostname_contact_problem(args)
+
+
+def hostname_contact_problem(args: argparse.Namespace) -> str | None:
+    """--hostname and --contact, for the iroh services' Let's Encrypt certificates."""
     if args.hostname and not re.fullmatch(DOMAIN_RE, args.hostname):
         return f"--hostname {args.hostname!r} is not a lower-case DNS name (no scheme, port or IP address)"
     if args.contact and not re.fullmatch(EMAIL_RE, args.contact):
@@ -909,6 +950,96 @@ def init_relay(args: argparse.Namespace) -> None:
         )
 
 
+# The role's named private ranges (RFC 1918, shared CGNAT, ULA), not is_global, so
+# documentation addresses still pass: no resolver on the internet reaches these.
+PRIVATE_NETS = tuple(
+    ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7")
+)
+
+
+def private_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(addr.version == n.version and addr in n for n in PRIVATE_NETS)
+
+
+def default_ipv4() -> str:
+    """The address the host's default route leaves from (the role's
+    ansible_facts.default_ipv4): a UDP connect sends nothing."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 53))
+            return s.getsockname()[0]
+    except OSError:
+        return ""
+
+
+def check_dns_args(args: argparse.Namespace) -> str | None:
+    """`init dns`'s inputs, before anything on the host changes."""
+    if not DNS_TOML.exists() and not (args.hostname and args.contact):
+        return (
+            "init dns needs --hostname <the zone delegated to this host, also its https name> and "
+            "--contact <email for Let's Encrypt> (iroh-dns-server refuses to start without a contact)"
+        )
+    problem = hostname_contact_problem(args)
+    if problem:
+        return problem
+    for flag, value, version in (("--dns-bind", args.dns_bind, 4), ("--public-ipv4", args.public_ipv4, 4)):
+        if value is None:
+            continue
+        try:
+            addr = ipaddress.ip_address(value)
+        except ValueError:
+            return f"{flag} {value!r} is not an IPv4 address"
+        if addr.version != version or addr.is_loopback or addr.is_link_local or addr.is_multicast:
+            return f"{flag} {value}: an IPv4 address of this host, not loopback, link-local or multicast"
+        if flag == "--public-ipv4" and private_address(addr):
+            return f"{flag} {value} is private: the parent zone's glue needs the address the internet reaches"
+    return None
+
+
+def render_dns_toml(hostname: str, contact: str, dns_bind: str, rr_a: str | None, staging: bool) -> str:
+    """compose/iroh-dns-server.toml.example with the operator's values in place."""
+    text = (HERE / "iroh-dns-server.toml.example").read_text()
+    text = text.replace(DNS_PLACEHOLDERS["hostname"], hostname).replace(DNS_PLACEHOLDERS["contact"], contact)
+    lines = {
+        r"^bind_addr = \"192\.0\.2\.1\"$": f"bind_addr = {json.dumps(dns_bind)}",
+        r"^letsencrypt_prod = .*$": f"letsencrypt_prod = {'false' if staging else 'true'}",
+        # Without a public address, no rr_a: `check` then asks for one.
+        r"^rr_a = .*$": f"rr_a = {json.dumps(rr_a)}" if rr_a else '# rr_a = "<this host\'s public IPv4>"',
+    }
+    for pattern, line in lines.items():
+        text, n = re.subn(f"(?m){pattern}", line.replace("\\", "\\\\"), text, count=1)
+        if n != 1:
+            raise Refused(f"compose/iroh-dns-server.toml.example has no line matching {pattern}")
+    tomllib.loads(text)
+    return text
+
+
+def init_dns(args: argparse.Namespace) -> None:
+    """The DNS server's config and state directory, root-owned (it runs as uid 0,
+    as the relay does)."""
+    ensure_dir(ETC_DNS, 0o755, 0, 0)
+    ensure_dir(VAR_DNS, 0o700, 0, 0)
+    if DNS_TOML.exists():
+        given = [
+            f"--{k.replace('_', '-')}" for k in ("hostname", "contact", "dns_bind", "public_ipv4") if getattr(args, k)
+        ]
+        say(f"kept the existing {DNS_TOML}" + (f" (not applied: {', '.join(given)}; edit the file)" if given else ""))
+        return
+    dns_bind = args.dns_bind or default_ipv4()
+    if not dns_bind:
+        raise Refused("this host has no default IPv4 route: pass --dns-bind <one of its IPv4 addresses>")
+    rr_a = args.public_ipv4 or (dns_bind if ipaddress.ip_address(dns_bind).is_global else None)
+    write_new(
+        DNS_TOML, render_dns_toml(args.hostname, args.contact, dns_bind, rr_a, args.staging).encode(), 0o644, 0, 0
+    )
+    say(f"wrote {DNS_TOML} (0644) for {args.hostname}, DNS on {dns_bind}{', staging CA' if args.staging else ''}")
+    if not rr_a:
+        say(
+            f"  {dns_bind} is not a public address (1:1 NAT?): set rr_a in {DNS_TOML} to the public IPv4 "
+            "the parent zone's glue names (or re-run init with --public-ipv4 on a fresh config)"
+        )
+
+
 def next_steps(wanted: list[str]) -> str:
     steps = ["", "Then:"]
     if {"node", "origin"} & set(wanted):
@@ -917,6 +1048,11 @@ def next_steps(wanted: list[str]) -> str:
         steps.append("  - point the onramp domain at this host; open tcp/80 and tcp/443")
     if "relay" in wanted:
         steps.append("  - point the relay's hostname (A/AAAA) at this host; open tcp/80, tcp/443 and udp/7842")
+    if "dns" in wanted:
+        steps.append(
+            "  - delegate the hostname to this host at the parent zone (NS + glue A, README.md); "
+            "open tcp/443, udp/53 and tcp/53"
+        )
     steps.append("  - sudo compose/decdn-compose up && sudo compose/decdn-compose health")
     if {"node", "origin"} & set(wanted):
         steps.append(
@@ -924,6 +1060,11 @@ def next_steps(wanted: list[str]) -> str:
         )
     if "relay" in wanted:
         steps.append("  - point the nodes at it: relay_urls in their node.toml (README.md, An iroh relay)")
+    if "dns" in wanted:
+        steps.append(
+            "  - point the nodes at it: [network.discovery] pkarr_url and dns_origin in node.toml, "
+            "and clients the same dns_origin (README.md, An iroh DNS server)"
+        )
     return "\n".join(steps)
 
 
@@ -1065,14 +1206,20 @@ def problems(project: Project, files_only: bool = False) -> list[str]:
         elif uid is not None and VAR_CADDY.stat().st_uid != uid:
             out.append(f"{VAR_CADDY} is not owned by the caddy account")
     out += conflicts(project.profiles)
-    if "iroh-relay" in svcs:
-        out += filter(None, [file_problem(RELAY_TOML, 0, private=False, what="`init relay`")])
-        if RELAY_TOML.is_file():
-            out += relay_problems(RELAY_TOML)
-        out += state_dir_problems(VAR_RELAY, "relay")
-        digest = env.get("IROH_RELAY_IMAGE_DIGEST")
+    for svc, key, conf, var, problems_of in (
+        ("iroh-relay", "IROH_RELAY_IMAGE_DIGEST", RELAY_TOML, VAR_RELAY, relay_problems),
+        ("iroh-dns-server", "IROH_DNS_SERVER_IMAGE_DIGEST", DNS_TOML, VAR_DNS, dns_problems),
+    ):
+        if svc not in svcs:
+            continue
+        profile = "relay" if svc == "iroh-relay" else "dns"
+        out += filter(None, [file_problem(conf, 0, private=False, what=f"`init {profile}`")])
+        if conf.is_file():
+            out += problems_of(conf)
+        out += state_dir_problems(var, profile)
+        digest = env.get(key)
         if digest is not None and not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-            out.append(".env: IROH_RELAY_IMAGE_DIGEST is set but not a sha256 digest (unset it for compose.yaml's pin)")
+            out.append(f".env: {key} is set but not a sha256 digest (unset it for compose.yaml's pin)")
     if not files_only:
         for svc in sorted(svcs):
             key = {
@@ -1289,6 +1436,216 @@ def relay_problems(path: Path) -> list[str]:
     return out
 
 
+def bare_bind_problem(what: str, value: object, wildcard_ok: bool = True) -> str | None:
+    """A public listener's bare address (iroh-dns-server's bind_addr)."""
+    try:
+        addr = ipaddress.ip_address(value) if isinstance(value, str) else None
+    except ValueError:
+        addr = None
+    if addr is None:
+        return f"{what} = {value!r} is not a bare IP address (no brackets or port)"
+    if str(addr) != value:
+        return f"{what} = {value!r}: write it in its canonical form, {str(addr)!r}"
+    if addr.is_unspecified and not wildcard_ok:
+        return f"{what} = {value!r}: not a wildcard here"
+    if addr.is_loopback or addr.is_link_local or addr.is_multicast:
+        return f"{what} = {value!r}: a loopback, link-local or multicast address serves no peer"
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        return f"{what} = {value!r}: an IPv4-mapped address; write the IPv4 address itself"
+    if addr == ipaddress.IPv6Address("::") and bindv6only():
+        return (
+            f"{what} = {value!r}: this host has net.ipv6.bindv6only=1, so :: serves no IPv4 peer; "
+            "use 0.0.0.0 or set the sysctl to 0"
+        )
+    return None
+
+
+def dns_problems(path: Path) -> list[str]:
+    """What iroh-dns-server would ignore, refuse late, or serve wrongly with."""
+    cfg, err = load_toml(path)
+    if err:
+        return [err]
+    out: list[str] = []
+    where = f"{path}:"
+    tables: dict[str, dict] = {}
+    extra = sorted(set(cfg) - DNS_KEYS["the top level"])
+    if extra:
+        out.append(
+            f"{where} unknown key(s) at the top level: {', '.join(extra)} (iroh-dns-server 1.3.0 would ignore them)"
+        )
+    for name in ("http", "https", "dns", "metrics", "mainline", "zone_store"):
+        section = f"[{name}]"
+        table = cfg.get(name)
+        if not isinstance(table, dict):
+            out.append(f"{where} no {section} table (every key is written out: start from the example)")
+            table = {}
+        extra = sorted(set(table) - DNS_KEYS[section])
+        if extra:
+            out.append(
+                f"{where} unknown key(s) in {section}: {', '.join(extra)} (iroh-dns-server 1.3.0 would ignore them)"
+            )
+        tables[name] = table
+    http, https, dns, metrics = tables["http"], tables["https"], tables["dns"], tables["metrics"]
+
+    rate = cfg.get("pkarr_put_rate_limit")
+    if rate == "smart":
+        out.append(
+            f'{where} pkarr_put_rate_limit = "smart" reads X-Forwarded-For, which a client can forge with no proxy '
+            'in front: use "simple" (1.3.0 treats smart as simple anyway)'
+        )
+    elif rate not in ("simple", "disabled"):
+        out.append(f'{where} pkarr_put_rate_limit must be "simple" or "disabled" (got {rate!r})')
+    if cfg.get("data_dir") != str(VAR_DNS):
+        out.append(
+            f"{where} data_dir must be {str(VAR_DNS)!r}, the mounted state directory (got {cfg.get('data_dir')!r}): "
+            "elsewhere the records and the certificate are lost on every restart"
+        )
+
+    for name, table in (("[http]", http), ("[metrics]", metrics)):
+        raw = table.get("bind_addr")
+        addr = socket_addr(raw) if name == "[metrics]" else None
+        host = addr[0] if addr else None
+        if name == "[http]":
+            try:
+                host = ipaddress.ip_address(raw) if isinstance(raw, str) else None
+            except ValueError:
+                host = None
+        if host is None or not host.is_loopback:
+            out.append(f"{where} {name} bind_addr must be loopback (got {raw!r}): never public")
+    if http.get("port") != 9118:
+        out.append(f"{where} [http] port must be 9118 (`decdn-compose health` reads /healthz there)")
+    if metrics.get("disabled") is not False:
+        out.append(f"{where} [metrics] disabled must be false")
+    metrics_addr = socket_addr(metrics.get("bind_addr"))
+    if metrics_addr and metrics_addr[1] != 9117:
+        out.append(f"{where} [metrics] bind_addr must use port 9117 (the port check and README assume it)")
+
+    if https.get("port") != 443:
+        out.append(f"{where} [https] port must be 443 (Let's Encrypt's TLS-ALPN-01 challenge comes there)")
+    problem = bare_bind_problem("[https] bind_addr", https.get("bind_addr", "::"))
+    if problem:
+        out.append(f"{where} {problem}")
+    if https.get("cert_mode") != "lets_encrypt":
+        out.append(f'{where} [https] cert_mode must be "lets_encrypt" (got {https.get("cert_mode")!r})')
+    domains = https.get("domains")
+    hostname = domains[0] if isinstance(domains, list) and len(domains) == 1 else None
+    if not isinstance(hostname, str) or not re.fullmatch(DOMAIN_RE, hostname):
+        out.append(f"{where} [https] domains must be one lower-case DNS name, the delegated hostname (got {domains!r})")
+        hostname = None
+    elif hostname == DNS_PLACEHOLDERS["hostname"]:
+        out.append(f"{where} [https] domains is still the example's {hostname}")
+    contact = https.get("letsencrypt_contact")
+    if not isinstance(contact, str) or not re.fullmatch(EMAIL_RE, contact):
+        out.append(f"{where} [https] letsencrypt_contact must be an email address, without mailto: (got {contact!r})")
+    elif contact == DNS_PLACEHOLDERS["contact"]:
+        out.append(f"{where} [https] letsencrypt_contact is still the example's {contact}")
+    elif reserved_mail_domain(contact):
+        out.append(
+            f"{where} [https] letsencrypt_contact {contact}: Let's Encrypt refuses an account on a reserved domain"
+        )
+    if not isinstance(https.get("letsencrypt_prod"), bool):
+        out.append(f"{where} [https] letsencrypt_prod must be true or false (unset means staging)")
+
+    if dns.get("port") != 53:
+        out.append(f"{where} [dns] port must be 53")
+    bind = dns.get("bind_addr")
+    if bind == DNS_PLACEHOLDERS["address"]:
+        out.append(f"{where} [dns] bind_addr is still the example's {bind}: this host's address (`init dns` picks it)")
+    else:
+        problem = bare_bind_problem("[dns] bind_addr", bind)
+        if problem:
+            out.append(f"{where} {problem}")
+    origins = dns.get("origins")
+    if not isinstance(origins, list) or not all(isinstance(o, str) for o in origins):
+        out.append(f"{where} [dns] origins must be a list of names")
+        origins = []
+    if "." not in origins:
+        out.append(f'{where} [dns] origins must include "." (the static zone is rooted there; 1.3.0 refuses to start)')
+    for o in origins:
+        if o != "." and not re.fullmatch(DNS_NAME_RE, o):
+            out.append(
+                f"{where} [dns] origin {o!r} must be a lower-case name with its trailing dot: without it "
+                "1.3.0 answers SOA but no record at the apex"
+            )
+    apexes = {o.rstrip(".") for o in origins if o != "."}
+    if hostname and hostname not in apexes and not any(hostname.endswith(f".{a}") for a in apexes):
+        out.append(f"{where} [dns] origins do not cover the hostname {hostname} (nodes resolve under it)")
+    soa = dns.get("default_soa")
+    fields = soa.split() if isinstance(soa, str) else []
+    if len(fields) != 7 or not all(f.isdigit() for f in fields[2:]):
+        out.append(f'{where} [dns] default_soa must be "<mname> <rname> <serial> <refresh> <retry> <expire> <minimum>"')
+    ttl = dns.get("default_ttl")
+    if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl <= 0:
+        out.append(f"{where} [dns] default_ttl must be a positive number of seconds")
+    for key, version in (("rr_a", 4), ("rr_aaaa", 6)):
+        if key not in dns:
+            continue
+        try:
+            addr = ipaddress.ip_address(dns[key])
+        except (ValueError, TypeError):
+            addr = None
+        if (
+            addr is None
+            or addr.version != version
+            or addr.is_unspecified
+            or addr.is_loopback
+            or addr.is_multicast
+            or addr.is_link_local
+        ):
+            out.append(f"{where} [dns] {key} must be a public IPv{version} address (got {dns[key]!r})")
+        elif private_address(addr):
+            out.append(
+                f"{where} [dns] {key} = {dns[key]!r} is private: set the public address the parent zone's glue names"
+            )
+    if dns.get("rr_a") == DNS_PLACEHOLDERS["address"]:
+        out.append(f"{where} [dns] rr_a is still the example's {dns['rr_a']}")
+    ns = dns.get("rr_ns")
+    if ns is not None and (not isinstance(ns, str) or not re.fullmatch(DNS_NAME_RE, ns)):
+        out.append(f"{where} [dns] rr_ns must be an absolute name with its trailing dot (got {ns!r})")
+    at_apex = hostname in apexes or (isinstance(ns, str) and ns.rstrip(".") in apexes)
+    if at_apex and not ("rr_a" in dns or "rr_aaaa" in dns):
+        out.append(
+            f"{where} [dns] no rr_a: this server answers its own hostname, so set rr_a to the host's public IPv4 "
+            "(the glue's address; behind NAT, not the bind address)"
+        )
+
+    if not isinstance(tables["mainline"].get("enabled"), bool):
+        out.append(f"{where} [mainline] enabled must be true or false")
+    missing = sorted(DNS_KEYS["[zone_store]"] - set(tables["zone_store"]))
+    if missing:
+        out.append(f"{where} [zone_store] lacks {', '.join(missing)} (write upstream's defaults, as the example does)")
+    return out
+
+
+def dns_bind(path: Path = DNS_TOML) -> str:
+    cfg, _ = load_toml(path)
+    dns = cfg.get("dns") if isinstance(cfg.get("dns"), dict) else {}
+    return str(dns.get("bind_addr", ""))
+
+
+def dns_port_problems(bind: str, rows: list[tuple[str, str, int, str]]) -> list[str]:
+    """Port 53 held by another process where the DNS listener binds: on its own
+    address, or anywhere for a wildcard bind (the role's tasks/ports.yml). A
+    resolver on another address (systemd-resolved's stub on 127.0.0.53) is fine,
+    unless the bind is a wildcard."""
+    wildcard = bind in ("::", "0.0.0.0")
+    out = []
+    for proto, addr, port, proc in rows:
+        if port != 53 or proto not in ("udp", "tcp"):
+            continue
+        holder_wild = addr in ("*", "0.0.0.0", "::", "[::]")
+        if not (wildcard or holder_wild or addr.strip("[]").split("%")[0] == bind):
+            continue
+        msg = f"{proto}/53 on {addr}, which iroh-dns-server binds ({bind}), is held by {proc}"
+        if wildcard and addr.startswith("127.0.0.5"):
+            msg += (
+                " (where systemd-resolved's stub listens). Bind [dns] to one address (`init dns` picks the default "
+                "IPv4) or turn the stub off first (DNSStubListener=no in /etc/systemd/resolved.conf.d/)"
+            )
+        out.append(msg)
+    return list(dict.fromkeys(out))
+
+
 def relay_ports(path: Path = RELAY_TOML) -> tuple[tuple[str, int], ...]:
     """The relay's listeners as its config sets them (PORTS when it cannot be read)."""
     cfg, err = load_toml(path)
@@ -1303,34 +1660,47 @@ def relay_ports(path: Path = RELAY_TOML) -> tuple[tuple[str, int], ...]:
 
 
 def service_ports(svc: str) -> tuple[tuple[str, int], ...]:
-    return relay_ports() if svc == "iroh-relay" else PORTS[svc]
+    if svc == "iroh-relay":
+        return relay_ports()
+    if svc == "iroh-dns-server":
+        # Port 53 is address-aware: dns_port_problems.
+        return tuple(p for p in PORTS[svc] if p[1] != 53)
+    return PORTS[svc]
 
 
-def listeners() -> dict[tuple[str, int], str] | None:
-    """(proto, port) -> the process holding it, from `ss`; None without ss."""
+def listener_rows(text: str) -> list[tuple[str, str, int, str]]:
+    """`ss -Hlntup` -> (proto, local address, port, process) per listener."""
+    rows = []
+    for line in text.splitlines():
+        cols = line.split()
+        if len(cols) < 5:
+            continue
+        m = re.fullmatch(r"(.*):(\d+)", cols[4])
+        if m:
+            proc = re.search(r'users:\(\("([^"]+)"', line)
+            rows.append((cols[0], m[1], int(m[2]), proc[1] if proc else "?"))
+    return rows
+
+
+def listeners() -> list[tuple[str, str, int, str]] | None:
+    """Every listener, from `ss`; None without ss."""
     if shutil.which("ss") is None:
         return None
     cp = run(["ss", "-Hlntup"], check=False, capture=True)
     if cp.returncode != 0:
         # An empty answer would read as "nothing holds any port".
         raise Refused(f"`ss -Hlntup` failed (exit {cp.returncode}): cannot check the ports (iproute2 too old?)")
-    held: dict[tuple[str, int], str] = {}
-    for line in cp.stdout.splitlines():
-        cols = line.split()
-        if len(cols) < 5:
-            continue
-        m = re.search(r":(\d+)$", cols[4])
-        if m:
-            proc = re.search(r'users:\(\("([^"]+)"', line)
-            held.setdefault((cols[0], int(m[1])), proc[1] if proc else "?")
-    return held
+    return listener_rows(cp.stdout)
 
 
 def check_ports(project: Project) -> list[str]:
-    held = listeners()
-    if held is None:
+    rows = listeners()
+    if rows is None:
         warn("`ss` is not installed: skipping the port check")
         return []
+    held: dict[tuple[str, int], str] = {}
+    for proto, _, port, proc in rows:
+        held.setdefault((proto, port), proc)
     out = []
     for svc in sorted(project.services):
         if container_id(svc):
@@ -1338,6 +1708,8 @@ def check_ports(project: Project) -> list[str]:
         for proto, port in service_ports(svc):
             if (proto, port) in held:
                 out.append(f"{proto}/{port}, which {svc} binds, is held by {held[(proto, port)]}")
+        if svc == "iroh-dns-server":
+            out += dns_port_problems(dns_bind(), rows)
     return out
 
 
@@ -1561,6 +1933,7 @@ def cmd_up(args: argparse.Namespace) -> None:
 # ones included): `restart` is how an edit is applied, so it runs them first.
 CONFIG_CHECKS: dict[str, Callable[[], list[str]]] = {
     "iroh-relay": lambda: relay_problems(RELAY_TOML),
+    "iroh-dns-server": lambda: dns_problems(DNS_TOML),
 }
 
 
@@ -1728,7 +2101,75 @@ def cmd_health(args: argparse.Namespace) -> None:
     if "iroh-relay" in svcs:
         for name, ok, detail, warn_only in relay_health(RELAY_TOML):
             report(name, ok, detail, warn_only)
+    if "iroh-dns-server" in svcs:
+        pinned = not project.env.get("IROH_DNS_SERVER_IMAGE_DIGEST")
+        for name, ok, detail, warn_only in dns_health(DNS_TOML, pinned):
+            report(name, ok, detail, warn_only)
     sys.exit(1 if bad else 0)
+
+
+def dig_soa(origin: str, addr: str, tcp: bool) -> str:
+    """The first field (the mname) of <origin>'s SOA from <addr>:53, or the error."""
+    cp = run(
+        ["dig", "+norecurse", "+time=2", "+tries=1", "+short", "+tcp" if tcp else "+notcp", "SOA", origin, f"@{addr}"],
+        check=False,
+        capture=True,
+    )
+    first = (cp.stdout or "").split()
+    return first[0].lower() if cp.returncode == 0 and first else (cp.stdout or "").strip() or "no answer"
+
+
+def dns_health(path: Path, pinned: bool) -> list[tuple[str, bool, str, bool]]:
+    """The role's gate and certificate check: loopback /healthz reporting the
+    pinned version (the binary has no --version), each origin's SOA over udp and
+    tcp at the DNS bind address (loopback for a wildcard), then
+    https://<hostname>/healthz against the host trust store (warn-only on staging)."""
+    cfg, err = load_toml(path)
+    if err:
+        return [("iroh-dns-server", False, err, False)]
+
+    def section(name: str) -> dict:
+        v = cfg.get(name)
+        return v if isinstance(v, dict) else {}
+
+    https, dns = section("https"), section("dns")
+    out = []
+    url = "http://127.0.0.1:9118/healthz"
+    status, body = fetch(url)
+    try:
+        version = json.loads(body).get("version", "?") if status == 200 else "?"
+    except (ValueError, AttributeError):
+        version = "?"
+    ok = status == 200 and (version == DNS_VERSION or not pinned)
+    out.append(("iroh-dns-server", ok, f"{url} {status}, version {version} (compose.yaml pins {DNS_VERSION})", False))
+
+    bind = str(dns.get("bind_addr", ""))
+    addr = "127.0.0.1" if bind in ("::", "0.0.0.0") else bind
+    soa = dns.get("default_soa")
+    mname = soa.split()[0].lower().rstrip(".") + "." if isinstance(soa, str) and soa.split() else "?"
+    origins = [o for o in dns.get("origins", []) if isinstance(o, str) and o != "."]
+    if shutil.which("dig") is None:
+        out.append(
+            ("iroh-dns-server DNS", False, "`dig` is not installed (dnsutils/bind9-dnsutils): not checked", True)
+        )
+    else:
+        for origin in origins:
+            for tcp in (False, True):
+                got = dig_soa(origin, addr, tcp)
+                out.append(
+                    (f"iroh-dns-server SOA {origin} {'tcp' if tcp else 'udp'}", got == mname, f"@{addr}: {got}", False)
+                )
+    domains = https.get("domains")
+    hostname = str(domains[0]) if isinstance(domains, list) and domains else ""
+    hbind = str(https.get("bind_addr", "::"))
+    haddr = "127.0.0.1" if hbind in ("::", "0.0.0.0") else hbind
+    res = tls_healthz(hostname, haddr)
+    staging = https.get("letsencrypt_prod") is not True
+    detail = f"https://{hostname}/healthz via {haddr}: {res}"
+    if staging and res != "ok":
+        detail += " (letsencrypt_prod = false: Let's Encrypt's staging certificates are never trusted)"
+    out.append(("iroh-dns-server certificate", res == "ok", detail, staging))
+    return out
 
 
 def relay_health(path: Path) -> list[tuple[str, bool, str, bool]]:
@@ -1788,6 +2229,9 @@ def backup_paths(project: Project) -> list[Path]:
         # The config only: the relay generates its ACME account and certificate
         # itself and gets them again on a new host (the Ansible path backs up none).
         paths += [RELAY_TOML]
+    if "iroh-dns-server" in svcs:
+        # The config only, likewise: nodes republish their records every 5 minutes.
+        paths += [DNS_TOML]
     return paths
 
 
@@ -1857,8 +2301,11 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--generate-treasury", action="store_true", help="sponsord/onramp: generate the treasury wallet on this host"
     )
-    p.add_argument("--hostname", help="relay: the relay's public DNS name (its A/AAAA records point at this host)")
-    p.add_argument("--contact", help="relay: the Let's Encrypt account's email address")
+    p.add_argument(
+        "--hostname",
+        help="relay: its public DNS name (A/AAAA here); dns: the zone delegated to this host, also its https name",
+    )
+    p.add_argument("--contact", help="relay/dns: the Let's Encrypt account's email address")
     p.add_argument(
         "--access",
         choices=("allowlist", "everyone"),
@@ -1866,8 +2313,14 @@ def parser() -> argparse.ArgumentParser:
         help="relay: who may relay through it (default allowlist: fill in your nodes' IDs)",
     )
     p.add_argument(
-        "--staging", action="store_true", help="relay: Let's Encrypt's staging CA, for a trial (untrusted certificates)"
+        "--staging",
+        action="store_true",
+        help="relay/dns: Let's Encrypt's staging CA, for a trial (untrusted certificates)",
     )
+    p.add_argument(
+        "--dns-bind", help="dns: the one IPv4 address DNS (udp+tcp/53) binds (default: the default route's source)"
+    )
+    p.add_argument("--public-ipv4", help="dns: the public IPv4 the parent zone's glue names, behind 1:1 NAT (rr_a)")
     p.set_defaults(func=init)
 
     sub.add_parser("check", help="preflight: files, settings, ports, the node's config").set_defaults(func=check)

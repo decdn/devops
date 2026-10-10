@@ -16,14 +16,13 @@ split along that line:
   same daemon with an origin backend, seated on-chain via `OriginAssignment.addOrigin`,
   ADR 002/011), and optionally `sponsord` + its onramp, iroh relays and an iroh DNS
   server: `publisher.yml` / `make deploy-publisher` (`origin.yml` + the component
-  playbooks), `cloud-init/user-data-publisher.yaml`, Compose's `origin`/`onramp`/`relay`
+  playbooks), `cloud-init/user-data-publisher.yaml`, Compose's `origin`/`onramp`/`relay`/`dns`
   profiles, the chart (an origin node only), the `decdn.publisher` collection. Front
   door: `docs/publishers.md`.
 
 There are four deploy paths:
 **Ansible** (`ansible/`, VMs/bare metal, the primary path, also the `decdn.node` and
-`decdn.publisher` Galaxy collections, and the only path that also deploys the iroh
-DNS server), **cloud-init**
+`decdn.publisher` Galaxy collections), **cloud-init**
 (`cloud-init/`, one VM that runs the Ansible playbook on itself, no control machine),
 **Docker Compose** (`compose/`, a single Docker host) and a **Helm chart**
 (`charts/decdn-node/`, Kubernetes).
@@ -68,7 +67,8 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
    IPv4 by default, clear of systemd-resolved's `127.0.0.53`) itself, with no proxy
    and no backend behind it. Its holes come from `iroh_dns_server_hosts`; its metrics
    (`127.0.0.1:9117`) and a plain-http health listener (`127.0.0.1:9118`) are
-   asserted onto loopback.
+   asserted onto loopback. On Compose (the `dns` profile) the operator opens the same
+   ports, and `decdn-compose check` refuses either listener off loopback.
    **Kubernetes exception (chart only):** the node's metrics bind `0.0.0.0` inside the pod
    so kubelet probes and Prometheus can reach them. That is allowed only behind a
    ClusterIP-only Service and the chart's NetworkPolicy (metrics ingress limited to
@@ -76,11 +76,11 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
    `networkPolicy.allowUnrestrictedMetrics=true` acknowledges it. Never front metrics with
    a LoadBalancer/NodePort/Ingress.
    **Compose exception (the iroh services only):** every Compose container runs as a
-   non-root host account, except the iroh relay, which runs as uid 0 holding
-   `NET_BIND_SERVICE` and no other capability (read-only rootfs,
-   `no-new-privileges`, everything else dropped). It must bind its public ports
+   non-root host account, except the iroh relay and DNS server, which run as uid 0
+   holding `NET_BIND_SERVICE` and no other capability (read-only rootfs,
+   `no-new-privileges`, everything else dropped). Each must bind its public ports
    itself, and on the host network Docker cannot give a non-root process that
-   capability (no ambient capabilities, no file capability on the binary, and the
+   capability (no ambient capabilities, no file capability on the binaries, and the
    unprivileged-port sysctl is refused with host networking). `compose/tests/invariants.jq`
    allows uid 0 only for the services in its `root_allowed` list, and only with
    `cap_add` exactly `[NET_BIND_SERVICE]`; never add a service to that list for any
@@ -103,7 +103,7 @@ ansible/                # the deployment project (DevSec-hardened, lean roles)
   inventory/ galaxy/ molecule/    # see ansible/README.md
 cloud-init/             # user-data-{node,publisher}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
 compose/                # Docker Compose deploy path for a single host (see its README.md)
-  compose.yaml          # profiles: node / origin (one decdn-node), sponsord, onramp (+ sponsord), caddy, relay
+  compose.yaml          # profiles: node / origin (one decdn-node), sponsord, onramp (+ sponsord), caddy, relay, dns
   decdn-compose         # the operator's wrapper: init, check, guarded up/stop/restart/down, health, cli, backup
   Caddyfile             # mirrors roles/sponsord_onramp/templates/Caddyfile.j2
   tests/*.jq            # lint-compose: invariants, inline-env, fail-closed
@@ -432,6 +432,12 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     inventory (`make test-scripts` checks), and `validation-iroh-dns-server`. The
     real binary's record round-trip (PUT, then `dig TXT`) is a manual check, listed
     in the role README. No `monitoring/` assets yet.
+  - **Compose:** the `dns` profile runs the same release from n0's image (see the
+    `compose/` bullet). A bump of `iroh_dns_server_version` also bumps the image
+    digest in `compose/compose.yaml`, the version its comment names and
+    `DNS_VERSION` in `compose/decdn-compose` (`make test-scripts` checks both), and
+    a new key in the role's template or stub goes into `DNS_KEYS` there (its unit
+    tests compare them with the stub's).
 
 - **`cloud-init/`** — the Ansible path with no control machine. Two templates, one per
   persona: `user-data-node.yaml` (node operators: a cache node) and
@@ -479,7 +485,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   `molecule/cloud-init/pack.yml` and `includes/`. They are the only coverage of the node's and the
   onramp's release download and verify path.
 
-- **`compose/`** — the node, the sponsor and an iroh relay under Docker Compose on one host. The
+- **`compose/`** — the node, the sponsor, an iroh relay and an iroh DNS server under Docker Compose on one host. The
   node: the upstream image, always by digest (`compose.yaml` builds
   `DECDN_IMAGE_REPO@DECDN_IMAGE_DIGEST`), the role's host layout (`/etc/decdn`
   read-only, `/var/lib/decdn`), host networking (so loopback metrics/admin stay
@@ -487,8 +493,8 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   SIGTERM grace. Every service sits behind a profile (`COMPOSE_PROFILES` in `.env`):
   `node` and `origin` (both start the one `decdn-node`: a node operator's cache node,
   or a publisher's origin, whose `node.toml` carries `[cache.origin]`), `sponsord`,
-  `onramp` (also starts `sponsord`), `caddy` and `relay` (refused with `onramp` or
-  `caddy`: all want 80/443). The shared hardening (host network,
+  `onramp` (also starts `sponsord`), `caddy`, `relay` and `dns` (`relay` and `dns`
+  each refused with one another, `onramp` or `caddy`: all want 443). The shared hardening (host network,
   read-only rootfs, `cap_drop: [ALL]`, `no-new-privileges`, SIGTERM, journald logging)
   is one `x-hardened` anchor merged by `<<: *hardened`; the lint checks the rendered
   result, so a service-level override is caught like an inline one. An fs origin's
@@ -546,6 +552,19 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     empty allowlist and `[::]` under `bindv6only=1`. `health` is the role's gate
     (loopback `/metrics` with `relayserver_accepts_total`) plus its certificate
     check (warn-only with `prod_tls = false`).
+  - **iroh DNS server (`dns`):** the relay's pattern with n0's
+    `n0computer/iroh-dns-server` (`--config`, `/etc/iroh-dns-server/config.toml` from
+    `compose/iroh-dns-server.toml.example`, `/var/lib/iroh-dns-server` as
+    `data_dir`). `init dns` binds DNS to one address, the default route's IPv4
+    (`--dns-bind`), so resolved's `127.0.0.53` stub keeps working, and writes `rr_a`
+    from it only when public (`--public-ipv4` behind NAT). `check` refuses unknown
+    keys (`DNS_KEYS`), an origin without its trailing dot or no `"."`, `"smart"`
+    rate limiting, `[http]`/`[metrics]` off loopback and a missing or private
+    `rr_a`; its port guard is address-aware for 53 (`dns_port_problems`, the
+    role's `ports.yml`: a wildcard bind beside resolved's stub names
+    `DNSStubListener=no`). `health`: loopback `/healthz` must report `DNS_VERSION`
+    (unless `.env` overrides the digest), each origin's SOA via `dig` over udp and
+    tcp (skipped with a warning without `dig`), then the certificate.
   - **No `${VAR:?}`:** Compose interpolates disabled services too, so a required
     variable would break other profiles. An unset variable renders a value its
     service refuses instead (invalid image reference, unknown user, a domain with a

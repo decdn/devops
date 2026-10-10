@@ -8,10 +8,10 @@
 def check($svc; $what; $ok): if $ok then empty else "\($svc): unset \($what)" end;
 
 # The images compose.yaml pins itself by digest, rather than taking them from .env.
-def pinned_images: ["caddy", "iroh-relay"];
+def pinned_images: ["caddy", "iroh-relay", "iroh-dns-server"];
 # The services whose account compose.yaml fixes (uid 0, which invariants.jq allows
 # for these only) instead of naming a host account's uid from .env.
-def fixed_user: ["iroh-relay"];
+def fixed_user: ["iroh-relay", "iroh-dns-server"];
 
 .services as $all
 | ($all | to_entries[] | .key as $n | .value as $s
