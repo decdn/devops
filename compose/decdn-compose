@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 import os
 import pwd
 import re
@@ -40,8 +41,10 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -79,7 +82,19 @@ ORIGIN_TARGET = "/srv/decdn-origin"
 # compose.yaml's default DECDN_ORIGIN_DIR: an empty directory, for a node without one.
 NO_ORIGIN = Path("/var/lib/decdn-compose/no-origin")
 # Never an origin's content: the hosts' secrets and state.
-NOT_ORIGIN = ("/etc/decdn", "/etc/sponsord", "/var/lib/decdn", "/var/lib/caddy", "/etc", "/root", "/proc", "/sys")
+NOT_ORIGIN = (
+    "/etc/decdn",
+    "/etc/sponsord",
+    "/var/lib/decdn",
+    "/var/lib/caddy",
+    "/etc",
+    "/root",
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
+    "/boot",
+)
 
 DEFAULT_ENV_FILES = {
     "DECDN_ENV_FILE": "/etc/decdn/decdn.env",
@@ -90,7 +105,9 @@ DEFAULT_ENV_FILES = {
 
 # Loopback listeners compose.yaml pins (tests/invariants.jq).
 SPONSORD_METRICS = "http://127.0.0.1:8090/metrics"
-HOLD_RE = re.compile(r"(?m)^sponsord_pool_topup_unconfirmed_since_unix(?:\{[^}]*\})?\s+([0-9.eE+]+)\s*$")
+HOLD_GAUGE = "sponsord_pool_topup_unconfirmed_since_unix"
+# One sample line of the gauge: name, optional labels, value, optional timestamp.
+HOLD_RE = re.compile(rf"^{HOLD_GAUGE}(?:\{{[^}}]*\}})?\s+([0-9.eE+-]+|NaN|[+-]Inf)(?:\s+-?[0-9]+)?\s*$")
 KEEPER_RE = re.compile(r"(?m)^sponsord_pool_keeper_failures_total\s")
 
 # The ports each service binds on the host network, for the preflight.
@@ -134,32 +151,47 @@ def redact(text: str) -> str:
 
 # --- .env ------------------------------------------------------------------------
 
-LINE_RE = re.compile(r"^\s*(#\s*)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+# A setting as Compose's dotenv parser reads one: `KEY=value`, also `KEY = value`
+# and the YAML-style `KEY: value`, with an optional `export `.
+SETTING_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|:(?=\s|$))\s*(.*)$")
+# A commented-out `# KEY=value` example, which set_env fills in place.
+COMMENTED_RE = re.compile(r"^\s*#\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=")
 
 
 def parse_env(path: Path) -> dict[str, str]:
-    """Compose's env-file format, the subset the templates use: KEY=value, with
-    optional single or double quotes, comments on their own lines."""
+    """Compose's env-file format, as far as these files need it: every form of a
+    setting Compose reads (SETTING_RE), single or double quotes (anything after the
+    closing quote dropped), an unquoted value's ` # comment` dropped. A line that
+    is neither blank, a comment nor a setting is refused rather than skipped:
+    Compose may read it some other way (a bare `KEY` takes the shell's value), and
+    a skipped setting would leave a check looking at a default Compose does not
+    use. It does not expand `${VAR}`: where a value matters, problems() and the
+    CLI take the environment Compose itself renders (rendered_environments), and
+    this is the fallback."""
     out: dict[str, str] = {}
-    for line in path.read_text().splitlines():
-        m = LINE_RE.match(line)
-        if not m or m[1]:
+    for n, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
             continue
-        value = m[3].strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-            value = value[1:-1]
-        out[m[2]] = value
+        m = SETTING_RE.match(line)
+        if not m:
+            raise Refused(f"{path}:{n}: not a KEY=value line, which decdn-compose cannot check: fix or remove it")
+        raw = m[2].strip()
+        if raw[:1] in ("'", '"'):
+            end = raw.find(raw[0], 1)
+            value = raw[1:end] if end > 0 else raw[1:]
+        else:
+            value = re.split(r"\s+#", raw, maxsplit=1)[0].strip()
+        out[m[1]] = value
     return out
 
 
 def set_env(path: Path, updates: dict[str, str]) -> None:
     """Set KEY=value in place: the active line if there is one, else the first
-    commented one, else appended. Comments and order are kept."""
+    commented `# KEY=` one, else appended. Comments and order are kept."""
     lines = path.read_text().splitlines()
     for key, value in updates.items():
-        matches = [(i, m) for i, line in enumerate(lines) if (m := LINE_RE.match(line)) and m[2] == key]
-        active = [i for i, m in matches if not m[1]]
-        commented = [i for i, m in matches if m[1]]
+        active = [i for i, line in enumerate(lines) if (m := SETTING_RE.match(line)) and m[1] == key]
+        commented = [i for i, line in enumerate(lines) if (m := COMMENTED_RE.match(line)) and m[1] == key]
         if active:
             lines[active[0]] = f"{key}={value}"
         elif commented:
@@ -192,7 +224,9 @@ class Project:
     def load(cls) -> Project:
         if not DOTENV.exists():
             raise Refused(f"{DOTENV} does not exist: run `decdn-compose init <profile>…` first")
-        return cls(parse_env(DOTENV))
+        env = parse_env(DOTENV)
+        refuse_compose_overrides(env, os.environ)
+        return cls(env)
 
     @property
     def profiles(self) -> list[str]:
@@ -213,6 +247,41 @@ class Project:
         return f"{repo}@{digest}"
 
 
+def interpolated_names() -> set[str]:
+    """Every variable compose.yaml (and the override) interpolates."""
+    names: set[str] = set()
+    for f in (COMPOSE_FILE, OVERRIDE_FILE):
+        if f.exists():
+            # `$${…}` is Compose's escape for a literal (the onramp's shell script).
+            names |= set(re.findall(r"(?<!\$)\$\{([A-Za-z_][A-Za-z0-9_]*)", f.read_text()))
+    return names
+
+
+def refuse_compose_overrides(dotenv: dict[str, str], environ: Mapping[str, str]) -> None:
+    """The preflight reads .env; Compose lets the shell's environment win over it,
+    and a COMPOSE_* setting can rename the project (whose label the top-up guard
+    finds sponsord by), swap the files or the env file. So every input Compose
+    takes comes from .env, and only COMPOSE_PROFILES among the COMPOSE_* keys."""
+    in_dotenv = sorted(k for k in dotenv if k.startswith("COMPOSE_") and k != "COMPOSE_PROFILES")
+    if in_dotenv:
+        raise Refused(f"{DOTENV} sets {', '.join(in_dotenv)}: decdn-compose fixes the project, its files and .env")
+    in_shell = sorted(k for k in environ if k.startswith("COMPOSE_") or k in interpolated_names())
+    if in_shell:
+        raise Refused(
+            f"the environment sets {', '.join(in_shell)}, which Compose would take over {DOTENV}: "
+            "unset them (decdn-compose reads .env only, so its checks see what Compose runs)"
+        )
+
+
+def compose_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The environment for `docker compose`: the caller's, minus anything Compose
+    would read in place of .env (refuse_compose_overrides already refused them; this
+    keeps an internal call honest too), plus `extra`."""
+    drop = interpolated_names()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("COMPOSE_") and k not in drop}
+    return env | dict(extra or {})
+
+
 # --- processes -------------------------------------------------------------------
 
 
@@ -224,6 +293,8 @@ def run(
     quiet: bool = False,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    if env is None and argv[:2] == ["docker", "compose"]:
+        env = compose_env()
     cp = subprocess.run(
         argv,
         text=True,
@@ -239,7 +310,8 @@ def run(
 
 
 def compose_argv(*args: str) -> list[str]:
-    argv = ["docker", "compose", "--project-directory", str(HERE), "-f", str(COMPOSE_FILE)]
+    # -p: the project name the top-up guard finds sponsord's container by.
+    argv = ["docker", "compose", "--project-directory", str(HERE), "-p", PROJECT, "-f", str(COMPOSE_FILE)]
     if OVERRIDE_FILE.exists():
         argv += ["-f", str(OVERRIDE_FILE)]
     return argv + list(args)
@@ -247,6 +319,29 @@ def compose_argv(*args: str) -> list[str]:
 
 def compose(*args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess[str]:
     return run(compose_argv(*args), check=check, capture=capture)
+
+
+def rendered_environments() -> dict[str, dict[str, str]]:
+    """Each active service's environment as Compose renders it (env files merged,
+    parsed and interpolated by Compose itself), or {} when it cannot render (an env
+    file is missing: problems() reports that on its own)."""
+    cp = subprocess.run(
+        compose_argv("config", "--format", "json"),
+        text=True,
+        env=compose_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if cp.returncode != 0:
+        return {}
+    try:
+        services = json.loads(cp.stdout).get("services") or {}
+    except ValueError:
+        return {}
+    return {
+        name: {k: "" if v is None else str(v) for k, v in (svc.get("environment") or {}).items()}
+        for name, svc in services.items()
+    }
 
 
 def container_id(service: str) -> str:
@@ -276,7 +371,7 @@ def decdn_cli(
     *,
     etc_rw: bool = False,
     network: str = "none",
-    env_file: Path | None = None,
+    env_values: Mapping[str, str] | None = None,
     tty: bool = False,
     extra_mounts: list[str] | None = None,
     cli_env: dict[str, str] | None = None,
@@ -287,9 +382,9 @@ def decdn_cli(
 ) -> subprocess.CompletedProcess[str]:
     """The decdn CLI from the pinned node image, hardened like the daemon.
 
-    An env file's values reach the container through a root-only copy parsed as
-    Compose parses them for the daemon (quotes stripped): never on an argv that
-    `ps` or a sudo log shows, and never in the docker client's environment."""
+    `env_values` (the daemon's environment, node_environment()) reach the container
+    through a root-only copy: never on an argv that `ps` or a sudo log shows, and
+    never in the docker client's environment."""
     uid, gid = project.env.get("DECDN_UID", ""), project.env.get("DECDN_GID", "")
     argv = [
         "docker",
@@ -320,15 +415,17 @@ def decdn_cli(
     if tty and sys.stdin.isatty():
         argv += ["-it"]
     with tempfile.TemporaryDirectory(prefix="decdn-env.") as tmp:
-        if env_file and env_file.exists():
-            # Compose's parse (quotes stripped), rewritten in `docker run`'s literal
-            # format into a root-only copy: the values stay off argv and out of the
-            # docker client's own environment, where a stray DOCKER_HOST or PATH
-            # line would steer the client itself.
+        if env_values:
+            # The values as the daemon gets them, rewritten in `docker run`'s literal
+            # format into a root-only copy: they stay off argv and out of the docker
+            # client's own environment, where a stray DOCKER_HOST or PATH line would
+            # steer the client itself. That format has no quoting, so no newlines.
+            if any("\n" in v or "\r" in v for v in env_values.values()):
+                raise Refused("an env-file value holds a line break, which `docker run --env-file` cannot carry")
             copy = Path(tmp) / "env"
             write_new(
                 copy,
-                "".join(f"{k}={v}\n" for k, v in parse_env(env_file).items()).encode(),
+                "".join(f"{k}={v}\n" for k, v in env_values.items()).encode(),
                 0o600,
                 os.geteuid(),
                 os.getegid(),
@@ -391,7 +488,8 @@ def write_new(path: Path, data: bytes, mode: int, uid: int, gid: int) -> bool:
 def install_template(src: str, dst: Path, mode: int) -> bool:
     if dst.exists():
         return False
-    write_new(dst, (HERE / src).read_bytes(), mode, 0, 0)
+    if not write_new(dst, (HERE / src).read_bytes(), mode, 0, 0):
+        raise Refused(f"{dst} appeared or is a dangling symlink: not installing compose/{src} over it")
     say(f"installed {dst} ({mode:04o}) from compose/{src}")
     return True
 
@@ -444,10 +542,11 @@ def init(args: argparse.Namespace) -> None:
         updates["SPONSORD_ONRAMP_DOMAIN"] = args.domain
     origin_url = args.origin
     if origin_url and origin_url.startswith("file://"):
-        host_dir = Path(origin_url.removeprefix("file://"))
-        if not host_dir.is_absolute() or not host_dir.is_dir():
-            raise Refused(f"--origin {origin_url}: {host_dir} is not an existing absolute directory")
-        updates["DECDN_ORIGIN_DIR"] = str(host_dir)
+        host_dir = origin_url.removeprefix("file://")
+        found = origin_dir_problems(host_dir) if host_dir else ["file:// names no directory"]
+        if found:
+            raise Refused(f"--origin {origin_url}: {found[0]}")
+        updates["DECDN_ORIGIN_DIR"] = host_dir
         origin_url = f"file://{ORIGIN_TARGET}"
     set_env(DOTENV, updates)
     project = Project(parse_env(DOTENV))
@@ -508,9 +607,11 @@ def init_node(project: Project, args: argparse.Namespace, origin_url: str | None
 
 
 def edit_node_toml(region: str, cache_node: bool) -> None:
-    """What README.md's set-up used to do with sed: the data dir, the region, and
+    """Fill in what `config init` leaves commented: the data dir, the region, and
     for a cache node the pull-through that fills its misses from other nodes (the
-    daemon's default is off; the Ansible role turns it on without an origin)."""
+    daemon's default is off; the Ansible role turns it on without an origin). The
+    result is parsed back and checked, so a change in `config init`'s output fails
+    here instead of leaving a node without its region or pull-through."""
     text = NODE_TOML.read_text()
     # data_dir and region live in [identity], where `config init` leaves them
     # commented; edit only that table (an S3 origin's table has a `# region` too).
@@ -523,7 +624,23 @@ def edit_node_toml(region: str, cache_node: bool) -> None:
             body = re.sub(rf"(?m)^# {key} = .*$", f'{key} = "{value}"', body, count=1)
     text = text[: ident.start(1)] + body + text[ident.end(1) :]
     if cache_node and not re.search(r"(?m)^node_to_node_pull_through_enabled\s*=", text):
-        text = re.sub(r"(?m)^\[cache\]$", "[cache]\nnode_to_node_pull_through_enabled = true", text, count=1)
+        if re.search(r"(?m)^\[cache\]$", text):
+            text = re.sub(r"(?m)^\[cache\]$", "[cache]\nnode_to_node_pull_through_enabled = true", text, count=1)
+        else:
+            text = text.rstrip("\n") + "\n\n[cache]\nnode_to_node_pull_through_enabled = true\n"
+    try:
+        parsed = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        raise Refused(f"editing {NODE_TOML} left invalid TOML ({e}); it was not written") from e
+    want = {("identity", "data_dir"): str(VAR_DECDN), ("identity", "region"): region}
+    if cache_node:
+        want[("cache", "node_to_node_pull_through_enabled")] = True
+    wrong = [f"{t}.{k}" for (t, k), v in want.items() if parsed.get(t, {}).get(k) != v]
+    if wrong:
+        raise Refused(
+            f"`config init` wrote a {NODE_TOML} this wrapper could not fill in ({', '.join(wrong)}): "
+            "set them by hand, then re-run init"
+        )
     write_atomic(NODE_TOML, text, like=NODE_TOML)
 
 
@@ -675,10 +792,9 @@ def file_problem(
     return None
 
 
-def env_problems(path: Path, required: list[str], what: str) -> list[str]:
+def env_problems(path: Path, values: Mapping[str, str], required: list[str], what: str) -> list[str]:
     if not path.exists():
         return []  # reported by file_problem
-    values = parse_env(path)
     return [f"{path}: set {k} ({what})" for k in required if not values.get(k)]
 
 
@@ -691,6 +807,13 @@ def problems(project: Project, files_only: bool = False) -> list[str]:
     if not project.profiles:
         out.append("COMPOSE_PROFILES in .env selects no service")
     svcs = project.services
+    rendered = rendered_environments()
+
+    def values(svc: str, path: Path) -> Mapping[str, str]:
+        """What the service gets: Compose's render, else the file as parse_env reads it."""
+        if svc in rendered:
+            return rendered[svc]
+        return parse_env(path) if path.exists() else {}
 
     seen: dict[str, int | None] = {}
 
@@ -720,7 +843,7 @@ def problems(project: Project, files_only: bool = False) -> list[str]:
         out += filter(None, [file_problem(NODE_TOML, None, private=False)])
         dec_env = project.env_file("DECDN_ENV_FILE")
         out += filter(None, [file_problem(dec_env, 0, nonempty=False)])
-        if dec_env.exists() and not parse_env(dec_env).get("DECDN_RPC_URL"):
+        if dec_env.exists() and not values("decdn-node", dec_env).get("DECDN_RPC_URL"):
             out.append(f"{dec_env}: set DECDN_RPC_URL, your RPC endpoint (sudoedit {dec_env})")
         if (
             "origin" in project.profiles
@@ -743,13 +866,14 @@ def problems(project: Project, files_only: bool = False) -> list[str]:
         out += filter(None, [file_problem(SD_PASSWORD, uid, what="its password")])
         secret_env = project.env_file("SPONSORD_SECRET_ENV_FILE")
         out += filter(None, [file_problem(secret_env, 0, nonempty=False)])
-        out += env_problems(secret_env, ["SPONSORD_RPC_URL"], "the RPC endpoint")
+        out += env_problems(secret_env, values("sponsord", secret_env), ["SPONSORD_RPC_URL"], "the RPC endpoint")
         sd_env = project.env_file("SPONSORD_ENV_FILE")
         out += filter(None, [file_problem(sd_env, 0, private=False, nonempty=False)])
         out += env_problems(
             sd_env,
+            values("sponsord", sd_env),
             ["SPONSORD_CHAIN_ID", "SPONSORD_PAYMENT_POOL_ADDR", "SPONSORD_POOL_ID"],
-            "README.md, sponsord step 4",
+            "README.md, sponsord step 2",
         )
         if sd_env.exists() and "SPONSORD_RPC_URL" in parse_env(sd_env):
             out.append(f"{sd_env} is world-readable: move SPONSORD_RPC_URL to {secret_env}")
@@ -759,12 +883,14 @@ def problems(project: Project, files_only: bool = False) -> list[str]:
         )
         on_env = project.env_file("SPONSORD_ONRAMP_ENV_FILE")
         out += filter(None, [file_problem(on_env, 0, private=False, nonempty=False)])
+        onramp_values = values("sponsord-onramp", on_env)
         out += env_problems(
             on_env,
+            onramp_values,
             ["ONRAMP_RPC_URL", "ONRAMP_CAPACITY_BOND_ADDR", "ONRAMP_TURNSTILE_SITEKEY"],
-            "README.md, the onramp step",
+            "README.md, sponsord step 2",
         )
-        rpc = parse_env(on_env).get("ONRAMP_RPC_URL", "") if on_env.exists() else ""
+        rpc = onramp_values.get("ONRAMP_RPC_URL", "")
         # Served to every user: no credentials, no query (the role's preflight).
         if rpc and not re.fullmatch(r"https?://[^/?#@\s'\"`$\\{}]+(/[^?#\s'\"`$\\{}]*)?", rpc):
             out.append(
@@ -794,8 +920,11 @@ def problems(project: Project, files_only: bool = False) -> list[str]:
 
 
 def origin_dir_problems(value: str) -> list[str]:
-    """DECDN_ORIGIN_DIR: an existing absolute directory, and never one holding the
-    host's secrets or state (the lint cannot pin an operator's path)."""
+    """DECDN_ORIGIN_DIR: an existing absolute directory that neither is, sits
+    inside nor contains one holding the host's secrets or state: the fs origin
+    serves every file under it that the node's account can read, and that
+    includes its own key in /var/lib/decdn (the lint cannot pin an operator's
+    path)."""
     if not value:
         if not NO_ORIGIN.is_dir():
             return [f"{NO_ORIGIN} is missing (`decdn-compose init node` creates it)"]
@@ -804,8 +933,22 @@ def origin_dir_problems(value: str) -> list[str]:
     if not path.is_absolute() or not path.is_dir():
         return [f".env: DECDN_ORIGIN_DIR={value} is not an existing absolute directory (an NFS mount not up?)"]
     real = path.resolve()
-    if real == Path("/") or any(real == Path(p) or Path(p) in real.parents for p in NOT_ORIGIN):
+    # Both the protected paths and where they resolve to: /var/lib/decdn may be a
+    # symlink onto a data disk, and Docker follows it when it mounts the state dir.
+    protected = {Path(p) for p in NOT_ORIGIN} | {Path(p).resolve() for p in NOT_ORIGIN}
+    if any(real == p or real in p.parents or p in real.parents for p in protected):
         return [f".env: DECDN_ORIGIN_DIR={value} resolves to {real}, which holds this host's secrets or state"]
+    return []
+
+
+def rendered_origin_problems(rendered: Mapping) -> list[str]:
+    """origin_dir_problems for the directory Compose actually mounts as the fs
+    origin, whatever .env, the shell or an override made of DECDN_ORIGIN_DIR."""
+    node = (rendered.get("services") or {}).get("decdn-node") or {}
+    for vol in node.get("volumes") or []:
+        if vol.get("target") == ORIGIN_TARGET:
+            source = str(vol.get("source") or "")
+            return [] if source == str(NO_ORIGIN) else origin_dir_problems(source)
     return []
 
 
@@ -814,6 +957,9 @@ def listeners() -> dict[tuple[str, int], str] | None:
     if shutil.which("ss") is None:
         return None
     cp = run(["ss", "-Hlntup"], check=False, capture=True)
+    if cp.returncode != 0:
+        # An empty answer would read as "nothing holds any port".
+        raise Refused(f"`ss -Hlntup` failed (exit {cp.returncode}): cannot check the ports (iproute2 too old?)")
     held: dict[tuple[str, int], str] = {}
     for line in cp.stdout.splitlines():
         cols = line.split()
@@ -845,11 +991,10 @@ def validate_node(project: Project) -> list[str]:
     """`decdn config validate` against the pinned image, with the daemon's own
     environment file. Its output can name the RPC endpoint, so only a redacted
     copy of a failure is shown."""
-    dec_env = project.env_file("DECDN_ENV_FILE")
     cp = decdn_cli(
         project,
         ["config", "validate", "--config", str(NODE_TOML), "--keystore-password-file", str(NODE_PASSWORD)],
-        env_file=dec_env,
+        env_values=node_environment(project),
         extra_mounts=origin_mounts(project),
         quiet=True,
         check=False,
@@ -858,6 +1003,17 @@ def validate_node(project: Project) -> list[str]:
         return []
     tail = "\n    ".join(redact(cp.stdout or "").strip().splitlines()[-15:])
     return [f"decdn config validate refused {NODE_TOML}:\n    {tail}"]
+
+
+def node_environment(project: Project) -> dict[str, str]:
+    """The node daemon's environment as Compose renders it (decdn-node sets
+    nothing inline, so that is decdn.env as Compose reads it), else decdn.env as
+    parse_env reads it."""
+    rendered = rendered_environments().get("decdn-node")
+    if rendered is not None:
+        return rendered
+    dec_env = project.env_file("DECDN_ENV_FILE")
+    return parse_env(dec_env) if dec_env.exists() else {}
 
 
 def origin_mounts(project: Project) -> list[str]:
@@ -879,6 +1035,7 @@ def check(args: argparse.Namespace | None = None, project: Project | None = None
                 f"no systemd journal on this host, and {', '.join(journald)} log to journald "
                 "(README.md, Logs, shows a compose.override.yaml for another driver)"
             )
+        found += rendered_origin_problems(rendered)
         found += check_ports(project)
         if "decdn-node" in project.services and not found:
             found += validate_node(project)
@@ -916,8 +1073,10 @@ def hold_state(status: int, body: str, url: str = SPONSORD_METRICS) -> str | Non
 
     A daemon that is not listening yet has never topped up (it binds before it
     starts the keeper); one that answers without the keeper's series, or does not
-    answer, is in an unknown state; a binary without the hold gauge holds nothing
-    (ansible/roles/sponsord/tasks/topup-hold.yml)."""
+    answer, is in an unknown state (ansible/roles/sponsord/tasks/topup-hold.yml).
+    Stricter than the role, which takes a missing gauge for a binary that predates
+    it: Compose runs only pinned images, which all export it, so a missing,
+    unparseable or non-finite sample is unknown too, and any held series holds."""
     if status == 0:
         return None
     if status != 200 or not KEEPER_RE.search(body):
@@ -925,8 +1084,15 @@ def hold_state(status: int, body: str, url: str = SPONSORD_METRICS) -> str | Non
             f"sponsord's /metrics ({url}) did not answer with its keeper series "
             f"(status {status}): its top-up hold state is unknown"
         )
-    m = HOLD_RE.search(body)
-    since = int(float(m[1])) if m else 0
+    samples = [line for line in body.splitlines() if line.startswith(HOLD_GAUGE)]
+    values = [m[1] for line in samples if (m := HOLD_RE.match(line))]
+    try:
+        parsed = [float(v) for v in values]
+    except ValueError:
+        parsed = []
+    if not samples or len(values) != len(samples) or not all(math.isfinite(v) for v in parsed) or not parsed:
+        return f"sponsord's /metrics ({url}) has no readable {HOLD_GAUGE} sample: its top-up hold state is unknown"
+    since = int(max(parsed))
     if since > 0:
         return (
             f"sponsord holds an unconfirmed pool top-up since "
@@ -965,17 +1131,29 @@ def sponsord_metrics_url(cid: str) -> str | None:
     constant: an override can move SPONSORD_BIND, and a probe refused on the old
     port would read as "not listening, holds nothing" (the role probes the running
     process's listener for the same reason)."""
+    return bind_metrics_url(container_env(cid).get("SPONSORD_BIND", ""))
+
+
+def container_env(cid: str) -> dict[str, str]:
+    """A running container's environment ({} when it cannot be read)."""
     cp = run(["docker", "inspect", "--format", "{{json .Config.Env}}", cid], check=False, capture=True)
     try:
-        env = dict(e.split("=", 1) for e in json.loads(cp.stdout or "[]") if "=" in e)
+        entries = json.loads(cp.stdout or "null")
     except ValueError:
-        return None
-    return bind_metrics_url(env.get("SPONSORD_BIND", ""))
+        return {}
+    if not isinstance(entries, list):
+        return {}
+    return dict(e.split("=", 1) for e in entries if isinstance(e, str) and "=" in e)
 
 
 def bind_metrics_url(bind: str) -> str | None:
+    return loopback_url(bind, "/metrics")
+
+
+def loopback_url(bind: str, path: str) -> str | None:
+    """http://<bind><path> for a loopback host:port bind, else None."""
     m = re.fullmatch(r"(127(?:\.\d{1,3}){3}):(\d{1,5})", bind)
-    return f"http://{m[1]}:{m[2]}/metrics" if m else None
+    return f"http://{m[1]}:{m[2]}{path}" if m else None
 
 
 # compose.yaml's services: a stop/restart argument outside this set is an
@@ -1037,19 +1215,18 @@ def cmd_config(args: argparse.Namespace) -> None:
     file replaced by <redacted>: Compose merges env_file into `environment:`, so
     the plain command prints DECDN_RPC_URL and the rest in clear. A value written
     inline in compose.yaml (listeners, secret paths) is kept. --services,
-    --profiles and --images list names only and pass through."""
+    --profiles, --images, --volumes and --networks list names only and pass
+    through; any other argument is refused (--environment would print it all)."""
     require_root()
     Project.load()
     listing = {"--services", "--profiles", "--images", "--volumes", "--networks"}
     if args.rest and set(args.rest) <= listing:
-        os.execvp("docker", compose_argv("config", *args.rest))
+        os.execvpe("docker", compose_argv("config", *args.rest), compose_env())
     if args.rest:
         raise Refused("config takes no other arguments here: it prints the redacted model as JSON")
     full = json.loads(compose("config", "--format", "json", capture=True).stdout)
     no_files = {k: "/dev/null" for k in DEFAULT_ENV_FILES}
-    inline = json.loads(
-        run(compose_argv("config", "--format", "json"), capture=True, env={**os.environ, **no_files}).stdout
-    )
+    inline = json.loads(run(compose_argv("config", "--format", "json"), capture=True, env=compose_env(no_files)).stdout)
     for name, svc in full.get("services", {}).items():
         keep = (inline.get("services", {}).get(name) or {}).get("environment") or {}
         env = svc.get("environment") or {}
@@ -1062,17 +1239,17 @@ def cmd_config(args: argparse.Namespace) -> None:
 def cmd_passthrough(args: argparse.Namespace) -> None:
     require_root()
     Project.load()
-    os.execvp("docker", compose_argv(args.command, *args.rest))
+    os.execvpe("docker", compose_argv(args.command, *args.rest), compose_env())
 
 
 def cmd_cli(args: argparse.Namespace) -> None:
     require_root()
     project = Project.load()
-    dec_env = project.env_file("DECDN_ENV_FILE")
     # The node's own config and keystore password, unless the command names its own:
     # without them the CLI looks under $HOME/.decdn and finds no identity.
     cli_args = list(args.rest)
     mounts = origin_mounts(project)
+    node_env = node_environment(project)
     with tempfile.TemporaryDirectory(prefix="decdn-cli.") as tmp:
         if "--config" not in cli_args and NODE_TOML.exists():
             config = NODE_TOML
@@ -1080,7 +1257,7 @@ def cmd_cli(args: argparse.Namespace) -> None:
             # endpoint `config init` wrote. A copy that says "${DECDN_RPC_URL}" (the
             # loader expands it) gives them yours, from decdn.env: the URL never
             # reaches an argv, a sudo log or shell history. The copy holds no secret.
-            if dec_env.exists() and parse_env(dec_env).get("DECDN_RPC_URL"):
+            if node_env.get("DECDN_RPC_URL"):
                 copy = Path(tmp) / "node.toml"
                 copy.write_text(with_env_rpc_url(NODE_TOML.read_text()))
                 os.chmod(tmp, 0o755)
@@ -1096,7 +1273,7 @@ def cmd_cli(args: argparse.Namespace) -> None:
             tty=True,
             check=False,
             extra_mounts=mounts,
-            env_file=dec_env if dec_env.exists() else None,
+            env_values=node_env,
         )
     sys.exit(cp.returncode)
 
@@ -1156,16 +1333,18 @@ def cmd_health(args: argparse.Namespace) -> None:
         report("decdn-node admin RPC", cp.returncode == 0, " ".join(cp.stdout.split()) or "no answer")
         status, _ = fetch("http://127.0.0.1:9090/metrics")
         report("decdn-node metrics", status == 200, f"http://127.0.0.1:9090/metrics status {status}")
-    for svc, url in (
-        ("sponsord", "http://127.0.0.1:8090/healthz"),
-        ("sponsord-onramp", "http://127.0.0.1:8080/healthz"),
-    ):
+    # Each at the bind its running container was started with, not a constant.
+    for svc, bind_key in (("sponsord", "SPONSORD_BIND"), ("sponsord-onramp", "ONRAMP_BIND")):
         if svc in svcs:
+            url = loopback_url(container_env(container_id(svc)).get(bind_key, ""), "/healthz")
+            if url is None:
+                report(svc, False, f"its {bind_key} is not a loopback host:port")
+                continue
             status, body = fetch(url)
             report(svc, status == 200, f"{url} {status} {body.strip()}")
     if "sponsord" in svcs:
-        status, body = fetch(SPONSORD_METRICS)
-        reason = hold_state(status, body)
+        url = sponsord_metrics_url(container_id("sponsord"))
+        reason = hold_state(*fetch(url), url) if url else "its SPONSORD_BIND is not a loopback host:port"
         report("sponsord top-up hold", reason is None, reason or "none")
     if "caddy" in svcs:
         dom = project.env.get("SPONSORD_ONRAMP_DOMAIN", "")
@@ -1189,12 +1368,14 @@ def backup_paths(project: Project) -> list[Path]:
         ]
     if "sponsord-onramp" in svcs:
         paths += [SD_TURNSTILE, project.env_file("SPONSORD_ONRAMP_ENV_FILE")]
-    return [p for p in paths if p.exists()]
+    return paths
 
 
 def cmd_backup(args: argparse.Namespace) -> None:
-    """The keys and secrets only (docs/lifecycle.md's manual backup), encrypted on
-    this host to age recipients: nothing readable ever touches the disk."""
+    """The active profiles' keys, secrets, node.toml and env files, encrypted on
+    this host to age recipients: nothing readable ever touches the disk. Every
+    file the profiles need must be there: a backup missing a key is found out
+    only at restore time."""
     require_root()
     project = Project.load()
     if shutil.which("age") is None:
@@ -1202,6 +1383,9 @@ def cmd_backup(args: argparse.Namespace) -> None:
     paths = backup_paths(project)
     if not paths:
         raise Refused("nothing to back up for COMPOSE_PROFILES=" + ",".join(project.profiles))
+    missing = [str(p) for p in paths if not p.is_file()]
+    if missing:
+        raise Refused(f"not backing up an incomplete set: {', '.join(missing)} missing (`decdn-compose check`)")
     out = Path(args.output or f"decdn-{socket.gethostname()}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.tar.age")
     if out.exists():
         raise Refused(f"{out} exists")

@@ -11,6 +11,7 @@ import http.server
 import importlib.machinery
 import json
 import os
+import re
 import threading
 import importlib.util
 import subprocess
@@ -43,8 +44,45 @@ class TmpDir(unittest.TestCase):
 class EnvFile(TmpDir):
     def test_parse_skips_comments_and_strips_quotes(self) -> None:
         p = self.tmp / ".env"
-        p.write_text("# A=commented\nA=1\nB='x y'\nC=\"$z\"\n# D=2\nnot a line\n")
+        p.write_text("# A=commented\nA=1\nB='x y'\nC=\"$z\"\n# D=2\n\n   \n")
         self.assertEqual(dc.parse_env(p), {"A": "1", "B": "x y", "C": "$z"})
+
+    def test_every_shipped_template_parses(self) -> None:
+        # init installs these; parse_env refuses a line it cannot read.
+        templates = [HERE.parent / ".env.example", *sorted(HERE.parent.glob("*.env.example"))]
+        self.assertGreater(len(templates), 3)
+        for path in templates:
+            with self.subTest(path=path.name):
+                dc.parse_env(path)
+
+    def test_parse_reads_every_form_compose_reads(self) -> None:
+        # Compose's dotenv parser takes these too: skipping them would leave a
+        # check looking at a default (`DECDN_ORIGIN_DIR = /var/lib` unchecked).
+        p = self.tmp / ".env"
+        p.write_text("A = /var/lib\nB: https://k@h/x\nC:\nexport D = 1\nURL=https://h:8545/x\n")
+        self.assertEqual(
+            dc.parse_env(p), {"A": "/var/lib", "B": "https://k@h/x", "C": "", "D": "1", "URL": "https://h:8545/x"}
+        )
+
+    def test_parse_refuses_what_it_cannot_read(self) -> None:
+        for line in ("BARE_KEY", "not a setting at all", "KEY:value-without-space-is-not-yaml"):
+            with self.subTest(line=line):
+                p = self.tmp / ".env"
+                p.write_text(f"A=1\n{line}\n")
+                with self.assertRaises(dc.Refused) as cm:
+                    dc.parse_env(p)
+                self.assertIn(":2:", str(cm.exception))
+
+    def test_set_fills_a_commented_example_not_a_prose_comment(self) -> None:
+        p = self.tmp / ".env"
+        p.write_text("# GC_API_TOKEN: the token, see below\n# GC_API_TOKEN=\n")
+        dc.set_env(p, {"GC_API_TOKEN": "x"})
+        self.assertEqual(p.read_text(), "# GC_API_TOKEN: the token, see below\nGC_API_TOKEN=x\n")
+
+    def test_parse_follows_compose_on_export_and_comments(self) -> None:
+        p = self.tmp / ".env"
+        p.write_text("export A=1\nB=https://x/k # mine\nC=\"q\" # c\nD='a#b'\nE=a#b\n")
+        self.assertEqual(dc.parse_env(p), {"A": "1", "B": "https://x/k", "C": "q", "D": "a#b", "E": "a#b"})
 
     def test_set_replaces_active_then_commented_then_appends(self) -> None:
         p = self.tmp / ".env"
@@ -95,8 +133,34 @@ class HoldState(unittest.TestCase):
     def test_zero_gauge_holds_nothing(self) -> None:
         self.assertIsNone(dc.hold_state(200, METRICS_OK))
 
-    def test_a_binary_without_the_gauge_holds_nothing(self) -> None:
-        self.assertIsNone(dc.hold_state(200, "sponsord_pool_keeper_failures_total 3\n"))
+    def test_a_missing_gauge_is_unknown(self) -> None:
+        # Every pinned sponsord exports it: a missing one is not "an old binary".
+        self.assertIn("unknown", dc.hold_state(200, "sponsord_pool_keeper_failures_total 3\n") or "")
+
+    def test_any_held_series_refuses(self) -> None:
+        body = (
+            "sponsord_pool_keeper_failures_total 0\n"
+            'sponsord_pool_topup_unconfirmed_since_unix{pool="a"} 0\n'
+            'sponsord_pool_topup_unconfirmed_since_unix{pool="b"} 1700000000\n'
+        )
+        self.assertIn("holds an unconfirmed pool top-up", dc.hold_state(200, body) or "")
+
+    def test_a_timestamped_sample_is_read(self) -> None:
+        body = METRICS_OK.replace("unix 0", "unix 1.7e9 1728000000000")
+        self.assertIn("holds an unconfirmed pool top-up", dc.hold_state(200, body) or "")
+
+    def test_an_unparseable_gauge_is_unknown(self) -> None:
+        for value in ("garbage", "NaN", "+Inf", ""):
+            with self.subTest(value=value):
+                body = METRICS_OK.replace("unix 0", f"unix {value}")
+                self.assertIn("unknown", dc.hold_state(200, body) or "")
+
+    def test_help_and_type_lines_are_not_samples(self) -> None:
+        body = (
+            "# HELP sponsord_pool_topup_unconfirmed_since_unix x\n"
+            "# TYPE sponsord_pool_topup_unconfirmed_since_unix gauge\n" + METRICS_OK
+        )
+        self.assertIsNone(dc.hold_state(200, body))
 
     def test_a_held_top_up_refuses(self) -> None:
         body = METRICS_OK.replace("unix 0", "unix 1.7e9")
@@ -179,6 +243,17 @@ class Guard(unittest.TestCase):
             self.assertIsNone(dc.bind_metrics_url(bind), bind)
 
 
+class ContainerEnv(unittest.TestCase):
+    def test_unreadable_env_is_empty(self) -> None:
+        for out in ("null", "", "not json", '{"a": 1}', '["A=1", 2, "B"]'):
+            with (
+                self.subTest(out=out),
+                mock.patch.object(dc, "run", return_value=subprocess.CompletedProcess([], 0, out)),
+            ):
+                env = dc.container_env("abc")
+            self.assertEqual(env, {"A": "1"} if out.startswith("[") else {})
+
+
 class Fetch(unittest.TestCase):
     def test_loopback_probes_ignore_a_proxy(self) -> None:
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -255,6 +330,69 @@ class ComposeArgv(TmpDir):
             argv = dc.compose_argv("up", "-d")
         self.assertEqual(argv[-4:], ["-f", str(override), "up", "-d"])
         self.assertIn("--project-directory", argv)
+        self.assertEqual(argv[argv.index("-p") + 1], dc.PROJECT)
+
+
+class ComposeOverrides(unittest.TestCase):
+    def test_load_refuses_them(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(dc, "DOTENV", Path(tmp) / ".env"),
+            mock.patch.dict(os.environ, {"COMPOSE_PROJECT_NAME": "other"}),
+        ):
+            (Path(tmp) / ".env").write_text("COMPOSE_PROFILES=node\n")
+            with self.assertRaises(dc.Refused):
+                dc.Project.load()
+
+    def test_every_compose_subprocess_gets_the_scrubbed_environment(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"COMPOSE_PROFILES": "x", "DECDN_ENV_FILE": "/x"}),
+            mock.patch.object(dc.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "{}")) as run,
+        ):
+            dc.run(dc.compose_argv("ps"))
+            dc.rendered_environments()
+        for call in run.call_args_list:
+            env = call.kwargs["env"]
+            self.assertNotIn("COMPOSE_PROFILES", env)
+            self.assertNotIn("DECDN_ENV_FILE", env)
+
+    def test_passthrough_execs_with_the_scrubbed_environment(self) -> None:
+        with (
+            mock.patch.object(dc, "require_root"),
+            mock.patch.object(dc.Project, "load"),
+            mock.patch.dict(os.environ, {"DECDN_ENV_FILE": "/x"}),
+            mock.patch.object(dc.os, "execvpe") as execvpe,
+        ):
+            dc.cmd_passthrough(argparse.Namespace(command="logs", rest=["-f"]))
+        argv, env = execvpe.call_args.args[1], execvpe.call_args.args[2]
+        self.assertEqual(argv[-2:], ["logs", "-f"])
+        self.assertNotIn("DECDN_ENV_FILE", env)
+
+    def test_dotenv_may_not_rename_or_reroute_the_project(self) -> None:
+        for key in ("COMPOSE_PROJECT_NAME", "COMPOSE_FILE", "COMPOSE_ENV_FILES"):
+            with self.subTest(key=key), self.assertRaises(dc.Refused):
+                dc.refuse_compose_overrides({"COMPOSE_PROFILES": "node", key: "x"}, {})
+
+    def test_the_shell_may_not_override_dotenv(self) -> None:
+        for key in ("COMPOSE_PROFILES", "COMPOSE_PROJECT_NAME", "DECDN_ENV_FILE", "SPONSORD_IMAGE_DIGEST"):
+            with self.subTest(key=key), self.assertRaises(dc.Refused) as cm:
+                dc.refuse_compose_overrides({"COMPOSE_PROFILES": "node"}, {key: "x", "PATH": "/bin"})
+            self.assertIn(key, str(cm.exception))
+
+    def test_an_ordinary_environment_passes(self) -> None:
+        dc.refuse_compose_overrides({"COMPOSE_PROFILES": "node"}, {"PATH": "/bin", "HOME": "/root", "LANG": "C"})
+
+    def test_escaped_dollars_are_not_variables(self) -> None:
+        names = dc.interpolated_names()
+        self.assertIn("DECDN_IMAGE_DIGEST", names)
+        self.assertNotIn("ONRAMP_GATE_TEMPLATE", names)  # `$${…}` in the onramp's script
+
+    def test_compose_env_drops_them(self) -> None:
+        with mock.patch.dict(os.environ, {"COMPOSE_PROFILES": "x", "DECDN_ENV_FILE": "/x", "KEEP": "1"}):
+            env = dc.compose_env({"DECDN_ENV_FILE": "/dev/null"})
+        self.assertNotIn("COMPOSE_PROFILES", env)
+        self.assertEqual(env["DECDN_ENV_FILE"], "/dev/null")
+        self.assertEqual(env["KEEP"], "1")
 
 
 class NodeToml(TmpDir):
@@ -279,6 +417,24 @@ class NodeToml(TmpDir):
             "[network]\n# bind_port = 4433\n\n[cache]\n"
             'node_to_node_pull_through_enabled = true\n# region = "us-east-1"\n',
         )
+
+    def test_appends_a_missing_cache_table(self) -> None:
+        p = self.tmp / "node.toml"
+        p.write_text('[identity]\n# data_dir = "~/.decdn"\n# region = "US"\n')
+        with mock.patch.object(dc, "NODE_TOML", p):
+            dc.edit_node_toml("DE", cache_node=True)
+        self.assertTrue(dc.tomllib.loads(p.read_text())["cache"]["node_to_node_pull_through_enabled"])
+
+    def test_refuses_what_it_cannot_fill_in(self) -> None:
+        # A future `config init` that writes region active (or not at all): the
+        # edit would silently do nothing, so the result is checked.
+        p = self.tmp / "node.toml"
+        p.write_text('[identity]\n# data_dir = "~/.decdn"\nregion = "US"\n\n[cache]\n')
+        before = p.read_text()
+        with mock.patch.object(dc, "NODE_TOML", p), self.assertRaises(dc.Refused) as cm:
+            dc.edit_node_toml("DE", cache_node=True)
+        self.assertIn("identity.region", str(cm.exception))
+        self.assertEqual(p.read_text(), before)
 
     def test_refuses_a_file_without_identity(self) -> None:
         p = self.tmp / "node.toml"
@@ -328,6 +484,7 @@ class Cli(TmpDir):
     def test_env_file_values_never_reach_argv_or_the_client_env(self) -> None:
         env_file = self.tmp / "decdn.env"
         env_file.write_text(f"DECDN_RPC_URL='https://rpc.example/v2/{KEY}'\nDOCKER_HOST=tcp://evil:2375\n")
+        values = dc.parse_env(env_file)
         project = dc.Project({"DECDN_UID": "1", "DECDN_GID": "1", "DECDN_IMAGE_DIGEST": "sha256:" + "a" * 64})
         seen = {}
 
@@ -340,13 +497,27 @@ class Cli(TmpDir):
             mock.patch.object(dc, "ensure_image", side_effect=lambda i: i),
             mock.patch.object(dc, "run", side_effect=fake_run),
         ):
-            dc.decdn_cli(project, ["whoami"], env_file=env_file)
+            dc.decdn_cli(project, ["whoami"], env_values=values)
         self.assertNotIn(KEY, " ".join(seen["argv"]))
         self.assertNotIn("env", seen["kwargs"])  # the docker client's own environment is untouched
         self.assertEqual(seen["mode"], 0o600)
         # Quotes stripped, as Compose strips them for the daemon, in docker's literal format.
         self.assertIn(f"DECDN_RPC_URL=https://rpc.example/v2/{KEY}\n", seen["text"])
         self.assertFalse(Path(seen["argv"][seen["argv"].index("--env-file") + 1]).exists())
+
+    def test_a_line_break_in_a_value_is_refused(self) -> None:
+        project = dc.Project({"DECDN_UID": "1", "DECDN_GID": "1", "DECDN_IMAGE_DIGEST": "sha256:" + "a" * 64})
+        with (
+            mock.patch.object(dc, "ensure_image", side_effect=lambda i: i),
+            mock.patch.object(dc, "run") as run,
+            self.assertRaises(dc.Refused),
+        ):
+            dc.decdn_cli(project, ["whoami"], env_values={"DECDN_RPC_URL": "https://a\nDOCKER_HOST=x"})
+        run.assert_not_called()
+
+    def test_node_environment_prefers_the_render(self) -> None:
+        with mock.patch.object(dc, "rendered_environments", return_value={"decdn-node": {"DECDN_RPC_URL": "r"}}):
+            self.assertEqual(dc.node_environment(dc.Project()), {"DECDN_RPC_URL": "r"})
 
     def test_rpc_url_comes_from_the_environment(self) -> None:
         text = '[identity]\nregion = "DE"\n\n[blockchain]\nrpc_url = "https://public"\nchain_id = 1\n'
@@ -372,7 +543,33 @@ class Config(unittest.TestCase):
         out = say.call_args.args[0]
         self.assertNotIn(KEY, out)
         self.assertIn("127.0.0.1:8090", out)
-        self.assertEqual(run.call_args.kwargs["env"]["DECDN_ENV_FILE"], "/dev/null")
+        for key in dc.DEFAULT_ENV_FILES:
+            self.assertEqual(run.call_args.kwargs["env"][key], "/dev/null", key)
+
+    def test_every_env_file_is_redactable(self) -> None:
+        # cmd_config learns the inline keys by pointing every DEFAULT_ENV_FILES
+        # variable at /dev/null: an env_file named any other way would print in clear.
+        text = (HERE.parent / "compose.yaml").read_text()
+        paths = re.findall(r"(?m)^\s*- path: (.*)$", text)
+        self.assertTrue(paths)
+        for path in paths:
+            m = re.fullmatch(r"\$\{([A-Z_]+):-[^}]+\}", path.strip())
+            self.assertIsNotNone(m, path)
+            self.assertIn(m[1], dc.DEFAULT_ENV_FILES, path)
+
+    def test_other_arguments_are_refused(self) -> None:
+        for rest in (["--environment"], ["--format", "yaml"], ["--no-interpolate"], ["--services", "--environment"]):
+            with (
+                self.subTest(rest=rest),
+                mock.patch.object(dc, "require_root"),
+                mock.patch.object(dc.Project, "load"),
+                mock.patch.object(dc.os, "execvpe") as execvpe,
+                mock.patch.object(dc, "compose") as compose,
+            ):
+                with self.assertRaises(dc.Refused):
+                    dc.cmd_config(argparse.Namespace(rest=rest))
+                execvpe.assert_not_called()
+                compose.assert_not_called()
 
 
 class OriginDir(TmpDir):
@@ -382,11 +579,51 @@ class OriginDir(TmpDir):
         self.assertEqual(dc.origin_dir_problems(str(content)), [])
         self.assertTrue(dc.origin_dir_problems("relative/path"))
         self.assertTrue(dc.origin_dir_problems(str(self.tmp / "missing")))
-        for bad in ("/", "/etc", "/etc/ssl", "/proc"):
+        # Inside, equal to, or containing a protected directory: /var/lib holds
+        # decdn/node.secret, which the fs origin would serve.
+        for bad in ("/", "/etc", "/etc/ssl", "/proc", "/var", "/var/lib", "/var/lib/decdn/cache"):
             self.assertTrue(dc.origin_dir_problems(bad), bad)
         link = self.tmp / "link"
         link.symlink_to("/etc")
         self.assertTrue(dc.origin_dir_problems(str(link)))
+
+    def test_a_protected_dir_behind_a_symlink_is_still_protected(self) -> None:
+        # /var/lib/decdn moved to a data disk behind a symlink: serving the disk
+        # would serve the key.
+        disk = self.tmp / "data"
+        (disk / "decdn").mkdir(parents=True)
+        state = self.tmp / "state-link"
+        state.symlink_to(disk / "decdn")
+        with mock.patch.object(dc, "NOT_ORIGIN", (str(state),)):
+            self.assertTrue(dc.origin_dir_problems(str(disk)))
+            self.assertEqual(dc.origin_dir_problems(str(self.tmp)), dc.origin_dir_problems(str(self.tmp)))
+
+    def test_the_rendered_mount_is_checked(self) -> None:
+        def render(source):
+            return {"services": {"decdn-node": {"volumes": [{"target": dc.ORIGIN_TARGET, "source": source}]}}}
+
+        self.assertTrue(dc.rendered_origin_problems(render("/var/lib")))
+        self.assertEqual(dc.rendered_origin_problems(render(str(dc.NO_ORIGIN))), [])
+        self.assertEqual(dc.rendered_origin_problems({"services": {}}), [])
+
+    def test_init_refuses_an_empty_or_protected_file_origin(self) -> None:
+        for origin in ("file://", "file:///var/lib", "file:///"):
+            args = argparse.Namespace(
+                profiles=["origin"], origin=origin, region="DE", domain=None, chain="x", generate_treasury=False
+            )
+            with (
+                self.subTest(origin=origin),
+                mock.patch.object(dc, "require_root"),
+                mock.patch.object(dc.shutil, "which", return_value="/usr/bin/docker"),
+                mock.patch.object(dc, "NODE_TOML", self.tmp / "absent.toml"),
+                mock.patch.object(dc, "DOTENV", self.tmp / ".env"),
+                mock.patch.object(dc, "ensure_account", return_value=(1, 1)),
+                mock.patch.object(dc, "set_env") as set_env,
+                self.assertRaises(dc.Refused),
+            ):
+                (self.tmp / ".env").write_text("COMPOSE_PROFILES=\n")
+                dc.init(args)
+            set_env.assert_not_called()
 
 
 class FileProblem(TmpDir):
@@ -425,6 +662,273 @@ class Profiles(unittest.TestCase):
         )
         with mock.patch.object(dc, "require_root"), self.assertRaises(dc.Refused):
             dc.init(args)
+
+
+class CommandGuard(unittest.TestCase):
+    """The guard must run before compose, for every command that can stop sponsord."""
+
+    HELD = METRICS_OK.replace("unix 0", "unix 1700000000")
+
+    def held(self):
+        return (
+            mock.patch.object(dc, "require_root"),
+            mock.patch.object(dc.Project, "load"),
+            mock.patch.object(dc, "container_id", return_value="abc"),
+            mock.patch.object(dc, "sponsord_metrics_url", return_value=dc.SPONSORD_METRICS),
+            mock.patch.object(dc, "fetch", return_value=(200, self.HELD)),
+        )
+
+    def test_stop_restart_down_refuse_before_compose(self) -> None:
+        for command, rest in (("stop", []), ("restart", ["sponsord"]), ("down", []), ("stop", ["-t", "10"])):
+            with self.subTest(command=command, rest=rest), mock.patch.object(dc, "compose") as compose:
+                p = self.held()
+                with p[0], p[1], p[2], p[3], p[4], self.assertRaises(dc.Refused):
+                    dc.cmd_stopping(argparse.Namespace(command=command, rest=rest, ignore_topup_hold=False))
+                compose.assert_not_called()
+
+    def test_the_override_lets_it_through(self) -> None:
+        with mock.patch.object(dc, "compose") as compose:
+            p = self.held()
+            with p[0], p[1], p[2], p[3], p[4]:
+                dc.cmd_stopping(argparse.Namespace(command="stop", rest=[], ignore_topup_hold=True))
+            compose.assert_called_once_with("stop")
+
+    def test_up_refuses_a_recreate_while_held(self) -> None:
+        p = self.held()
+        with (
+            p[2],
+            p[3],
+            p[4],
+            mock.patch.object(dc, "check"),
+            mock.patch.object(dc, "up_recreates_sponsord", return_value=True),
+            mock.patch.object(dc, "compose") as compose,
+        ):
+            with self.assertRaises(dc.Refused):
+                dc.cmd_up(argparse.Namespace(rest=[], ignore_topup_hold=False))
+            compose.assert_not_called()
+            dc.cmd_up(argparse.Namespace(rest=["sponsord"], ignore_topup_hold=True))
+            compose.assert_called_once_with("up", "-d", "sponsord")
+
+    def test_the_override_flag_goes_before_the_command(self) -> None:
+        ns = dc.parser().parse_args(["--ignore-topup-hold", "stop", "-t", "10"])
+        self.assertTrue(ns.ignore_topup_hold)
+        self.assertEqual(ns.rest, ["-t", "10"])
+        # After it, it is Compose's argument: the guard still runs (and Compose
+        # refuses the unknown flag), so it is never silently ignored.
+        ns = dc.parser().parse_args(["stop", "--ignore-topup-hold"])
+        self.assertFalse(ns.ignore_topup_hold)
+        self.assertTrue(dc.touches_sponsord("stop", ns.rest))
+
+
+class InitNeverReplaces(TmpDir):
+    def paths(self):
+        etc, var = self.tmp / "etc", self.tmp / "var"
+        for d in (etc, var):
+            d.mkdir(exist_ok=True)
+            for f in d.iterdir():
+                f.unlink()
+        return (
+            mock.patch.object(dc, "ETC_DECDN", etc),
+            mock.patch.object(dc, "VAR_DECDN", var),
+            mock.patch.object(dc, "NODE_PASSWORD", etc / "keystore.password"),
+            mock.patch.object(dc, "NODE_TOML", etc / "node.toml"),
+            mock.patch.object(dc, "NODE_SECRET", var / "node.secret"),
+            mock.patch.object(dc, "NODE_KEYSTORE", var / "keystore.json"),
+            mock.patch.object(dc, "NO_ORIGIN", self.tmp / "no-origin" / "x"),
+            mock.patch.object(dc, "ensure_dir"),
+            mock.patch.object(dc, "install_template"),
+        )
+
+    def run_init_node(self, *present: str) -> mock.MagicMock:
+        uid, gid = os.geteuid(), os.getegid()
+        project = dc.Project({"DECDN_UID": str(uid), "DECDN_GID": str(gid)})
+        args = argparse.Namespace(chain="arbitrum-sepolia", region="DE")
+        p = self.paths()
+        with p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], mock.patch.object(dc, "decdn_cli") as cli:
+            (self.tmp / "etc" / "node.toml").write_text("x")  # config init is not under test here
+            for name in present:
+                (self.tmp / "var" / name).write_text("keep")
+            try:
+                dc.init_node(project, args, None)
+            finally:
+                for name in present:
+                    self.assertEqual((self.tmp / "var" / name).read_text(), "keep")
+        return cli
+
+    def test_a_half_identity_is_refused(self) -> None:
+        for name in ("node.secret", "keystore.json"):
+            with self.subTest(present=name), self.assertRaises(dc.Refused):
+                self.run_init_node(name)
+
+    def test_an_existing_identity_is_kept(self) -> None:
+        cli = self.run_init_node("node.secret", "keystore.json")
+        cli.assert_not_called()
+
+    def test_the_treasury_is_never_regenerated(self) -> None:
+        for present in (
+            ("treasury-password",),
+            ("treasury-keystore.json",),
+            ("treasury-password", "treasury-keystore.json"),
+        ):
+            with (
+                self.subTest(present=present),
+                tempfile.TemporaryDirectory() as tmp,
+                mock.patch.object(dc, "SD_KEYSTORE", Path(tmp) / "treasury-keystore.json"),
+                mock.patch.object(dc, "SD_PASSWORD", Path(tmp) / "treasury-password"),
+                mock.patch.object(dc, "run") as run,
+            ):
+                for name in present:
+                    (Path(tmp) / name).write_text("keep")
+                dc.generate_treasury(dc.Project(), os.geteuid(), os.getegid())
+                run.assert_not_called()
+                for name in present:
+                    self.assertEqual((Path(tmp) / name).read_text(), "keep")
+
+
+class SecretFileChecks(unittest.TestCase):
+    """problems() checks every secret file private (and env files root-owned)."""
+
+    def test_every_secret_is_checked_private(self) -> None:
+        seen: dict[str, tuple] = {}
+
+        def record(path, uid, *, private=True, nonempty=True, what=""):
+            seen[str(path)] = (uid, private)
+            return None
+
+        project = dc.Project(
+            {
+                "COMPOSE_PROFILES": "node,onramp,caddy",
+                "DECDN_UID": "1",
+                "DECDN_GID": "1",
+                "SPONSORD_UID": "2",
+                "SPONSORD_GID": "2",
+                "CADDY_UID": "3",
+                "CADDY_GID": "3",
+                "SPONSORD_ONRAMP_DOMAIN": "onramp.decdn.org",
+            }
+        )
+        with (
+            mock.patch.object(dc, "file_problem", side_effect=record),
+            mock.patch.object(dc, "rendered_environments", return_value={}),
+            mock.patch.object(dc.pwd, "getpwnam", side_effect=KeyError),
+            mock.patch.object(dc, "origin_dir_problems", return_value=[]),
+        ):
+            dc.problems(project, files_only=True)
+        private = [
+            dc.NODE_PASSWORD,
+            dc.NODE_SECRET,
+            dc.NODE_KEYSTORE,
+            dc.SD_TOKEN,
+            dc.SD_KEYSTORE,
+            dc.SD_PASSWORD,
+            dc.SD_TURNSTILE,
+        ]
+        for p in private:
+            self.assertTrue(seen[str(p)][1], p)
+        for key in ("DECDN_ENV_FILE", "SPONSORD_SECRET_ENV_FILE"):
+            path = dc.DEFAULT_ENV_FILES[key]
+            self.assertEqual(seen[path], (0, True), path)
+        for key in ("SPONSORD_ENV_FILE", "SPONSORD_ONRAMP_ENV_FILE"):
+            path = dc.DEFAULT_ENV_FILES[key]
+            self.assertEqual(seen[path], (0, False), path)
+
+    def run_problems(self, profiles: str, rendered: dict) -> list[str]:
+        project = dc.Project(
+            {
+                "COMPOSE_PROFILES": profiles,
+                "SPONSORD_UID": "2",
+                "SPONSORD_GID": "2",
+                "SPONSORD_ONRAMP_DOMAIN": "onramp.decdn.org",
+            }
+        )
+        with (
+            mock.patch.object(dc, "file_problem", return_value=None),
+            mock.patch.object(dc, "rendered_environments", return_value=rendered),
+            mock.patch.object(dc.pwd, "getpwnam", side_effect=KeyError),
+            mock.patch.object(Path, "exists", return_value=True),
+            mock.patch.object(dc, "parse_env", return_value={}),
+        ):
+            return dc.problems(project, files_only=True)
+
+    def test_the_onramp_rpc_url_is_public(self) -> None:
+        base = {"ONRAMP_CAPACITY_BOND_ADDR": "0x1", "ONRAMP_TURNSTILE_SITEKEY": "k"}
+        for url, ok in (
+            ("https://h/v2", True),
+            (f"https://u:{KEY}@h/", False),
+            (f"https://h/?key={KEY}", False),
+            (f"https://h/#{KEY}", False),
+        ):
+            with self.subTest(url=url):
+                found = self.run_problems("onramp", {"sponsord-onramp": base | {"ONRAMP_RPC_URL": url}})
+                self.assertEqual(not any("ONRAMP_RPC_URL must be" in f for f in found), ok)
+
+    def test_values_come_from_the_render(self) -> None:
+        # A value Compose renders empty (an unset ${VAR}) is missing, whatever the file says.
+        found = self.run_problems("sponsord", {"sponsord": {"SPONSORD_RPC_URL": "", "SPONSORD_CHAIN_ID": "1"}})
+        self.assertTrue(any("set SPONSORD_RPC_URL" in f for f in found))
+
+    def test_a_uid_that_is_not_the_accounts_is_flagged(self) -> None:
+        project = dc.Project({"COMPOSE_PROFILES": "caddy", "CADDY_UID": "0", "CADDY_GID": "0"})
+        account = mock.Mock(pw_uid=997)
+        with (
+            mock.patch.object(dc, "rendered_environments", return_value={}),
+            mock.patch.object(dc.pwd, "getpwnam", return_value=account),
+        ):
+            found = dc.problems(project, files_only=True)
+        self.assertTrue(any("CADDY_UID=0" in f for f in found))
+
+
+class Backup(TmpDir):
+    def test_covers_every_key_and_secret(self) -> None:
+        project = dc.Project({"COMPOSE_PROFILES": "node,onramp"})
+        paths = set(map(str, dc.backup_paths(project)))
+        for p in (
+            dc.NODE_SECRET,
+            dc.NODE_KEYSTORE,
+            dc.NODE_PASSWORD,
+            dc.SD_KEYSTORE,
+            dc.SD_PASSWORD,
+            dc.SD_TOKEN,
+            dc.SD_TURNSTILE,
+        ):
+            self.assertIn(str(p), paths)
+        for key in ("DECDN_ENV_FILE", "SPONSORD_SECRET_ENV_FILE", "SPONSORD_ENV_FILE", "SPONSORD_ONRAMP_ENV_FILE"):
+            self.assertIn(dc.DEFAULT_ENV_FILES[key], paths)
+
+    def test_an_incomplete_set_is_refused(self) -> None:
+        present = self.tmp / "present"
+        present.write_text("x")
+        with (
+            mock.patch.object(dc, "require_root"),
+            mock.patch.object(dc.Project, "load", return_value=dc.Project({"COMPOSE_PROFILES": "node"})),
+            mock.patch.object(dc.shutil, "which", return_value="/usr/bin/age"),
+            mock.patch.object(dc, "backup_paths", return_value=[present, self.tmp / "missing"]),
+            mock.patch.object(dc.subprocess, "Popen") as popen,
+        ):
+            with self.assertRaises(dc.Refused) as cm:
+                dc.cmd_backup(argparse.Namespace(recipient=["age1x"], output=str(self.tmp / "out.age")))
+            popen.assert_not_called()
+        self.assertIn("missing", str(cm.exception))
+        self.assertFalse((self.tmp / "out.age").exists())
+
+
+class Ports(unittest.TestCase):
+    def test_a_failing_ss_is_refused_not_empty(self) -> None:
+        with (
+            mock.patch.object(dc.shutil, "which", return_value="/usr/bin/ss"),
+            mock.patch.object(dc, "run", return_value=subprocess.CompletedProcess([], 1, "")),
+            self.assertRaises(dc.Refused),
+        ):
+            dc.listeners()
+
+
+class InstallTemplate(TmpDir):
+    def test_a_dangling_symlink_is_refused(self) -> None:
+        dst = self.tmp / "decdn.env"
+        dst.symlink_to(self.tmp / "nowhere")
+        with self.assertRaises(dc.Refused):
+            dc.install_template("decdn.env.example", dst, 0o600)
+        self.assertFalse((self.tmp / "nowhere").exists())
 
 
 if __name__ == "__main__":

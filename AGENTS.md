@@ -278,8 +278,9 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     `notify: Restart sponsord` to another task; make the file a hashed input
     instead, or the restart skips the guard. `sponsord_restart_ignore_topup_hold`
     overrides it (pass it as JSON). On Compose, `decdn-compose` makes the same check
-    (`hold_state`, same semantics, probing the bind the running container was
-    started with) before a stop, restart, down or recreating `up`.
+    (`hold_state`, probing the bind the running container was started with; stricter
+    than the role: a missing or unparseable gauge, which every pinned image exports,
+    is unknown, and any held series holds) before a stop, restart, down or recreating `up`.
   - **Alloy toggles:** `playbooks/group_vars/all.yml` derives
     `grafana_alloy_node_enabled` / `grafana_alloy_sponsord_enabled` from group
     membership. They are host-scoped so a co-located host's two plays render one
@@ -476,8 +477,12 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   The node's healthcheck is `decdn node health` (the image ships the CLI since decdn
   v0.0.2).
   - **`decdn-compose`** (Python ≥ 3.11, stdlib only): every service command is plain
-    `docker compose --project-directory compose/ -f compose.yaml [-f
-    compose.override.yaml]`. `init` creates the accounts, dirs and host-generated
+    `docker compose --project-directory compose/ -p decdn -f compose.yaml [-f
+    compose.override.yaml]`, and it refuses to run while `.env` sets a `COMPOSE_*` key
+    other than `COMPOSE_PROFILES` or the shell sets one or a variable `compose.yaml`
+    interpolates (Compose would take those over `.env`, which is all its checks
+    read). Values are checked as Compose renders them (`rendered_environments`), with
+    `parse_env` as the fallback. `init` creates the accounts, dirs and host-generated
     secrets (node keys and `config init` through the node image's CLI, the API
     token, optionally the treasury wallet) and fills chain values from the generated
     `networks.yml` mirrors (`network_profile`, which parses their fixed shape: keep

@@ -19,29 +19,32 @@ def allowed_keys: {
   "caddy": (base_keys + ["cap_add", "tmpfs"])
 };
 
-# Every mount, exactly: [source, target, read-only?], volumes and secrets alike (a
-# secret is a read-only bind of its host file, listed as "secret:<file>"). Each
-# container sees only its own files; the only writable ones are the node's data
-# dir and Caddy's ACME state. The Caddyfile's source is absolute (compose.yaml's
+# Every mount, exactly: [source, target, read-only?, created?], volumes and secrets
+# alike (a secret is a read-only bind of its host file, listed as "secret:<file>").
+# Each container sees only its own files; the only writable ones are the node's
+# data dir and Caddy's ACME state. "created?" is Docker creating a missing source
+# (create_host_path, true unless set false): only for the onramp's optional
+# gate-page directory, so a mistyped path or an NFS mount that is not up fails the
+# start instead of mounting an empty directory. The Caddyfile's source is absolute (compose.yaml's
 # directory), so it is matched by name; the origin content's source is the
 # operator's DECDN_ORIGIN_DIR, so only its target and mode are pinned.
 def allowed_mounts: {
-  "decdn-node": [["/etc/decdn", "/etc/decdn", true], ["/var/lib/decdn", "/var/lib/decdn", false],
-                 ["DECDN_ORIGIN_DIR", "/srv/decdn-origin", true]],
-  "sponsord": [["secret:/etc/sponsord/api-token", "/run/secrets/api-token", true],
-               ["secret:/etc/sponsord/treasury-password", "/run/secrets/treasury-password", true],
-               ["secret:/etc/sponsord/treasury-keystore.json", "/run/secrets/treasury-keystore.json", true]],
-  "sponsord-onramp": [["/etc/sponsord/onramp-gate", "/etc/sponsord/onramp-gate", true],
-                      ["secret:/etc/sponsord/api-token", "/run/secrets/api-token", true],
-                      ["secret:/etc/sponsord/turnstile-secret", "/run/secrets/turnstile-secret", true]],
-  "caddy": [["Caddyfile", "/etc/caddy/Caddyfile", true], ["/var/lib/caddy", "/data", false]]
+  "decdn-node": [["/etc/decdn", "/etc/decdn", true, false], ["/var/lib/decdn", "/var/lib/decdn", false, false],
+                 ["DECDN_ORIGIN_DIR", "/srv/decdn-origin", true, false]],
+  "sponsord": [["secret:/etc/sponsord/api-token", "/run/secrets/api-token", true, false],
+               ["secret:/etc/sponsord/treasury-password", "/run/secrets/treasury-password", true, false],
+               ["secret:/etc/sponsord/treasury-keystore.json", "/run/secrets/treasury-keystore.json", true, false]],
+  "sponsord-onramp": [["/etc/sponsord/onramp-gate", "/etc/sponsord/onramp-gate", true, true],
+                      ["secret:/etc/sponsord/api-token", "/run/secrets/api-token", true, false],
+                      ["secret:/etc/sponsord/turnstile-secret", "/run/secrets/turnstile-secret", true, false]],
+  "caddy": [["Caddyfile", "/etc/caddy/Caddyfile", true, false], ["/var/lib/caddy", "/data", false, false]]
 };
 def mounts($secrets): [((.volumes // [])[]
     | [(if .type == "bind" then .source else "\(.type):\(.source)" end
         | if endswith("/Caddyfile") then "Caddyfile" else . end),
-       .target, (.read_only == true)]
+       .target, (.read_only == true), (.type == "bind" and .bind.create_host_path != false)]
     | if .[1] == "/srv/decdn-origin" then .[0] = "DECDN_ORIGIN_DIR" else . end),
-  ((.secrets // [])[] | ["secret:\($secrets[.source].file // "?")", (.target // "/run/secrets/\(.source)"), true])]
+  ((.secrets // [])[] | ["secret:\($secrets[.source].file // "?")", (.target // "/run/secrets/\(.source)"), true, false])]
   | sort;
 
 # Secrets reach the sponsord daemons only as the files mounted above, never inline.

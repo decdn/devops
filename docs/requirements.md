@@ -34,7 +34,7 @@ and they run the same roles.
 | Ansible (control machine) | ansible-core ≥ 2.15 | CI runs the current release |
 | cloud-init | the provider image's own; the bootstrap installs its pinned ansible-core on the host | the node template is booted with the distro's cloud-init in Debian 12 and Ubuntu 26.04 containers, to a running node; the sponsor template in Ubuntu 26.04, to running `sponsord`, `sponsord-onramp` and Caddy |
 | Kubernetes | ≥ 1.25 | rendered and validated with kubeconform against 1.30 |
-| Docker Compose | v2 with `env_file.required` and `depends_on.restart` support (2.24+), on a host with systemd-journald; Python ≥ 3.11 for the `decdn-compose` wrapper | rendered in CI with every profile on; the wrapper's decisions unit-tested |
+| Docker Compose | v2 with `env_file.required` and `depends_on.restart` support (2.24+), with systemd-journald (or a `compose.override.yaml` setting another logging driver); Python ≥ 3.11 for the `decdn-compose` wrapper | rendered in CI with every profile on; the wrapper's decisions unit-tested |
 
 On Ubuntu 25.10 and later, `sudo` is sudo-rs; see the `ansible_become_exe` note in
 `ansible/inventory/hosts-node.yml.example`.

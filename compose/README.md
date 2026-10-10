@@ -57,7 +57,11 @@ against [`compose.yaml`](compose.yaml), plus `compose.override.yaml` when you ha
 | `logs`, `ps`, `pull`, `exec` | plain `docker compose …` |
 
 `.env` (beside `compose.yaml`, not committed) holds `COMPOSE_PROFILES`, the image
-digests, the accounts' uids and the onramp's domain. Nothing in it is secret. `init`
+digests, the accounts' uids, the env files' paths, an fs origin's directory and the
+onramp's domain. Nothing in it is secret. It is the only place Compose's inputs come
+from: the wrapper always names the project (`decdn`) and refuses to run while the
+shell sets a `COMPOSE_*` variable or one `compose.yaml` reads, which Compose would
+otherwise take over `.env`, so its checks see what Compose runs. `init`
 starts it from `.env.example`, which carries the digests of the releases the Ansible
 roles pin (decdn/decdn v0.0.2, decdn/sponsord v0.0.2), each copied from that
 release's signed digest file; [Operate](#operate) says how to take a newer one.
@@ -100,7 +104,7 @@ release's signed digest file; [Operate](#operate) says how to take a newer one.
 5. **Stake and register** (on-chain onboarding, ADR 019 Phase 2) with `decdn setup`,
    described in
    [`roles/decdn_node/README.md` § On-chain onboarding](../ansible/roles/decdn_node/README.md#on-chain-onboarding).
-   `sudo compose/decdn-compose cli setup`. `node.toml` still names the public RPC
+   Run `sudo compose/decdn-compose cli setup`. `node.toml` still names the public RPC
    `config init` wrote, so `cli` hands the CLI a copy whose `rpc_url` reads your
    endpoint from `decdn.env` (`"${DECDN_RPC_URL}"`, which the config loader
    expands): it never appears on a command line, in a sudo log or in shell history.
@@ -359,7 +363,9 @@ services:
 `sudo compose/decdn-compose backup -r age1… [-r age1…] [-o file.tar.age]` writes, in
 the current directory, one archive of the active profiles' keys, secrets and env
 files, encrypted on the host to the age recipients (nothing readable touches the
-disk). It is the same set as the Ansible path's `make backup` takes for the identity;
+disk). It covers what the Ansible path's `make backup` takes for the identity, plus
+`node.toml` and the env files, and refuses to write an archive while any of them is
+missing;
 restore with `age -d -i <key> <file> | sudo tar -C / -xzp --numeric-owner`, as in
 [`docs/lifecycle.md`](../docs/lifecycle.md#restore-and-host-migration).
 
