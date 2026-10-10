@@ -8,15 +8,24 @@
 [![shellcheck](https://img.shields.io/badge/shellcheck-passing-brightgreen)](https://www.shellcheck.net/)
 [![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow.svg)](https://www.conventionalcommits.org)
 
-The official **DevOps repo** for running a deCDN node: infrastructure, deployment and
-day-2 tooling for operators anywhere. Four ways to deploy the same node:
+The official **DevOps repo** for running deCDN: infrastructure, deployment and day-2
+tooling for operators anywhere. It serves both kinds of operator:
+
+| You are | You run | Start here |
+|---------|---------|------------|
+| a **node operator** | deCDN cache nodes: bond, serve, get paid per megabyte | [`docs/node-operators.md`](docs/node-operators.md) |
+| a **publisher** | origin nodes for your namespaces, and optionally the services around them (`sponsord` and its onramp, iroh relays, an iroh DNS server) | [`docs/publishers.md`](docs/publishers.md) |
+
+Four ways to deploy the node, cache or origin:
 
 | Path | For | Start here |
 |------|-----|------------|
 | **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published as the `decdn.node` and `decdn.publisher` Galaxy collections. | [`ansible/README.md`](ansible/README.md) |
-| **cloud-init** (`cloud-init/`) | One VM, no control machine: paste the user-data into your provider's "create server" form. It runs the Ansible playbook on the host itself, hardening included. A second template boots the onboarding sponsor (`sponsord` + its onramp). | [`cloud-init/README.md`](cloud-init/README.md) |
-| **Docker Compose** (`compose/`) | One host that already runs Docker. Also runs the onboarding sponsor (`sponsord` + its onramp) behind profiles. | [`compose/README.md`](compose/README.md) |
-| **Helm** (`charts/decdn-node/`) | Kubernetes, one release per node. | [`charts/decdn-node/README.md`](charts/decdn-node/README.md) |
+| **cloud-init** (`cloud-init/`) | One VM, no control machine: paste the user-data into your provider's "create server" form. It runs the Ansible playbook on the host itself, hardening included. One template per kind of operator: a cache node, or a publisher's origin with the onboarding sponsor (`sponsord` + its onramp). | [`cloud-init/README.md`](cloud-init/README.md) |
+| **Docker Compose** (`compose/`) | One host that already runs Docker. Profiles for a cache node or an origin, and the onboarding sponsor (`sponsord` + its onramp). | [`compose/README.md`](compose/README.md) |
+| **Helm** (`charts/decdn-node/`) | Kubernetes, one release per node, cache or origin. | [`charts/decdn-node/README.md`](charts/decdn-node/README.md) |
+
+The iroh relay and DNS server a publisher may run deploy with Ansible only.
 
 Supported hosts: Debian 12/13 and Ubuntu 24.04/26.04 on x86_64 or aarch64. Network,
 disk and platform requirements, and how to choose a path:
@@ -110,7 +119,7 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 | [`compose/`](compose/README.md) | The Docker Compose deploy path: the node, `sponsord`, `sponsord-onramp` and Caddy, one profile each. |
 | [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart; it renders the node's dashboards and alert rules from `monitoring/`. |
 | [`monitoring/`](monitoring/README.md) | The deCDN Grafana dashboards and Prometheus alert rules, for the node (`decdn-node/`, every deploy path), sponsord (`sponsord/`, Ansible and Compose) and the iroh relay (`iroh-relay/`, Ansible). |
-| [`docs/`](docs/requirements.md) | Cross-path operator docs: requirements, lifecycle. |
+| [`docs/`](docs/requirements.md) | Cross-path operator docs: the two front doors ([node operators](docs/node-operators.md), [publishers](docs/publishers.md)), requirements, lifecycle. |
 | `scripts/` | Generators for the upstream mirrors (network profiles) and the release gate. |
 | `Makefile` | Lint, test and security targets; CI runs the same ones. `make help` lists them. |
 | `.github/workflows/` | CI (`ci.yml`, `molecule.yml`), releases (`release-collection.yml`, `release-chart.yml`), the weekly upstream drift check. |

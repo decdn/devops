@@ -5,8 +5,21 @@ DevOps repo.
 
 ## What this repo is
 
-The official DevOps project for deploying a **deCDN node**: infrastructure, deployment,
-and operational tooling, for node operators anywhere. There are four deploy paths:
+The official DevOps project for deploying deCDN: infrastructure, deployment, and
+operational tooling. It serves **two kinds of operator**, and every entry point is
+split along that line:
+
+- **Node operators** run cache nodes (`decdn-node`, no origin backend): `node.yml` /
+  `make deploy-node`, `cloud-init/user-data-node.yaml`, Compose's `node` profile, the
+  chart, the `decdn.node` collection. Front door: `docs/node-operators.md`.
+- **Publishers** own namespaces in `PublisherRegistry` and run **origin nodes** (the
+  same daemon with an origin backend, seated on-chain via `OriginAssignment.addOrigin`,
+  ADR 002/011), and optionally `sponsord` + its onramp, iroh relays and an iroh DNS
+  server: `publisher.yml` / `make deploy-publisher` (`origin.yml` + the component
+  playbooks), `cloud-init/user-data-publisher.yaml`, Compose's `origin`/`onramp`
+  profiles, the `decdn.publisher` collection. Front door: `docs/publishers.md`.
+
+There are four deploy paths:
 **Ansible** (`ansible/`, VMs/bare metal, the primary path, also the `decdn.node` and
 `decdn.publisher` Galaxy collections, and the only path that also deploys self-hosted iroh relays and the iroh
 DNS server), **cloud-init**
@@ -90,7 +103,7 @@ monitoring/             # Grafana dashboards + Prometheus alert rules (maintaine
   decdn-node/           # the node's (+ promtool unit tests, .helmignored), rendered by the chart
   sponsord/             # sponsord's (+ promtool unit tests), Ansible/Compose only
   iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible only
-docs/                   # cross-path operator docs: requirements.md, lifecycle.md
+docs/                   # cross-path operator docs: node-operators.md + publishers.md (the front doors), requirements.md, lifecycle.md
 scripts/                # upstream-mirror generators, the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh)
 ```
 
