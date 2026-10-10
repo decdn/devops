@@ -52,18 +52,19 @@ On Ubuntu 25.10 and later, `sudo` is sudo-rs; see the `ansible_become_exe` note 
   Compose, the `caddy` profile runs the official image and you open both ports in the
   host firewall. Either way, open them in the provider's firewall too, and point the
   domain's A/AAAA records at the host.
-- **An iroh relay host (Ansible only) needs inbound tcp/80, tcp/443 and udp/7842**
+- **An iroh relay host (Ansible, or Compose's `relay` profile) needs inbound tcp/80, tcp/443 and udp/7842**
   from anywhere: 443 carries the relay and Let's Encrypt's TLS-ALPN-01 challenge, 80
   iroh's captive-portal probe, and 7842 QUIC address discovery (unless
-  `iroh_relay_enable_quic_addr_discovery` is `false`). `baseline` opens them for hosts
-  in `iroh_relay_hosts`; open them in the provider's firewall too, and point
-  `iroh_relay_hostname`'s A/AAAA records at the host. It also needs outbound HTTPS to
-  Let's Encrypt. A relay cannot share a host with sponsord-onramp (both want 80 and
-  443). It carries the traffic of every peer pair it relays, so size its bandwidth
+  `iroh_relay_enable_quic_addr_discovery` is `false`). On Ansible, `baseline` opens
+  them for hosts in `iroh_relay_hosts`; on Compose you open them in the host firewall.
+  Either way, open them in the provider's firewall too, and point the relay hostname's
+  A/AAAA records at the host. It also needs outbound HTTPS to Let's Encrypt. A relay
+  cannot share a host with sponsord-onramp (both want 80 and 443). It carries the traffic of every peer pair it relays, so size its bandwidth
   for that, and set rate limits (`iroh_relay_client_rx_bytes_per_second`) on a
   metered link. By default only the inventory's deCDN nodes and the IDs in
   `iroh_relay_allowlist` may relay through it: its deploy reads each node's ID on the
-  node, so it needs SSH to every node and every node deployed first. decdn clients
+  node, so it needs SSH to every node and every node deployed first (on Compose you
+  list the IDs in its config yourself). decdn clients
   cannot be listed (a fresh key per fetch), so a node behind NAT that serves clients
   needs relays with `iroh_relay_access: everyone`.
 - **An iroh DNS server host (Ansible only) needs inbound tcp/443, udp/53 and tcp/53**

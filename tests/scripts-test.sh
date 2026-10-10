@@ -1010,7 +1010,7 @@ expect 0 "lint-compose accepts compose/compose.yaml" make -s -C "$repo" lint-com
 # <name> <expected message fragment> <sed expression>: the fragment pins WHICH
 # invariant fired (compose/tests/*.jq print "<service>: <invariant>"), since one
 # edit can trip several. Scope an edit to one service by prefixing a sed range:
-# "${node}", "${sd}", "${onr}" or "${cdy}".
+# "${node}", "${sd}", "${onr}", "${cdy}" or "${rly}".
 variant() {
   sed -E "$3" "$compose" > "$work/$1.yaml"
   cmp -s "$compose" "$work/$1.yaml" && fail "variant $1 did not change compose.yaml"
@@ -1030,6 +1030,7 @@ node='/^  decdn-node:$/,/^ {0,2}[a-z]/'
 sd='/^  sponsord:$/,/^ {0,2}[a-z]/'
 onr='/^  sponsord-onramp:$/,/^ {0,2}[a-z]/'
 cdy='/^  caddy:$/,/^ {0,2}[a-z]/'
+rly='/^  iroh-relay:$/,/^ {0,2}[a-z]/'
 h='s/^(\s*)<<: \*hardened$/&\n\1'
 # Shape
 variant "unexpected service"       "compose.yaml: services are exactly"           "s/^  caddy:$/  proxy:/"
@@ -1100,6 +1101,29 @@ variant "caddy keeps capabilities" "caddy: cap_drop is [ALL]"                   
 variant "caddy as root"            "caddy: runs as a non-root uid:gid"            "${cdy} {/^    user: /d}"
 variant "caddy published port"     "caddy: publishes no ports"                    "${cdy} ${h}ports: [\"443:443\"]/"
 variant "caddy always on"          "caddy: profiles are [caddy]"                  "${cdy} {/^    profiles: \[caddy\]$/d}"
+# Caddy holds NET_BIND_SERVICE too, but only the iroh services may run as uid 0.
+variant "caddy as uid 0"           "caddy: runs as a non-root uid:gid"            "${cdy} s/^(\s*)user: .*/\1user: \"0:0\"/"
+# iroh-relay: uid 0 holding NET_BIND_SERVICE alone, SIGINT, the config read-only
+variant "relay extra capability"   "iroh-relay: runs as uid 0 only with cap_add exactly [NET_BIND_SERVICE]" "${rly} s/cap_add: \[NET_BIND_SERVICE\]/cap_add: [NET_BIND_SERVICE, NET_ADMIN]/"
+variant "relay root, no cap_add"   "iroh-relay: runs as uid 0 only with cap_add exactly [NET_BIND_SERVICE]" "${rly} {/^    cap_add: /d}"
+variant "relay keeps capabilities" "iroh-relay: cap_drop is [ALL]"                "${rly} ${h}cap_drop: []/"
+variant "relay as root by name"    "iroh-relay: runs as a non-root uid:gid"       "${rly} s/^(\s*)user: .*/\1user: root/"
+variant "relay SIGTERM"            "iroh-relay: stop_signal is SIGINT"            "${rly} s/^(\s*)stop_signal: SIGINT$/\1stop_signal: SIGTERM/"
+variant "relay short grace"        "iroh-relay: stop_grace_period is 30s"         "${rly} s/^(\s*)stop_grace_period: 30s$/\1stop_grace_period: 5s/"
+variant "relay writable config"    "iroh-relay: mounts are exactly"               "${rly} {/target: \/etc\/iroh-relay\/iroh-relay.toml$/{n;s/read_only: true/read_only: false/}}"
+variant "relay config directory"   "iroh-relay: mounts are exactly"               "${rly} s#^(\s*)(source|target): /etc/iroh-relay/iroh-relay\.toml\$#\1\2: /etc/iroh-relay#"
+variant "relay docker socket"      "iroh-relay: mounts are exactly"               "${rly} s#^(\s*)volumes:\$#\1volumes:\n\1  - /var/run/docker.sock:/var/run/docker.sock:ro#"
+variant "relay published port"     "iroh-relay: publishes no ports"               "${rly} ${h}ports: [\"443:443\"]/"
+variant "relay bridge network"     "iroh-relay: network_mode is host"             "${rly} ${h}network_mode: bridge/"
+variant "relay writable rootfs"    "iroh-relay: read_only rootfs"                 "${rly} ${h}read_only: false/"
+variant "relay dev mode"           "iroh-relay: command is exactly"               "${rly} s#^(\s*)command: .*#\1command: [\"--dev\"]#"
+variant "relay entrypoint swap"    "iroh-relay: command is exactly"               "${rly} ${h}entrypoint: [\"\/bin\/sh\"]/"
+variant "relay quiet log"          "iroh-relay: RUST_LOG is set"                  "${rly} {/^      RUST_LOG: /d}"
+variant "relay privileged"         "iroh-relay: sets only allowed keys (extra: privileged)"         "${rly} ${h}privileged: true/"
+variant "relay low fd limit"       "iroh-relay: ulimits.nofile is 65536"          "${rly} s/^(\s*)nofile: 65536$/\1nofile: 1024/"
+variant "relay by tag"             "iroh-relay: image is pinned"                  "${rly} s#^(\s*)image: .*#\1image: docker.io/n0computer/iroh-relay:v1.3.0#"
+variant "relay inline secret"      "iroh-relay: sets only allowed environment keys inline (extra: ACME_KEY)" "${rly} s/^(\s*)RUST_LOG: (.*)$/&\n\1ACME_KEY: x/"
+variant "relay always on"          "iroh-relay: profiles are [relay]"             "${rly} {/^    profiles: \[relay\]$/d}"
 
 # --- compose/decdn-compose: the wrapper's decisions (no root, no docker) -----------
 expect 0 "decdn-compose unit tests pass" \
@@ -1469,6 +1493,17 @@ done
 app="$(sed -nE 's/^appVersion: *"?([^" #]*)"?.*/\1/p' "$repo/charts/decdn-node/Chart.yaml")"
 [ "$app" = "$(pin decdn_node decdn_node_version)" ] \
   || fail "charts/decdn-node/Chart.yaml appVersion '$app' is not decdn_node_version"
+# compose.yaml pins n0's iroh images by digest, with the release they are named in
+# the comment above each image line; it must be the release the roles install.
+# shellcheck disable=SC2043  # one image for now; the list is "<role> <image>" pairs
+for p in "iroh_relay iroh-relay"; do
+  role="${p% *}" img="${p#* }"
+  named="$(sed -nE "s#.*n0computer/$img v([0-9][0-9.]*[0-9]).*#\1#p" "$repo/compose/compose.yaml")"
+  [ "$named" = "$(pin "$role" "${role}_version")" ] \
+    || fail "compose/compose.yaml names n0computer/$img v$named, not ${role}_version $(pin "$role" "${role}_version")"
+  grep -qE "image: \\$\\{[A-Z_]+:-docker\.io/n0computer/$img\}@\\$\\{[A-Z_]+:-sha256:[0-9a-f]{64}\}$" "$repo/compose/compose.yaml" \
+    || fail "compose/compose.yaml: n0computer/$img is not pinned by a default digest"
+done
 # Artifact Hub scans the images the annotation lists, so it must name the one the
 # chart deploys by default.
 if command -v yq >/dev/null; then
@@ -1496,7 +1531,7 @@ want_fprs="$(fprs "$repo/ansible/roles/decdn_node/files/decdn-release-KEYS.asc")
   || fail "the decdn and sponsord release KEYS hold different keys"
 [ "$(sed -nE 's/^Fingerprint: *//p' "$repo/SECURITY.md" | tr -d ' ' | sort)" = "$want_fprs" ] \
   || fail "SECURITY.md's Fingerprint: lines differ from the vendored KEYS"
-pass "release pins agree across roles, Compose, the chart and its artifacthub.io/images; the vendored KEYS match SECURITY.md"
+pass "release pins agree across roles, Compose (incl. its iroh images), the chart and its artifacthub.io/images; the vendored KEYS match SECURITY.md"
 # iroh_relay's tasks_from node-ids runs `decdn whoami` on the inventory's nodes, where
 # decdn_node's defaults are not loaded: its fallbacks must be those defaults.
 ids="$repo/ansible/roles/iroh_relay/tasks/node-ids.yml"

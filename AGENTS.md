@@ -16,13 +16,13 @@ split along that line:
   same daemon with an origin backend, seated on-chain via `OriginAssignment.addOrigin`,
   ADR 002/011), and optionally `sponsord` + its onramp, iroh relays and an iroh DNS
   server: `publisher.yml` / `make deploy-publisher` (`origin.yml` + the component
-  playbooks), `cloud-init/user-data-publisher.yaml`, Compose's `origin`/`onramp`
+  playbooks), `cloud-init/user-data-publisher.yaml`, Compose's `origin`/`onramp`/`relay`
   profiles, the chart (an origin node only), the `decdn.publisher` collection. Front
   door: `docs/publishers.md`.
 
 There are four deploy paths:
 **Ansible** (`ansible/`, VMs/bare metal, the primary path, also the `decdn.node` and
-`decdn.publisher` Galaxy collections, and the only path that also deploys self-hosted iroh relays and the iroh
+`decdn.publisher` Galaxy collections, and the only path that also deploys the iroh
 DNS server), **cloud-init**
 (`cloud-init/`, one VM that runs the Ansible playbook on itself, no control machine),
 **Docker Compose** (`compose/`, a single Docker host) and a **Helm chart**
@@ -59,7 +59,9 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
    terminates its own TLS (Let's Encrypt over TLS-ALPN-01; QUIC address discovery needs
    the same certificate in-process), so it binds tcp/80, tcp/443 and udp/7842 on every
    address itself, with no proxy and no backend behind it. Its holes come from
-   `iroh_relay_hosts`; its metrics are asserted onto loopback (`127.0.0.1:9092`).
+   `iroh_relay_hosts`; its metrics are asserted onto loopback (`127.0.0.1:9092`). On
+   Compose (the `relay` profile) the operator opens the same three ports, and
+   `decdn-compose check` refuses metrics off loopback.
    **iroh DNS server exception (`iroh_dns_server` role):** `iroh-dns-server` is public
    by design and terminates its own TLS (Let's Encrypt over TLS-ALPN-01), so it binds
    tcp/443 (`::` by default) and udp/53 + tcp/53 on one address (the host's default
@@ -73,6 +75,16 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
    `metrics.networkPolicy.from`); disabling the policy fails the render unless
    `networkPolicy.allowUnrestrictedMetrics=true` acknowledges it. Never front metrics with
    a LoadBalancer/NodePort/Ingress.
+   **Compose exception (the iroh services only):** every Compose container runs as a
+   non-root host account, except the iroh relay, which runs as uid 0 holding
+   `NET_BIND_SERVICE` and no other capability (read-only rootfs,
+   `no-new-privileges`, everything else dropped). It must bind its public ports
+   itself, and on the host network Docker cannot give a non-root process that
+   capability (no ambient capabilities, no file capability on the binary, and the
+   unprivileged-port sysctl is refused with host networking). `compose/tests/invariants.jq`
+   allows uid 0 only for the services in its `root_allowed` list, and only with
+   `cap_add` exactly `[NET_BIND_SERVICE]`; never add a service to that list for any
+   other reason.
 3. **Role templates render to their target paths.** Ansible roles template config directly
    onto the host (e.g. `roles/decdn_node/templates/decdn-node.service.j2` →
    `/etc/systemd/system/`), with secrets generated on the host at `0600`.
@@ -91,7 +103,7 @@ ansible/                # the deployment project (DevSec-hardened, lean roles)
   inventory/ galaxy/ molecule/    # see ansible/README.md
 cloud-init/             # user-data-{node,publisher}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
 compose/                # Docker Compose deploy path for a single host (see its README.md)
-  compose.yaml          # profiles: node / origin (one decdn-node), sponsord, onramp (+ sponsord), caddy
+  compose.yaml          # profiles: node / origin (one decdn-node), sponsord, onramp (+ sponsord), caddy, relay
   decdn-compose         # the operator's wrapper: init, check, guarded up/stop/restart/down, health, cli, backup
   Caddyfile             # mirrors roles/sponsord_onramp/templates/Caddyfile.j2
   tests/*.jq            # lint-compose: invariants, inline-env, fail-closed
@@ -105,7 +117,7 @@ charts/
 monitoring/             # Grafana dashboards + Prometheus alert rules (maintained here)
   decdn-node/           # the node's (+ promtool unit tests, .helmignored), rendered by the chart
   sponsord/             # sponsord's (+ promtool unit tests), Ansible/Compose only
-  iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible only
+  iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible and Compose
 docs/                   # cross-path operator docs: node-operators.md + publishers.md (the front doors), requirements.md, lifecycle.md
 scripts/                # upstream-mirror generators, the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh), ansible/Makefile's LIMIT preflight (limit-guard.sh)
 ```
@@ -374,6 +386,12 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     access modes; two hosts), `iroh-relay-lifecycle` (decommission) and
     `iroh-relay-install` (release mode against a local mirror), all on the same
     inventory (`make test-scripts` checks), and `validation-iroh-relay`.
+  - **Compose:** the `relay` profile runs the same release from n0's image (see the
+    `compose/` bullet). A bump of `iroh_relay_version` also bumps the image digest in
+    `compose/compose.yaml` and the version its comment names (`make test-scripts`
+    checks the name), and a new key in the role's template or stub goes into
+    `RELAY_KEYS` in `compose/decdn-compose` (its unit tests compare them with the
+    stub's).
 
 - **`ansible/roles/iroh_dns_server`** — a self-hosted iroh DNS server
   (`iroh-dns-server` from n0-computer/iroh): the pkarr relay nodes publish their
@@ -461,7 +479,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   `molecule/cloud-init/pack.yml` and `includes/`. They are the only coverage of the node's and the
   onramp's release download and verify path.
 
-- **`compose/`** — the node and the sponsor under Docker Compose on one host. The
+- **`compose/`** — the node, the sponsor and an iroh relay under Docker Compose on one host. The
   node: the upstream image, always by digest (`compose.yaml` builds
   `DECDN_IMAGE_REPO@DECDN_IMAGE_DIGEST`), the role's host layout (`/etc/decdn`
   read-only, `/var/lib/decdn`), host networking (so loopback metrics/admin stay
@@ -469,7 +487,8 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   SIGTERM grace. Every service sits behind a profile (`COMPOSE_PROFILES` in `.env`):
   `node` and `origin` (both start the one `decdn-node`: a node operator's cache node,
   or a publisher's origin, whose `node.toml` carries `[cache.origin]`), `sponsord`,
-  `onramp` (also starts `sponsord`) and `caddy`. The shared hardening (host network,
+  `onramp` (also starts `sponsord`), `caddy` and `relay` (refused with `onramp` or
+  `caddy`: all want 80/443). The shared hardening (host network,
   read-only rootfs, `cap_drop: [ALL]`, `no-new-privileges`, SIGTERM, journald logging)
   is one `x-hardened` anchor merged by `<<: *hardened`; the lint checks the rendered
   result, so a service-level override is caught like an inline one. An fs origin's
@@ -513,6 +532,20 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   - **Caddy:** the official image by digest, non-root, keeping only
     `NET_BIND_SERVICE`. `compose/Caddyfile` is a hand-kept copy of the role's
     `Caddyfile.j2`: change one, change both.
+  - **iroh relay (`relay`):** n0's `n0computer/iroh-relay` image (musl, Alpine;
+    unsigned upstream) pinned in `compose.yaml` by its multi-arch index digest at
+    the role's `iroh_relay_version`; uid 0 with `NET_BIND_SERVICE` only (hard rule
+    2's Compose exception), `stop_signal: SIGINT` (as PID 1 it ignores SIGTERM
+    outright), `ulimits.nofile`, the config a read-only single-file bind
+    (`/etc/iroh-relay/iroh-relay.toml`, from `compose/iroh-relay.toml.example`,
+    which writes every key the role's template does) and `/var/lib/iroh-relay` (ACME
+    state) the only writable mount. iroh-relay ignores unknown keys and runs on
+    public defaults without a config, so `check` parses it (`tomllib`) and refuses
+    unknown keys (`RELAY_KEYS`), metrics off loopback, a `cert_dir` outside the
+    mount, placeholders, a reserved-domain contact (Let's Encrypt refuses it), an
+    empty allowlist and `[::]` under `bindv6only=1`. `health` is the role's gate
+    (loopback `/metrics` with `relayserver_accepts_total`) plus its certificate
+    check (warn-only with `prod_tls = false`).
   - **No `${VAR:?}`:** Compose interpolates disabled services too, so a required
     variable would break other profiles. An unset variable renders a value its
     service refuses instead (invalid image reference, unknown user, a domain with a

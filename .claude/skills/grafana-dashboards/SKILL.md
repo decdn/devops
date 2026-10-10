@@ -54,7 +54,7 @@ the iroh relay's in `monitoring/iroh-relay/`):
 
 - `monitoring/iroh-relay/` — the self-hosted iroh relay's pair: `dashboard-iroh-relay.json`
   (uid `decdn-iroh-relay`) and `prometheus-alerts.yml` (group `iroh-relay`,
-  `job="iroh-relay"`), Ansible path only, not rendered by the chart. Every series is a
+  `job="iroh-relay"`), Ansible and Compose paths, not rendered by the chart. Every series is a
   `relayserver_*_total` counter (no gauges: "connected" is `accepts − disconnects`).
   `exported-metrics.txt` is the pinned binary's `/metrics`, and `make lint-helm` fails on
   any `relayserver_*` name not in it — so this pair, unlike the others, IS name-checked

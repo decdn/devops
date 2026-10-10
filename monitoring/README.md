@@ -2,8 +2,8 @@
 
 The deCDN Grafana dashboards and reference Prometheus alert rules, maintained here:
 `decdn-node/` for the node, on every deploy path, `sponsord/` for the onboarding
-sponsor, on the Ansible and Compose paths, and `iroh-relay/` for the self-hosted iroh
-relay, on the Ansible path. The node's metric surface is documented in
+sponsor, and `iroh-relay/` for the self-hosted iroh relay, both on the Ansible and
+Compose paths. The node's metric surface is documented in
 upstream `decdn/decdn`'s `adr/appendix-observability.md`. The node's assets were
 imported from `decdn/decdn` (MIT OR Apache-2.0) at `20db95ef`; distributed here under
 this repo's MIT license. sponsord's were written here.
@@ -109,7 +109,7 @@ your own; `SponsordKeeperFailing` is the symptom when it runs dry.
 
 `iroh-relay/` holds the same pair for the self-hosted iroh relays
 ([`roles/iroh_relay`](../ansible/roles/iroh_relay/README.md)), which run on the Ansible
-path only. The chart never renders it.
+path and as Compose's `relay` profile. The chart never renders it.
 
 | File | What it is |
 |------|------------|
@@ -119,7 +119,10 @@ path only. The chart never renders it.
 
 They select `job="iroh-relay"`, which the `grafana_alloy` role stamps on the relay's
 `/metrics` (`grafana_alloy_iroh_relay_job`); the log panel selects
-`unit="iroh-relay.service"` with the parsed `level`. Import them as above, e.g.
+`unit="iroh-relay.service"` with the parsed `level`. On Compose, scrape
+`127.0.0.1:9092/metrics` with `job="iroh-relay"` yourself; the log panel's `unit`
+selector finds nothing there (the container logs to the journal under
+`CONTAINER_NAME=decdn-iroh-relay-1`). Import them as above, e.g.
 `mimirtool rules load iroh-relay/prometheus-alerts.yml`. `make lint-helm` also runs
 `promtool check rules` and the unit tests in `iroh-relay/prometheus-alerts_test.yml`.
 

@@ -13,10 +13,13 @@ Compose cannot make by itself.
 | `sponsord` | `sponsord`, the onboarding sponsor: treasury signer and PaymentPool keeper | `ghcr.io/decdn/sponsord` | `sponsord` |
 | `onramp` | `sponsord-onramp`, its public side (Turnstile gate, installers); also starts `sponsord` | `ghcr.io/decdn/sponsord-onramp` | `sponsord_onramp` |
 | `caddy` | Caddy, TLS in front of the onramp; leave it out to bring your own proxy | `caddy` (official) | `sponsord_onramp_proxy: caddy` |
+| `relay` | `iroh-relay`, a self-hosted iroh relay ([below](#an-iroh-relay-publishers)) | `n0computer/iroh-relay` (official) | `iroh_relay` ([`playbooks/iroh_relay.yml`](../ansible/playbooks/iroh_relay.yml)) |
 
 A **node operator** runs `node`. A **publisher** runs `origin` for an origin node,
-`onramp caddy` for a sponsor, or all three on one host. The sponsor is independent of
-the node. `node` and `origin` start the same service, so a host runs one or the other.
+`onramp caddy` for a sponsor, or all three on one host, and `relay` on hosts of its
+own. The sponsor is independent of the node. `node` and `origin` start the same
+service, so a host runs one or the other; `relay` cannot share a host with `onramp`
+or `caddy`, which want the same ports.
 
 Pick this path for a single machine you already run Docker on. For a fleet, or a host
 you want hardened from scratch (firewall, SSH, auto-patching), use the
@@ -47,10 +50,10 @@ against [`compose.yaml`](compose.yaml), plus `compose.override.yaml` when you ha
 | Command | Does |
 |---------|------|
 | `init <profile>…` | creates the system accounts and directories, writes `.env` with their real uids, installs the env-file templates to `/etc`, fills in the chain's contract addresses from this repo's [generated mirror](../ansible/roles/sponsord/vars/main/networks.yml), and generates every secret that is generated on the host. It never replaces a secret, and ends with the list of what you still have to provide. Re-run it any time. |
-| `check` | the preflight `up` also runs: every file present, owned and moded as the services need, the settings filled in, `decdn config validate` against the pinned image, and no other process on the ports the stopped services bind |
+| `check` | the preflight `up` also runs: every file present, owned and moded as the services need, the settings filled in, `decdn config validate` against the pinned image, the relay's config, and no other process on the ports the stopped services bind |
 | `up [svc…]` | `check`, then `docker compose up -d` |
 | `stop`, `restart`, `down` | `docker compose …`, but refused while sponsord holds an unconfirmed pool top-up ([below](#the-top-up-hold)) |
-| `health` | probes every running service: the node's admin RPC and metrics, each `/healthz`, sponsord's hold, the onramp's certificate through Caddy |
+| `health` | probes every running service: the node's admin RPC and metrics, each `/healthz`, sponsord's hold, the onramp's certificate through Caddy, the relay's metrics and certificate |
 | `cli <args>` | the `decdn` CLI from the node image, with the node's config and keys and your RPC endpoint from `decdn.env`: `cli whoami`, `cli node status`, `cli setup` |
 | `backup -r <age recipient>` | an age-encrypted archive of the active profiles' keys and secrets |
 | `config` | `docker compose config`, with every value that came from an env file shown as `<redacted>` (the plain command prints `DECDN_RPC_URL` and the rest in clear) |
@@ -344,6 +347,126 @@ wrapper.
   owns the pool and its funds: `sudo compose/decdn-compose backup -r age1…` takes them
   with the API token, the Turnstile secret and the env files.
 
+## An iroh relay (publishers)
+
+`iroh-relay` is n0's relay server for iroh: when two peers cannot hole-punch, their
+end-to-end encrypted QUIC traffic falls back to a relay, and its QUIC address
+discovery (QAD, udp/7842) helps them hole-punch in the first place. Nodes use n0's
+public relays unless their `relay_urls` names others; the ADRs expect production to
+self-host relays as operational infrastructure, not an incentivized role
+([Architecture § Trust Assumptions](https://github.com/decdn/decdn/blob/main/adr/architecture.md#trust-assumptions)).
+The [`iroh_relay` role's README](../ansible/roles/iroh_relay/README.md) explains the
+relay in depth; this section covers the Compose side.
+
+The relay is public by design and terminates its own TLS: it gets a Let's Encrypt
+certificate itself (TLS-ALPN-01 on tcp/443), and QAD needs that certificate
+in-process, so no proxy can stand in front of it. It binds tcp/80, tcp/443 and
+udp/7842 itself, so it cannot share a host with `onramp` or `caddy`.
+
+### Set up
+
+1. **A DNS name.** Point an A record (and an AAAA record, if the host has IPv6) at
+   the host.
+
+2. **Prepare the host:**
+
+   ```bash
+   sudo compose/decdn-compose init relay --hostname relay1.example.org --contact you@your-domain
+   ```
+
+   This writes [`iroh-relay.toml.example`](iroh-relay.toml.example) to
+   `/etc/iroh-relay/iroh-relay.toml` with your hostname and contact (Let's Encrypt
+   mails expiry warnings there, and refuses an `example.*` address), and creates
+   `/var/lib/iroh-relay` for the ACME account and certificates. It never replaces an
+   existing config: edit that file instead. `--staging` uses Let's Encrypt's staging
+   CA for a trial that leaves the production rate limits alone; its certificates are
+   never trusted, so nodes cannot use the relay until you set `prod_tls = true`.
+
+3. **Who may use it.** `--access` picks the mode (`allowlist`, the default, or
+   `everyone`; a denylist is a hand edit, see the config's comments).
+   - **`allowlist`** admits only the listed endpoint IDs. Run
+     `sudo compose/decdn-compose cli whoami` on each of your nodes (the Ansible path:
+     `decdn whoami` as the node's user) and add each `node id` to `access` in the
+     config. `check` refuses an empty list, which would admit nobody. Update every
+     relay after adding a node or rotating its key, then `restart iroh-relay`.
+   - **What it costs:** decdn clients (`decdn fetch`, onramp users) use a fresh key
+     per fetch, so they can never be listed, and iroh hole-punches over a connection
+     it already has. A client therefore reaches a node homed on an allowlisted relay
+     only if the node is directly reachable. A node behind NAT that serves clients
+     needs its relays in `everyone` mode.
+
+4. **Firewall.** Open **tcp/80** (iroh's captive-portal probe), **tcp/443** (the
+   relay, and Let's Encrypt's challenge) and **udp/7842** (QAD) in the host firewall
+   and the cloud security group, from anywhere.
+
+5. **Start it:**
+
+   ```bash
+   sudo compose/decdn-compose up
+   sudo compose/decdn-compose health
+   ```
+
+   `health` reads the relay's loopback `/metrics`, then fetches
+   `https://<hostname>/healthz` from it against the host's trust store. Until Let's
+   Encrypt has issued the first certificate (DNS and tcp/443 from the internet must
+   work first), that second check fails; with `prod_tls = false` it only warns.
+
+6. **Point the nodes at it.** In each node's `node.toml` (the Ansible path:
+   `decdn_relay_urls`), then `restart decdn-node`:
+
+   ```toml
+   [network]
+   relay_urls = ["https://relay1.example.org", "https://relay2.example.org"]
+   ```
+
+   `relay_urls` **replaces** n0's relays; it does not add to them. Deploy **at least
+   two** relays, preferably in different regions, before switching nodes over.
+
+### How it is laid out
+
+| Host path | Owner, mode | In the container | Holds |
+|-----------|-------------|------------------|-------|
+| `/etc/iroh-relay/iroh-relay.toml` | `root`, `0644` | same, read-only | the config; nothing secret |
+| `/var/lib/iroh-relay/` | `root`, `0700` | same, read-write | `acme/`: the Let's Encrypt account key and the certificate with its private key |
+
+iroh-relay ignores keys it does not know, and without its config runs on built-in
+defaults (metrics on a public port, no TLS). So the config is a single read-only file
+that must exist (Docker never creates it), every key is written out, and `check`
+refuses what the relay would ignore or run unsafely with: a key iroh-relay 1.3.0 does
+not define, metrics off or off loopback, a `cert_dir` outside the mounted state
+directory (the certificate would be lost on every restart), a non-Let's Encrypt
+`cert_mode`, a placeholder or malformed hostname or contact, an empty allowlist,
+ports other than 80/443/7842, and `[::]` on a host with `net.ipv6.bindv6only=1`
+(where it serves no IPv4 peer; use `0.0.0.0`). Before `up` it also refuses ports
+another process holds.
+
+The image is n0's own `n0computer/iroh-relay`, the release the Ansible role pins
+(`iroh_relay_version`, the iroh version decdn builds against), referenced by its
+multi-arch digest in `compose.yaml`. Upstream signs neither the image nor the
+release tarballs, so that digest is all that vouches for it, as the role's sha256
+pin is on the Ansible path. It is upstream's musl build on Alpine; the role installs
+the gnu build, whose glibc allocator serves a busy relay better. To change it, set
+`IROH_RELAY_IMAGE_REPO` and `IROH_RELAY_IMAGE_DIGEST` in `.env`.
+
+### Operate
+
+- **Logs:** `sudo compose/decdn-compose logs -f iroh-relay`, at `RUST_LOG=info` (it
+  logs only errors without it). An ACME failure (DNS, firewall, a refused contact)
+  shows here; the relay keeps serving meanwhile.
+- **Stop:** `sudo compose/decdn-compose stop iroh-relay` sends SIGINT, the only
+  signal it shuts down gracefully on. As the container's PID 1 it ignores SIGTERM
+  altogether, so a plain `docker stop` would wait out the grace period and kill it.
+- **Config change:** edit `/etc/iroh-relay/iroh-relay.toml`, then
+  `sudo compose/decdn-compose restart iroh-relay`, which checks the file first
+  (iroh-relay ignores a mistyped key and falls back to its defaults, public metrics
+  included) and refuses to restart on a problem. A restart drops the connections
+  relayed through it.
+- **Backup:** `backup` takes the config only. The relay creates its ACME account and
+  certificate itself and gets new ones on a new host.
+- **Dashboard and alerts:** in
+  [`monitoring/iroh-relay/`](../monitoring/README.md#iroh-relay). Its scrape is your
+  own on this path: `127.0.0.1:9092/metrics`, `job="iroh-relay"`.
+
 ## Logs
 
 Every container logs to the host journal (Compose's `journald` driver), like the
@@ -429,6 +552,19 @@ is given.
   a read-only root filesystem, every capability dropped and `no-new-privileges`, from
   one shared block (`x-hardened`). Caddy keeps `NET_BIND_SERVICE` and nothing else,
   for tcp/80 and tcp/443.
+- **The one exception is the iroh relay, which runs as uid 0** holding
+  `NET_BIND_SERVICE` and nothing else. It must bind tcp/80, tcp/443 and udp/7842
+  itself (TLS-ALPN-01 and QUIC address discovery need its certificate in-process, so
+  no proxy can take the ports), and on the host network Docker cannot give a non-root
+  process that capability: Docker sets no ambient capabilities, the image's binary
+  carries no file capability (Caddy's does), and the
+  `net.ipv4.ip_unprivileged_port_start` sysctl cannot be set on a host-network
+  container. The rest of the hardening stays: read-only root filesystem,
+  `no-new-privileges`, every other capability dropped (its effective set is
+  `0x400`, `CAP_NET_BIND_SERVICE` alone, so root's file-permission and other
+  overrides are gone), and its only writable mount is its own state directory.
+  [`tests/invariants.jq`](tests/invariants.jq) allows uid 0 for the iroh services
+  only, and only with `cap_add` exactly `[NET_BIND_SERVICE]`.
 - Secret files reach the sponsor's containers as Compose secrets: read-only, one file
   each, from a host file only (never an environment source), so a container sees only
   its own. A missing secret file fails the start; Docker never creates one in its
@@ -439,8 +575,9 @@ is given.
   URL cut to its scheme and host.
 - The remaining KICS findings are the design, not an oversight: host networking
   (loopback-only backends, no Docker-published ports), no healthchecks on the sponsor's
-  images (they have no HTTP client), Caddy's one added capability, and the API token
-  both sponsord containers mount. The "Volume Has Sensitive Host Directory" query,
+  images (they have no HTTP client), Caddy's and the relay's one added capability,
+  the relay running as root (above), and the API token both sponsord containers
+  mount. The "Volume Has Sensitive Host Directory" query,
   which flags every host-path mount (the roles' host layout), is excluded for the
   reason given in the root `Makefile`.
 - Every image is referenced by digest: `compose.yaml` builds `REPO@DIGEST` itself,

@@ -15,6 +15,8 @@
 #   sponsord  the onboarding sponsor daemon (treasury signer + PaymentPool keeper)
 #   onramp    sponsord-onramp, its public side; also starts sponsord, which it needs
 #   caddy     TLS in front of the onramp (leave it out to bring your own proxy)
+#   relay     a self-hosted iroh relay (publishers); not with onramp or caddy, since
+#             all of them want tcp/80 and tcp/443
 #
 # Compose interpolates every service, enabled or not, so no variable here may be
 # required with `:?`: a host without the node would then need the node's digest.
@@ -26,15 +28,17 @@
 # network it stays loopback-only, exactly as on a systemd host, and host tools
 # (curl to /healthz, the wrapper's checks) reach it directly. There are no `ports:`
 # for Docker to publish, which also means Docker's own iptables rules never punch a
-# hole past the host firewall. The public ports are the node's QUIC udp/4433 and,
-# with the caddy profile, tcp/80 + tcp/443: open them in the host firewall.
+# hole past the host firewall. The public ports are the node's QUIC udp/4433; with
+# the caddy profile, tcp/80 + tcp/443; with the relay profile, tcp/80, tcp/443 and
+# udp/7842. Open them in the host firewall.
 name: decdn
 
 # What every service shares: the host network, a read-only root filesystem, no
 # capabilities, no privilege escalation, a graceful SIGTERM stop, and logs in the
 # host journal like the systemd units (`journalctl CONTAINER_NAME=decdn-decdn-node-1`;
 # `docker compose logs` reads them back). A service overrides a key only to add to
-# it (Caddy's one capability); tests/invariants.jq checks the rendered result.
+# it (Caddy's one capability) or for a documented exception (the iroh relay's uid 0
+# and SIGINT); tests/invariants.jq checks the rendered result.
 x-hardened: &hardened
   network_mode: host
   read_only: true
@@ -245,6 +249,60 @@ services:
     # Caddy autosaves the config it loaded here; nothing reads it back.
     tmpfs:
       - /config:uid=${CADDY_UID:-unset-CADDY_UID},gid=${CADDY_GID:-unset-CADDY_GID},mode=0700
+
+  iroh-relay:
+    <<: *hardened
+    profiles: [relay]
+    # The official image, n0computer/iroh-relay v1.3.0 (the role's
+    # iroh_relay_version, the iroh decdn builds against), pinned by its multi-arch
+    # index digest. Upstream signs neither the image nor the release tarball, so the
+    # digest is all that vouches for it, as the sha256 pin does on the Ansible path.
+    # It is upstream's musl build on Alpine; the role installs the gnu build, whose
+    # glibc allocator serves a busy relay better.
+    image: ${IROH_RELAY_IMAGE_REPO:-docker.io/n0computer/iroh-relay}@${IROH_RELAY_IMAGE_DIGEST:-sha256:7a51e3826531dba5eee73d8b48a8f27284684d98c4d0da271d99127cc43b9d57}
+    # uid 0: the one exception to the non-root rule (README.md, Security notes). The
+    # relay binds tcp/80, tcp/443 and udp/7842 itself (TLS-ALPN-01 and QUIC address
+    # discovery need its certificate in-process, so no proxy can take the ports),
+    # and on the host network Docker cannot give a non-root process
+    # NET_BIND_SERVICE: it sets no ambient capabilities, the binary carries no file
+    # capability, and the net.ipv4.ip_unprivileged_port_start sysctl is refused with
+    # host networking. So it runs as root holding NET_BIND_SERVICE and nothing else,
+    # on a read-only rootfs with no-new-privileges. tests/invariants.jq allows uid 0
+    # for the iroh services only, and only so.
+    user: "0:0"
+    cap_add: [NET_BIND_SERVICE]
+    # The unit's ExecStart (the image's entrypoint is the binary). Never `--dev`,
+    # which serves plain http.
+    command: ["--config-path", "/etc/iroh-relay/iroh-relay.toml"]
+    # iroh-relay logs only errors without RUST_LOG; plain text into the journal.
+    environment:
+      RUST_LOG: info
+      NO_COLOR: "1"
+    volumes:
+      # iroh-relay ignores keys it does not know and runs on built-in defaults
+      # (metrics on a public port, no TLS) without its config, so the config is a
+      # read-only bind of a file that must exist: Docker never creates it, and
+      # `decdn-compose check` reads it first.
+      - type: bind
+        source: /etc/iroh-relay/iroh-relay.toml
+        target: /etc/iroh-relay/iroh-relay.toml
+        read_only: true
+        bind: {create_host_path: false}
+      # The Let's Encrypt account key and certificates (cert_dir is acme/ in here),
+      # kept across restarts so a restart does not spend Let's Encrypt's rate limit.
+      - type: bind
+        source: /var/lib/iroh-relay
+        target: /var/lib/iroh-relay
+        bind: {create_host_path: false}
+    # It shuts down gracefully on SIGINT only: as the container's PID 1 it ignores
+    # SIGTERM. The unit's KillSignal and TimeoutStopSec.
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+    # One socket per client: the unit's LimitNOFILE.
+    ulimits:
+      nofile: 65536
+    # No healthcheck: `decdn-compose health` reads its loopback /metrics and checks
+    # its certificate from the host.
 
 # The sponsor's credentials, each a single host file owned by the `sponsord` account
 # at 0600 (README.md). Only `file:` sources: an `environment:` source would read the

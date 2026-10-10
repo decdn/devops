@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ipaddress
 import json
 import math
 import os
@@ -44,7 +45,7 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -63,7 +64,14 @@ PROFILES: dict[str, tuple[str, ...]] = {
     "sponsord": ("sponsord",),
     "onramp": ("sponsord", "sponsord-onramp"),
     "caddy": ("caddy",),
+    "relay": ("iroh-relay",),
 }
+# Profiles that cannot share a host: each pair wants the same public ports (the
+# Ansible playbooks refuse the same pairs).
+CONFLICTS: tuple[tuple[str, str, str], ...] = (
+    ("relay", "onramp", "tcp/80 and tcp/443"),
+    ("relay", "caddy", "tcp/80 and tcp/443"),
+)
 
 # Host layout: the Ansible roles' paths (README.md, "How it is laid out").
 ETC_DECDN = Path("/etc/decdn")
@@ -81,12 +89,20 @@ SD_TURNSTILE = ETC_SPONSORD / "turnstile-secret"
 ORIGIN_TARGET = "/srv/decdn-origin"
 # compose.yaml's default DECDN_ORIGIN_DIR: an empty directory, for a node without one.
 NO_ORIGIN = Path("/var/lib/decdn-compose/no-origin")
+ETC_RELAY = Path("/etc/iroh-relay")
+VAR_RELAY = Path("/var/lib/iroh-relay")
+RELAY_TOML = ETC_RELAY / "iroh-relay.toml"
+# The relay's metrics listener: loopback, and the port the alloy profile scrapes.
+RELAY_METRICS = "127.0.0.1:9092"
+RELAY_CERT_DIR = VAR_RELAY / "acme"
+BINDV6ONLY = Path("/proc/sys/net/ipv6/bindv6only")
 # Never an origin's content: the hosts' secrets and state.
 NOT_ORIGIN = (
     "/etc/decdn",
     "/etc/sponsord",
     "/var/lib/decdn",
     "/var/lib/caddy",
+    str(VAR_RELAY),
     "/etc",
     "/root",
     "/proc",
@@ -116,7 +132,50 @@ PORTS: dict[str, tuple[tuple[str, int], ...]] = {
     "sponsord": (("tcp", 8090),),
     "sponsord-onramp": (("tcp", 8080),),
     "caddy": (("tcp", 80), ("tcp", 443)),
+    # udp/7842 only with QUIC address discovery on, and the metrics port as
+    # configured: relay_ports() reads both from the config.
+    "iroh-relay": (("tcp", 80), ("tcp", 443), ("udp", 7842), ("tcp", 9092)),
 }
+
+# The keys iroh-relay 1.3.0 deserialises (iroh-relay/src/main.rs: Config, TlsConfig,
+# Limits), the same sets as the role's molecule stub
+# (ansible/molecule/iroh-relay/files/iroh-relay-stub; the unit tests compare them).
+# The binary ignores any other key, so a typo would silently drop a setting.
+RELAY_KEYS: dict[str, set[str]] = {
+    "the top level": {
+        "enable_relay",
+        "http_bind_addr",
+        "tls",
+        "enable_quic_addr_discovery",
+        "limits",
+        "enable_metrics",
+        "metrics_bind_addr",
+        "key_cache_capacity",
+        "access",
+    },
+    "[tls]": {
+        "https_bind_addr",
+        "quic_bind_addr",
+        "hostname",
+        "cert_mode",
+        "cert_dir",
+        "manual_cert_path",
+        "manual_key_path",
+        "prod_tls",
+        "contact",
+        "dangerous_http_only",
+    },
+    "[limits]": {"accept_conn_limit", "accept_conn_burst", "client"},
+    "[limits.client]": {"rx"},
+    "[limits.client.rx]": {"bytes_per_second", "max_burst_bytes"},
+}
+# Not knobs (the role's vars): ACME's TLS-ALPN-01 challenge comes to 443, iroh's
+# captive-portal probe to 80, and iroh clients assume 7842 for QUIC address discovery.
+RELAY_FIXED_PORTS = {"http_bind_addr": 80, "https_bind_addr": 443, "quic_bind_addr": 7842}
+# iroh-relay.toml.example's placeholders, which `init relay` replaces.
+RELAY_PLACEHOLDERS = {"hostname": "relay.example.org", "contact": "admin@example.org"}
+# One series the relay always exports (monitoring/iroh-relay/exported-metrics.txt).
+RELAY_GATE_METRIC = "relayserver_accepts_total"
 
 
 DOMAIN_RE = r"(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}"
@@ -514,6 +573,11 @@ def init(args: argparse.Namespace) -> None:
         raise Refused(f"--region {args.region!r} is not an ISO 3166-1 alpha-2 code (e.g. DE)")
     if args.domain and not re.fullmatch(DOMAIN_RE, args.domain):
         raise Refused(f"--domain {args.domain!r} is not a lower-case DNS name")
+    refuse_conflicts(wanted)
+    if "relay" in wanted:
+        relay_args_problem = check_relay_args(args)
+        if relay_args_problem:
+            raise Refused(relay_args_problem)
     if shutil.which("docker") is None:
         raise Refused("docker is not installed")
 
@@ -525,6 +589,7 @@ def init(args: argparse.Namespace) -> None:
     profiles = [] if fresh else project.profiles
     if "node" in wanted and "origin" in profiles or "origin" in wanted and "node" in profiles:
         raise Refused("this host already runs the other one of node/origin (COMPOSE_PROFILES in .env)")
+    refuse_conflicts(profiles + wanted)
     updates: dict[str, str] = {
         "COMPOSE_PROFILES": ",".join(dict.fromkeys(profiles + wanted)),
     }
@@ -558,6 +623,8 @@ def init(args: argparse.Namespace) -> None:
     if "caddy" in wanted:
         uid, gid = int(project.env["CADDY_UID"]), int(project.env["CADDY_GID"])
         ensure_dir(VAR_CADDY, 0o700, uid, gid)
+    if "relay" in wanted:
+        init_relay(args)
 
     todo = problems(project, files_only=True)
     say("")
@@ -756,17 +823,107 @@ def generate_treasury(project: Project, uid: int, gid: int) -> None:
     )
 
 
+def conflicts(profiles: list[str]) -> list[str]:
+    have = set(profiles)
+    return [
+        f"the {a} and {b} profiles cannot share a host: both want {why}" for a, b, why in CONFLICTS if {a, b} <= have
+    ]
+
+
+def refuse_conflicts(profiles: list[str]) -> None:
+    found = conflicts(profiles)
+    if found:
+        raise Refused(f"{found[0]} (COMPOSE_PROFILES in .env, and the profiles named here)")
+
+
+EMAIL_RE = r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,63}"
+
+
+def reserved_mail_domain(email: str) -> bool:
+    """RFC 2606's example domains and reserved TLDs, whose contact Let's Encrypt
+    refuses ("contact email has forbidden domain"): the relay would never get a
+    certificate, and say so only in its log."""
+    domain = email.rsplit("@", 1)[-1].lower()
+    labels = domain.split(".")
+    return ".".join(labels[-2:]) in {"example.com", "example.net", "example.org"} or labels[-1] in {
+        "example",
+        "invalid",
+        "localhost",
+        "test",
+    }
+
+
+def check_relay_args(args: argparse.Namespace) -> str | None:
+    """`init relay`'s inputs, before anything on the host changes. With a config
+    already installed they are not applied (it is never replaced), so only their
+    shape is checked."""
+    if not RELAY_TOML.exists() and not (args.hostname and args.contact):
+        return (
+            "init relay needs --hostname <the relay's DNS name> and --contact <email for Let's Encrypt> "
+            "(iroh-relay refuses to start without a contact)"
+        )
+    if args.hostname and not re.fullmatch(DOMAIN_RE, args.hostname):
+        return f"--hostname {args.hostname!r} is not a lower-case DNS name (no scheme, port or IP address)"
+    if args.contact and not re.fullmatch(EMAIL_RE, args.contact):
+        return f"--contact {args.contact!r} is not an email address (without mailto:)"
+    if args.contact and reserved_mail_domain(args.contact):
+        return f"--contact {args.contact}: Let's Encrypt refuses an account on a reserved domain"
+    return None
+
+
+def render_relay_toml(hostname: str, contact: str, access: str, staging: bool) -> str:
+    """compose/iroh-relay.toml.example with the operator's values in place."""
+    text = (HERE / "iroh-relay.toml.example").read_text()
+    lines = {
+        "hostname": f"hostname = {json.dumps(hostname)}",
+        "contact": f"contact = {json.dumps(contact)}",
+        "prod_tls": f"prod_tls = {'false' if staging else 'true'}",
+        "access": 'access = "everyone"' if access == "everyone" else "access = { allowlist = [] }",
+    }
+    for key, line in lines.items():
+        text, n = re.subn(rf"(?m)^{key} = .*$", line.replace("\\", "\\\\"), text, count=1)
+        if n != 1:
+            raise Refused(f"compose/iroh-relay.toml.example has no `{key} = ` line")
+    tomllib.loads(text)  # the template stays valid TOML
+    return text
+
+
+def init_relay(args: argparse.Namespace) -> None:
+    """The relay's config and state directory, root-owned like the role's: the
+    container runs as uid 0 (compose.yaml says why)."""
+    ensure_dir(ETC_RELAY, 0o755, 0, 0)
+    ensure_dir(VAR_RELAY, 0o700, 0, 0)
+    ensure_dir(RELAY_CERT_DIR, 0o700, 0, 0)
+    if RELAY_TOML.exists():
+        given = [f"--{k}" for k in ("hostname", "contact") if getattr(args, k)]
+        say(f"kept the existing {RELAY_TOML}" + (f" (not applied: {', '.join(given)}; edit the file)" if given else ""))
+        return
+    write_new(
+        RELAY_TOML, render_relay_toml(args.hostname, args.contact, args.access, args.staging).encode(), 0o644, 0, 0
+    )
+    say(f"wrote {RELAY_TOML} (0644) for {args.hostname}, access {args.access}{', staging CA' if args.staging else ''}")
+    if args.access == "allowlist":
+        say(
+            "  list your nodes' IDs in its allowlist: `sudo compose/decdn-compose cli whoami` on each node "
+            "prints its node id (README.md, An iroh relay)"
+        )
+
+
 def next_steps(wanted: list[str]) -> str:
     steps = ["", "Then:"]
     if {"node", "origin"} & set(wanted):
         steps.append("  - open udp/4433 in the host firewall and your provider's security group")
     if "caddy" in wanted:
         steps.append("  - point the onramp domain at this host; open tcp/80 and tcp/443")
+    if "relay" in wanted:
+        steps.append("  - point the relay's hostname (A/AAAA) at this host; open tcp/80, tcp/443 and udp/7842")
     steps.append("  - sudo compose/decdn-compose up && sudo compose/decdn-compose health")
     if {"node", "origin"} & set(wanted):
         steps.append(
             "  - stake and register: sudo compose/decdn-compose cli setup (README.md, step 'Stake and register')"
         )
+    if "relay" in wanted:
+        steps.append("  - point the nodes at it: relay_urls in their node.toml (README.md, An iroh relay)")
     return "\n".join(steps)
 
 
@@ -907,6 +1064,15 @@ def problems(project: Project, files_only: bool = False) -> list[str]:
             out.append(f"{VAR_CADDY} is missing (`init caddy`)")
         elif uid is not None and VAR_CADDY.stat().st_uid != uid:
             out.append(f"{VAR_CADDY} is not owned by the caddy account")
+    out += conflicts(project.profiles)
+    if "iroh-relay" in svcs:
+        out += filter(None, [file_problem(RELAY_TOML, 0, private=False, what="`init relay`")])
+        if RELAY_TOML.is_file():
+            out += relay_problems(RELAY_TOML)
+        out += state_dir_problems(VAR_RELAY, "relay")
+        digest = env.get("IROH_RELAY_IMAGE_DIGEST")
+        if digest is not None and not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            out.append(".env: IROH_RELAY_IMAGE_DIGEST is set but not a sha256 digest (unset it for compose.yaml's pin)")
     if not files_only:
         for svc in sorted(svcs):
             key = {
@@ -952,6 +1118,194 @@ def rendered_origin_problems(rendered: Mapping) -> list[str]:
     return []
 
 
+def state_dir_problems(path: Path, profile: str) -> list[str]:
+    """An iroh service's state directory: root's, private (its ACME account key)."""
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return [f"{path} is missing (`init {profile}`)"]
+    if not stat.S_ISDIR(st.st_mode):
+        return [f"{path} is not a directory"]
+    if st.st_uid != 0 or st.st_mode & 0o077:
+        return [f"{path} must be root's, mode 0700 (it holds the ACME account key): chown root: and chmod 0700 it"]
+    return []
+
+
+def socket_addr(value: object) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int] | None:
+    """A Rust SocketAddr as iroh's configs write it: 1.2.3.4:80 or [::]:80."""
+    if not isinstance(value, str):
+        return None
+    m = re.fullmatch(r"\[([0-9A-Fa-f:.]+)\]:(\d{1,5})|([0-9.]+):(\d{1,5})", value)
+    if not m:
+        return None
+    try:
+        addr = ipaddress.ip_address(m[1] or m[3])
+    except ValueError:
+        return None
+    if isinstance(addr, ipaddress.IPv6Address) != bool(m[1]):
+        return None
+    return addr, int(m[2] or m[4])
+
+
+def bindv6only() -> bool:
+    try:
+        return BINDV6ONLY.read_text().strip() == "1"
+    except OSError:
+        return False
+
+
+def public_bind_problem(what: str, value: object, port: int) -> str | None:
+    """A public listener: a fixed port on a wildcard or one of the host's own
+    unicast addresses (the role parses its bind address the same way)."""
+    sa = socket_addr(value)
+    if sa is None:
+        return f'{what} = {value!r} is not an address:port such as "[::]:{port}" or "0.0.0.0:{port}"'
+    addr, got = sa
+    if got != port:
+        return f"{what} must use port {port}, not {got}"
+    if addr.is_loopback or addr.is_link_local or addr.is_multicast:
+        return f"{what} = {value!r}: a loopback, link-local or multicast address serves no peer"
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        return f"{what} = {value!r}: an IPv4-mapped address; write the IPv4 address itself"
+    if addr == ipaddress.IPv6Address("::") and bindv6only():
+        return (
+            f"{what} = {value!r}: this host has net.ipv6.bindv6only=1, so [::] serves no IPv4 peer; "
+            "use 0.0.0.0 or set the sysctl to 0"
+        )
+    return None
+
+
+def load_toml(path: Path) -> tuple[dict, str | None]:
+    try:
+        return tomllib.loads(path.read_text()), None
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+        return {}, f"{path} is not readable TOML: {e}"
+
+
+def relay_problems(path: Path) -> list[str]:
+    """What the relay would ignore, or run unsafely with: iroh-relay itself reports
+    neither an unknown key nor most bad values until a peer trips over them."""
+    cfg, err = load_toml(path)
+    if err:
+        return [err]
+    out: list[str] = []
+    where = f"{path}:"
+
+    def unknown(section: str, table: object) -> None:
+        if not isinstance(table, dict):
+            out.append(f"{where} {section} is not a table")
+            return
+        extra = sorted(set(table) - RELAY_KEYS[section])
+        if extra:
+            out.append(f"{where} unknown key(s) in {section}: {', '.join(extra)} (iroh-relay 1.3.0 would ignore them)")
+
+    unknown("the top level", cfg)
+    tls = cfg.get("tls")
+    if tls is None:
+        out.append(f"{where} no [tls] table: the relay must get its certificate from Let's Encrypt")
+        tls = {}
+    else:
+        unknown("[tls]", tls)
+        tls = tls if isinstance(tls, dict) else {}
+    limits = cfg.get("limits")
+    if limits is not None:
+        unknown("[limits]", limits)
+        client = limits.get("client") if isinstance(limits, dict) else None
+        if client is not None:
+            unknown("[limits.client]", client)
+            if isinstance(client, dict) and client.get("rx") is not None:
+                unknown("[limits.client.rx]", client["rx"])
+
+    if cfg.get("enable_relay") is not True:
+        out.append(f"{where} enable_relay must be true")
+    if cfg.get("enable_metrics") is not True:
+        out.append(f"{where} enable_metrics must be true (`decdn-compose health` reads /metrics)")
+    if cfg.get("metrics_bind_addr") != RELAY_METRICS:
+        out.append(
+            f'{where} metrics_bind_addr must be "{RELAY_METRICS}" (got {cfg.get("metrics_bind_addr")!r}): '
+            "iroh-relay's default is public, metrics never are, and that is where the dashboards' "
+            "scrape (and the alloy profile) reads them"
+        )
+    qad = cfg.get("enable_quic_addr_discovery", False)
+    if not isinstance(qad, bool):
+        out.append(f"{where} enable_quic_addr_discovery must be true or false")
+    for key, table, port in (
+        ("http_bind_addr", cfg, RELAY_FIXED_PORTS["http_bind_addr"]),
+        ("https_bind_addr", tls, RELAY_FIXED_PORTS["https_bind_addr"]),
+        ("quic_bind_addr", tls, RELAY_FIXED_PORTS["quic_bind_addr"]),
+    ):
+        if key == "quic_bind_addr" and qad is not True and key not in table:
+            continue
+        problem = public_bind_problem(key, table.get(key), port)
+        if problem:
+            out.append(f"{where} {problem}")
+
+    if tls.get("cert_mode") != "LetsEncrypt":
+        out.append(f'{where} [tls] cert_mode must be "LetsEncrypt" (got {tls.get("cert_mode")!r})')
+    for key in ("manual_cert_path", "manual_key_path", "dangerous_http_only"):
+        if key in tls:
+            out.append(f"{where} [tls] {key} is not for this profile: remove it")
+    cert_dir = tls.get("cert_dir")
+    inside = isinstance(cert_dir, str) and os.path.normpath(cert_dir).startswith(f"{VAR_RELAY}/")
+    if not inside or os.path.normpath(cert_dir) != cert_dir.rstrip("/"):
+        out.append(
+            f"{where} [tls] cert_dir must be a directory in the mounted {VAR_RELAY}, such as "
+            f'"{RELAY_CERT_DIR}" (got {cert_dir!r}): elsewhere the certificate is lost on every restart'
+        )
+    hostname = tls.get("hostname")
+    if not isinstance(hostname, str) or not re.fullmatch(DOMAIN_RE, hostname):
+        out.append(f"{where} [tls] hostname must be the relay's lower-case DNS name (got {hostname!r})")
+    elif hostname == RELAY_PLACEHOLDERS["hostname"]:
+        out.append(f"{where} [tls] hostname is still the example's {hostname}")
+    contact = tls.get("contact")
+    if not isinstance(contact, str) or not re.fullmatch(EMAIL_RE, contact):
+        out.append(f"{where} [tls] contact must be an email address, without mailto: (got {contact!r})")
+    elif contact == RELAY_PLACEHOLDERS["contact"]:
+        out.append(f"{where} [tls] contact is still the example's {contact}")
+    elif reserved_mail_domain(contact):
+        out.append(f"{where} [tls] contact {contact}: Let's Encrypt refuses an account on a reserved domain")
+    if not isinstance(tls.get("prod_tls"), bool):
+        out.append(f"{where} [tls] prod_tls must be true or false")
+
+    access = cfg.get("access", "everyone")
+    if access != "everyone":
+        if not isinstance(access, dict) or list(access) not in (["allowlist"], ["denylist"]):
+            out.append(f'{where} access must be "everyone", {{ allowlist = [...] }} or {{ denylist = [...] }}')
+        else:
+            kind, ids = next(iter(access.items()))
+            if not isinstance(ids, list) or not all(
+                isinstance(i, str) and re.fullmatch(r"[0-9a-f]{64}", i) for i in ids
+            ):
+                out.append(
+                    f"{where} access.{kind} must list endpoint IDs, each 64 lowercase hex (`cli whoami` on a node)"
+                )
+            elif len(set(ids)) != len(ids):
+                out.append(f"{where} access.{kind} lists an ID twice")
+            elif kind == "allowlist" and not ids:
+                out.append(
+                    f"{where} the allowlist is empty, so the relay would admit nobody: add your nodes' IDs "
+                    '(`sudo compose/decdn-compose cli whoami` on each node), or set access = "everyone" deliberately'
+                )
+    return out
+
+
+def relay_ports(path: Path = RELAY_TOML) -> tuple[tuple[str, int], ...]:
+    """The relay's listeners as its config sets them (PORTS when it cannot be read)."""
+    cfg, err = load_toml(path)
+    if err:
+        return PORTS["iroh-relay"]
+    ports = [("tcp", 80), ("tcp", 443)]
+    if cfg.get("enable_quic_addr_discovery") is True:
+        ports.append(("udp", 7842))
+    metrics = socket_addr(cfg.get("metrics_bind_addr"))
+    ports.append(("tcp", metrics[1] if metrics else 9092))
+    return tuple(ports)
+
+
+def service_ports(svc: str) -> tuple[tuple[str, int], ...]:
+    return relay_ports() if svc == "iroh-relay" else PORTS[svc]
+
+
 def listeners() -> dict[tuple[str, int], str] | None:
     """(proto, port) -> the process holding it, from `ss`; None without ss."""
     if shutil.which("ss") is None:
@@ -981,7 +1335,7 @@ def check_ports(project: Project) -> list[str]:
     for svc in sorted(project.services):
         if container_id(svc):
             continue  # it holds its own ports
-        for proto, port in PORTS[svc]:
+        for proto, port in service_ports(svc):
             if (proto, port) in held:
                 out.append(f"{proto}/{port}, which {svc} binds, is held by {held[(proto, port)]}")
     return out
@@ -1202,9 +1556,29 @@ def cmd_up(args: argparse.Namespace) -> None:
     compose("up", "-d", *args.rest)
 
 
+# The configs a service reads only at start, which nothing but these checks guards
+# (the iroh servers ignore unknown keys and fall back to built-in defaults, public
+# ones included): `restart` is how an edit is applied, so it runs them first.
+CONFIG_CHECKS: dict[str, Callable[[], list[str]]] = {
+    "iroh-relay": lambda: relay_problems(RELAY_TOML),
+}
+
+
 def cmd_stopping(args: argparse.Namespace) -> None:
     require_root()
-    Project.load()
+    project = Project.load()
+    if args.command == "restart":
+        names = [a for a in args.rest if not a.startswith("-")]
+        found = [
+            p
+            for svc, checks in CONFIG_CHECKS.items()
+            if svc in project.services and (not names or svc in names or not set(names) <= SERVICES)
+            for p in checks()
+        ]
+        if found:
+            raise Refused(
+                "refusing to restart with a config the service would misread:\n" + "\n".join(f"  - {p}" for p in found)
+            )
     if touches_sponsord(args.command, args.rest):
         guard_sponsord(args, "stop" if args.command == "down" else args.command)
     compose(args.command, *args.rest)
@@ -1295,13 +1669,14 @@ def with_env_rpc_url(text: str) -> str:
     return text[: m.start(1)] + body + text[m.end(1) :]
 
 
-def tls_healthz(domain: str) -> str:
-    """GET https://<domain>/healthz from Caddy on loopback, against the host's
-    trust store: proves the certificate, not just the listener."""
+def tls_healthz(domain: str, addr: str = "127.0.0.1") -> str:
+    """GET https://<domain>/healthz from the listener on <addr>:443 (Caddy, the
+    relay), against the host's trust store: proves the certificate, not just the
+    listener."""
     ctx = ssl.create_default_context()
     try:
         with (
-            socket.create_connection(("127.0.0.1", 443), timeout=5) as raw,
+            socket.create_connection((addr, 443), timeout=5) as raw,
             ctx.wrap_socket(raw, server_hostname=domain) as s,
         ):
             s.sendall(f"GET /healthz HTTP/1.1\r\nHost: {domain}\r\nConnection: close\r\n\r\n".encode())
@@ -1316,10 +1691,10 @@ def cmd_health(args: argparse.Namespace) -> None:
     project = Project.load()
     bad = 0
 
-    def report(name: str, ok: bool, detail: str) -> None:
+    def report(name: str, ok: bool, detail: str, warn_only: bool = False) -> None:
         nonlocal bad
-        bad += not ok
-        say(f"{'ok  ' if ok else 'FAIL'} {name}: {detail}")
+        bad += not ok and not warn_only
+        say(f"{'ok  ' if ok else 'warn' if warn_only else 'FAIL'} {name}: {detail}")
 
     svcs = project.services
     for svc in sorted(svcs):
@@ -1350,7 +1725,48 @@ def cmd_health(args: argparse.Namespace) -> None:
         dom = project.env.get("SPONSORD_ONRAMP_DOMAIN", "")
         res = tls_healthz(dom)
         report("caddy", res == "ok", f"https://{dom}/healthz: {res}")
+    if "iroh-relay" in svcs:
+        for name, ok, detail, warn_only in relay_health(RELAY_TOML):
+            report(name, ok, detail, warn_only)
     sys.exit(1 if bad else 0)
+
+
+def relay_health(path: Path) -> list[tuple[str, bool, str, bool]]:
+    """The role's gate and certificate check: loopback /metrics with the relay's
+    series, then https://<hostname>/healthz on the relay's own address (loopback
+    for a wildcard bind) against the host trust store. A staging certificate is
+    never trusted, so with prod_tls = false that check only warns."""
+    cfg, err = load_toml(path)
+    if err:
+        return [("iroh-relay", False, err, False)]
+    tls = cfg.get("tls") if isinstance(cfg.get("tls"), dict) else {}
+    out = []
+    metrics = socket_addr(cfg.get("metrics_bind_addr"))
+    if metrics is None:
+        out.append(("iroh-relay metrics", False, "metrics_bind_addr is not an address", False))
+    else:
+        host = f"[{metrics[0]}]" if metrics[0].version == 6 else str(metrics[0])
+        url = f"http://{host}:{metrics[1]}/metrics"
+        status, body = fetch(url)
+        has = RELAY_GATE_METRIC in body
+        out.append(
+            (
+                "iroh-relay metrics",
+                status == 200 and has,
+                f"{url} {status}{'' if has else f', no {RELAY_GATE_METRIC}'}",
+                False,
+            )
+        )
+    https = socket_addr(tls.get("https_bind_addr"))
+    addr = "127.0.0.1" if https is None or https[0].is_unspecified else str(https[0])
+    hostname = str(tls.get("hostname", ""))
+    res = tls_healthz(hostname, addr)
+    staging = tls.get("prod_tls") is False
+    detail = f"https://{hostname}/healthz via {addr}: {res}"
+    if staging and res != "ok":
+        detail += " (prod_tls = false: Let's Encrypt's staging certificates are never trusted)"
+    out.append(("iroh-relay certificate", res == "ok", detail, staging))
+    return out
 
 
 def backup_paths(project: Project) -> list[Path]:
@@ -1368,6 +1784,10 @@ def backup_paths(project: Project) -> list[Path]:
         ]
     if "sponsord-onramp" in svcs:
         paths += [SD_TURNSTILE, project.env_file("SPONSORD_ONRAMP_ENV_FILE")]
+    if "iroh-relay" in svcs:
+        # The config only: the relay generates its ACME account and certificate
+        # itself and gets them again on a new host (the Ansible path backs up none).
+        paths += [RELAY_TOML]
     return paths
 
 
@@ -1436,6 +1856,17 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--domain", help="onramp/caddy: the onramp's public host name")
     p.add_argument(
         "--generate-treasury", action="store_true", help="sponsord/onramp: generate the treasury wallet on this host"
+    )
+    p.add_argument("--hostname", help="relay: the relay's public DNS name (its A/AAAA records point at this host)")
+    p.add_argument("--contact", help="relay: the Let's Encrypt account's email address")
+    p.add_argument(
+        "--access",
+        choices=("allowlist", "everyone"),
+        default="allowlist",
+        help="relay: who may relay through it (default allowlist: fill in your nodes' IDs)",
+    )
+    p.add_argument(
+        "--staging", action="store_true", help="relay: Let's Encrypt's staging CA, for a trial (untrusted certificates)"
     )
     p.set_defaults(func=init)
 

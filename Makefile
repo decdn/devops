@@ -65,8 +65,10 @@ security-helm:       ## KICS scan of the decdn-node chart's rendered manifests (
 # /etc/sponsord gate-page directory (ro) and /var/lib/caddy. They are the Ansible
 # roles' host layout, which is what lets backups and restores (docs/lifecycle.md)
 # work unchanged; lint-compose pins each container's exact mounts (and secrets)
-# instead. The MEDIUMs (host network, no healthcheck on the sponsor's and Caddy's
-# images, Caddy's NET_BIND_SERVICE) are the documented design; see compose/README.md.
+# instead. The MEDIUMs (host network, no healthcheck on the sponsor's, Caddy's and
+# the iroh relay's images, Caddy's and the relay's NET_BIND_SERVICE) are the
+# documented design; see compose/README.md. KICS has no query for the relay's uid 0
+# (the one root service, NET_BIND_SERVICE only): lint-compose pins that instead.
 security-compose:    ## KICS scan of compose/ (pinned engine image)
 	mkdir -p kics-results
 	docker run --rm --user $(shell id -u):$(shell id -g) -w /repo -v "$(CURDIR):/repo" $(KICS_IMAGE) \
@@ -78,8 +80,9 @@ security-compose:    ## KICS scan of compose/ (pinned engine image)
 # Renders compose/compose.yaml with every profile on, three times, and checks each:
 #  - with the example .env, against compose/tests/invariants.jq: the properties the
 #    README promises (host network, nothing published, images by digest, read-only
-#    rootfs, no capabilities beyond Caddy's NET_BIND_SERVICE, exact security_opt,
-#    non-root users, each container's exact mounts, loopback sponsord listeners,
+#    rootfs, no capabilities beyond Caddy's and the relay's NET_BIND_SERVICE, exact
+#    security_opt, non-root users (uid 0 for the iroh relay only, with that one
+#    capability), each container's exact mounts, loopback sponsord listeners,
 #    secret files only, stop graces long enough for each daemon's drain);
 #  - with every service env file empty (/dev/null), against
 #    compose/tests/inline-env.jq: compose.yaml itself sets only the allowed

@@ -657,11 +657,241 @@ class Profiles(unittest.TestCase):
         self.assertRegex(text, rf"(?m)^name: {dc.PROJECT}$")
 
     def test_init_refuses_node_and_origin_together(self) -> None:
-        args = argparse.Namespace(
-            profiles=["node", "origin"], origin=None, region="DE", domain=None, chain="x", generate_treasury=False
-        )
         with mock.patch.object(dc, "require_root"), self.assertRaises(dc.Refused):
-            dc.init(args)
+            dc.init(init_args(["node", "origin"]))
+
+    def test_relay_conflicts_with_the_onramp_and_caddy(self) -> None:
+        self.assertEqual(dc.conflicts(["node", "relay"]), [])
+        for other in ("onramp", "caddy"):
+            with self.subTest(other=other):
+                self.assertIn("tcp/80 and tcp/443", dc.conflicts(["relay", other])[0])
+                with mock.patch.object(dc, "require_root"), self.assertRaises(dc.Refused) as cm:
+                    dc.init(init_args(["relay", other], hostname="relay.example.net", contact="noc@decdn.org"))
+                self.assertIn("cannot share a host", str(cm.exception))
+
+    def test_check_refuses_conflicting_profiles(self) -> None:
+        found = dc.problems(dc.Project({"COMPOSE_PROFILES": "relay,caddy"}), files_only=True)
+        self.assertTrue(any("cannot share a host" in p for p in found), found)
+
+
+def init_args(profiles: list[str], **kw: object) -> argparse.Namespace:
+    base = dict(
+        profiles=profiles,
+        origin=None,
+        region="DE",
+        domain=None,
+        chain="x",
+        generate_treasury=False,
+        hostname=None,
+        contact=None,
+        access="allowlist",
+        staging=False,
+    )
+    return argparse.Namespace(**(base | kw))
+
+
+ID1 = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+
+
+class RelayConfig(TmpDir):
+    """The relay's config checks (`check`): iroh-relay itself ignores an unknown key
+    and starts on most bad values."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.v6only = self.tmp / "bindv6only"
+        self.v6only.write_text("0\n")
+        patcher = mock.patch.object(dc, "BINDV6ONLY", self.v6only)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.good = dc.render_relay_toml("relay.example.net", "noc@decdn.org", "everyone", staging=False)
+
+    def problems(self, text: str) -> list[str]:
+        p = self.tmp / "iroh-relay.toml"
+        p.write_text(text)
+        return dc.relay_problems(p)
+
+    def refused(self, text: str, fragment: str) -> None:
+        found = self.problems(text)
+        self.assertTrue(any(fragment in f for f in found), f"no {fragment!r} in {found}")
+
+    def sub(self, old: str, new: str) -> str:
+        """Replace <old> in the first setting (not comment) line that holds it."""
+        lines = self.good.splitlines(keepends=True)
+        for i, line in enumerate(lines):
+            if not line.startswith("#") and old in line:
+                lines[i] = line.replace(old, new, 1)
+                return "".join(lines)
+        self.fail(f"no setting line holds {old!r}")
+
+    def test_rendered_config_passes(self) -> None:
+        self.assertEqual(self.problems(self.good), [])
+        allow = self.sub('access = "everyone"', f'access = {{ allowlist = [\n  "{ID1}",\n] }}')
+        self.assertEqual(self.problems(allow), [])
+
+    def test_render(self) -> None:
+        text = dc.render_relay_toml("relay.example.net", "noc@decdn.org", "allowlist", staging=True)
+        cfg = dc.tomllib.loads(text)
+        self.assertEqual(cfg["access"], {"allowlist": []})
+        self.assertIs(cfg["tls"]["prod_tls"], False)
+        self.assertEqual(cfg["tls"]["hostname"], "relay.example.net")
+        self.assertEqual(cfg["tls"]["cert_dir"], str(dc.RELAY_CERT_DIR))
+
+    def test_example_needs_its_placeholders_and_ids(self) -> None:
+        found = self.problems((HERE.parent / "iroh-relay.toml.example").read_text())
+        self.assertEqual(len(found), 3, found)
+        for fragment in ("hostname is still the example's", "contact is still the example's", "allowlist is empty"):
+            self.assertTrue(any(fragment in f for f in found), found)
+
+    def test_unknown_keys(self) -> None:
+        self.refused("key_cache_capacty = 10\n" + self.good, "unknown key(s) in the top level: key_cache_capacty")
+        self.refused(self.sub("hostname =", "host_name ="), "unknown key(s) in [tls]: host_name")
+        self.refused(self.good + "\n[limits]\nconn_limit = 1.0\n", "unknown key(s) in [limits]: conn_limit")
+
+    def test_metrics(self) -> None:
+        for addr in ('"0.0.0.0:9092"', '"[::]:9090"', '"127.0.0.1:9100"'):
+            # Public, or a loopback port the alloy profile does not scrape.
+            self.refused(self.sub('"127.0.0.1:9092"', addr), 'metrics_bind_addr must be "127.0.0.1:9092"')
+        self.refused(self.sub("enable_metrics = true", "enable_metrics = false"), "enable_metrics must be true")
+
+    def test_cert_dir(self) -> None:
+        self.refused(self.sub('"/var/lib/iroh-relay/acme"', '"/tmp/acme"'), "cert_dir must be")
+        self.refused(self.sub('"/var/lib/iroh-relay/acme"', '"/var/lib/iroh-relay/../acme"'), "cert_dir must be")
+        self.refused(self.sub('"/var/lib/iroh-relay/acme"', '"/var/lib/iroh-relay"'), "cert_dir must be")
+
+    def test_tls(self) -> None:
+        self.refused(self.sub('cert_mode = "LetsEncrypt"', 'cert_mode = "Manual"'), "cert_mode must be")
+        self.refused(self.sub('hostname = "relay.example.net"', 'hostname = "https://relay"'), "hostname must be")
+        self.refused(self.sub('contact = "noc@decdn.org"', 'contact = "mailto:noc@decdn.org"'), "contact must be")
+        self.refused(self.good + "dangerous_http_only = true\n", "dangerous_http_only is not for this profile")
+        # Let's Encrypt refuses these (e2e: "contact email has forbidden domain").
+        for contact in ("ops@example.net", "ops@mail.example.com", "ops@relay.invalid", "ops@host.test"):
+            self.refused(self.sub('contact = "noc@decdn.org"', f'contact = "{contact}"'), "reserved domain")
+        self.assertFalse(dc.reserved_mail_domain("ops@notexample.com"))
+
+    def test_access(self) -> None:
+        self.refused(self.sub('access = "everyone"', "access = { allowlist = [] }"), "allowlist is empty")
+        self.refused(self.sub('access = "everyone"', 'access = { allowlist = ["ABC"] }'), "64 lowercase hex")
+        self.refused(self.sub('access = "everyone"', f'access = {{ allowlist = ["{ID1}", "{ID1}"] }}'), "twice")
+        self.assertEqual(self.problems(self.sub('access = "everyone"', "access = { denylist = [] }")), [])
+
+    def test_binds(self) -> None:
+        self.refused(self.sub('"[::]:443"', '"[::]:8443"'), "must use port 443")
+        self.refused(self.sub('http_bind_addr = "[::]:80"', 'http_bind_addr = "127.0.0.1:80"'), "serves no peer")
+        self.refused(self.sub('"[::]:7842"', '"relay:7842"'), "is not an address:port")
+        self.v6only.write_text("1\n")
+        self.refused(self.good, "bindv6only=1")
+        v4 = self.good.replace('"[::]:', '"0.0.0.0:')
+        self.assertEqual(self.problems(v4), [])
+
+    def test_ports_follow_the_config(self) -> None:
+        p = self.tmp / "iroh-relay.toml"
+        p.write_text(self.good)
+        self.assertEqual(dc.relay_ports(p), (("tcp", 80), ("tcp", 443), ("udp", 7842), ("tcp", 9092)))
+        p.write_text(self.sub("enable_quic_addr_discovery = true", "enable_quic_addr_discovery = false"))
+        self.assertNotIn(("udp", 7842), dc.relay_ports(p))
+        p.write_text("not toml [")
+        self.assertEqual(dc.relay_ports(p), dc.PORTS["iroh-relay"])
+
+    def test_keys_match_the_molecule_stub(self) -> None:
+        import ast
+
+        stub = HERE.parent.parent / "ansible" / "molecule" / "iroh-relay" / "files" / "iroh-relay-stub"
+        sets = {
+            t.id: ast.literal_eval(node.value)
+            for node in ast.parse(stub.read_text()).body
+            if isinstance(node, ast.Assign)
+            for t in node.targets
+            if isinstance(t, ast.Name) and t.id.endswith("_KEYS")
+        }
+        self.assertEqual(dc.RELAY_KEYS["the top level"], sets["TOP_KEYS"])
+        self.assertEqual(dc.RELAY_KEYS["[tls]"], sets["TLS_KEYS"])
+        self.assertEqual(dc.RELAY_KEYS["[limits]"], sets["LIMIT_KEYS"])
+        self.assertEqual(dc.RELAY_KEYS["[limits.client.rx]"], sets["RX_KEYS"])
+
+
+class RelayInit(TmpDir):
+    def test_needs_hostname_and_contact(self) -> None:
+        with mock.patch.object(dc, "RELAY_TOML", self.tmp / "absent.toml"):
+            self.assertIn("--hostname", dc.check_relay_args(init_args(["relay"])) or "")
+            self.assertIn("--hostname", dc.check_relay_args(init_args(["relay"], hostname="r.example.net")) or "")
+            ok = init_args(["relay"], hostname="r.example.net", contact="noc@decdn.org")
+            self.assertIsNone(dc.check_relay_args(ok))
+            bad = init_args(["relay"], hostname="r.example.net", contact="mailto:noc@decdn.org")
+            self.assertIn("--contact", dc.check_relay_args(bad) or "")
+            with mock.patch.object(dc, "require_root"), self.assertRaises(dc.Refused):
+                dc.init(init_args(["relay"]))
+
+    def test_never_replaces_the_config(self) -> None:
+        cfg = self.tmp / "etc" / "iroh-relay.toml"
+        cfg.parent.mkdir()
+        cfg.write_text("keep")
+        with (
+            mock.patch.object(dc, "ETC_RELAY", cfg.parent),
+            mock.patch.object(dc, "RELAY_TOML", cfg),
+            mock.patch.object(dc, "VAR_RELAY", self.tmp / "var"),
+            mock.patch.object(dc, "RELAY_CERT_DIR", self.tmp / "var" / "acme"),
+            mock.patch.object(dc.os, "chown", lambda *a: None),
+        ):
+            dc.init_relay(init_args(["relay"], hostname="r.example.net", contact="noc@decdn.org"))
+        self.assertEqual(cfg.read_text(), "keep")
+        self.assertEqual((self.tmp / "var").stat().st_mode & 0o777, 0o700)
+
+
+class RelayHealth(TmpDir):
+    def run_with(self, prod: bool, tls: str) -> list[tuple[str, bool, str, bool]]:
+        p = self.tmp / "iroh-relay.toml"
+        p.write_text(dc.render_relay_toml("relay.example.net", "noc@decdn.org", "everyone", staging=not prod))
+        with (
+            mock.patch.object(dc, "fetch", return_value=(200, "relayserver_accepts_total 0\n")),
+            mock.patch.object(dc, "tls_healthz", return_value=tls) as th,
+        ):
+            out = dc.relay_health(p)
+        th.assert_called_once_with("relay.example.net", "127.0.0.1")
+        return out
+
+    def test_metrics_and_certificate(self) -> None:
+        (_, ok_m, _, _), (_, ok_c, _, warn) = self.run_with(prod=True, tls="ok")
+        self.assertTrue(ok_m and ok_c and not warn)
+
+    def test_an_untrusted_production_certificate_fails(self) -> None:
+        _, (_, ok, _, warn) = self.run_with(prod=True, tls="certificate verify failed")
+        self.assertFalse(ok or warn)
+
+    def test_staging_only_warns(self) -> None:
+        _, (_, ok, detail, warn) = self.run_with(prod=False, tls="certificate verify failed")
+        self.assertTrue(warn and not ok)
+        self.assertIn("staging", detail)
+
+
+class RestartChecksConfig(TmpDir):
+    def test_restart_refuses_a_config_the_service_would_misread(self) -> None:
+        bad = lambda: ["iroh-relay.toml: unknown key metrics_bind_adr"]  # noqa: E731
+        project = dc.Project({"COMPOSE_PROFILES": "relay"})
+        for rest in ([], ["iroh-relay"], ["--timeout", "5"]):
+            with (
+                self.subTest(rest=rest),
+                mock.patch.object(dc, "require_root"),
+                mock.patch.object(dc.Project, "load", return_value=project),
+                mock.patch.dict(dc.CONFIG_CHECKS, {"iroh-relay": bad}),
+                mock.patch.object(dc, "compose") as compose,
+                self.assertRaises(dc.Refused),
+            ):
+                dc.cmd_stopping(argparse.Namespace(command="restart", rest=rest, ignore_topup_hold=False))
+            compose.assert_not_called()
+
+    def test_restart_of_another_service_skips_it(self) -> None:
+        project = dc.Project({"COMPOSE_PROFILES": "node,relay"})
+        bad = mock.Mock(return_value=["x"])
+        with (
+            mock.patch.object(dc, "require_root"),
+            mock.patch.object(dc.Project, "load", return_value=project),
+            mock.patch.dict(dc.CONFIG_CHECKS, {"iroh-relay": bad}),
+            mock.patch.object(dc, "compose") as compose,
+        ):
+            dc.cmd_stopping(argparse.Namespace(command="restart", rest=["decdn-node"], ignore_topup_hold=False))
+        bad.assert_not_called()
+        compose.assert_called_once_with("restart", "decdn-node")
 
 
 class CommandGuard(unittest.TestCase):
