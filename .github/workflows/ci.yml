@@ -217,7 +217,7 @@ jobs:
   # promises (no secrets, release installs, host-generated node wallet, localhost in
   # decdn_nodes and/or sponsord_hosts, a keyed admin account, shellcheck-clean stage 1,
   # a collection lock covering ansible/requirements.yml), for both templates. The boots
-  # themselves are the molecule `cloud-init` and `cloud-init-sponsord` scenarios
+  # themselves are the molecule `cloud-init` and `cloud-init-publisher` scenarios
   # (molecule.yml). Runs only when cloud-init/, ansible/requirements.yml, the root
   # Makefile or ci.yml changed.
   cloud-init:

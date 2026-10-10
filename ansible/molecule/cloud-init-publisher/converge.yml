@@ -1,20 +1,24 @@
 ---
-# First boot of cloud-init/user-data-sponsord.yaml, filled in the way an operator would
-# with the values ../sponsord-onramp uses, and pointed at the local repo and mirror.
-# Two edits go beyond a placeholder: the keyrings (the mirror's throwaway key, as in
-# ../cloud-init) and `sponsord_onramp_caddy_tls: internal` (no ACME in a container).
+# First boot of cloud-init/user-data-publisher.yaml, filled in the way an operator would
+# with the values ../cloud-init and ../sponsord-onramp use (an http origin backend for
+# the node), and pointed at the local repo and mirror. Two edits go beyond a
+# placeholder: the keyrings (the mirror's throwaway key, as in ../cloud-init) and
+# `sponsord_onramp_caddy_tls: internal` (no ACME in a container).
 #
-# It then asserts the host stopped at the secret gate: state "awaiting-secret", all
-# four sponsor secrets listed, nothing of either service installed.
-- name: Converge — first boot of the sponsor user-data
+# It then asserts the host stopped at the secret gate: state "awaiting-secret", the
+# node's and all four sponsor secrets listed, nothing of any service installed.
+- name: Converge — first boot of the publisher user-data
   hosts: all
   become: true
   vars:
     userdata_src: >-
-      {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/../cloud-init/user-data-sponsord.yaml
+      {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/../cloud-init/user-data-publisher.yaml
     # Stood up by prepare.yml.
     mirror_base: http://127.0.0.1:8099/releases
     mirror_key: /srv/mirror/KEYS.asc
+    # Each repository's releases under their own base (prepare.yml).
+    node_base: "{{ mirror_base }}/decdn"
+    sponsor_base: "{{ mirror_base }}/sponsord"
     userdata_edits:
       - regexp: '^(\s*)DEVOPS_REPO=https://github\.com/decdn/devops\.git$'
         replace: '\1DEVOPS_REPO=file:///srv/devops-src'
@@ -24,11 +28,20 @@
         replace: '\1- name: molecule'
       - regexp: '^(\s*)- "CHANGE_ME"(.*)$'
         replace: '\1- "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMolecule0000000000000000000000000000000000 molecule"'
+      # the origin node
+      - regexp: '^(\s*)decdn_node_install_method: release$'
+        replace: '\1decdn_node_install_method: release\n\1decdn_node_version: "0.0.0-molecule-stub"'
+      - regexp: '^(\s*)# decdn_node_release_base: .*$'
+        replace: '\1decdn_node_release_base: "{{ node_base }}"\n\1decdn_release_keyring: {{ mirror_key }}'
+      - regexp: '^(\s*)decdn_region: "CHANGE_ME".*$'
+        replace: '\1decdn_region: "DE"'
+      - regexp: '^(\s*)decdn_cache_origin_url: "CHANGE_ME".*$'
+        replace: '\1decdn_cache_origin_url: "https://content.example.invalid/"'
       # sponsord
       - regexp: '^(\s*)sponsord_install_method: release$'
         replace: '\1sponsord_install_method: release\n\1sponsord_version: "0.0.0-molecule-stub"'
       - regexp: '^(\s*)# sponsord_release_base: .*$'
-        replace: '\1sponsord_release_base: "{{ mirror_base }}"\n\1sponsord_release_keyring: {{ mirror_key }}'
+        replace: '\1sponsord_release_base: "{{ sponsor_base }}"\n\1sponsord_release_keyring: {{ mirror_key }}'
       - regexp: '^(\s*)sponsord_pool_id: "CHANGE_ME".*$'
         replace: '\1sponsord_pool_id: "0x00000000000000000000000000000000000000000000000000000000000000aa"'
       # sponsord-onramp
@@ -36,7 +49,7 @@
         replace: '\1sponsord_onramp_install_method: release\n\1sponsord_onramp_version: "0.0.0-molecule-stub"'
       - regexp: '^(\s*)# sponsord_onramp_release_base: .*$'
         replace: >-
-          \1sponsord_onramp_release_base: "{{ mirror_base }}"\n\1sponsord_onramp_release_keyring: {{ mirror_key }}
+          \1sponsord_onramp_release_base: "{{ sponsor_base }}"\n\1sponsord_onramp_release_keyring: {{ mirror_key }}
       - regexp: '^(\s*)sponsord_onramp_domain: "CHANGE_ME".*$'
         replace: '\1sponsord_onramp_domain: onramp.molecule.test\n\1sponsord_onramp_caddy_tls: internal'
       - regexp: '^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME".*$'
@@ -56,6 +69,9 @@
         path: "{{ item }}"
       register: premature
       loop:
+        - /usr/local/bin/decdn-node
+        - /etc/systemd/system/decdn-node.service
+        - /var/lib/decdn/keystore.json
         - /usr/local/bin/sponsord
         - /usr/local/bin/sponsord-onramp
         - /etc/systemd/system/sponsord.service
@@ -70,6 +86,7 @@
     - name: Assert the host is waiting for its secrets, and nothing more
       vars:
         want:
+          - /etc/decdn/decdn.env
           - /etc/sponsord/secret.env
           - /etc/sponsord/treasury-keystore.json
           - /etc/sponsord/treasury-password
@@ -81,6 +98,7 @@
           - premature.results | selectattr('stat.exists') | list | length == 0
           - login_hint.stdout is search('waiting for these secrets')
           - login_hint.stdout is search('/etc/sponsord/treasury-keystore\.json')
+          - login_hint.stdout is search('/etc/decdn/decdn\.env')
         fail_msg: >-
           Expected state awaiting-secret listing {{ want }} with nothing installed.
           Got state {{ bootstrap_state.content | b64decode | trim }}, awaiting

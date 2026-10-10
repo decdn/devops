@@ -444,7 +444,7 @@ node built from source on the host: the build sandbox, stamps, a moved branch),
 `source-build-rollback` (the same converge, then a broken commit rolled back by SHA),
 `source-build-recovery` (the same converge, then the install-method switch, an
 untrusted earlier build home and a lost restart), and
-`cloud-init` and `cloud-init-sponsord` (the `cloud-init/` templates booted for real).
+`cloud-init` and `cloud-init-publisher` (the `cloud-init/` templates booted for real).
 A slow scenario is split along its side effects rather than allowed to set the wall
 clock on its own.
 They are independent, so they run concurrently, and each line of output is prefixed with its scenario name

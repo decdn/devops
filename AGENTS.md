@@ -75,7 +75,7 @@ ansible/                # the deployment project (DevSec-hardened, lean roles)
   playbooks/            # site.yml = node.yml (node operators: cache nodes) + publisher.yml (publishers: origin.yml, sponsord.yml (+ onramp), iroh_relay.yml, iroh_dns_server.yml); backup.yml, decommission.yml
   roles/                # baseline, decdn_node, grafana_alloy, sponsord, sponsord_onramp, iroh_relay, iroh_dns_server
   inventory/ galaxy/ molecule/    # see ansible/README.md
-cloud-init/             # user-data{,-sponsord}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
+cloud-init/             # user-data-{node,publisher}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
 compose/                # Docker Compose deploy path for a single host (see its README.md)
   compose.yaml          # profiles: node, sponsord, onramp (+ sponsord), caddy
   Caddyfile             # mirrors roles/sponsord_onramp/templates/Caddyfile.j2
@@ -269,8 +269,8 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     config.
   - **Molecule:** under docker, `/` must be `--make-rshared` (see
     `molecule/sponsord/prepare.yml`) or every credential directory is empty.
-  - **cloud-init:** `cloud-init/user-data-sponsord.yaml` (with the onramp), release
-    mode only; see the `cloud-init/` bullet below.
+  - **cloud-init:** `cloud-init/user-data-publisher.yaml` (with the onramp and an
+    origin node), release mode only; see the `cloud-init/` bullet below.
 
 - **`ansible/roles/sponsord_onramp`** — `sponsord-onramp`, sponsord's public side (the
   Turnstile gate, the installers, the `decdn-sponsored` CLI API), as a second play of
@@ -397,9 +397,10 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     real binary's record round-trip (PUT, then `dig TXT`) is a manual check, listed
     in the role README. No `monitoring/` assets yet.
 
-- **`cloud-init/`** — the Ansible path with no control machine. Two templates,
-  `user-data.yaml` (a node) and `user-data-sponsord.yaml` (sponsord + onramp), share
-  stage 1 and differ only in their inventory. They carry only public material (the lint
+- **`cloud-init/`** — the Ansible path with no control machine. Two templates, one per
+  persona: `user-data-node.yaml` (node operators: a cache node) and
+  `user-data-publisher.yaml` (publishers: an origin node + sponsord + onramp, deletable
+  group by group), share stage 1 and differ only in their inventory. They carry only public material (the lint
   refuses secret-looking keys, credentials in URLs and unknown `bootstrap.env` keys)
   and a stage-1 `decdn-bootstrap`. That script clones this repo at a pinned ref (a full
   SHA is verified after checkout) and execs `cloud-init/bootstrap.sh`, which:
@@ -408,11 +409,16 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   - installs the exact collections from `collections.lock.yml`;
   - runs `site.yml` (which imports `node.yml` and `publisher.yml`) against localhost. The inventory
     must put localhost in `decdn_nodes` and/or `sponsord_hosts` (and in
-    `sponsord_hosts` whenever it is in `sponsord_onramp_hosts`), or the plays match
-    nothing and the firewall holes never load.
+    `decdn_nodes` whenever it is in `decdn_origin_nodes`, in `sponsord_hosts` whenever
+    it is in `sponsord_onramp_hosts`), or the plays match nothing and the firewall
+    holes never load. The template lists an origin in `decdn_nodes` and
+    `decdn_origin_nodes` as siblings (the lint refuses `children:`), and the lint
+    requires an origin backend in `decdn_origin_nodes.vars`.
 
   Each group needs its secrets on the host first, at the role-default paths (the lint
-  forbids moving them): `/etc/decdn/decdn.env` for a node; `secret.env`, the treasury
+  forbids moving them): `/etc/decdn/decdn.env` for a node (an origin's too, with an S3
+  backend's keys; `decdn_origin_nodes` has no `SECRETS` of its own, so no `case` arm);
+  `secret.env`, the treasury
   keystore and password, and (onramp) `turnstile-secret` under `/etc/sponsord/`. While
   any is missing it runs `--tags baseline` only, lists them in
   `/var/lib/decdn-bootstrap/awaiting` and records `awaiting-secret`. The operator
@@ -425,12 +431,14 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   steps at the end of `bootstrap.sh`, and the README's table. A new group also needs
   its own `case` arm and a place in both `HOST_GROUPS` and lint.py's `GROUPS`
   (`make test-scripts` checks all three). The baseline-only run trusts every
-  `decdn_nodes`/`sponsord_hosts` play to run `baseline` tagged `baseline` (checked per
-  play at boot by `cloud-init/baseline-plays.sh`, and by `make test-scripts`). The lint
+  node.yml/origin.yml/sponsord.yml play to run `baseline` tagged `baseline` (checked
+  per play at boot by `cloud-init/baseline-plays.sh`, for `decdn_origin_nodes` in place
+  of `decdn_nodes` on an origin, whose play is origin.yml's; and by `make
+  test-scripts`). The lint
   allows only the templates' top-level modules and no YAML anchors, so what it reads
   is what cloud-init and Ansible read. When `ansible/requirements.yml` changes, re-sync the lock:
   `make lint-cloud-init` checks it covers the requirements. The molecule `cloud-init`
-  and `cloud-init-sponsord` scenarios boot the real templates through cloud-init
+  and `cloud-init-publisher` scenarios boot the real templates through cloud-init
   (skipping `baseline`) against a locally signed release mirror, built from the shared
   `molecule/cloud-init/pack.yml` and `includes/`. They are the only coverage of the node's and the
   onramp's release download and verify path.

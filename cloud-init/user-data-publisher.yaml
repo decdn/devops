@@ -1,24 +1,29 @@
 #cloud-config
-# deCDN sponsor host bootstrap: sponsord (the onboarding sponsor's treasury signer and
-# PaymentPool keeper) and sponsord-onramp (its public gate, behind Caddy), for a fresh
-# Debian 12/13 or Ubuntu 24.04/26.04 VM (x86_64 or aarch64). Paste this into your
-# provider's "user data" / "cloud-init" field when creating the server. The full
-# walkthrough is in cloud-init/README.md of github.com/decdn/devops ("Sponsor host").
+# deCDN publisher host bootstrap: an origin node (the deCDN node with an origin backend,
+# the canonical source of your namespace's content), sponsord (the onboarding sponsor's
+# treasury signer and PaymentPool keeper) and sponsord-onramp (its public gate, behind
+# Caddy), for a fresh Debian 12/13 or Ubuntu 24.04/26.04 VM (x86_64 or aarch64). Paste
+# this into your provider's "user data" / "cloud-init" field when creating the server.
+# The full walkthrough is in cloud-init/README.md of github.com/decdn/devops
+# ("Publisher host"). To run fewer of them, delete the groups you do not want: an origin
+# alone keeps decdn_nodes and decdn_origin_nodes, a sponsor alone sponsord_hosts and
+# sponsord_onramp_hosts (move baseline_sudo_users into sponsord_hosts' vars then).
 #
 # Edit every value marked MUST-EDIT first. The bootstrap refuses to run while any
 # CHANGE_ME is left.
 #
 # NEVER PUT A SECRET IN THIS FILE. Any local process can read user-data from the instance
 # metadata service, and your provider keeps a copy in its console and API. That rules out
-# sponsord's RPC URL (it may embed an API key), the treasury keystore and its password,
-# and the Turnstile secret. Everything below is public: an SSH *public* key, versions, a
-# domain, a public RPC URL, a Turnstile sitekey. The secrets are written over SSH after
-# the first boot, and sponsord's API token is generated on the host.
+# the node's and sponsord's RPC URLs (they may embed an API key), S3 keys for the origin
+# backend, the treasury keystore and its password, and the Turnstile secret. Everything
+# below is public: an SSH *public* key, versions, a region, the origin's store, a domain,
+# a public RPC URL, a Turnstile sitekey. The secrets are written over SSH after the first
+# boot; the node's wallet and sponsord's API token are generated on the host.
 #
 # On first boot the host clones github.com/decdn/devops at DEVOPS_REF, installs a pinned
-# Ansible, and hardens itself (SSH, firewall with tcp/80 and tcp/443 open for Caddy,
-# automatic patching). It then stops and waits for its secrets under /etc/sponsord.
-# `cloud-init status --wait` returns when it is done.
+# Ansible, and hardens itself (SSH, firewall with udp/4433 open for the node and tcp/80
+# and tcp/443 for Caddy, automatic patching). It then stops and waits for its secrets
+# under /etc/decdn and /etc/sponsord. `cloud-init status --wait` returns when it is done.
 ---
 package_update: true
 packages:
@@ -39,14 +44,14 @@ write_files:
 
   # The Ansible inventory for this host. Everything the playbook needs that is not a
   # secret lives here. More knobs: ansible/roles/*/defaults/main.yml. To run a node on
-  # the same host, add the decdn_nodes group from user-data.yaml without its
+  # the same host, add the decdn_nodes group from user-data-node.yaml without its
   # baseline_* settings: the admin account is set once, below.
   - path: /etc/decdn-bootstrap/inventory.yml
     owner: root:root
     permissions: "0600"
     content: |
       ---
-      sponsord_hosts:
+      decdn_nodes:
         hosts:
           localhost:
             ansible_connection: local
@@ -65,6 +70,38 @@ write_files:
           # Optional: accept SSH only from these CIDRs.
           # ssh_allow_cidrs: ["203.0.113.0/24"]
 
+          # The node, installed from the GPG-verified release tarballs. The release is
+          # the decdn_node role's default at DEVOPS_REF (decdn_node_version); set
+          # decdn_node_version here to pin another one.
+          decdn_node_install_method: release
+          # Optional: a mirror that serves v<version>/{decdn-node,decdn}-<version>-<target>.tar.gz,
+          # SHA256SUMS and SHA256SUMS.asc. The signature is still checked against
+          # deCDN's release keys.
+          # decdn_node_release_base: "https://mirror.example/decdn/releases/download"
+          decdn_node_generate_keystore: true   # the wallet is generated on the host
+          decdn_network: arbitrum-sepolia
+          decdn_region: "CHANGE_ME"            # MUST-EDIT: ISO 3166-1 alpha-2 of the VM's location, e.g. "DE"
+
+      # The node is your origin: localhost is in decdn_origin_nodes too (a deCDN node with
+      # an origin backend). The chain recognises it as the origin once you seat its
+      # operator with OriginAssignment.addOrigin; until then it serves as a cache does.
+      decdn_origin_nodes:
+        hosts:
+          localhost:
+        vars:
+          # MUST-EDIT: where the origin reads your content. http shown; for S3 (R2, B2,
+          # MinIO) set decdn_cache_origin_kind: s3 with decdn_cache_origin_s3_bucket,
+          # decdn_cache_origin_s3_region (and decdn_cache_origin_s3_endpoint_url) and
+          # decdn_cache_origin_s3_use_default_chain: true, and put the keys in
+          # /etc/decdn/decdn.env on the host, never here. For a local path, kind fs and
+          # decdn_cache_origin_path.
+          decdn_cache_origin_kind: http
+          decdn_cache_origin_url: "CHANGE_ME"   # MUST-EDIT: e.g. "https://content.example.org/"
+
+      sponsord_hosts:
+        hosts:
+          localhost:
+        vars:
           # sponsord, installed from the GPG-verified release tarball. The release is
           # the sponsord role's default at DEVOPS_REF (sponsord_version); set
           # sponsord_version here, and sponsord_onramp_version to the same, to pin

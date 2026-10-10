@@ -1,6 +1,6 @@
 #cloud-config
-# deCDN node bootstrap for a fresh Debian 12/13 or Ubuntu 24.04/26.04 VM (x86_64 or
-# aarch64). Paste this into your provider's "user data" / "cloud-init" field when creating
+# deCDN cache node bootstrap (node operators) for a fresh Debian 12/13 or Ubuntu
+# 24.04/26.04 VM (x86_64 or aarch64). Paste this into your provider's "user data" / "cloud-init" field when creating
 # the server. The full walkthrough is in cloud-init/README.md of github.com/decdn/devops.
 #
 # Edit every value marked MUST-EDIT first. The bootstrap refuses to run while any
@@ -15,7 +15,8 @@
 # On first boot the host clones github.com/decdn/devops at DEVOPS_REF, installs a pinned
 # Ansible, and hardens itself (SSH, firewall, automatic patching). It then stops and waits
 # for its secret, /etc/decdn/decdn.env. `cloud-init status --wait` returns when it is done.
-# For a sponsor host (sponsord, sponsord-onramp), start from user-data-sponsord.yaml.
+# Publishers (an origin node, sponsord, sponsord-onramp) start from
+# user-data-publisher.yaml.
 ---
 package_update: true
 packages:

@@ -126,7 +126,7 @@ lint-compose:        ## render compose/ with its examples and check its security
 # ansible/requirements.yml.
 # CLOUD_INIT_FILE (one path or several) is overridable so operators can check their
 # filled-in copy and tests/scripts-test.sh can feed it broken variants.
-CLOUD_INIT_FILE ?= cloud-init/user-data.yaml cloud-init/user-data-sponsord.yaml
+CLOUD_INIT_FILE ?= cloud-init/user-data-node.yaml cloud-init/user-data-publisher.yaml
 lint-cloud-init:     ## schema-check the cloud-init/ user-data templates and their invariants (needs cloud-init, shellcheck, yq)
 	@command -v cloud-init >/dev/null || { echo "lint-cloud-init: needs cloud-init on PATH" >&2; exit 2; }
 	@# An empty list would loop zero times and report success with nothing checked.

@@ -1,6 +1,6 @@
 ---
 # Everything the user-data needs from the outside world, stood up inside the container
-# by the includes the cloud-init-sponsord scenario shares:
+# by the includes the cloud-init-publisher scenario shares:
 #   * cloud-init itself, and the repo committed from the WORKING TREE
 #     (pack.yml, includes/repo.yml);
 #   * a release mirror: the shared stub daemon packaged as the node's two release

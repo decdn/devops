@@ -1,23 +1,26 @@
 ---
-# Boots the REAL cloud-init/user-data-sponsord.yaml (a sponsor host: sponsord, then
-# sponsord-onramp behind Caddy) in a systemd container, following the "Sponsor host"
-# walkthrough in cloud-init/README.md. Built from ../cloud-init/pack.yml and
-# ../cloud-init/includes/, so the boot plumbing is the node scenario's; this one covers
-# what differs:
+# Boots the REAL cloud-init/user-data-publisher.yaml (a publisher host: an origin node,
+# sponsord, then sponsord-onramp behind Caddy) in a systemd container, following the
+# "Publisher host" walkthrough in cloud-init/README.md. Built from ../cloud-init/pack.yml
+# and ../cloud-init/includes/, so the boot plumbing is the node scenario's; this one
+# covers what differs:
 #   prepare     cloud-init and the repo (as ../cloud-init), shared mount propagation
-#               (as ../sponsord), and a signed loopback mirror holding one v* release
-#               of the shared stubs (sponsord and sponsord-onramp, as upstream ships
-#               them).
-#   converge    seeds the template (placeholders filled; release bases, keyrings and
-#               Caddy's `tls internal` pointed at local ones) and boots. Asserts the
-#               host stopped at the secret gate with all four sponsor secrets listed.
-#   side_effect refuses an inventory with localhost in neither base group, and one
-#               with the onramp outside sponsord_hosts (stage 2's checks, each
-#               recording "failed"). Then writes only sponsord's three secrets and
-#               re-runs: the gate must still hold, now for the Turnstile secret alone.
-#               Then writes it, moves DEVOPS_REF to a tag, and re-runs.
-#   verify      both services and Caddy running from the signed releases, the API
-#               token generated on the host, https through Caddy, no hint left.
+#               (as ../sponsord), and a signed loopback mirror holding a decdn/decdn
+#               release of the node stubs and a decdn/sponsord release of the shared
+#               sponsor stubs, each under its own base.
+#   converge    seeds the template (placeholders filled, an http origin backend;
+#               release bases, keyrings and Caddy's `tls internal` pointed at local
+#               ones) and boots. Asserts the host stopped at the secret gate with the
+#               node's and all four sponsor secrets listed.
+#   side_effect refuses an inventory with localhost in neither base group, one with
+#               the origin outside decdn_nodes and one with the onramp outside
+#               sponsord_hosts (stage 2's checks, each recording "failed"). Then writes
+#               the node's and sponsord's secrets and re-runs: the gate must still hold,
+#               now for the Turnstile secret alone. Then writes it, moves DEVOPS_REF to
+#               a tag, and re-runs.
+#   verify      the origin node, both sponsor services and Caddy running from the signed
+#               releases, the origin backend in node.toml, the API token generated on
+#               the host, https through Caddy, no hint left.
 #
 # The release download and verify path of sponsord-onramp runs here and nowhere else
 # in the suite (../validation-sponsord sets its release mode, but stops at its
@@ -35,7 +38,7 @@
 driver:
   name: docker
 platforms:
-  - name: decdn-cloud-init-sponsord-u2604
+  - name: decdn-cloud-init-publisher-u2604
     # Same digest as ../cloud-init's Ubuntu 26.04 platform; bump them together.
     image: geerlingguy/docker-ubuntu2604-ansible@sha256:a81f2af83a18b609eabdc926d56bc4813d3d7558d60dc891db6056f868fe6054
     pre_build_image: true

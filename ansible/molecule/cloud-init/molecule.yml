@@ -1,12 +1,12 @@
 ---
-# Boots the REAL cloud-init/user-data.yaml in a systemd container and follows the
+# Boots the REAL cloud-init/user-data-node.yaml in a systemd container and follows the
 # operator walkthrough in cloud-init/README.md end to end:
 #   prepare     installs cloud-init. It stands up a local release mirror: the shared stub
 #               daemon packaged as release tarballs, with a SHA256SUMS signed by a
 #               throwaway GPG key, served on loopback. It also commits the working tree
 #               into a git repo in the container, for stage 1 to clone.
 #               (prepare and converge are built from pack.yml and includes/, which
-#               the ../cloud-init-sponsord scenario shares.)
+#               the ../cloud-init-publisher scenario shares.)
 #   converge    seeds NoCloud with the user-data (placeholders filled, the repo, mirror
 #               and keyring pointed at the local ones) and runs cloud-init's boot stages.
 #               It then asserts that the host stopped cleanly at the secret gate.
@@ -33,7 +33,7 @@
 # Oldest and newest supported distributions only. They bracket the controller Pythons
 # that cloud-init/requirements.txt pins two ansible-core versions for (3.11 gets 2.19,
 # 3.14 gets 2.21). The image digests are the same pins as ../default, ../os-matrix and
-# ../cloud-init-sponsord; bump them together.
+# ../cloud-init-publisher; bump them together.
 #
 # The stages need network access: apt (the user-data's packages), PyPI (the pinned
 # ansible-core) and Galaxy (the pinned collections).
