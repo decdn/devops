@@ -1734,6 +1734,16 @@ def dns_problems(path: Path) -> list[str]:
     ns = dns.get("rr_ns")
     if ns is not None and (not isinstance(ns, str) or not re.fullmatch(DNS_NAME_RE, ns)):
         out.append(f"{where} [dns] rr_ns must be an absolute name with its trailing dot (got {ns!r})")
+    elif isinstance(ns, str):
+        # The server answers A/AAAA/NS only at an origin's apex and reads a name below
+        # one as a node key, so an NS name there leaves the delegation unanswerable
+        # (the role's "Validate the NS record").
+        below = sorted(a for a in apexes if ns.rstrip(".").lower().endswith(f".{a}"))
+        if below:
+            out.append(
+                f"{where} [dns] rr_ns {ns!r} is below the origin {below[0]}., which the server reads as a node "
+                "key and cannot answer: use an origin's apex (the hostname) or a name outside every origin"
+            )
     at_apex = hostname in apexes or (isinstance(ns, str) and ns.rstrip(".") in apexes)
     if at_apex and not ("rr_a" in dns or "rr_aaaa" in dns):
         out.append(
@@ -2426,9 +2436,21 @@ def cmd_backup(args: argparse.Namespace) -> None:
     paths = backup_paths(project)
     if not paths:
         raise Refused("nothing to back up for COMPOSE_PROFILES=" + ",".join(project.profiles))
-    missing = [str(p) for p in paths if not p.is_file()]
+
+    # lstat, not is_file(): tar archives a symlink as the link, so a credential
+    # replaced by one would back up nothing restorable.
+    def regular(p: Path) -> bool:
+        try:
+            return stat.S_ISREG(p.lstat().st_mode)
+        except FileNotFoundError:
+            return False
+
+    missing = [str(p) for p in paths if not regular(p)]
     if missing:
-        raise Refused(f"not backing up an incomplete set: {', '.join(missing)} missing (`decdn-compose check`)")
+        raise Refused(
+            f"not backing up an incomplete set: {', '.join(missing)} missing or not a regular file "
+            "(a symlink would be archived as the link) (`decdn-compose check`)"
+        )
     out = Path(args.output or f"decdn-{socket.gethostname()}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.tar.age")
     if out.exists():
         raise Refused(f"{out} exists")

@@ -1130,6 +1130,24 @@ class Backup(TmpDir):
         for key in ("DECDN_ENV_FILE", "SPONSORD_SECRET_ENV_FILE", "SPONSORD_ENV_FILE", "SPONSORD_ONRAMP_ENV_FILE"):
             self.assertIn(dc.DEFAULT_ENV_FILES[key], paths)
 
+    def test_a_symlinked_credential_is_refused(self) -> None:
+        real = self.tmp / "real-token"
+        real.write_text("x")
+        link = self.tmp / "api-token"
+        link.symlink_to(real)
+        with (
+            mock.patch.object(dc, "require_root"),
+            mock.patch.object(dc.Project, "load", return_value=dc.Project({"COMPOSE_PROFILES": "sponsord"})),
+            mock.patch.object(dc.shutil, "which", return_value="/usr/bin/age"),
+            mock.patch.object(dc, "backup_paths", return_value=[real, link]),
+            mock.patch.object(dc.subprocess, "Popen") as popen,
+        ):
+            with self.assertRaises(dc.Refused) as cm:
+                dc.cmd_backup(argparse.Namespace(recipient=["age1x"], output=str(self.tmp / "out.age")))
+            popen.assert_not_called()
+        self.assertIn(str(link), str(cm.exception))
+        self.assertNotIn(str(real) + ",", str(cm.exception))
+
     def test_an_incomplete_set_is_refused(self) -> None:
         present = self.tmp / "present"
         present.write_text("x")
@@ -1217,6 +1235,14 @@ class DnsConfig(TmpDir):
         self.assertEqual(cfg["dns"]["bind_addr"], "198.51.100.7")
         self.assertEqual(cfg["https"]["domains"], ["dns.example.net"])
         self.assertEqual(cfg["data_dir"], str(dc.VAR_DNS))
+
+    def test_rr_ns_below_an_origin_is_refused(self) -> None:
+        # The server reads a name below an origin as a node key and cannot answer
+        # its address (the role's "Validate the NS record").
+        self.refused(self.sub('rr_ns = "dns.example.net."', 'rr_ns = "ns.dns.example.net."'), "is below the origin")
+        self.refused(self.sub('rr_ns = "dns.example.net."', 'rr_ns = "a.b.dns.example.net."'), "is below the origin")
+        # The apex itself, or a name outside every origin, is fine.
+        self.assertEqual(self.problems(self.sub('rr_ns = "dns.example.net."', 'rr_ns = "ns1.example.org."')), [])
 
     def test_render_without_a_public_address_leaves_rr_a_out(self) -> None:
         text = dc.render_dns_toml("dns.example.net", "noc@decdn.org", "10.0.0.5", None, True)
