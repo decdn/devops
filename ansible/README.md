@@ -95,8 +95,9 @@ canonical copy; don't duplicate them here.
 **Or** carry it in inventory, and the role authors `decdn.env` from those values on every run:
 
 ```bash
-cp inventory/host_vars/decdn-node-1/secret.yml.example inventory/host_vars/decdn-node-1/secret.yml
-$EDITOR inventory/host_vars/decdn-node-1/secret.yml   # set decdn_rpc_url
+HOST=decdn-node-1   # or origin-1, the publisher example's host
+cp inventory/host_vars/$HOST/secret.yml.example inventory/host_vars/$HOST/secret.yml
+$EDITOR inventory/host_vars/$HOST/secret.yml   # set decdn_rpc_url
 ```
 
 The role fails loud when neither exists, and — once it has recorded a checksum for the file —

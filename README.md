@@ -55,13 +55,15 @@ end to end (with `--dry-run`); this repo stops at host prep and startup.
 ```bash
 cd ansible
 make deps                                          # vendor pinned Galaxy collections
-cp inventory/hosts-node.yml.example inventory/hosts.yml   # publishers: hosts-publisher.yml.example
-$EDITOR inventory/hosts.yml                         # your hosts in decdn_nodes
-$EDITOR inventory/host_vars/decdn-node-1/main.yml   # binaries, region; chain via decdn_network
+cp inventory/hosts-node.yml.example inventory/hosts.yml   # node operators; its host is decdn-node-1
+# publishers instead: cp inventory/hosts-publisher.yml.example inventory/hosts.yml  (host origin-1)
+HOST=decdn-node-1                                   # or origin-1
+$EDITOR inventory/hosts.yml                         # your hosts
+$EDITOR inventory/host_vars/$HOST/main.yml          # binaries, region (an origin: its backend); chain via decdn_network
 # RPC URL: provision 0600 /etc/decdn/decdn.env on the host (preferred), or secret.yml
-make check  LIMIT=decdn-node-1 ANSIBLE_ARGS='-u root'   # dry run; -u root only until the first converge
-make deploy LIMIT=decdn-node-1 ANSIBLE_ARGS='-u root'   # first converge creates your admin account
-make deploy LIMIT=decdn-node-1                          # every run after that
+make check  LIMIT=$HOST ANSIBLE_ARGS='-u root'      # dry run; -u root only until the first converge
+make deploy LIMIT=$HOST ANSIBLE_ARGS='-u root'      # first converge creates your admin account
+make deploy LIMIT=$HOST                             # every run after that
 ```
 
 The full flow (bootstrap user, keystore, secrets, fleets in a private inventory) is in
