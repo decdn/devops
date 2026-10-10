@@ -1,0 +1,21 @@
+---
+# PUBLISHERS: everything a publisher runs, in order.
+#   origin.yml           decdn_origin_nodes
+#   sponsord.yml         sponsord_hosts (+ sponsord_onramp_hosts)
+#   iroh_relay.yml       iroh_relay_hosts (reads the nodes' IDs, origins included)
+#   iroh_dns_server.yml  iroh_dns_server_hosts
+# Entry point `make deploy-publisher`, also imported by site.yml after node.yml. Each
+# component has its own entry point too (deploy-origin, deploy-sponsord,
+# deploy-relay, deploy-dns), and each play matches nothing unless the inventory
+# defines its group.
+- name: Provision origin nodes
+  ansible.builtin.import_playbook: origin.yml
+
+- name: Provision sponsord
+  ansible.builtin.import_playbook: sponsord.yml
+
+- name: Provision iroh relays
+  ansible.builtin.import_playbook: iroh_relay.yml
+
+- name: Provision iroh DNS servers
+  ansible.builtin.import_playbook: iroh_dns_server.yml

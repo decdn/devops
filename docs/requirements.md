@@ -35,7 +35,7 @@ and they run the same roles.
 | Docker Compose | v2 with `env_file.required` and `depends_on.restart` support (2.24+) | rendered in CI with every profile on |
 
 On Ubuntu 25.10 and later, `sudo` is sudo-rs; see the `ansible_become_exe` note in
-`ansible/inventory/hosts.yml.example`.
+`ansible/inventory/hosts-node.yml.example`.
 
 ## Network
 

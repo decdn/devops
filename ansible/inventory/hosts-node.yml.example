@@ -1,8 +1,9 @@
 ---
-# Copy to inventory/hosts.yml and fill in your hosts. inventory/hosts.yml is
+# NODE OPERATORS: copy to inventory/hosts.yml and fill in your hosts (a publisher
+# starts from hosts-publisher.yml.example instead). inventory/hosts.yml is
 # git-ignored: this repo is public, so real host IPs never belong in it. To track a
-# real fleet, keep its inventory in a private overlay and pass INVENTORY=<path>
-# (see README.md "Private fleet inventory").
+# real fleet, keep its inventory in a private overlay and pass INVENTORY=<path> (see
+# README.md "Private fleet inventory").
 #
 # No ansible_user by default: Ansible connects as your local $USER, which is the admin
 # account the baseline role creates (the auto-detected runner). A fresh box doesn't have
@@ -29,7 +30,10 @@
 # affected host: `sudo --version` reports "sudo-rs" and/or /usr/bin/sudo.ws exists. Leave
 # it commented on Debian bookworm / Ubuntu noble — that path does not exist there.
 
-# PRIMARY: public deCDN node(s) — provisioned by playbooks/site.yml.
+# Public deCDN cache nodes — provisioned by playbooks/node.yml (`make deploy-node`)
+# and by site.yml (`make deploy`). A cache node has no origin backend: it fills a
+# miss from other nodes (node-to-node pull-through). Origins are a publisher's
+# (hosts-publisher.yml.example).
 # Per-node config (contract addresses, region, version, …) goes in the committed
 # inventory/host_vars/<name>/main.yml; the one secret, rpc_url, goes in a git-ignored
 # secret.yml beside it (copy the shipped secret.yml.example there).
@@ -44,54 +48,9 @@ decdn_nodes:
     # decdn-node-2:
     #   ansible_host: REPLACE_WITH_NODE_VPS_IP_OR_DNS
   # Child groups, for hosts that differ in a way that is easier to express per group
-  # than per host (disk size, an origin, an egress cap on pay-per-TB bandwidth). Give
+  # than per host (disk size, an egress cap on pay-per-TB bandwidth). Give
   # each one a group_vars/<group>.yml; Ansible merges it over decdn_nodes'.
   # children:
   #   big_disk:
   #     hosts:
   #       decdn-node-2:
-
-# OPTIONAL: sponsord, the onboarding sponsor (treasury signer + PaymentPool keeper) —
-# provisioned by playbooks/sponsord.yml (`make deploy-sponsord`) and by site.yml. It
-# needs no node: give it its own host, or list a node host here as well to co-locate
-# them. Its knobs are in group_vars/sponsord_hosts.yml; the treasury keystore and
-# password are provisioned on the host (roles/sponsord/README.md).
-# sponsord_hosts:
-#   hosts:
-#     sponsord-1:
-#       ansible_host: REPLACE_WITH_SPONSORD_VPS_IP_OR_DNS
-#
-# OPTIONAL: sponsord-onramp, sponsord's public side (Turnstile gate, installers, the
-# decdn-sponsored CLI API), behind Caddy on tcp/80 + tcp/443. List a sponsord host
-# again here; it must be in sponsord_hosts too. Its knobs are in
-# group_vars/sponsord_onramp_hosts.yml; the Turnstile secret is provisioned on the
-# host (roles/sponsord_onramp/README.md).
-# sponsord_onramp_hosts:
-#   hosts:
-#     sponsord-1:
-#
-# OPTIONAL: self-hosted iroh relays, the fallback path for peers that cannot
-# hole-punch — provisioned by playbooks/iroh_relay.yml (`make deploy-relay`) and by
-# site.yml. Public by design: each terminates its own Let's Encrypt TLS on tcp/80 +
-# tcp/443 and serves QUIC address discovery on udp/7842, so it cannot share a host
-# with sponsord-onramp. Deploy at least two before pointing nodes' decdn_relay_urls
-# at them. Its knobs are in group_vars/iroh_relay_hosts.yml (roles/iroh_relay/README.md).
-# iroh_relay_hosts:
-#   hosts:
-#     relay-1:
-#       ansible_host: REPLACE_WITH_RELAY_VPS_IP_OR_DNS
-#       iroh_relay_hostname: relay1.example.org
-#
-# OPTIONAL: a self-hosted iroh DNS server, the pkarr relay nodes publish their
-# address records to and the DNS server peers resolve them through (in place of
-# n0's dns.iroh.link) — provisioned by playbooks/iroh_dns_server.yml (`make
-# deploy-dns`) and by site.yml. Public by design: it terminates its own Let's
-# Encrypt TLS on tcp/443 and answers DNS on udp+tcp/53, so it cannot share a host
-# with an iroh relay or sponsord-onramp. The parent zone must delegate its hostname
-# to it (NS + glue). Its knobs are in group_vars/iroh_dns_server_hosts.yml
-# (roles/iroh_dns_server/README.md).
-# iroh_dns_server_hosts:
-#   hosts:
-#     dns-1:
-#       ansible_host: REPLACE_WITH_DNS_VPS_IP_OR_DNS
-#       iroh_dns_server_hostname: dns.example.org

@@ -90,4 +90,4 @@ nftables,
 DevSec `os_hardening`/`ssh_hardening` and fail2ban need a real machine. It is
 verified on real hosts (the deCDN team's own fleet runs Ubuntu 26.04) and with
 `make check` as a dry run. On Ubuntu 25.10+ note the sudo-rs become workaround in
-`inventory/hosts.yml.example`.
+`inventory/hosts-node.yml.example`.

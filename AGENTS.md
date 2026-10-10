@@ -72,7 +72,7 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
 
 ```
 ansible/                # the deployment project (DevSec-hardened, lean roles)
-  playbooks/            # site.yml (node + sponsord + relay + DNS server), sponsord.yml (+ onramp), iroh_relay.yml, iroh_dns_server.yml, backup.yml, decommission.yml
+  playbooks/            # site.yml = node.yml (node operators: cache nodes) + publisher.yml (publishers: origin.yml, sponsord.yml (+ onramp), iroh_relay.yml, iroh_dns_server.yml); backup.yml, decommission.yml
   roles/                # baseline, decdn_node, grafana_alloy, sponsord, sponsord_onramp, iroh_relay, iroh_dns_server
   inventory/ galaxy/ molecule/    # see ansible/README.md
 cloud-init/             # user-data{,-sponsord}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
@@ -141,8 +141,21 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
 
 ## Current services
 
-- **`ansible/`** — the declarative deployment project. **The public deCDN node**
-  (`playbooks/site.yml` → baseline + `decdn-node`), installed by `decdn_node_install_method`:
+- **`ansible/`** — the declarative deployment project, with an entry point per persona:
+  `playbooks/node.yml` (`make deploy-node`) for **node operators**, `playbooks/publisher.yml`
+  (`make deploy-publisher`) for **publishers**, and `site.yml` (`make deploy`) for both.
+  **Origin nodes** are `decdn_origin_nodes`, a child of `decdn_nodes` (so they inherit the
+  node's firewall hole, backup, decommission, relay allowlist and Alloy scrape), deployed by
+  `playbooks/origin.yml` with the same roles; node.yml's play is
+  `decdn_nodes:!decdn_origin_nodes`, so each node runs once under site.yml. origin.yml's
+  `pre_tasks` refuse an origin outside `decdn_nodes` or without an origin backend
+  (`decdn_cache_origin_kind`/`decdn_cache_origins`); node.yml's warn about a backend outside
+  `decdn_origin_nodes`. Those group checks live in the playbooks, never the role, as with
+  sponsord's. A cache node has no origin backend: it fills misses from other nodes
+  (node-to-node pull-through), and an origin-configured node serves only its own
+  namespaces (ADR 037). Recognition as an origin is on-chain (`OriginAssignment.addOrigin`,
+  the publisher's step). **The public deCDN node**
+  (baseline + `decdn-node`), installed by `decdn_node_install_method`:
   `release` (the default) — a pinned GitHub release tarball verified against the
   release's GPG-signed `SHA256SUMS` (`decdn_node_version`, default `0.0.1`); `source` — a git ref (any tag/branch/SHA) cloned and `cargo build`-ed **on the
   node** as the unprivileged `decdn-build` user, sha256-pinned rustup, a `<repo>@<commit>`
@@ -219,7 +232,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
 - **`ansible/roles/sponsord`** — the deCDN onboarding sponsor (`decdn/sponsord`): the
   treasury wallet's signer for capped capabilities plus the PaymentPool keeper. It is
   independent of the node, so `playbooks/sponsord.yml` (`make deploy-sponsord`, also
-  imported by `site.yml`) targets its own `sponsord_hosts` group, standalone or
+  imported by `publisher.yml`) targets its own `sponsord_hosts` group, standalone or
   co-located with a node.
   - **Install:** a GPG-verified `v*` decdn/sponsord release by default
     (`sponsord_version`, `0.0.2`), a host-side `source` build, or a manual binary.
@@ -290,7 +303,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   QUIC address discovery. The ADRs make relays operator-run infrastructure, not an
   incentivized role (`decdn/adr/architecture.md`, Trust Assumptions); nodes use them
   through `decdn_relay_urls`, which REPLACES n0's relays (so deploy at least two).
-  `playbooks/iroh_relay.yml` (`make deploy-relay`, also imported by `site.yml`) runs
+  `playbooks/iroh_relay.yml` (`make deploy-relay`, also imported by `publisher.yml`) runs
   baseline → grafana_alloy → iroh_relay on `iroh_relay_hosts`, after a play refusing a
   host also in `sponsord_onramp_hosts` (both want 80/443; `make test-scripts` runs it).
   - **Access:** `iroh_relay_access` defaults to `allowlist`. A play before the
@@ -351,7 +364,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   `dns.iroh.link` (ADR 001, Node Discovery). Nodes use it through
   `decdn_discovery_pkarr_url` + `decdn_discovery_dns_origin`, which DROP the n0 leg,
   so clients need the same `dns_origin`. `playbooks/iroh_dns_server.yml` (`make
-  deploy-dns`, also imported by `site.yml`) runs baseline → grafana_alloy →
+  deploy-dns`, also imported by `publisher.yml`) runs baseline → grafana_alloy →
   iroh_dns_server on `iroh_dns_server_hosts`, after a play refusing a host also in
   `iroh_relay_hosts` or `sponsord_onramp_hosts` (all want tcp/443; `make
   test-scripts` runs it). One server per origin: upstream has no replication, and
@@ -393,7 +406,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   - installs ansible-core from the hash-locked `requirements.txt` into a venv (two pins
     split by Python marker: 2.19 for Debian 12's 3.11, 2.21 for 3.12 and later);
   - installs the exact collections from `collections.lock.yml`;
-  - runs `site.yml` (which imports `sponsord.yml`) against localhost. The inventory
+  - runs `site.yml` (which imports `node.yml` and `publisher.yml`) against localhost. The inventory
     must put localhost in `decdn_nodes` and/or `sponsord_hosts` (and in
     `sponsord_hosts` whenever it is in `sponsord_onramp_hosts`), or the plays match
     nothing and the firewall holes never load.
@@ -509,6 +522,9 @@ make security         # KICS over ansible/, the rendered chart and compose/
 # Ansible — run from ansible/
 make deps                          # vendor pinned Galaxy collections
 make check / deploy                # site.yml; fleet-wide unless LIMIT=<host>; INVENTORY=<overlay>
+make check-node / deploy-node      # node.yml only (node operators: cache nodes)
+make check-publisher / deploy-publisher # publisher.yml only (origins, sponsord, relays, DNS)
+make check-origin / deploy-origin  # origin.yml only (decdn_origin_nodes)
 make check-sponsord / deploy-sponsord   # sponsord.yml only (sponsord_hosts)
 make check-relay / deploy-relay         # iroh_relay.yml only (iroh_relay_hosts)
 make check-dns / deploy-dns             # iroh_dns_server.yml only (iroh_dns_server_hosts)
@@ -520,13 +536,14 @@ make build / galaxy-check          # both collections (build-node, galaxy-check-
 `ansible/inventory/hosts.yml` is git-ignored and a real fleet lives in a private overlay.
 Inventory-adjacent group_vars do not load for an overlay, so anything every host needs
 regardless of inventory lives in `ansible/playbooks/group_vars/`. The public firewall holes
-(`baseline_extra_inbound`, today the node's udp/4433, plus tcp/80 + tcp/443 on
+(`baseline_extra_inbound`, today the node's udp/4433 (an origin's too), plus tcp/80 + tcp/443 on
 `sponsord_onramp_hosts` with `sponsord_onramp_proxy: caddy`, tcp/80 + tcp/443 + udp/7842
 on `iroh_relay_hosts`, the last unless `iroh_relay_enable_quic_addr_discovery` is false,
 and tcp/443 + udp/53 + tcp/53 on `iroh_dns_server_hosts`) are built from a host's groups in
-`all.yml` (`_baseline_service_inbound`). `decdn_nodes.yml`, `sponsord_hosts.yml`,
-`iroh_relay_hosts.yml` and `iroh_dns_server_hosts.yml` all set `baseline_extra_inbound`
-to that list, so a co-located host renders one firewall in every play.
+`all.yml` (`_baseline_service_inbound`). `decdn_nodes.yml`, `decdn_origin_nodes.yml`,
+`sponsord_hosts.yml`, `iroh_relay_hosts.yml` and `iroh_dns_server_hosts.yml` all set
+`baseline_extra_inbound` to that list, so a co-located host renders one firewall in
+every play.
 `ansible/tests/firewall-holes/` (run by `make test-scripts`) pins the result per host shape.
 The Alloy per-daemon toggles also live in `all.yml`. Don't move any of it back under
 `inventory/`.

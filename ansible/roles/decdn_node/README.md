@@ -246,9 +246,12 @@ Optional (omitted from `node.toml` unless set):
   file, which also means nothing downstream catches a malformed value — hence the
   role's own shape assert. (The former `decdn_swap_*` knobs for the on-chain swap
   path were removed upstream.)
-- `decdn_cache_origin_kind` (`http`|`fs`|`s3`) + that kind's fields — the
-  pull-through origin the node fetches on a cache miss. **A serving node needs
-  one:** unset ⇒ no `[cache.origin]` and cache misses fail `NoOrigin`. For an
+- `decdn_cache_origin_kind` (`http`|`fs`|`s3`) + that kind's fields — the origin
+  backend a publisher's **origin node** fills a cache miss from (in this repo's
+  playbooks, a `decdn_origin_nodes` host; `playbooks/origin.yml` requires one).
+  Unset ⇒ no `[cache.origin]`: a **cache node**, which fills a miss from other nodes
+  (`decdn_node_to_node_pull_through_enabled`, on by default without an origin) and
+  fails it `NoOrigin` when none of them has the blob. For an
   ordered fallback chain use `decdn_cache_origins` (a list of the same per-kind
   dicts) instead — the two forms are mutually exclusive upstream and the role
   fails loud if both are set.

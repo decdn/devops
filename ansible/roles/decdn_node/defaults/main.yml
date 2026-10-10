@@ -303,9 +303,10 @@ decdn_node_pull_min_throughput_bps: ""           # daemon dflt 4096
 # authorized origin for. Daemon default is ROLE-DERIVED — false when an origin
 # backend is configured, true when none — so leave "" unless you mean to pin it.
 decdn_relay_foreign_namespaces: ""               # bool
-# Pull-through origin (#437): what the node fetches on a cache miss. Empty kind =>
-# the [cache.origin] table is omitted and misses fail NoOrigin — a serving node
-# needs an origin. Pick ONE kind and set that kind's fields; the others are ignored.
+# Origin backend (#437): what an origin node fetches on a cache miss. Empty kind =>
+# the [cache.origin] table is omitted: a cache node, which fills a miss from other
+# nodes (node-to-node pull-through above) and fails it NoOrigin when none has it.
+# Pick ONE kind and set that kind's fields; the others are ignored.
 decdn_cache_origin_kind: ""             # "" (omit) | http | fs | s3
 decdn_cache_origin_url: ""              # http: base URL (blobs served at {url}/{blake3_hex})
 decdn_cache_origin_decompress: ""       # http, optional: "auto" (default) | "strict"

@@ -628,7 +628,8 @@
       s3: decdn_cache_origin_s3_bucket + decdn_cache_origin_s3_region.
       decdn_cache_origin_decompress, if set, must be auto|strict, and
       decdn_cache_origin_s3_path_style must be a boolean (true/false). Leave the
-      kind empty to omit [cache.origin] (cache misses then fail NoOrigin).
+      kind empty to omit [cache.origin] (a cache node, which fills misses from other
+      nodes).
   when: decdn_cache_origin_kind | length > 0
 
 # The inverse gate. Every decdn_cache_origin_* default is "", and the validator

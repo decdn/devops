@@ -1,0 +1,39 @@
+---
+# NODE OPERATORS: hardened, public deCDN cache nodes.
+#   decdn_nodes (minus decdn_origin_nodes): baseline -> grafana_alloy (opt-in, off by
+#   default) -> decdn-node
+# Standalone entry point (`make deploy-node`), also imported by site.yml. The node
+# listens on public QUIC udp/4433; metrics + admin RPC stay loopback. On-chain stake +
+# registration (ADR 019 Phase 2) is an operator action, not automated here — see
+# roles/decdn_node/README.md.
+# A publisher's origin nodes are decdn_nodes too, but they are listed in
+# decdn_origin_nodes and deployed by origin.yml (publisher.yml), so this play leaves
+# them alone and site.yml runs each node once.
+- name: Provision deCDN cache nodes
+  hosts: decdn_nodes:!decdn_origin_nodes
+  become: true
+  pre_tasks:
+    # A node with an origin backend serves as its namespace's canonical source and
+    # declines foreign-namespace misses (decdn_relay_foreign_namespaces). It still
+    # works from here, so this warns rather than fails.
+    - name: Warn about an origin backend on a host outside decdn_origin_nodes
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: {{ inventory_hostname }} has an origin backend
+          (decdn_cache_origin_kind / decdn_cache_origins) but is not in
+          decdn_origin_nodes. It serves as an origin all the same; list it under
+          decdn_origin_nodes so publisher.yml deploys it and its placement is checked.
+      when: >-
+        (decdn_cache_origin_kind | default('') | length > 0)
+        or (decdn_cache_origins | default([]) | length > 0)
+      tags: [always]
+  roles:
+    - role: baseline
+      tags: [baseline]
+    # Opt-in Grafana Cloud observability (off by default; one mirrored inventory
+    # flag drives this + the otlp_endpoint injection inside decdn_node). Runs
+    # BEFORE decdn_node so Alloy's receivers exist before the daemon exports.
+    - role: grafana_alloy
+      tags: [observability, decdn_node, node]
+    - role: decdn_node
+      tags: [decdn_node, node]

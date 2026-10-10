@@ -195,6 +195,10 @@ Initial packaging of the deCDN node roles as a distributable collection
 
 ### Changed
 
+- `decdn_node`: the docs and the origin-kind assert no longer say a serving node
+  needs an origin backend. Without one a node is a cache node, which fills a miss
+  from other nodes (`decdn_node_to_node_pull_through_enabled`, on by default without
+  an origin); a node with one is a publisher's origin.
 - The seven roles ship as two collections. `decdn.node` keeps what a node
   operator runs (`baseline`, `decdn_node`, `grafana_alloy`); `sponsord`,
   `sponsord_onramp`, `iroh_relay` and `iroh_dns_server` move to `decdn.publisher`,

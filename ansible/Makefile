@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN Ansible project.
 # Always run from the ansible/ directory.
-.PHONY: deps lint check deploy check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns backup decommission molecule molecule-serial molecule-list build build-node build-publisher galaxy-check galaxy-check-node galaxy-check-publisher
+.PHONY: deps lint check deploy check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns backup decommission molecule molecule-serial molecule-list build build-node build-publisher galaxy-check galaxy-check-node galaxy-check-publisher
 SHELL := /bin/bash
 
 # Install the required Galaxy collections (>= constraints in requirements.yml)
@@ -14,9 +14,9 @@ lint:
 	yamllint .
 	ansible-lint
 
-# --- Primary: the public deCDN node ------------------------------------------
+# --- Deploys: node operators and publishers -----------------------------------
 # Optional scoping for the deploy targets. Both are empty by default, so check/deploy
-# stay fleet-wide (every host in decdn_nodes) unless you say otherwise.
+# stay fleet-wide (every host in the inventory) unless you say otherwise.
 #   make deploy LIMIT=decdn-node-1                        # one host
 #   make deploy LIMIT='decdn-node-1,decdn-node-2'         # a list
 #   make deploy ANSIBLE_ARGS='--tags decdn_node -vv'
@@ -35,7 +35,7 @@ ANSIBLE_ARGS ?=
 limit_arg = $(if $(LIMIT),--limit '$(LIMIT)')
 
 # Which inventory check/deploy run against. The default is the git-ignored
-# inventory/hosts.yml (copy hosts.yml.example). A real fleet keeps its inventory in a
+# inventory/hosts.yml (copy hosts-node.yml.example or hosts-publisher.yml.example). A real fleet keeps its inventory in a
 # private overlay outside this public repo and points at it here:
 #   make deploy INVENTORY=../../decdn-fleet/hosts.yml LIMIT=<host>
 # The overlay's own group_vars/ and host_vars/ must sit beside that hosts.yml, where
@@ -44,21 +44,21 @@ INVENTORY ?= inventory/hosts.yml
 # A missing or unparseable inventory fails the run. Ansible's default only warns,
 # skips the `hosts: decdn_nodes` play and exits 0, so a mistyped INVENTORY= would
 # report a successful deploy that did nothing. This applies to the playbook targets
-# (check/deploy/check-sponsord/deploy-sponsord/check-relay/deploy-relay/check-dns/deploy-dns/
+# (check/deploy and their -node/-origin/-publisher/-sponsord/-relay/-dns variants,
 # backup/decommission) only:
 # ansible.cfg can't set it globally, because ansible-lint's own syntax checks run
 # with no inventory present.
 strict_inventory = ANSIBLE_INVENTORY_UNPARSED_FAILED=True
 
 # Fail loud on the two ways a run can look scoped but silently be fleet-wide. Scoped to
-# the playbook targets (check/deploy[-sponsord|-relay|-dns]/backup/decommission) via MAKECMDGOALS so an
+# the playbook targets (check/deploy[-node|-origin|-publisher|-sponsord|-relay|-dns]/backup/decommission) via MAKECMDGOALS so an
 # unrelated `make lint` is never blocked. NOTE: this
 # does not catch an argument that is well-formed but selects nothing — `--tags` with a
 # typo (decdn-node vs decdn_node) runs zero tasks and still exits 0. See ansible/README.md.
-ifneq ($(filter check deploy check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns backup decommission,$(MAKECMDGOALS)),)
+ifneq ($(filter check deploy check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns backup decommission,$(MAKECMDGOALS)),)
   # Echo back the goal the operator actually typed, so the hint never nudges a
   # `make check` dry-run toward the mutating `make deploy`.
-  scoped_goal := $(firstword $(filter check deploy check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns backup decommission,$(MAKECMDGOALS)))
+  scoped_goal := $(firstword $(filter check deploy check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns backup decommission,$(MAKECMDGOALS)))
   ifeq ($(origin LIMIT),environment)
     $(error LIMIT is set in your environment ($(LIMIT)) and would silently scope this run. Unset it or pass it on the command line: make $(scoped_goal) LIMIT=<host>)
   endif
@@ -86,16 +86,40 @@ ifneq ($(filter check deploy check-sponsord deploy-sponsord check-relay deploy-r
   endif
 endif
 
-# Dry run against $(INVENTORY) — shows diffs, mutates nothing.
+# Dry run of everything in $(INVENTORY) (site.yml: node.yml, then publisher.yml) —
+# shows diffs, mutates nothing.
 check:
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/site.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
 
-# Provision the deCDN node host(s) in $(INVENTORY) (default inventory/hosts.yml).
+# Provision every host in $(INVENTORY) (default inventory/hosts.yml).
 deploy:
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/site.yml $(limit_arg) $(ANSIBLE_ARGS)
 
-# sponsord alone (playbooks/sponsord.yml, hosts in sponsord_hosts). check/deploy
-# above already include it via site.yml; these leave every decdn-node untouched.
+# Node operators: the cache nodes alone (playbooks/node.yml, decdn_nodes that are not
+# in decdn_origin_nodes).
+check-node:
+	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/node.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
+
+deploy-node:
+	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/node.yml $(limit_arg) $(ANSIBLE_ARGS)
+
+# Publishers: everything a publisher runs (playbooks/publisher.yml: origins, sponsord
+# and its onramp, iroh relays, iroh DNS servers), leaving the cache nodes untouched.
+check-publisher:
+	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/publisher.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
+
+deploy-publisher:
+	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/publisher.yml $(limit_arg) $(ANSIBLE_ARGS)
+
+# A publisher's origin nodes alone (playbooks/origin.yml, hosts in decdn_origin_nodes).
+check-origin:
+	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/origin.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
+
+deploy-origin:
+	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/origin.yml $(limit_arg) $(ANSIBLE_ARGS)
+
+# sponsord alone (playbooks/sponsord.yml, hosts in sponsord_hosts). check/deploy and
+# check/deploy-publisher above already include it; these leave every decdn-node untouched.
 check-sponsord:
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/sponsord.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
 
@@ -103,7 +127,8 @@ deploy-sponsord:
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/sponsord.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # iroh relays alone (playbooks/iroh_relay.yml, hosts in iroh_relay_hosts). check/deploy
-# above already include them via site.yml; these leave every other host untouched.
+# and check/deploy-publisher above already include them; these leave every other host
+# untouched.
 check-relay:
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/iroh_relay.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
 
@@ -111,8 +136,8 @@ deploy-relay:
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/iroh_relay.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # iroh DNS servers alone (playbooks/iroh_dns_server.yml, hosts in iroh_dns_server_hosts).
-# check/deploy above already include them via site.yml; these leave every other host
-# untouched.
+# check/deploy and check/deploy-publisher above already include them; these leave every
+# other host untouched.
 check-dns:
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/iroh_dns_server.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
 

@@ -1,7 +1,7 @@
 ---
 # Shared config for iroh DNS server hosts (playbooks/iroh_dns_server.yml, also run
 # by site.yml). Uncomment and fill in; per-host values (the hostname, at least) go
-# under the host in hosts.yml (as hosts.yml.example shows) or in
+# under the host in hosts.yml (as hosts-publisher.yml.example shows) or in
 # host_vars/<host>/main.yml.
 # Full variable list: roles/iroh_dns_server/defaults/main.yml and its README.md.
 # Nothing to provision on the host: the server generates its ACME account key and
