@@ -6,8 +6,8 @@ commands and the same hardening as the roles' systemd units.
 
 | Profile | Service | Image | Ansible equivalent |
 |---------|---------|-------|--------------------|
-| `node` | `decdn-node`, a deCDN cache node (node operators) | `ghcr.io/decdn/decdn-node` | `decdn_node` (`playbooks/node.yml`) |
-| `origin` | the same `decdn-node`, run as a publisher's origin ([below](#run-it-as-an-origin-publishers)) | `ghcr.io/decdn/decdn-node` | `decdn_node` on `decdn_origin_nodes` (`playbooks/origin.yml`) |
+| `node` | `decdn-node`, a deCDN cache node (node operators) | `ghcr.io/decdn/decdn-node` | `decdn_node` |
+| `origin` | the same `decdn-node`, run as a publisher's origin ([below](#run-it-as-an-origin-publishers)) | `ghcr.io/decdn/decdn-node` | `decdn_node` with an origin backend (`decdn_cache_origin_kind`) |
 | `sponsord` | `sponsord`, the onboarding sponsor: treasury signer and PaymentPool keeper | `ghcr.io/decdn/sponsord` | `sponsord` |
 | `onramp` | `sponsord-onramp`, its public side (Turnstile gate, installers); also starts `sponsord` | `ghcr.io/decdn/sponsord-onramp` | `sponsord_onramp` |
 | `caddy` | Caddy, TLS in front of the onramp; leave it out to bring your own proxy | `caddy` (official) | `sponsord_onramp_proxy: caddy` |
@@ -31,6 +31,12 @@ each copied from that release's signed digest file; the node's
 **Upgrading from a node-only `compose.yaml`?** Every service now sits behind a
 profile, so add `COMPOSE_PROFILES=node` to your `.env`. Without it,
 `sudo docker compose -f compose/compose.yaml up -d` selects no service.
+
+**Running a cache node from an earlier setup?** Its `/etc/decdn/node.toml` predates
+step 4's pull-through line, and the daemon's default is off, so the node cannot fill a
+miss from other nodes. Add `node_to_node_pull_through_enabled = true` under `[cache]`
+(the same `sed` as step 4), check it (step 6), and restart the node. An origin needs no
+change.
 
 ## The node
 
