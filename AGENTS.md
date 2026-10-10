@@ -483,8 +483,8 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     `networks.yml` mirrors (`network_profile`, which parses their fixed shape: keep
     it, or update the parser); it never replaces a secret. `check` (also run by
     `up`) is the preflight, including `decdn config validate` with every URL in a
-    failure redacted. An env file's values reach a CLI container by name only (the
-    value in docker's environment, never argv); `cli` points on-chain commands at
+    failure redacted. An env file's values reach a CLI container through a root-only
+    0600 copy (`--env-file`), never argv or the docker client's own environment; `cli` points on-chain commands at
     `decdn.env`'s endpoint through a config copy with `rpc_url = "${DECDN_RPC_URL}"`;
     `config` redacts every env-file value; loopback probes bypass any proxy. The top-up guard asks Compose itself whether an `up` recreates
     sponsord (`--dry-run up`): `config --hash` differs from the container label on

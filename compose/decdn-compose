@@ -287,9 +287,9 @@ def decdn_cli(
 ) -> subprocess.CompletedProcess[str]:
     """The decdn CLI from the pinned node image, hardened like the daemon.
 
-    An env file's values reach the container by name only (`-e KEY`, the value in
-    docker's own environment), parsed as Compose parses them for the daemon
-    (quotes stripped): never on an argv that `ps` or a sudo log shows."""
+    An env file's values reach the container through a root-only copy parsed as
+    Compose parses them for the daemon (quotes stripped): never on an argv that
+    `ps` or a sudo log shows, and never in the docker client's environment."""
     uid, gid = project.env.get("DECDN_UID", ""), project.env.get("DECDN_GID", "")
     argv = [
         "docker",
@@ -315,15 +315,27 @@ def decdn_cli(
     ]
     for m in extra_mounts or []:
         argv += ["-v", m]
-    secret_env = parse_env(env_file) if env_file and env_file.exists() else {}
-    for k in secret_env:
-        argv += ["-e", k]
     for k, v in (cli_env or {}).items():
         argv += ["-e", f"{k}={v}"]
     if tty and sys.stdin.isatty():
         argv += ["-it"]
-    argv += ["--entrypoint", "decdn", ensure_image(project.node_image()), *args]
-    return run(argv, check=check, quiet=quiet, capture=capture, env={**os.environ, **secret_env})
+    with tempfile.TemporaryDirectory(prefix="decdn-env.") as tmp:
+        if env_file and env_file.exists():
+            # Compose's parse (quotes stripped), rewritten in `docker run`'s literal
+            # format into a root-only copy: the values stay off argv and out of the
+            # docker client's own environment, where a stray DOCKER_HOST or PATH
+            # line would steer the client itself.
+            copy = Path(tmp) / "env"
+            write_new(
+                copy,
+                "".join(f"{k}={v}\n" for k, v in parse_env(env_file).items()).encode(),
+                0o600,
+                os.geteuid(),
+                os.getegid(),
+            )
+            argv += ["--env-file", str(copy)]
+        argv += ["--entrypoint", "decdn", ensure_image(project.node_image()), *args]
+        return run(argv, check=check, quiet=quiet, capture=capture)
 
 
 def ensure_image(image: str) -> str:

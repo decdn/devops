@@ -325,20 +325,28 @@ class Validate(unittest.TestCase):
 
 
 class Cli(TmpDir):
-    def test_env_file_values_never_reach_argv(self) -> None:
+    def test_env_file_values_never_reach_argv_or_the_client_env(self) -> None:
         env_file = self.tmp / "decdn.env"
-        env_file.write_text(f"DECDN_RPC_URL='https://rpc.example/v2/{KEY}'\n")
+        env_file.write_text(f"DECDN_RPC_URL='https://rpc.example/v2/{KEY}'\nDOCKER_HOST=tcp://evil:2375\n")
         project = dc.Project({"DECDN_UID": "1", "DECDN_GID": "1", "DECDN_IMAGE_DIGEST": "sha256:" + "a" * 64})
+        seen = {}
+
+        def fake_run(argv, **kwargs):
+            copy = Path(argv[argv.index("--env-file") + 1])
+            seen.update(argv=argv, kwargs=kwargs, text=copy.read_text(), mode=copy.stat().st_mode & 0o777)
+            return subprocess.CompletedProcess(argv, 0, "")
+
         with (
             mock.patch.object(dc, "ensure_image", side_effect=lambda i: i),
-            mock.patch.object(dc, "run", return_value=subprocess.CompletedProcess([], 0, "")) as run,
+            mock.patch.object(dc, "run", side_effect=fake_run),
         ):
             dc.decdn_cli(project, ["whoami"], env_file=env_file)
-        argv, kwargs = run.call_args.args[0], run.call_args.kwargs
-        self.assertNotIn(KEY, " ".join(argv))
-        self.assertIn("DECDN_RPC_URL", argv)
-        # Quotes stripped, as Compose strips them for the daemon.
-        self.assertEqual(kwargs["env"]["DECDN_RPC_URL"], f"https://rpc.example/v2/{KEY}")
+        self.assertNotIn(KEY, " ".join(seen["argv"]))
+        self.assertNotIn("env", seen["kwargs"])  # the docker client's own environment is untouched
+        self.assertEqual(seen["mode"], 0o600)
+        # Quotes stripped, as Compose strips them for the daemon, in docker's literal format.
+        self.assertIn(f"DECDN_RPC_URL=https://rpc.example/v2/{KEY}\n", seen["text"])
+        self.assertFalse(Path(seen["argv"][seen["argv"].index("--env-file") + 1]).exists())
 
     def test_rpc_url_comes_from_the_environment(self) -> None:
         text = '[identity]\nregion = "DE"\n\n[blockchain]\nrpc_url = "https://public"\nchain_id = 1\n'
