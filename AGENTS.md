@@ -152,8 +152,8 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   (`decdn_cache_origin_kind`/`decdn_cache_origins`); node.yml's warn about a backend outside
   `decdn_origin_nodes`. Those group checks live in the playbooks, never the role, as with
   sponsord's. A cache node has no origin backend: it fills misses from other nodes
-  (node-to-node pull-through), and an origin-configured node serves only its own
-  namespaces (ADR 037). Recognition as an origin is on-chain (`OriginAssignment.addOrigin`,
+  (node-to-node pull-through), and an origin-configured node serves only what its own
+  backend holds (`relay_foreign_namespaces`, ADR 002 § Retrieval by namespace, ADR 037). Recognition as an origin is on-chain (`OriginAssignment.addOrigin`,
   the publisher's step). **The public deCDN node**
   (baseline + `decdn-node`), installed by `decdn_node_install_method`:
   `release` (the default) — a pinned GitHub release tarball verified against the

@@ -58,9 +58,9 @@ decdn_cache_origin_kind: "http"
 decdn_cache_origin_url: "https://your-origin.example/"
 # Being configured is not being recognised: the namespace's publisher seats this
 # node's operator with OriginAssignment.addOrigin (decdn/adr/011-content-takedown.md,
-# Origin Assignment Authority). With a backend set, the node declines misses for
-# namespaces it is not an origin of (decdn_relay_foreign_namespaces defaults to false)
-# and does not pull from other nodes (decdn_node_to_node_pull_through_enabled).
+# Origin Assignment Authority). With a backend set, the node serves only what the
+# backend holds (decdn_relay_foreign_namespaces defaults to false) and does not pull
+# from other nodes (decdn_node_to_node_pull_through_enabled).
 
 # --- Node identity / locale ---------------------------------------------------
 decdn_region: "US"            # MUST-EDIT — ISO 3166-1 alpha-2 of the node's physical location

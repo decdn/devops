@@ -14,8 +14,8 @@
   become: true
   pre_tasks:
     # A node with an origin backend serves as its namespace's canonical source and
-    # declines foreign-namespace misses (decdn_relay_foreign_namespaces). It still
-    # works from here, so this warns rather than fails.
+    # declines whatever its backend does not hold (decdn_relay_foreign_namespaces). It
+    # still works from here, so this warns rather than fails.
     - name: Warn about an origin backend on a host outside decdn_origin_nodes
       ansible.builtin.debug:
         msg: >-

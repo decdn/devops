@@ -299,9 +299,10 @@ decdn_node_pull_timeout_sec: ""                  # daemon dflt 20 — per-upstre
 # A leg is abandoned when it delivers under min_throughput_bps across the window.
 decdn_node_pull_stall_window_sec: ""             # daemon dflt 20
 decdn_node_pull_min_throughput_bps: ""           # daemon dflt 4096
-# Origin-only node policy (#1759): whether to relay namespaces this node is not an
-# authorized origin for. Daemon default is ROLE-DERIVED — false when an origin
-# backend is configured, true when none — so leave "" unless you mean to pin it.
+# Origin-only node policy (#1759): whether to relay a miss this node's own backend
+# cannot produce (the gate is the backend's content, not the request's namespace;
+# ADR 002 § Retrieval by namespace). Daemon default is ROLE-DERIVED — false when an
+# origin backend is configured, true when none — so leave "" unless you mean to pin it.
 decdn_relay_foreign_namespaces: ""               # bool
 # Origin backend (#437): what an origin node fetches on a cache miss. Empty kind =>
 # the [cache.origin] table is omitted: a cache node, which fills a miss from other

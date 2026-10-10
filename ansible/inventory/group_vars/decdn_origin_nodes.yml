@@ -16,9 +16,10 @@
 # decdn_cache_origin_s3_use_default_chain: true   # keys in /etc/decdn/decdn.env
 
 # --- Origin behaviour ----------------------------------------------------------------
-# With a backend set, the role derives two defaults: decdn_relay_foreign_namespaces
-# false (the node serves only namespaces it is an origin of, ADR 037) and
-# decdn_node_to_node_pull_through_enabled false (misses fill from the backend). Set
-# either explicitly only to change that.
+# With a backend set, two defaults follow: decdn_relay_foreign_namespaces false (the
+# daemon's: the node serves only what its backend holds and declines the rest, even a
+# blob already in its cache; ADR 002 § Retrieval by namespace, ADR 037) and
+# decdn_node_to_node_pull_through_enabled false (the role's: misses fill from the
+# backend). Set either explicitly only to change that.
 # decdn_fs_rescan_interval_sec: 60       # fs backend: how often the root is rescanned
 # decdn_pinned_hashes: []                # blobs (lowercase BLAKE3) never evicted
