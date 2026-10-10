@@ -278,7 +278,8 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     `notify: Restart sponsord` to another task; make the file a hashed input
     instead, or the restart skips the guard. `sponsord_restart_ignore_topup_hold`
     overrides it (pass it as JSON). On Compose, `decdn-compose` makes the same check
-    (`hold_state`, same semantics) before a stop, restart, down or recreating `up`.
+    (`hold_state`, same semantics, probing the bind the running container was
+    started with) before a stop, restart, down or recreating `up`.
   - **Alloy toggles:** `playbooks/group_vars/all.yml` derives
     `grafana_alloy_node_enabled` / `grafana_alloy_sponsord_enabled` from group
     membership. They are host-scoped so a co-located host's two plays render one
@@ -482,7 +483,10 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     `networks.yml` mirrors (`network_profile`, which parses their fixed shape: keep
     it, or update the parser); it never replaces a secret. `check` (also run by
     `up`) is the preflight, including `decdn config validate` with every URL in a
-    failure redacted. The top-up guard asks Compose itself whether an `up` recreates
+    failure redacted. An env file's values reach a CLI container by name only (the
+    value in docker's environment, never argv); `cli` points on-chain commands at
+    `decdn.env`'s endpoint through a config copy with `rpc_url = "${DECDN_RPC_URL}"`;
+    `config` redacts every env-file value; loopback probes bypass any proxy. The top-up guard asks Compose itself whether an `up` recreates
     sponsord (`--dry-run up`): `config --hash` differs from the container label on
     older Compose. Running containers are found by Compose's labels (project
     `decdn`), not `compose ps`, which loads disabled services' env files.

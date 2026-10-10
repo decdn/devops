@@ -7,7 +7,11 @@ Docker host (`make test-scripts` runs them; no root, no docker needed).
 from __future__ import annotations
 
 import argparse
+import http.server
 import importlib.machinery
+import json
+import os
+import threading
 import importlib.util
 import subprocess
 import sys
@@ -116,6 +120,7 @@ class Guard(unittest.TestCase):
         held = METRICS_OK.replace("unix 0", "unix 1700000000")
         with (
             mock.patch.object(dc, "container_id", return_value="abc"),
+            mock.patch.object(dc, "sponsord_metrics_url", return_value=dc.SPONSORD_METRICS),
             mock.patch.object(dc, "fetch", return_value=(200, held)),
         ):
             with self.assertRaises(dc.Refused) as cm:
@@ -125,6 +130,7 @@ class Guard(unittest.TestCase):
     def test_retries_then_refuses_an_unanswered_probe(self) -> None:
         with (
             mock.patch.object(dc, "container_id", return_value="abc"),
+            mock.patch.object(dc, "sponsord_metrics_url", return_value=dc.SPONSORD_METRICS),
             mock.patch.object(dc, "fetch", return_value=(-1, "")) as fetch,
             mock.patch.object(dc.time, "sleep"),
         ):
@@ -148,6 +154,57 @@ class Guard(unittest.TestCase):
         self.assertTrue(dc.touches_sponsord("stop", ["sponsord", "caddy"]))
         self.assertFalse(dc.touches_sponsord("restart", ["sponsord-onramp"]))
         self.assertFalse(dc.touches_sponsord("stop", ["decdn-node"]))
+        self.assertFalse(dc.touches_sponsord("stop", ["--timeout=10", "decdn-node"]))
+
+    def test_an_option_value_fails_closed(self) -> None:
+        # `stop -t 10` stops everything: "10" is no service, so it must count.
+        self.assertTrue(dc.touches_sponsord("stop", ["-t", "10"]))
+        self.assertTrue(dc.touches_sponsord("restart", ["--timeout", "5", "decdn-node"]))
+
+    def test_a_non_loopback_bind_refuses(self) -> None:
+        with (
+            mock.patch.object(dc, "container_id", return_value="abc"),
+            mock.patch.object(dc, "sponsord_metrics_url", return_value=None),
+            mock.patch.object(dc, "fetch") as fetch,
+        ):
+            with self.assertRaises(dc.Refused):
+                dc.guard_sponsord(self.args(), "stop")
+            fetch.assert_not_called()
+
+    def test_the_probe_follows_the_running_bind(self) -> None:
+        env = json.dumps(["PATH=/usr/bin", "SPONSORD_BIND=127.0.0.2:9000", "X=a=b"])
+        with mock.patch.object(dc, "run", return_value=subprocess.CompletedProcess([], 0, env)):
+            self.assertEqual(dc.sponsord_metrics_url("abc"), "http://127.0.0.2:9000/metrics")
+        for bind in ("0.0.0.0:8090", "[::1]:8090", "127.0.0.1", ""):
+            self.assertIsNone(dc.bind_metrics_url(bind), bind)
+
+
+class Fetch(unittest.TestCase):
+    def test_loopback_probes_ignore_a_proxy(self) -> None:
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(METRICS_OK.encode())
+
+            def log_message(self, *_) -> None:
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/metrics"
+            with mock.patch.dict(os.environ, {"http_proxy": "http://127.0.0.1:9", "HTTP_PROXY": "http://127.0.0.1:9"}):
+                self.assertEqual(dc.fetch(url), (200, METRICS_OK))
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_nothing_listening_is_status_0(self) -> None:
+        server = http.server.HTTPServer(("127.0.0.1", 0), http.server.BaseHTTPRequestHandler)
+        port = server.server_port
+        server.server_close()
+        self.assertEqual(dc.fetch(f"http://127.0.0.1:{port}/metrics")[0], 0)
 
 
 class UpRecreates(unittest.TestCase):
@@ -161,6 +218,7 @@ class UpRecreates(unittest.TestCase):
             if argv[:2] == ["docker", "inspect"]:
                 return subprocess.CompletedProcess(argv, 0, "/decdn-sponsord-1\n")
             self.assertIn("--dry-run", argv)
+            self.assertEqual(argv[argv.index("--progress") + 1], "plain")
             return subprocess.CompletedProcess(argv, rc, dry_run)
 
         with (
@@ -264,6 +322,63 @@ class Validate(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertNotIn(KEY, found[0])
         self.assertIn("https://rpc.example/<redacted>", found[0])
+
+
+class Cli(TmpDir):
+    def test_env_file_values_never_reach_argv(self) -> None:
+        env_file = self.tmp / "decdn.env"
+        env_file.write_text(f"DECDN_RPC_URL='https://rpc.example/v2/{KEY}'\n")
+        project = dc.Project({"DECDN_UID": "1", "DECDN_GID": "1", "DECDN_IMAGE_DIGEST": "sha256:" + "a" * 64})
+        with (
+            mock.patch.object(dc, "ensure_image", side_effect=lambda i: i),
+            mock.patch.object(dc, "run", return_value=subprocess.CompletedProcess([], 0, "")) as run,
+        ):
+            dc.decdn_cli(project, ["whoami"], env_file=env_file)
+        argv, kwargs = run.call_args.args[0], run.call_args.kwargs
+        self.assertNotIn(KEY, " ".join(argv))
+        self.assertIn("DECDN_RPC_URL", argv)
+        # Quotes stripped, as Compose strips them for the daemon.
+        self.assertEqual(kwargs["env"]["DECDN_RPC_URL"], f"https://rpc.example/v2/{KEY}")
+
+    def test_rpc_url_comes_from_the_environment(self) -> None:
+        text = '[identity]\nregion = "DE"\n\n[blockchain]\nrpc_url = "https://public"\nchain_id = 1\n'
+        out = dc.with_env_rpc_url(text)
+        self.assertIn('[blockchain]\nrpc_url = "${DECDN_RPC_URL}"\nchain_id = 1\n', out)
+        self.assertNotIn("https://public", out)
+        self.assertIn('rpc_url = "${DECDN_RPC_URL}"', dc.with_env_rpc_url('[blockchain]\n# rpc_url = "x"\n'))
+        self.assertIn('[blockchain]\nrpc_url = "${DECDN_RPC_URL}"', dc.with_env_rpc_url("[identity]\n"))
+
+
+class Config(unittest.TestCase):
+    def test_env_file_values_are_redacted(self) -> None:
+        full = {"services": {"sponsord": {"environment": {"SPONSORD_BIND": "127.0.0.1:8090", "SPONSORD_RPC_URL": KEY}}}}
+        inline = {"services": {"sponsord": {"environment": {"SPONSORD_BIND": "127.0.0.1:8090"}}}}
+        with (
+            mock.patch.object(dc, "require_root"),
+            mock.patch.object(dc.Project, "load"),
+            mock.patch.object(dc, "compose", return_value=subprocess.CompletedProcess([], 0, json.dumps(full))),
+            mock.patch.object(dc, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps(inline))) as run,
+            mock.patch.object(dc, "say") as say,
+        ):
+            dc.cmd_config(argparse.Namespace(rest=[]))
+        out = say.call_args.args[0]
+        self.assertNotIn(KEY, out)
+        self.assertIn("127.0.0.1:8090", out)
+        self.assertEqual(run.call_args.kwargs["env"]["DECDN_ENV_FILE"], "/dev/null")
+
+
+class OriginDir(TmpDir):
+    def test_checks(self) -> None:
+        content = self.tmp / "content"
+        content.mkdir()
+        self.assertEqual(dc.origin_dir_problems(str(content)), [])
+        self.assertTrue(dc.origin_dir_problems("relative/path"))
+        self.assertTrue(dc.origin_dir_problems(str(self.tmp / "missing")))
+        for bad in ("/", "/etc", "/etc/ssl", "/proc"):
+            self.assertTrue(dc.origin_dir_problems(bad), bad)
+        link = self.tmp / "link"
+        link.symlink_to("/etc")
+        self.assertTrue(dc.origin_dir_problems(str(link)))
 
 
 class FileProblem(TmpDir):

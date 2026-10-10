@@ -51,9 +51,10 @@ against [`compose.yaml`](compose.yaml), plus `compose.override.yaml` when you ha
 | `up [svc…]` | `check`, then `docker compose up -d` |
 | `stop`, `restart`, `down` | `docker compose …`, but refused while sponsord holds an unconfirmed pool top-up ([below](#the-top-up-hold)) |
 | `health` | probes every running service: the node's admin RPC and metrics, each `/healthz`, sponsord's hold, the onramp's certificate through Caddy |
-| `cli <args>` | the `decdn` CLI from the node image, with the node's config and keys: `cli whoami`, `cli node status`, `cli setup` |
+| `cli <args>` | the `decdn` CLI from the node image, with the node's config and keys and your RPC endpoint from `decdn.env`: `cli whoami`, `cli node status`, `cli setup` |
 | `backup -r <age recipient>` | an age-encrypted archive of the active profiles' keys and secrets |
-| `logs`, `ps`, `pull`, `exec`, `config` | plain `docker compose …` |
+| `config` | `docker compose config`, with every value that came from an env file shown as `<redacted>` (the plain command prints `DECDN_RPC_URL` and the rest in clear) |
+| `logs`, `ps`, `pull`, `exec` | plain `docker compose …` |
 
 `.env` (beside `compose.yaml`, not committed) holds `COMPOSE_PROFILES`, the image
 digests, the accounts' uids and the onramp's domain. Nothing in it is secret. `init`
@@ -99,10 +100,11 @@ release's signed digest file; [Operate](#operate) says how to take a newer one.
 5. **Stake and register** (on-chain onboarding, ADR 019 Phase 2) with `decdn setup`,
    described in
    [`roles/decdn_node/README.md` § On-chain onboarding](../ansible/roles/decdn_node/README.md#on-chain-onboarding).
-   The CLI does not read `DECDN_RPC_URL`, and `node.toml` still names the public RPC
-   `config init` wrote, so pass your endpoint:
-   `sudo compose/decdn-compose cli setup --rpc-url "$RPC"`. The node serves paid
-   traffic only after that.
+   `sudo compose/decdn-compose cli setup`. `node.toml` still names the public RPC
+   `config init` wrote, so `cli` hands the CLI a copy whose `rpc_url` reads your
+   endpoint from `decdn.env` (`"${DECDN_RPC_URL}"`, which the config loader
+   expands): it never appears on a command line, in a sudo log or in shell history.
+   The node serves paid traffic only after that.
 
 ### How it is laid out
 

@@ -87,12 +87,14 @@ services:
         bind: {create_host_path: false}
       # An fs origin's content (publishers): DECDN_ORIGIN_DIR in .env, served
       # read-only as /srv/decdn-origin (`config init --origin file:///srv/decdn-origin`).
-      # Unset, an empty directory that Docker creates is mounted, unused.
+      # Unset, the empty directory `decdn-compose init` creates is mounted, unused.
+      # Never created here: a mistyped path or an NFS mount that is not up yet
+      # fails the start instead of serving an empty origin.
       - type: bind
         source: ${DECDN_ORIGIN_DIR:-/var/lib/decdn-compose/no-origin}
         target: /srv/decdn-origin
         read_only: true
-        bind: {create_host_path: true}
+        bind: {create_host_path: false}
     tmpfs:
       - /tmp
     # The image ships the decdn CLI (v0.0.2 and later); `node health` asks the
