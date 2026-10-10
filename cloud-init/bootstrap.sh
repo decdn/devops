@@ -216,7 +216,8 @@ The node's RPC endpoint (the URL may embed an API key):
   echo 'DECDN_RPC_URL=https://…' | sudo tee /etc/decdn/decdn.env >/dev/null
   sudo chmod 600 /etc/decdn/decdn.env
 An origin with an S3 backend also needs its keys in that file, one per line:
-  AWS_ACCESS_KEY_ID=…  AWS_SECRET_ACCESS_KEY=…
+  AWS_ACCESS_KEY_ID=…
+  AWS_SECRET_ACCESS_KEY=…
 EOF
       ;;
     sponsord_hosts)

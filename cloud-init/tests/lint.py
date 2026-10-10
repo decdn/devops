@@ -121,6 +121,14 @@ SECRET_KEY_ALLOW = {
     # user-data ships it. A key in the URL's path cannot be told from a public path.
     "sponsord_onramp_rpc_url",
 }
+# The origin backend fields each kind requires, as roles/decdn_node/tasks/main.yml
+# asserts them: the scalar form's variable names, and the list form's keys.
+ORIGIN_KINDS = {
+    "http": (("decdn_cache_origin_url",), ("url",)),
+    "fs": (("decdn_cache_origin_path",), ("path",)),
+    "s3": (("decdn_cache_origin_s3_bucket", "decdn_cache_origin_s3_region"), ("bucket", "region")),
+}
+
 # The format roles/sponsord_onramp/tasks/main.yml asserts for sponsord_onramp_rpc_url.
 # Run here too: by the time the role refuses a keyed URL, the user-data has already
 # published the key through the instance metadata.
@@ -338,9 +346,26 @@ def check_inventory(inventory):
         # template's (the bootstrap refuses a CHANGE_ME left anywhere).
         ov = gv["decdn_origin_nodes"]
         kind, origins = ov.get("decdn_cache_origin_kind"), ov.get("decdn_cache_origins")
-        if not (isinstance(kind, str) and kind) and not (isinstance(origins, list) and origins):
+
+        def filled(v):
+            return isinstance(v, str) and v != ""
+        if isinstance(origins, list) and origins:
+            for i, o in enumerate(origins):
+                k = o.get("kind") if isinstance(o, dict) else None
+                if k not in ORIGIN_KINDS:
+                    violation(f"inventory: decdn_origin_nodes.vars.decdn_cache_origins[{i}] needs a kind of "
+                              "http, fs or s3")
+                elif not all(filled(o.get(f)) for f in ORIGIN_KINDS[k][1]):
+                    violation(f"inventory: decdn_origin_nodes.vars.decdn_cache_origins[{i}] ({k}) needs "
+                              f"{' and '.join(ORIGIN_KINDS[k][1])}")
+        elif not filled(kind):
             violation("inventory: decdn_origin_nodes.vars needs an origin backend: decdn_cache_origin_kind "
                       "(http, fs or s3) and its fields, or decdn_cache_origins")
+        elif kind not in ORIGIN_KINDS:
+            violation(f"inventory: decdn_origin_nodes.vars.decdn_cache_origin_kind is {kind!r}, not http, fs or s3")
+        elif not all(filled(ov.get(f)) for f in ORIGIN_KINDS[kind][0]):
+            violation(f"inventory: decdn_origin_nodes.vars: an origin of kind {kind} needs "
+                      f"{' and '.join(ORIGIN_KINDS[kind][0])}")
     for g, prefix in (("sponsord_hosts", "sponsord"), ("sponsord_onramp_hosts", "sponsord_onramp")):
         if g not in gv:
             continue
