@@ -10,10 +10,12 @@ type: application
 version: 0.1.0
 # The decdn/decdn release the chart's config rendering is synced against, and the
 # image tag used when neither image.tag nor image.digest is set. Keep it equal to
-# the decdn_node role's decdn_node_version (make test-scripts checks).
+# the decdn_node role's decdn_node_version, and the tag in the artifacthub.io/images
+# annotation below (make test-scripts checks both).
 appVersion: "0.0.1"
 kubeVersion: ">=1.25.0-0"
 home: https://decdn.org
+icon: https://decdn.org/icon.svg
 sources:
   - https://github.com/decdn/devops
   - https://github.com/decdn/decdn
@@ -24,4 +26,21 @@ keywords:
   - quic
 maintainers:
   - name: deCDN
+    email: info@decdn.org
     url: https://decdn.org
+# Artifact Hub metadata (https://artifacthub.io/docs/topics/annotations/helm/).
+# release.yml adds artifacthub.io/changes to the packaged copy, generated from this
+# release's CHANGELOG.md section (scripts/chart-artifacthub-changes.py): never add it here.
+annotations:
+  artifacthub.io/category: networking
+  artifacthub.io/license: MIT
+  artifacthub.io/images: |
+    - name: decdn-node
+      image: ghcr.io/decdn/decdn-node:0.0.1
+  artifacthub.io/links: |
+    - name: Chart source
+      url: https://github.com/decdn/devops/tree/main/charts/decdn-node
+    - name: deCDN
+      url: https://github.com/decdn/decdn
+    - name: Verifying a release
+      url: https://github.com/decdn/devops/blob/main/RELEASING.md#verifying-a-release

@@ -213,6 +213,71 @@ for section in '^## Ansible collection' '^## Helm chart'; do
 done
 pass "release notes carry both changelog sections"
 
+# --- artifacthub.io/changes, generated from the chart changelog at release ---------
+changes="$repo/scripts/chart-artifacthub-changes.py"
+expect 2 "changes generator rejects no arguments"   "$changes"
+expect 1 "changes generator rejects a missing version" "$changes" "$repo/charts/decdn-node/CHANGELOG.md" 9.9.9
+cat > "$work/changelog.md" <<'MD'
+# Changelog
+
+## [Unreleased]
+
+## [1.2.3] — 2099-01-01
+
+Intro text, not an entry.
+
+### Added
+
+- First entry,
+  wrapped over two lines.
+- Second entry.
+
+### Fixed
+
+- A fix.
+
+## [1.2.2] — 2098-01-01
+
+### Removed
+
+- Not in 1.2.3.
+MD
+want='- kind: added
+  description: "First entry, wrapped over two lines."
+- kind: added
+  description: "Second entry."
+- kind: fixed
+  description: "A fix."'
+[[ "$("$changes" "$work/changelog.md" 1.2.3)" == "$want" ]] \
+  || fail "changes generator: unexpected output for the fixture: $("$changes" "$work/changelog.md" 1.2.3)"
+pass "changes generator maps headings to kinds and joins wrapped entries"
+expect 1 "changes generator rejects an empty section" "$changes" "$work/changelog.md" Unreleased
+sed 's/^### Fixed$/### Notes/' "$work/changelog.md" > "$work/changelog-bad.md"
+expect 1 "changes generator rejects an unknown heading" "$changes" "$work/changelog-bad.md" 1.2.3
+sed 's/^- A fix\.$/A paragraph./' "$work/changelog.md" > "$work/changelog-bad.md"
+expect 1 "changes generator rejects a stray paragraph" "$changes" "$work/changelog-bad.md" 1.2.3
+# The real changelog's section for this version must already parse, so a heading the
+# generator refuses fails here rather than on release day.
+expect 0 "changes generator reads charts/decdn-node/CHANGELOG.md [$version]" \
+  "$changes" "$repo/charts/decdn-node/CHANGELOG.md" "$version"
+if command -v yq >/dev/null && command -v helm >/dev/null; then
+  # The release.yml step, on a full copy of the chart: the annotation must survive
+  # helm package as a YAML list.
+  cp -RL "$repo/charts/decdn-node" "$work/ah-chart"
+  CHANGES="$("$changes" "$rel/charts/decdn-node/CHANGELOG.md" "$version")" \
+    yq -i '.annotations["artifacthub.io/changes"] = strenv(CHANGES)' "$work/ah-chart/Chart.yaml"
+  helm package "$work/ah-chart" --destination "$work/ah-dist" >/dev/null \
+    || fail "helm package failed on the chart with artifacthub.io/changes"
+  helm show chart "$work/ah-dist/decdn-node-$version.tgz" \
+    | yq -e '.annotations["artifacthub.io/changes"] | from_yaml | length > 0' >/dev/null \
+    || fail "the packaged chart lost the artifacthub.io/changes annotation"
+  pass "the packaged chart carries the generated artifacthub.io/changes"
+elif [[ -n ${CI:-} ]]; then
+  fail "yq or helm is not on PATH in CI; the artifacthub.io/changes packaging check would be skipped"
+else
+  skipped+=("artifacthub.io/changes packaging check (needs yq and helm)")
+fi
+
 # --- lint-compose: the real file passes, each broken variant is rejected -------------
 compose="$repo/compose/compose.yaml"
 # The baseline first: a variant below only proves something if the unmodified file
@@ -610,6 +675,17 @@ done
 app="$(sed -nE 's/^appVersion: *"?([^" #]*)"?.*/\1/p' "$repo/charts/decdn-node/Chart.yaml")"
 [ "$app" = "$(pin decdn_node decdn_node_version)" ] \
   || fail "charts/decdn-node/Chart.yaml appVersion '$app' is not decdn_node_version"
+# Artifact Hub scans the images the annotation lists, so it must name the one the
+# chart deploys by default.
+if command -v yq >/dev/null; then
+  ah_images="$(yq '.annotations["artifacthub.io/images"]' "$repo/charts/decdn-node/Chart.yaml" | yq -o=json -I0 '[.[].image]')"
+  [ "$ah_images" = "[\"ghcr.io/decdn/decdn-node:$app\"]" ] \
+    || fail "charts/decdn-node/Chart.yaml artifacthub.io/images is $ah_images, not [ghcr.io/decdn/decdn-node:$app]"
+elif [[ -n ${CI:-} ]]; then
+  fail "yq is not on PATH in CI; the artifacthub.io/images check would be skipped"
+else
+  skipped+=("artifacthub.io/images check (needs yq)")
+fi
 # Both vendored KEYS hold the same maintainer keys (they differ in header text only),
 # and those are the fingerprints SECURITY.md publishes, so swapping a key takes a
 # visible edit there too.
@@ -625,7 +701,7 @@ want_fprs="$(fprs "$repo/ansible/roles/decdn_node/files/decdn-release-KEYS.asc")
   || fail "the decdn and sponsord release KEYS hold different keys"
 [ "$(sed -nE 's/^Fingerprint: *//p' "$repo/SECURITY.md" | tr -d ' ' | sort)" = "$want_fprs" ] \
   || fail "SECURITY.md's Fingerprint: lines differ from the vendored KEYS"
-pass "release pins agree across roles, Compose and the chart; the vendored KEYS match SECURITY.md"
+pass "release pins agree across roles, Compose, the chart and its artifacthub.io/images; the vendored KEYS match SECURITY.md"
 # iroh_relay's tasks_from node-ids runs `decdn whoami` on the inventory's nodes, where
 # decdn_node's defaults are not loaded: its fallbacks must be those defaults.
 ids="$repo/ansible/roles/iroh_relay/tasks/node-ids.yml"

@@ -26,7 +26,11 @@ creates the GitHub Release, but **only** when the repository variable
    **First release only:** both files already hold a `## [0.1.0] — unreleased` section
    describing the initial state; fold `[Unreleased]` into it and replace "unreleased"
    with the date. The gate rejects a missing section and one still marked
-   "unreleased". These two sections become the GitHub Release notes.
+   "unreleased". These two sections become the GitHub Release notes. The chart's
+   section also becomes the packaged chart's `artifacthub.io/changes` annotation
+   (`scripts/chart-artifacthub-changes.py`), so its `###` headings must be Keep a
+   Changelog kinds (Added, Changed, Deprecated, Removed, Fixed, Security) and every
+   change a bulleted entry; `make test-scripts` checks the section parses.
 3. **Check locally:** `scripts/check-release-version.sh vX.Y.Z`, then
    `make -C ansible galaxy-check` and `make lint-helm`.
 4. **Merge** that as a PR, then tag the merge commit on `main` and push the tag:
@@ -51,14 +55,23 @@ Do these before setting `PUBLISH_ENABLED`:
 - **GHCR visibility.** The first `helm push` creates the `decdn/charts/decdn-node`
   package as **private**. Make it public under the org's *Packages* settings, or
   nobody outside the org can pull it.
+- **Artifact Hub.** Once the chart package is public, sign in to artifacthub.io with
+  the `info@decdn.org` account and add a Helm repository with the URL
+  `oci://ghcr.io/decdn/charts/decdn-node`. Put the repository ID it shows into
+  `repositoryID` in `charts/decdn-node/artifacthub-repo.yml`. Every publish pushes that
+  file as `ghcr.io/decdn/charts/decdn-node:artifacthub.io`, which earns the Verified
+  Publisher badge and lets the `owners` listed there claim the repository.
 - **Enable:** set the repository variable `PUBLISH_ENABLED` to `true`.
 
 ## When a publish fails half-way
 
-The steps run chart, then Galaxy, then the GitHub Release. The Release is last, so it
+The steps run chart (with its Artifact Hub metadata), then Galaxy, then the GitHub
+Release. The Release is last, so it
 only appears once both artifacts are live.
 
 - **Chart push failed:** nothing is public yet. Fix the cause and re-run the job.
+- **Artifact Hub metadata push failed:** the chart is live. Fix the cause and re-run;
+  both pushes are repeatable.
 - **Galaxy publish failed after the chart was pushed:** fix the cause and re-run. The
   chart push is repeatable for the same version (the tag just moves to an identical
   digest), but **Galaxy refuses a version that already exists**. If Galaxy actually
