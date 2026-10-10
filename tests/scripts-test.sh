@@ -1038,8 +1038,8 @@ variant "caddy always on"          "caddy: profiles are [caddy]"                
 # Skipped without cloud-init on PATH, except in CI (which installs it), so a broken
 # install step cannot quietly drop these cases.
 if command -v cloud-init >/dev/null; then
-  userdata="$repo/cloud-init/user-data.yaml"
-  sponsorud="$repo/cloud-init/user-data-sponsord.yaml"
+  userdata="$repo/cloud-init/user-data-node.yaml"
+  sponsorud="$repo/cloud-init/user-data-publisher.yaml"
   expect 0 "lint-cloud-init accepts both cloud-init/ templates" make -s -C "$repo" lint-cloud-init
   expect 0 "lint-cloud-init accepts the sponsor template alone" make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$sponsorud"
   sed '1s/^#cloud-config$/# cloud-config/' "$userdata" > "$work/ci-header.yaml"
@@ -1050,7 +1050,7 @@ if command -v cloud-init >/dev/null; then
   pass "lint-cloud-init rejects: no #cloud-config header (schema)"
   # <name> <expected message fragment> <sed expression> [<template>]: the fragment pins
   # WHICH invariant fired, since one edit can trip several. The template defaults to
-  # the node's user-data.yaml.
+  # the node's user-data-node.yaml.
   ci_variant() {
     # No spaces in the file name: CLOUD_INIT_FILE is a list.
     local src=${4:-$userdata} out="$work/ci-${1// /-}.yaml"
@@ -1089,7 +1089,7 @@ if command -v cloud-init >/dev/null; then
   ci_variant "signature off as a host var" 'set decdn_verify_release_signature only in decdn_nodes.vars' "s#$loc#&\\n\\1decdn_verify_release_signature: false#"
   ci_variant "install method as a host var" 'set decdn_node_install_method only in decdn_nodes.vars' "s#$loc#&\\n\\1decdn_node_install_method: manual#"
   ci_variant "signature off in its group"  'decdn_verify_release_signature must not be turned off' "s#$net#&\\n\\1decdn_verify_release_signature: false#"
-  ci_variant "another inventory group"     'only the decdn_nodes, sponsord_hosts, sponsord_onramp_hosts groups belong here' 's#^(\s*)decdn_nodes:$#\1all: {vars: {decdn_verify_release_signature: false}}\n&#'
+  ci_variant "another inventory group"     'only the decdn_nodes, decdn_origin_nodes, sponsord_hosts, sponsord_onramp_hosts groups belong here' 's#^(\s*)decdn_nodes:$#\1all: {vars: {decdn_verify_release_signature: false}}\n&#'
   # Shape
   ci_variant "localhost outside decdn_nodes" 'localhost must be in decdn_nodes or sponsord_hosts' 's/^(\s*)decdn_nodes:$/\1decdn_hosts:/'
   ci_variant "admin account without keys"  'baseline_sudo_users needs at least one named account' '/^\s*keys:$/,+1d'
@@ -1097,7 +1097,7 @@ if command -v cloud-init >/dev/null; then
   ci_variant "stage 1 failure masked"      'runcmd must be exactly' 's#^  - \[/usr/local/sbin/decdn-bootstrap\]$#  - "/usr/local/sbin/decdn-bootstrap || true"#'
   # shellcheck disable=SC2016 # a literal $DEVOPS_REPO: the variant unquotes it in stage 1
   ci_variant "shellcheck-dirty stage 1"    'decdn-bootstrap fails shellcheck' 's#git clone --quiet --no-checkout "\$DEVOPS_REPO"#git clone --quiet --no-checkout $DEVOPS_REPO#'
-  # The sponsor host (user-data-sponsord.yaml)
+  # The publisher host (user-data-publisher.yaml)
   spnet='^(\s*)sponsord_network: arbitrum-sepolia$'
   onproxy='^(\s*)sponsord_onramp_proxy: caddy$'
   ci_variant "sponsord RPC URL in the inventory" 'sponsord_hosts.vars.sponsord_rpc_url looks secret-bearing' "s#$spnet#&\\n\\1sponsord_rpc_url: https://rpc.example/#" "$sponsorud"
@@ -1140,7 +1140,11 @@ if command -v cloud-init >/dev/null; then
       ci_variant "forbidden $v" "$v may not be overridden" "s#$spnet#&\\n\\1$v: /tmp/x#" "$sponsorud"
     fi
   done
-  ci_variant "onramp without sponsord_hosts" 'sponsord_onramp_hosts needs sponsord_hosts too' 's/^(\s*)sponsord_hosts:$/\1decdn_nodes:/' "$sponsorud"
+  ci_variant "onramp without sponsord_hosts" 'sponsord_onramp_hosts needs sponsord_hosts too' 's/^(\s*)sponsord_hosts:$/\1molecule_hosts:/' "$sponsorud"
+  ci_variant "an origin without decdn_nodes" 'decdn_origin_nodes needs decdn_nodes too' 's/^(\s*)decdn_nodes:$/\1molecule_nodes:/' "$sponsorud"
+  ci_variant "an origin without a backend" 'decdn_origin_nodes.vars needs an origin backend' '/^\s*decdn_cache_origin_(kind|url):/d' "$sponsorud"
+  ci_variant "an origin node built from source" 'decdn_node_install_method must be release' 's/^(\s*)decdn_node_install_method: release$/\1decdn_node_install_method: source/' "$sponsorud"
+  ci_variant "S3 keys in the origin vars" 'decdn_origin_nodes.vars.decdn_extra_env looks secret-bearing' 's/^(\s*)decdn_cache_origin_kind: http$/&\n\1decdn_extra_env: {AWS_SECRET_ACCESS_KEY: x}/' "$sponsorud"
   ci_variant "a second connection"         "sponsord_onramp_hosts.hosts.localhost.ansible_connection is 'ssh'" '/^\s*sponsord_onramp_hosts:$/,/^\s*vars:$/ s/^(\s*)localhost:$/&\n\1  ansible_connection: ssh/' "$sponsorud"
   ci_variant "hosts as a list"             'sponsord_onramp_hosts must hold exactly localhost' '/^\s*sponsord_onramp_hosts:$/,/^\s*vars:$/ {s/^(\s*)hosts:$/\1hosts: [localhost]/; /^\s*localhost:$/d}' "$sponsorud"
   ci_variant "the inventory as a list"     'inventory: must be a mapping of groups, not a list' 's/^(\s*)decdn_nodes:$/\1- decdn_nodes:/'
@@ -1233,9 +1237,12 @@ host_groups="$(sed -nE 's/^readonly HOST_GROUPS=\((.*)\)$/\1/p' "$boot")"
   || fail "cloud-init/bootstrap.sh HOST_GROUPS ($host_groups) differs from lint.py's GROUPS"
 for g in $host_groups; do
   grep -qE "^  \[$g\]=" "$boot" || fail "cloud-init/bootstrap.sh: no SECRETS entry for $g"
+  # A group with no secrets of its own (decdn_origin_nodes) is never missing one, so
+  # it needs no instructions.
+  grep -qE "^  \[$g\]=\"\"$" "$boot" && continue
   grep -qE "^    $g\)$" "$boot" || fail "cloud-init/bootstrap.sh: the hint has no case arm for $g"
 done
-pass "bootstrap.sh's groups match lint.py's, each with its secrets and its hint"
+pass "bootstrap.sh's groups match lint.py's, each with its secrets and, if it has any, its hint"
 # The same contract, read from the playbooks with nothing booted. The molecule boots
 # run the guard too, but in Docker and only for the groups their inventories use.
 # `hosts` and `tags` may each be a string or a list; tags match exactly.
@@ -1257,7 +1264,7 @@ if command -v yq >/dev/null; then
   # templates' inventories, then against a copy whose sponsord play lost the tag (#90).
   # Listing tasks needs ansible-core only, not the collections.
   if command -v ansible-playbook >/dev/null; then
-    for t in user-data:decdn_nodes user-data-sponsord:sponsord_hosts; do
+    for t in user-data-node:decdn_nodes user-data-publisher:sponsord_hosts; do
       yq '.write_files[] | select(.path == "/etc/decdn-bootstrap/inventory.yml") | .content' \
         "$repo/cloud-init/${t%%:*}.yaml" > "$work/${t%%:*}-inventory.yml"
     done
@@ -1265,15 +1272,22 @@ if command -v yq >/dev/null; then
       local dir=$1; shift
       (cd "$dir" && HOME="$work" ANSIBLE_DEPRECATION_WARNINGS=0 "$repo/cloud-init/baseline-plays.sh" "$@" </dev/null)
     }
-    expect 0 "baseline-plays.sh accepts the node template's host" bplays "$repo/ansible" "$work/user-data-inventory.yml" decdn_nodes
-    expect 0 "baseline-plays.sh accepts the sponsor template's host" bplays "$repo/ansible" "$work/user-data-sponsord-inventory.yml" sponsord_hosts
+    expect 0 "baseline-plays.sh accepts the node template's host" bplays "$repo/ansible" "$work/user-data-node-inventory.yml" decdn_nodes
+    # The publisher's origin runs origin.yml's play, not node.yml's: bootstrap.sh
+    # passes decdn_origin_nodes for it, and decdn_nodes would find no play.
+    expect 0 "baseline-plays.sh accepts the publisher template's host" \
+      bplays "$repo/ansible" "$work/user-data-publisher-inventory.yml" decdn_origin_nodes sponsord_hosts
+    expect 1 "baseline-plays.sh finds no cache-node play for the publisher's origin" \
+      bplays "$repo/ansible" "$work/user-data-publisher-inventory.yml" decdn_nodes
+    grep -q 'no play targets decdn_nodes with localhost in it' "$work/out" \
+      || { cat "$work/out" >&2; fail "baseline-plays.sh refused the origin as a cache node, but not for decdn_nodes"; }
     mkdir -p "$work/notag"
     cp -r "$repo/ansible/playbooks" "$repo/ansible/ansible.cfg" "$work/notag/"
     ln -s "$repo/ansible/roles" "$work/notag/roles"
     yq -i '(.[] | select(.hosts == "sponsord_hosts") | .roles[] | select(.role == "baseline")) |= del(.tags)' \
       "$work/notag/playbooks/sponsord.yml"
     expect 1 "baseline-plays.sh refuses a sponsord play that lost its baseline tag (#90)" \
-      bplays "$work/notag" "$work/user-data-sponsord-inventory.yml" sponsord_hosts
+      bplays "$work/notag" "$work/user-data-publisher-inventory.yml" sponsord_hosts
     grep -q 'a play for sponsord_hosts selects no baseline task' "$work/out" \
       || { cat "$work/out" >&2; fail "baseline-plays.sh refused, but not for sponsord_hosts' play"; }
   elif [[ -n ${CI:-} ]]; then
@@ -1284,11 +1298,11 @@ if command -v yq >/dev/null; then
   # The two templates differ only in their inventory: stage 1, the login hint and the
   # final message are the same bytes in both.
   shared='{"files": [.write_files[] | select(.path == "/usr/local/sbin/decdn-bootstrap" or .path == "/etc/profile.d/decdn-bootstrap.sh")], "final_message": .final_message}'
-  node_shared="$(yq -o=json "$shared" "$repo/cloud-init/user-data.yaml")"
+  node_shared="$(yq -o=json "$shared" "$repo/cloud-init/user-data-node.yaml")"
   [[ "$(yq '.files | length' <<<"$node_shared")" == 2 && "$(yq '.final_message | length > 0' <<<"$node_shared")" == true ]] \
-    || fail "cloud-init/user-data.yaml: stage 1, the login hint or final_message not found"
-  [[ "$node_shared" == "$(yq -o=json "$shared" "$repo/cloud-init/user-data-sponsord.yaml")" ]] \
-    || fail "cloud-init/user-data.yaml and user-data-sponsord.yaml differ in stage 1, the login hint or final_message"
+    || fail "cloud-init/user-data-node.yaml: stage 1, the login hint or final_message not found"
+  [[ "$node_shared" == "$(yq -o=json "$shared" "$repo/cloud-init/user-data-publisher.yaml")" ]] \
+    || fail "cloud-init/user-data-node.yaml and user-data-publisher.yaml differ in stage 1, the login hint or final_message"
   pass "the cloud-init templates share stage 1, the login hint and final_message byte for byte"
 elif [[ -n ${CI:-} ]]; then
   fail "yq is not on PATH in CI; the baseline-tag check would be skipped"

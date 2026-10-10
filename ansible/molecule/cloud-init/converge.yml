@@ -1,5 +1,5 @@
 ---
-# First boot. The seed is cloud-init/user-data.yaml as committed, with each MUST-EDIT
+# First boot. The seed is cloud-init/user-data-node.yaml as committed, with each MUST-EDIT
 # filled in the way an operator would and the three outside dependencies redirected
 # (repo, release mirror, signing key); includes/boot.yml seeds it and boots.
 #
@@ -10,7 +10,7 @@
   hosts: all
   become: true
   vars:
-    userdata_src: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/../cloud-init/user-data.yaml"
+    userdata_src: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/../cloud-init/user-data-node.yaml"
     # Stood up by prepare.yml.
     mirror_base: http://127.0.0.1:8099/releases
     mirror_key: /srv/mirror/KEYS.asc

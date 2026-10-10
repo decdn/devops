@@ -2,11 +2,12 @@
 # First, the inventory mistakes stage 2 must refuse, each recording "failed" and saying
 # so at login (../cloud-init/includes/refuse.yml). Each case costs about a minute: pip
 # and Galaxy run before the check.
-# Then the operator's part, as the "Sponsor host" walkthrough in cloud-init/README.md
+# Then the operator's part, as the "Publisher host" walkthrough in cloud-init/README.md
 # tells it:
-#   1. Write sponsord's three secrets only, and re-run. The onramp's Turnstile secret is
-#      still missing, so the run must stop at the gate again, listing just that file:
-#      the gate covers every group the host is in, not only the first.
+#   1. Write the node's secret and sponsord's three only, and re-run. The onramp's
+#      Turnstile secret is still missing, so the run must stop at the gate again,
+#      listing just that file: the gate covers every group the host is in, not only
+#      the first.
 #   2. Write the Turnstile secret, move DEVOPS_REF to a tag on a newer commit (the
 #      upgrade path), and re-run for the whole playbook. The values are placeholders:
 #      the stubs never dial the RPC URL or Cloudflare.
@@ -22,14 +23,22 @@
         dest: "{{ bootstrap_inventory }}"
         content: >-
           {{ good_inventory.content | b64decode
-             | regex_replace('(?m)^sponsord_hosts:$', 'molecule_hosts:') }}
+             | regex_replace('(?m)^sponsord_hosts:$', 'molecule_hosts:')
+             | regex_replace('(?m)^decdn_nodes:$', 'molecule_nodes:') }}
         mode: "0600"
         expect: neither decdn_nodes nor sponsord_hosts
+      - name: the origin outside decdn_nodes
+        dest: "{{ bootstrap_inventory }}"
+        content: >-
+          {{ good_inventory.content | b64decode
+             | regex_replace('(?m)^decdn_nodes:$', 'molecule_nodes:') }}
+        mode: "0600"
+        expect: in decdn_origin_nodes but not in decdn_nodes
       - name: the onramp outside sponsord_hosts
         dest: "{{ bootstrap_inventory }}"
         content: >-
           {{ good_inventory.content | b64decode
-             | regex_replace('(?m)^sponsord_hosts:$', 'decdn_nodes:') }}
+             | regex_replace('(?m)^sponsord_hosts:$', 'molecule_hosts:') }}
         mode: "0600"
         expect: in sponsord_onramp_hosts but not in sponsord_hosts
   tasks:
@@ -97,13 +106,22 @@
         group: root
         mode: "0600"
 
-    - name: Create /etc/sponsord
+    - name: Create /etc/decdn and /etc/sponsord
       ansible.builtin.file:
-        path: /etc/sponsord
+        path: "{{ item }}"
         state: directory
         owner: root
         group: root
         mode: "0700"
+      loop: [/etc/decdn, /etc/sponsord]
+
+    - name: Write the node's RPC endpoint on the host
+      ansible.builtin.copy:
+        dest: /etc/decdn/decdn.env
+        content: "DECDN_RPC_URL=https://rpc.example.invalid/\n"
+        owner: root
+        group: root
+        mode: "0600"
 
     - name: Write sponsord's secrets on the host
       ansible.builtin.copy:
@@ -129,10 +147,11 @@
     - name: Read the state and the list of missing secrets after the partial re-run
       ansible.builtin.include_tasks: ../cloud-init/includes/read-state.yml
 
-    - name: Stat the daemon (not installed while any secret is missing)
+    - name: Stat the daemons (not installed while any secret is missing)
       ansible.builtin.stat:
-        path: /usr/local/bin/sponsord
+        path: "{{ item }}"
       register: partial_bin
+      loop: [/usr/local/bin/sponsord, /usr/local/bin/decdn-node]
 
     - name: Assert the gate still holds, for the Turnstile secret alone
       ansible.builtin.assert:
@@ -142,11 +161,12 @@
           - awaiting.content | b64decode | split | list == ['/etc/sponsord/turnstile-secret']
           - partial.stdout is search('Cloudflare Turnstile secret')
           - partial.stdout is not search('treasury wallet')
-          - not partial_bin.stat.exists
+          - partial.stdout is not search('RPC endpoint')
+          - partial_bin.results | selectattr('stat.exists') | list | length == 0
         fail_msg: >-
           rc={{ partial.rc }} state={{ bootstrap_state.content | b64decode | trim }}
           awaiting={{ awaiting.content | b64decode | to_json }}
-          sponsord installed={{ partial_bin.stat.exists }}
+          installed={{ partial_bin.results | selectattr('stat.exists') | map(attribute='item') | list }}
           output={{ (partial.stdout_lines[-30:] + partial.stderr_lines) | to_json }}
 
     - name: Write the Turnstile secret on the host

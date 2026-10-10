@@ -1,7 +1,8 @@
 ---
-# After the secrets: the host moved to the pinned tag, both services came from their
-# (mirrored, signed) releases and are running, sponsord generated its own API token,
-# and Caddy serves the onramp over https. The toolchain pins are ../cloud-init's check.
+# After the secrets: the host moved to the pinned tag, the origin node and both sponsor
+# services came from their (mirrored, signed) releases and are running, with the
+# origin backend in node.toml, sponsord generated its own API token, and Caddy serves
+# the onramp over https. The toolchain pins are ../cloud-init's check.
 - name: Verify
   hosts: all
   become: true
@@ -31,12 +32,24 @@
       ansible.builtin.slurp:
         src: "/usr/local/lib/{{ item }}/installed-version"
       register: stamps
-      loop: [sponsord, sponsord-onramp]
+      loop: [decdn, sponsord, sponsord-onramp]
 
     - name: Stat the host-generated API token
       ansible.builtin.stat:
         path: /etc/sponsord/api-token
       register: api_token
+
+    - name: Read the origin backend from the node's config
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json, tomllib
+            with open("/etc/decdn/node.toml", "rb") as f:
+                print(json.dumps(tomllib.load(f).get("cache", {}).get("origin")))
+      register: node_origin
+      changed_when: false
 
     - name: Gather service facts
       ansible.builtin.service_facts:
@@ -56,9 +69,10 @@
       register: login_hint
       changed_when: false
 
-    - name: Assert both services are installed from their releases and running
+    - name: Assert every service is installed from its release and running
       vars:
-        services: ['caddy.service', 'sponsord-onramp.service', 'sponsord.service']
+        services: ['caddy.service', 'decdn-node.service', 'sponsord-onramp.service', 'sponsord.service']
+        origin: "{{ node_origin.stdout | from_json }}"
         # A unit that is absent drops out here, rather than failing the template.
         units: "{{ ansible_facts.services | dict2items | selectattr('key', 'in', services) }}"
         running: "{{ units | selectattr('value.state', 'equalto', 'running') | map(attribute='key') | sort }}"
@@ -69,6 +83,7 @@
           - checkout_head.content | b64decode | trim == tag_sha.content | b64decode | trim
           - stamps.results | map(attribute='content') | map('b64decode') | map('trim') | unique
             == ['0.0.0-molecule-stub']
+          - "origin == {'kind': 'http', 'url': 'https://content.example.invalid/'}"
           - api_token.stat.exists
           - api_token.stat.mode == '0600'
           - running == services
@@ -78,6 +93,7 @@
           state={{ bootstrap_state.content | b64decode | trim }} awaiting={{ awaiting.stat.exists }}
           head={{ checkout_head.content | b64decode | trim }} (tag {{ tag_sha.content | b64decode | trim }})
           stamps={{ stamps.results | map(attribute='content') | map('b64decode') | list }}
+          origin={{ origin | to_json }}
           api-token={{ api_token.stat.mode | default('absent') }}
           running={{ running }} of {{ services }}
           https rc={{ https_health.rc }} {{ https_health.stderr }}

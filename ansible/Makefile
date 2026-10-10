@@ -187,7 +187,7 @@ decommission:
 # source-build-recovery (the node built from source on the host: sandbox, stamps;
 # then a rollback from a broken commit; then the install-method switch, an untrusted
 # build home and a lost restart), and cloud-init and
-# cloud-init-sponsord (the cloud-init/ templates, booted for real). The glob in
+# cloud-init-publisher (the cloud-init/ templates, booted for real). The glob in
 # scripts/molecule.sh is the authority; this list is a guide.
 #
 #   make molecule                               every scenario, in parallel
@@ -221,7 +221,7 @@ decommission:
 SCENARIOS ?= all
 JOBS ?=
 SLOW_FIRST ?= sponsord-onramp-source sponsord-install cloud-init source-build-recovery \
-	iroh-relay-gate cloud-init-sponsord sponsord source-build sponsord-onramp \
+	iroh-relay-gate cloud-init-publisher sponsord source-build sponsord-onramp \
 	sponsord-onramp-caddy iroh-relay source-build-rollback iroh-relay-certificate \
 	validation iroh-relay-install os-matrix grafana-cloud
 MOLECULE_LOCK_PREFIX ?= /tmp/decdn-devops-molecule

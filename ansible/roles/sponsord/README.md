@@ -228,7 +228,7 @@ export it, so watch the address yourself.
   members, decommission refused for a held top-up and a missing or wrong
   confirmation, then the units removed and every credential kept.
 - `molecule/grafana-cloud` co-locates sponsord with a node.
-- `molecule/cloud-init-sponsord` deploys it from `cloud-init/user-data-sponsord.yaml`
+- `molecule/cloud-init-publisher` deploys it from `cloud-init/user-data-publisher.yaml`
   (no control machine), in release mode, beside the onramp.
 - `molecule/validation-sponsord` holds the negative cases.
 

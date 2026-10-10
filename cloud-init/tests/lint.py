@@ -2,7 +2,8 @@
 """Check the invariants cloud-init/README.md promises for a user-data file.
 
 Usage: lint.py <user-data.yaml>  (normally via `make lint-cloud-init`, which checks
-user-data.yaml, the node, and user-data-sponsord.yaml, the sponsor host)
+user-data-node.yaml, a node operator's cache node, and user-data-publisher.yaml, a
+publisher's origin node with sponsord and its onramp)
 
 `cloud-init schema` checks the file's shape, including the `#cloud-config` header. This
 script checks what the schema cannot:
@@ -24,6 +25,7 @@ script checks what the schema cannot:
     group's vars would override them. Nor may a user-data move the signing keys or the
     secret files bootstrap.sh's gate looks for;
   * the inventory holds only localhost, in decdn_nodes and/or sponsord_hosts (and
+    decdn_origin_nodes only beside decdn_nodes, with an origin backend in its vars;
     sponsord_onramp_hosts only beside sponsord_hosts), with `ansible_connection: local`
     set at least once and nothing else anywhere, and names a keyed admin account
     (baseline's lockout guard). A malformed shape is a violation, not a traceback;
@@ -64,9 +66,14 @@ TOP_LEVEL_KEYS = {"package_update", "packages", "write_files", "runcmd", "final_
 # A user-data that creates it, by write_files or a command, ships an unhardened host.
 TEST_ONLY_MARKER = "TEST-ONLY-skip-baseline"
 
-# The groups a user-data may use. site.yml (which imports sponsord.yml) targets the
-# first two; the onramp runs beside sponsord, so its group needs sponsord_hosts too.
-GROUPS = ("decdn_nodes", "sponsord_hosts", "sponsord_onramp_hosts")
+# The groups a user-data may use. site.yml (node.yml, then publisher.yml) targets them
+# all, but every host is in decdn_nodes or sponsord_hosts: an origin is a node, so its
+# group needs decdn_nodes too, and the onramp runs beside sponsord, so its group needs
+# sponsord_hosts too. The template lists an origin in both groups as siblings (no
+# `children:`, which this lint refuses); both are one level deep, so Ansible merges
+# their vars by name and decdn_origin_nodes' win, which is harmless while the two set
+# different keys.
+GROUPS = ("decdn_nodes", "decdn_origin_nodes", "sponsord_hosts", "sponsord_onramp_hosts")
 BASE_GROUPS = {"decdn_nodes", "sponsord_hosts"}
 
 # Knobs this lint checks, by the group whose role reads them: allowed only in that
@@ -85,7 +92,7 @@ PINNED_VARS = {
 # Knobs a user-data may not set at all: a different signing key would make "verified"
 # meaningless, and bootstrap.sh's secret gate looks for the secrets at the roles'
 # default paths. sponsord's API token is always generated on the host. A cloud-init
-# sponsor host runs on an operator-provisioned treasury wallet: the gate waits for
+# sponsor runs on an operator-provisioned treasury wallet: the gate waits for
 # the keystore before the role runs, so the role's own wallet generation (and the
 # decdn CLI it ships for that) would never get the chance.
 FORBIDDEN_VARS = {
@@ -275,6 +282,8 @@ def check_inventory(inventory):
                   f"not {sorted(set(inventory) - set(GROUPS))}")
     if not BASE_GROUPS & set(present):
         violation("inventory: localhost must be in decdn_nodes or sponsord_hosts (site.yml's host patterns)")
+    if "decdn_origin_nodes" in present and "decdn_nodes" not in present:
+        violation("inventory: decdn_origin_nodes needs decdn_nodes too (an origin is a deCDN node)")
     if "sponsord_onramp_hosts" in present and "sponsord_hosts" not in present:
         violation("inventory: sponsord_onramp_hosts needs sponsord_hosts too (the onramp runs beside the daemon)")
     groups = {}
@@ -323,6 +332,15 @@ def check_inventory(inventory):
             violation("inventory: decdn_node_generate_keystore must be true (the wallet is generated on the host)")
         if iv.get("decdn_verify_release_signature", True) is not True:
             violation("inventory: decdn_verify_release_signature must not be turned off")
+    if "decdn_origin_nodes" in gv:
+        # playbooks/origin.yml refuses an origin without a backend, but only after the
+        # host waited for its secrets; say so before it boots. A placeholder is the
+        # template's (the bootstrap refuses a CHANGE_ME left anywhere).
+        ov = gv["decdn_origin_nodes"]
+        kind, origins = ov.get("decdn_cache_origin_kind"), ov.get("decdn_cache_origins")
+        if not (isinstance(kind, str) and kind) and not (isinstance(origins, list) and origins):
+            violation("inventory: decdn_origin_nodes.vars needs an origin backend: decdn_cache_origin_kind "
+                      "(http, fs or s3) and its fields, or decdn_cache_origins")
     for g, prefix in (("sponsord_hosts", "sponsord"), ("sponsord_onramp_hosts", "sponsord_onramp")):
         if g not in gv:
             continue

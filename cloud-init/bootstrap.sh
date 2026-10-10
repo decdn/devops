@@ -5,16 +5,17 @@
 # script from it.
 #
 # This script converges the host by running ansible/playbooks/site.yml against
-# localhost. site.yml imports sponsord.yml, so one playbook serves a node
-# (user-data.yaml), a sponsor host (user-data-sponsord.yaml) or both, by the inventory's
-# groups:
+# localhost. site.yml imports node.yml and publisher.yml, so one playbook serves a node
+# operator's cache node (user-data-node.yaml), a publisher's host (user-data-publisher.yaml:
+# an origin node, sponsord and its onramp) or any mix, by the inventory's groups:
 #   1. Install the pinned ansible-core into a venv, with hashes enforced
 #      (requirements.txt), and the pinned Galaxy collections (collections.lock.yml).
 #   2. Syntax-check site.yml. Check that the inventory puts localhost in decdn_nodes or
-#      sponsord_hosts, and in sponsord_hosts whenever it is in sponsord_onramp_hosts.
-#      Without that membership the plays match no host and exit 0, and the firewall
-#      holes in playbooks/group_vars/ never load. Then check that, under
-#      `--tags baseline`, each decdn_nodes and sponsord_hosts play the host is in still
+#      sponsord_hosts, in decdn_nodes whenever it is in decdn_origin_nodes, and in
+#      sponsord_hosts whenever it is in sponsord_onramp_hosts. Without that membership
+#      the plays match no host and exit 0, and the firewall holes in
+#      playbooks/group_vars/ never load. Then check that, under `--tags baseline`, each
+#      play that runs on the host (node.yml's or origin.yml's, and sponsord.yml's) still
 #      selects the baseline role (baseline-plays.sh), since phase 1 relies on it.
 #   3. Pick the phase. Each of the host's groups needs its secrets on the host (SECRETS
 #      below):
@@ -39,14 +40,17 @@ readonly AWAITING_FILE=$STATE_DIR/awaiting
 # The secrets each group's role reads on the host, at the role defaults that
 # `make lint-cloud-init` forbids a user-data to move:
 #   decdn_nodes: decdn_env_file (roles/decdn_node/defaults/main.yml).
+#   decdn_origin_nodes: none of its own. An origin is in decdn_nodes too, whose
+#     decdn.env also carries an S3 backend's keys; an http or fs backend needs none.
 #   sponsord_hosts: sponsord_secret_env_file, sponsord_treasury_keystore_file,
 #     sponsord_treasury_password_file (roles/sponsord/defaults/main.yml). Not the API
 #     token: the role generates it.
 #   sponsord_onramp_hosts: sponsord_onramp_turnstile_secret_file
 #     (roles/sponsord_onramp/defaults/main.yml).
-readonly HOST_GROUPS=(decdn_nodes sponsord_hosts sponsord_onramp_hosts)
+readonly HOST_GROUPS=(decdn_nodes decdn_origin_nodes sponsord_hosts sponsord_onramp_hosts)
 declare -rA SECRETS=(
   [decdn_nodes]=/etc/decdn/decdn.env
+  [decdn_origin_nodes]=""
   [sponsord_hosts]="/etc/sponsord/secret.env /etc/sponsord/treasury-keystore.json /etc/sponsord/treasury-password"
   [sponsord_onramp_hosts]=/etc/sponsord/turnstile-secret
 )
@@ -145,20 +149,29 @@ for g in "${HOST_GROUPS[@]}"; do
 done
 [[ -n ${member[decdn_nodes]:-} || -n ${member[sponsord_hosts]:-} ]] \
   || die "$INVENTORY puts localhost in neither decdn_nodes nor sponsord_hosts (site.yml would match nothing)"
+# playbooks/origin.yml asserts the same, but under `--tags baseline` only after the
+# host waited for its secrets.
+[[ -z ${member[decdn_origin_nodes]:-} || -n ${member[decdn_nodes]:-} ]] \
+  || die "$INVENTORY puts localhost in decdn_origin_nodes but not in decdn_nodes (an origin is a deCDN node)"
 # playbooks/sponsord.yml asserts the same, in a play that `--tags baseline` skips.
 [[ -z ${member[sponsord_onramp_hosts]:-} || -n ${member[sponsord_hosts]:-} ]] \
   || die "$INVENTORY puts localhost in sponsord_onramp_hosts but not in sponsord_hosts (the onramp runs beside the daemon)"
 echo "decdn-bootstrap: localhost is in ${groups_in[*]}"
 
-# Phase 1 below relies on every decdn_nodes and sponsord_hosts play the host is in
-# tagging the baseline role `baseline`. If one lost the role or its tag,
-# --tags baseline would skip it and exit 0, and the host would be reported hardened
-# without being so. The check is per play: --list-tasks lists every play, hostless
-# ones too, so another group's play would satisfy a check over the whole output.
+# Phase 1 below relies on every play that runs baseline on the host tagging the
+# baseline role `baseline`. If one lost the role or its tag, --tags baseline would
+# skip it and exit 0, and the host would be reported hardened without being so. The
+# check is per play: --list-tasks lists every play, hostless ones too, so another
+# group's play would satisfy a check over the whole output. An origin runs origin.yml's
+# play, not node.yml's (decdn_nodes:!decdn_origin_nodes), so it is checked as
+# decdn_origin_nodes.
 base_groups=()
-for g in decdn_nodes sponsord_hosts; do
-  [[ -z ${member[$g]:-} ]] || base_groups+=("$g")
-done
+if [[ -n ${member[decdn_origin_nodes]:-} ]]; then
+  base_groups+=(decdn_origin_nodes)
+elif [[ -n ${member[decdn_nodes]:-} ]]; then
+  base_groups+=(decdn_nodes)
+fi
+[[ -z ${member[sponsord_hosts]:-} ]] || base_groups+=(sponsord_hosts)
 "$repo/cloud-init/baseline-plays.sh" "$INVENTORY" "${base_groups[@]}" \
   || die "--tags baseline would not harden this host (see above; was the baseline role or its tag removed from a play?)"
 
@@ -202,6 +215,8 @@ The node's RPC endpoint (the URL may embed an API key):
   sudo mkdir -p /etc/decdn
   echo 'DECDN_RPC_URL=https://…' | sudo tee /etc/decdn/decdn.env >/dev/null
   sudo chmod 600 /etc/decdn/decdn.env
+An origin with an S3 backend also needs its keys in that file, one per line:
+  AWS_ACCESS_KEY_ID=…  AWS_SECRET_ACCESS_KEY=…
 EOF
       ;;
     sponsord_hosts)

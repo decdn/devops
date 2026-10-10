@@ -1,15 +1,16 @@
-# deCDN node (or sponsor host) from cloud-init user-data
+# deCDN node (or publisher host) from cloud-init user-data
 
-A deCDN node with no machine of your own in the loop. Paste
-[`user-data.yaml`](user-data.yaml) into your provider's "create server" form, and a
+A deCDN node, or a publisher's origin and sponsor, with no machine of your own in the
+loop. Paste
+[`user-data-node.yaml`](user-data-node.yaml) into your provider's "create server" form, and a
 fresh Debian 12/13 or Ubuntu 24.04/26.04 VM (x86_64 or aarch64) sets itself up. It
 hardens itself and stops to wait for its secrets (a node's is its RPC endpoint). You
 then SSH in once to write them.
 
 On the host it runs the [Ansible project](../ansible/README.md)'s `site.yml` against
 localhost. That means the same `baseline` hardening (nftables default-deny with only
-SSH and the host's public services open: udp/4433 for a node, tcp/80 and tcp/443 for a
-sponsor host; DevSec SSH/OS hardening, fail2ban, unattended upgrades) and the same
+SSH and the host's public services open: udp/4433 for a node, an origin included, and
+tcp/80 and tcp/443 for the onramp's Caddy; DevSec SSH/OS hardening, fail2ban, unattended upgrades) and the same
 `decdn_node` role (or the `sponsord` roles), with no second copy of any. Nearly
 every provider accepts cloud-init: Hetzner, DigitalOcean, OVHcloud, Vultr, AWS,
 Scaleway and others.
@@ -18,24 +19,27 @@ Pick this path for one VM when you don't want a control machine. For a fleet, or
 repeated deploys from your workstation, use the [Ansible project](../ansible/README.md)
 directly. [`docs/requirements.md`](../docs/requirements.md) compares the paths.
 
-There are two templates. They share the bootstrap and differ only in their inventory:
+There are two templates, one per kind of operator. They share the bootstrap and differ
+only in their inventory:
 
-| Template | Host | Waits for |
-|----------|------|-----------|
-| [`user-data.yaml`](user-data.yaml) | a deCDN node | `/etc/decdn/decdn.env` |
-| [`user-data-sponsord.yaml`](user-data-sponsord.yaml) | a sponsor host: `sponsord` and `sponsord-onramp` behind Caddy ([Sponsor host](#sponsor-host)) | `/etc/sponsord/{secret.env,treasury-keystore.json,treasury-password,turnstile-secret}` |
+| Template | For | Host | Waits for |
+|----------|-----|------|-----------|
+| [`user-data-node.yaml`](user-data-node.yaml) | node operators | a deCDN cache node | `/etc/decdn/decdn.env` |
+| [`user-data-publisher.yaml`](user-data-publisher.yaml) | publishers | an origin node, `sponsord` and `sponsord-onramp` behind Caddy ([Publisher host](#publisher-host)) | `/etc/decdn/decdn.env`, `/etc/sponsord/{secret.env,treasury-keystore.json,treasury-password,turnstile-secret}` |
 
-To run both on one VM, copy the `decdn_nodes` group from `user-data.yaml` into the sponsor
-template's inventory, leaving out its `baseline_*` settings. Ansible applies one
-`baseline_sudo_users` list, not the union of two groups', so the lint wants it set once.
-The bootstrap then waits for both sets of secrets.
+A publisher who wants fewer of them on the VM deletes the groups it does not need from
+the publisher template: an origin alone keeps `decdn_nodes` and `decdn_origin_nodes`, a
+sponsor alone keeps `sponsord_hosts` and `sponsord_onramp_hosts` (and takes the
+`baseline_*` settings into `sponsord_hosts`). Ansible applies one `baseline_sudo_users`
+list, not the union of two groups', so the lint wants it set once. The bootstrap waits
+for the secrets of every group the host is in.
 
 > **Releases only.** The node installs only from a GPG-verified release tarball
 > (`release` mode). The `manual` mode would install binaries that nothing verified,
 > and the Ansible path's `source` mode builds whatever its git ref points at (and
 > takes many minutes on first boot), so the lint refuses both. The release is the
 > one the roles pin at `DEVOPS_REF` (decdn/decdn `v0.0.1` today, decdn/sponsord
-> `v0.0.2` for a sponsor host); set `decdn_node_version` in the user-data to pin
+> `v0.0.2` for the sponsor); set `decdn_node_version` in the user-data to pin
 > another. `decdn_node_release_base` points the download at a mirror that serves
 > `v<version>/{decdn-node,decdn}-<version>-<target>.tar.gz`, `SHA256SUMS` and
 > `SHA256SUMS.asc`; the signature is still checked against deCDN's release keys.
@@ -83,7 +87,7 @@ log is in `/var/log/cloud-init-output.log`.
 
 ## Set up
 
-1. **Fill in the user-data.** Copy [`user-data.yaml`](user-data.yaml) and replace every
+1. **Fill in the user-data.** Copy [`user-data-node.yaml`](user-data-node.yaml) and replace every
    `CHANGE_ME`:
    - `DEVOPS_REF`: a full 40-character commit SHA of this repo (recommended; it is
      verified after checkout) or a tag; a `node-collection-vX.Y.Z` or
@@ -177,15 +181,25 @@ log is in `/var/log/cloud-init-output.log`.
    `/etc/decdn/keystore.password`. Fund the wallet before you run the command without
    `--dry-run`.
 
-## Sponsor host
+## Publisher host
 
-[`user-data-sponsord.yaml`](user-data-sponsord.yaml) boots a host for the deCDN
-onboarding sponsor: the [`sponsord`](../ansible/roles/sponsord/README.md) daemon, which
-holds the treasury wallet, and
-[`sponsord-onramp`](../ansible/roles/sponsord_onramp/README.md), its public gate, with
-Caddy terminating TLS. The flow is the node's. Only the values and the secrets differ.
+[`user-data-publisher.yaml`](user-data-publisher.yaml) boots what a publisher runs on
+one host:
 
-> **Releases only.** Both services install only from GPG-verified release tarballs
+- an **origin node**: the deCDN node with an origin backend, the canonical source of
+  your namespace's content (`decdn_origin_nodes`, which is also in `decdn_nodes`);
+- the deCDN onboarding sponsor: the [`sponsord`](../ansible/roles/sponsord/README.md)
+  daemon, which holds the treasury wallet and pays for your users' downloads, and
+  [`sponsord-onramp`](../ansible/roles/sponsord_onramp/README.md), its public gate,
+  with Caddy terminating TLS.
+
+The flow is the node's. Only the values and the secrets differ. Configuring the backend
+does not make the node your origin on-chain: as the namespace's publisher you seat its
+operator with `OriginAssignment.addOrigin`
+([ADR 011](https://github.com/decdn/decdn/blob/main/adr/011-content-takedown.md#origin-assignment-authority)).
+Until then it serves its bytes as a cache does.
+
+> **Releases only.** The sponsor's services install only from GPG-verified release tarballs
 > (`release` mode), and the lint refuses `manual` and `source`. Both come from one
 > decdn/sponsord release (`v<version>`), the one the roles pin at `DEVOPS_REF`
 > unless the user-data sets `sponsord_version` and `sponsord_onramp_version`.
@@ -199,24 +213,33 @@ Caddy terminating TLS. The flow is the node's. Only the values and the secrets d
    - check the `decdn` and `decdn-sponsored` releases the installers install: the
      roles' pins at `DEVOPS_REF` unless you set all four `sponsord_onramp_*_release`
      / `_sums_sha256` values.
-2. **Fill in the user-data.** Replace every `CHANGE_ME`: `DEVOPS_REF` and
-   `baseline_sudo_users` (as for a node), `sponsord_pool_id`,
-   `sponsord_onramp_domain`, `sponsord_onramp_rpc_url` and
+2. **Fill in the user-data.** Replace every `CHANGE_ME`: `DEVOPS_REF`,
+   `baseline_sudo_users` and `decdn_region` (as for a node), the origin backend
+   (`decdn_cache_origin_url` for an http store; or `decdn_cache_origin_kind: s3` with
+   its bucket and region, or `fs` with a path, as the template's comment shows),
+   `sponsord_pool_id`, `sponsord_onramp_domain`, `sponsord_onramp_rpc_url` and
    `sponsord_onramp_turnstile_sitekey`.
    - `sponsord_onramp_rpc_url` is served to every user, so it must be a **public**
      endpoint with no API key in it. sponsord's own RPC URL may embed a key, so it is
      written on the host instead (step 5).
    - Check the file with
      `make lint-cloud-init CLOUD_INIT_FILE=path/to/your-user-data.yaml`.
-3. **Point DNS** for the domain (A/AAAA) at the VM, and open **tcp/80 and tcp/443**
-   in the provider's firewall, if it has one. The host's nftables already allows both.
+3. **Point DNS** for the domain (A/AAAA) at the VM, and open **udp/4433** (the node)
+   and **tcp/80 and tcp/443** (Caddy) in the provider's firewall, if it has one. The
+   host's nftables already allows all three.
    Caddy needs them to get its certificate.
 4. **Create the VM and wait for the first boot.** It ends at `awaiting-secret`, with
-   the four sponsor secrets listed in `/var/lib/decdn-bootstrap/awaiting`.
-5. **Write the secrets on the host**, as your admin account:
+   the node's and the four sponsor secrets listed in `/var/lib/decdn-bootstrap/awaiting`.
+5. **Write the secrets on the host**, as your admin account. The node's RPC endpoint,
+   and an S3 backend's keys if it has one, go in `/etc/decdn/decdn.env`:
 
    ```bash
    umask 077
+   sudo mkdir -p /etc/decdn
+   echo 'DECDN_RPC_URL=https://…' | sudo tee /etc/decdn/decdn.env >/dev/null
+   # S3 origin backend only:
+   # printf 'AWS_ACCESS_KEY_ID=…\nAWS_SECRET_ACCESS_KEY=…\n' | sudo tee -a /etc/decdn/decdn.env >/dev/null
+   sudo chmod 600 /etc/decdn/decdn.env
    sudo mkdir -p /etc/sponsord
    sudo install -m 0600 treasury-keystore.json /etc/sponsord/treasury-keystore.json
    sudo install -m 0600 treasury-password      /etc/sponsord/treasury-password
@@ -228,9 +251,10 @@ Caddy terminating TLS. The flow is the node's. Only the values and the secrets d
 
    `secret.env` may hold `SPONSORD_RPC_URL` **only**: the role refuses any other key,
    because an `EnvironmentFile` would override every other setting.
-6. **Install and start both services:** `sudo decdn-bootstrap`, which ends with
-   `decdn-bootstrap: complete`. The sponsord role generates sponsord's API token on
-   the host. sponsord starts only once its keystore decrypts and the treasury owns
+6. **Install and start every service:** `sudo decdn-bootstrap`, which ends with
+   `decdn-bootstrap: complete`. The node generates its wallet on the host (fund and
+   stake it as for any node, then seat it as your origin), and the sponsord role
+   generates sponsord's API token there. sponsord starts only once its keystore decrypts and the treasury owns
    `sponsord_pool_id`. If either check fails, the run fails at sponsord's `/healthz`
    gate (`journalctl -u sponsord`).
 
@@ -255,7 +279,7 @@ Day 2 is in the role READMEs. Rotate a secret by replacing its file and running
 - **Back up, migrate or decommission:** the host is an ordinary Ansible host. Add it to
   an inventory on your workstation with the same groups and variables and use
   `make backup`, `make decommission` and the rest
-  ([`docs/lifecycle.md`](../docs/lifecycle.md)). Both cover a sponsor host too: its
+  ([`docs/lifecycle.md`](../docs/lifecycle.md)). Both cover a publisher host too: its
   backup carries the treasury keystore and password, the API token and the Turnstile
   secret, and decommission keeps `/etc/sponsord` and never touches the pool on chain.
   From then on,
@@ -325,12 +349,12 @@ What CI proves:
 
 - `make lint-cloud-init` (CI job `cloud-init`) checks the schema and the invariants
   above, and `make test-scripts` checks that it rejects broken variants.
-- The molecule `cloud-init` scenario boots `user-data.yaml` with cloud-init in Debian
+- The molecule `cloud-init` scenario boots `user-data-node.yaml` with cloud-init in Debian
   12 and Ubuntu 26.04 containers. It covers the secret gate first. It then checks that
   stage 1 refuses a branch name, the placeholder ref, an unknown key and a loose file mode,
   each recording `failed`. Finally, after an upgrade to a tag and `decdn.env`, it
   covers a running node installed from a locally signed mirror.
-- The molecule `cloud-init-sponsord` scenario boots `user-data-sponsord.yaml` in an
+- The molecule `cloud-init-publisher` scenario boots `user-data-publisher.yaml` in an
   Ubuntu 26.04 container. It checks that stage 2 refuses an inventory with localhost
   in neither base group, and one with the onramp outside `sponsord_hosts`, each
   recording `failed`. It writes sponsord's secrets but not the Turnstile secret, and

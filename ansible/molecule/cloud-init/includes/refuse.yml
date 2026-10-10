@@ -1,5 +1,5 @@
 ---
-# One refusal case for ../side_effect.yml and ../../cloud-init-sponsord/side_effect.yml:
+# One refusal case for ../side_effect.yml and ../../cloud-init-publisher/side_effect.yml:
 # write the broken file (refusal.dest, bootstrap.env unless set), run the bootstrap,
 # and check that it refused for the stated reason, recorded "failed" and did not move
 # the checkout.
