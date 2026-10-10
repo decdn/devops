@@ -653,6 +653,7 @@ if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
     cp "$repo/ansible/galaxy/$c/roles.txt" "$rs/ansible/galaxy/$c/"
     printf 'namespace: decdn\nname: %s\nversion: 0.0.0                      # a comment\n' "$c" > "$rs/ansible/galaxy/$c/galaxy.yml"
   done
+  printf 'dependencies:\n  decdn.node: ">=0.0.2"\n' >> "$rs/ansible/galaxy/publisher/galaxy.yml"
   for log in "$chart/CHANGELOG.md" "$rs"/ansible/galaxy/{node,publisher}/CHANGELOG.md; do
     printf '# Changelog\n\nIntro.\n\n## [Unreleased]\n\nInitial.\n\n### Added\n\n- The first entry.\n' > "$log"
   done
@@ -864,11 +865,16 @@ if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
 
   # Each collection is released on its own tags and paths: its roles.txt, its overlay.
   # decdn.publisher depends on decdn.node, so its first release waits for node's.
-  rsrefused "decdn.publisher's first release before decdn.node's" "release node-collection first" publisher-collection minor
+  rsrefused "decdn.publisher's first release before decdn.node's" "origin's highest node-collection tag is none" publisher-collection minor
   : > "$RS_MAKE_LOG"
   expect 0 "release.sh cuts the node collection's first release" rsrel node-collection patch --execute
   rsmade galaxy-check-node
   rspushed node-collection-v0.0.1
+  # The fixture's publisher declares decdn.node >=0.0.2: a lower node release is not enough.
+  rsrefused "decdn.publisher's first release below its decdn.node constraint" \
+    "needs decdn.node >=0.0.2, and origin's highest node-collection tag is 0.0.1" publisher-collection patch
+  sed -i 's/">=0.0.2"/">=0.0.1"/' "$rs/ansible/galaxy/publisher/galaxy.yml"
+  rsgit commit -qam "build: lower the fixture's decdn.node constraint"; rspush
   grep -qx 'version: 0.0.1                      # a comment' "$rs/ansible/galaxy/node/galaxy.yml" \
     || fail "release.sh did not set node/galaxy.yml to 0.0.1 keeping its comment: $(grep '^version' "$rs/ansible/galaxy/node/galaxy.yml")"
   grep -qx '## \[Unreleased\]' "$rs/ansible/galaxy/publisher/CHANGELOG.md" || fail "release.sh touched the publisher collection's changelog"

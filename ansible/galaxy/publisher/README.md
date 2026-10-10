@@ -31,12 +31,15 @@ repository — four roles and nothing else:
 > **Not on Galaxy yet.** The first release (`publisher-collection-v0.1.0`) has not
 > been cut, and it follows `decdn.node`'s; see
 > [RELEASING.md](https://github.com/decdn/devops/blob/main/RELEASING.md). Until then,
-> build and install both from a checkout:
+> build and install both from a checkout. A checkout's builds are both `0.0.0`, below
+> the `decdn.node >=0.1.0` this collection declares, so install the node collection
+> first (which pulls its own dependencies) and this one without dependency resolution:
 >
 > ```bash
 > git clone https://github.com/decdn/devops && cd devops/ansible
 > make build
-> ansible-galaxy collection install build/decdn-node-*.tar.gz build/decdn-publisher-*.tar.gz
+> ansible-galaxy collection install build/decdn-node-*.tar.gz
+> ansible-galaxy collection install --no-deps build/decdn-publisher-*.tar.gz
 > ```
 
 Once published:
