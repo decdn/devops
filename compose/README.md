@@ -6,8 +6,8 @@ commands and the same hardening as the roles' systemd units.
 
 | Profile | Service | Image | Ansible equivalent |
 |---------|---------|-------|--------------------|
-| `node` | `decdn-node`, a deCDN cache node (node operators) | `ghcr.io/decdn/decdn-node` | `decdn_node` |
-| `origin` | the same `decdn-node`, run as a publisher's origin ([below](#run-it-as-an-origin-publishers)) | `ghcr.io/decdn/decdn-node` | `decdn_node` with an origin backend (`decdn_cache_origin_kind`) |
+| `node` | `decdn-node`, a deCDN cache node (node operators) | `ghcr.io/decdn/decdn-node` | `decdn_node` on `decdn_nodes` ([`playbooks/node.yml`](../ansible/playbooks/node.yml)) |
+| `origin` | the same `decdn-node`, run as a publisher's origin ([below](#run-it-as-an-origin-publishers)) | `ghcr.io/decdn/decdn-node` | `decdn_node` on `decdn_origin_nodes`, with an origin backend ([`playbooks/origin.yml`](../ansible/playbooks/origin.yml)) |
 | `sponsord` | `sponsord`, the onboarding sponsor: treasury signer and PaymentPool keeper | `ghcr.io/decdn/sponsord` | `sponsord` |
 | `onramp` | `sponsord-onramp`, its public side (Turnstile gate, installers); also starts `sponsord` | `ghcr.io/decdn/sponsord-onramp` | `sponsord_onramp` |
 | `caddy` | Caddy, TLS in front of the onramp; leave it out to bring your own proxy | `caddy` (official) | `sponsord_onramp_proxy: caddy` |
