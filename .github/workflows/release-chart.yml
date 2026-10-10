@@ -89,7 +89,7 @@ jobs:
             | jq -e 'type == "array" and length > 0 and all(.[];
                 (.kind | IN("added", "changed", "deprecated", "removed", "fixed", "security"))
                 and (.description | type == "string" and length > 0))' >/dev/null
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ env.TAG }}
           path: dist/
@@ -107,7 +107,7 @@ jobs:
       packages: write           # the chart on ghcr.io
       id-token: write           # keyless cosign signature (Sigstore)
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-${{ env.TAG }}
           path: dist
