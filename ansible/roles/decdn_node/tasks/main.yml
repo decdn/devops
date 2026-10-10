@@ -1794,7 +1794,7 @@
 # --- Readiness ----------------------------------------------------------------
 # ADVISORY probe: the daemon binds its loopback /metrics listener only after its
 # startup bootstrap completes, which on a healthy node can lag process start by a
-# long way (metrics/admin bind behind the PaymentChannel buyer bootstrap — an
+# long way (metrics/admin bind behind the PaymentPool buyer bootstrap — an
 # upstream startup-ordering issue tracked in decdn/decdn, not here). So a probe
 # TIMEOUT must NOT fail the deploy — but a metrics endpoint that ANSWERS with an
 # error is a real fault, not slow startup, so that still should. failed_when below
@@ -1844,7 +1844,7 @@
       ~{{ (decdn_readiness_retries | int) * (decdn_readiness_delay | int) }}s
       ({{ decdn_readiness_retries }}×{{ decdn_readiness_delay }}), so readiness
       could NOT be confirmed. This is OFTEN benign — a healthy node binds
-      metrics/admin late (behind the startup PaymentChannel bootstrap) and logs
+      metrics/admin late (behind the startup PaymentPool bootstrap) and logs
       "node runtime ready" once bound — but a PERSISTENT timeout can also mean a
       wedged or mis-started daemon (a Type=simple unit still reports `running`
       even when wedged). Verify before trusting the node:
