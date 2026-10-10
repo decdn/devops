@@ -24,7 +24,7 @@ you want hardened from scratch (firewall, SSH, auto-patching), use the
 compares the paths.
 
 `compose.yaml` takes every image by digest. `.env.example` carries the digests of
-the releases the Ansible roles pin (decdn/decdn v0.0.1, decdn/sponsord v0.0.2),
+the releases the Ansible roles pin (decdn/decdn v0.0.2, decdn/sponsord v0.0.2),
 each copied from that release's signed digest file; the node's
 [Operate](#operate) section says how to take a newer one.
 
@@ -67,7 +67,8 @@ anything past your firewall. The node's only public port is QUIC **udp/4433**.
    sudo install -d -m 0750 -o decdn -g decdn /etc/decdn
    ```
 
-2. **The `decdn` CLI on the host.** The image is daemon-only. Install the CLI from the
+2. **The `decdn` CLI on the host.** The image carries it too (since v0.0.2), but the
+   steps below run it before the container exists. Install the CLI from the
    release tarball, checking it against the GPG-signed `SHA256SUMS` first (the
    maintainer keys are in `decdn/decdn`'s `KEYS`; their fingerprints are in
    [SECURITY.md](../SECURITY.md#release-verification)). It is also on crates.io

@@ -61,7 +61,7 @@ decdn_rustup_sha256:
 # also moves the generated mirrors, the onramp's decdn pin (role default and
 # compose/sponsord-onramp.env.example), the Compose image digest and the chart's
 # appVersion (README.md, "Bumping the decdn release").
-decdn_node_version: "0.0.1"       # asserted non-empty in "release" mode
+decdn_node_version: "0.0.2"       # asserted non-empty in "release" mode
 # Release target triple. Derived from the host's gathered architecture (x86_64 or
 # aarch64, see vars/main/arch.yml), so arm64 hosts (Graviton, Ampere, Hetzner CAX)
 # get the aarch64 tarball with no inventory change. Needs facts: a play with

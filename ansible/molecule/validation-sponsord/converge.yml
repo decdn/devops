@@ -978,7 +978,7 @@
           ansible.builtin.include_role:
             name: sponsord_onramp
           vars:
-            sponsord_onramp_decdn_sums_sha256: cd3d63846b04775b55537bf3b865d7340b40c1eb8ec352ff2dca7111814ba350
+            sponsord_onramp_decdn_sums_sha256: 1697880cfb0e888b55856f5756de4418fd67cfd55fbaf977fa604da999d2d62f
       rescue:
         - name: Record onramp-pin-pair rejection (only if its assert failed)
           ansible.builtin.set_fact:

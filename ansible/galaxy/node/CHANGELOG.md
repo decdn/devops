@@ -225,6 +225,10 @@ Initial packaging of the deCDN node roles as a distributable collection
   `origin/main`. The weekly `upstream-drift` job checks the mirrors against that
   tag, the onramp's `SHA256SUMS` digests and the Compose image digests against the
   pinned releases, and fails when either upstream repo has a newer `vX.Y.Z` tag.
+- `decdn_node`: `decdn_node_version` defaults to `0.0.2`, decdn/decdn v0.0.2 (was
+  `0.0.1`). Its config schema and contract addresses are unchanged, so the
+  generated mirrors (`vars/main/networks.yml`, `schema-keys.txt`) move only their
+  source commit.
 
 - **Breaking:** `decdn_node_install_method`, `sponsord_install_method` and
   `sponsord_onramp_install_method` now default to `release` (was `manual`). An

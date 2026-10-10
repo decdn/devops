@@ -33,9 +33,9 @@
 # sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc
 # sponsord_onramp_turnstile_sitekey: "0x…"
 # The releases the installers install default to the role's pins (decdn/decdn
-# v0.0.1, decdn/sponsord v0.0.2), each with the SHA-256 of its SHA256SUMS. To serve
+# v0.0.2, decdn/sponsord v0.0.2), each with the SHA-256 of its SHA256SUMS. To serve
 # others, set all four (a decdn/sponsord release's notes print the CLI pair):
-# sponsord_onramp_decdn_release: v0.0.1
+# sponsord_onramp_decdn_release: v0.0.2
 # sponsord_onramp_decdn_sums_sha256: "…"
 # sponsord_onramp_cli_release: v0.0.2
 # sponsord_onramp_cli_sums_sha256: "…"

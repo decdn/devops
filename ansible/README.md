@@ -174,7 +174,7 @@ ignored on the first converge.
    - **`release`** (the default) downloads the `v<decdn_node_version>` tarballs from
      `decdn_node_release_base` and verifies them against the GPG-signed `SHA256SUMS`.
      `decdn_node_version` defaults to the decdn/decdn release this repo pins
-     (`0.0.1`); the sponsord roles pin decdn/sponsord `0.0.2` the same way.
+     (`0.0.2`); the sponsord roles pin decdn/sponsord `0.0.2` the same way.
    - **`source`** clones `decdn_node_source_repo` (default `decdn/decdn` on GitHub) at
      `decdn_node_source_ref` (any tag, branch or SHA) **on the node** and builds it there
      as an unprivileged `decdn-build` user, in a fresh environment per commit, with a
@@ -498,7 +498,7 @@ the RPC URL when it is not provisioned on the host instead). Highlights:
 | `baseline_extra_inbound` | `[]` | public inbound ports; `decdn_nodes` opens udp/4433. |
 | `baseline_preserve_ipv6_autoconf` | `true` | Keep IPv6 RA/autoconf under hardening; set `false` for static-IPv6 hosts. |
 | `baseline_rp_filter_loose` | `false` | `true` loosens reverse-path filtering (`rp_filter=2`) for multi-homed nodes. |
-| `decdn_node_install_method` | `release` | `release` (the pinned `decdn_node_version`, `0.0.1`), `source` (build `decdn_node_source_ref` on the node) or `manual` (copy a control-machine build). |
+| `decdn_node_install_method` | `release` | `release` (the pinned `decdn_node_version`, `0.0.2`), `source` (build `decdn_node_source_ref` on the node) or `manual` (copy a control-machine build). |
 | `decdn_node_source_repo` / `decdn_node_source_ref` | `decdn/decdn` on GitHub / `""` | `source` only: the repo (no credentials in the URL) and the tag, branch or SHA to build. |
 | `decdn_node_target` | from the host | The release target triple, derived from the host architecture (x86_64 or aarch64). |
 | `decdn_network` | `""` | `arbitrum-sepolia` sets `chain_id` and every contract address from the role's manifest mirror; inventory values still win. `""` = set them yourself. |
