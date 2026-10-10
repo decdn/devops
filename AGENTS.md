@@ -85,12 +85,13 @@ charts/
     ci/                 # CI values files (mirror molecule/schema's three plays)
     files/monitoring    # symlink to ../../../monitoring/decdn-node (helm package dereferences it)
     tests/render-test.sh  # positive/negative render tests (`make lint-helm`)
+    artifacthub-repo.yml  # Artifact Hub repository metadata (.helmignored, release.yml pushes it)
 monitoring/             # Grafana dashboards + Prometheus alert rules (maintained here)
   decdn-node/           # the node's (+ promtool unit tests, .helmignored), rendered by the chart
   sponsord/             # sponsord's (+ promtool unit tests), Ansible/Compose only
   iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible only
 docs/                   # cross-path operator docs: requirements.md, lifecycle.md
-scripts/                # upstream-mirror generators, the release gate, the molecule driver (molecule.sh)
+scripts/                # upstream-mirror generators, the release gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh)
 ```
 
 **Generated mirrors of upstream — regenerate, never hand-edit:**
@@ -111,8 +112,8 @@ tags) are pinned across every path: the role defaults, the onramp's installer pi
 `compose/sponsord-onramp.env.example`), `compose/.env.example`'s image digests, the
 chart's `appVersion` and the generated mirrors. cloud-init takes the role defaults at
 `DEVOPS_REF`. `make test-scripts` checks the pins agree with each other, the Compose
-example and `appVersion`, and that both vendored KEYS hold the keys SECURITY.md
-publishes; the weekly `upstream-drift` job checks the digests and the mirrors against
+example, `appVersion` and the chart's `artifacthub.io/images` tag, and that both
+vendored KEYS hold the keys SECURITY.md publishes; the weekly `upstream-drift` job checks the digests and the mirrors against
 the releases and flags a newer upstream tag. The `--version` check compares the pin in
 `release` mode only (exactly, on `<binary> <version>`). Bump everything together with
 the checklists in `roles/decdn_node/README.md` and `roles/sponsord/README.md`. Both upstream repos are public and also publish their
@@ -537,7 +538,11 @@ collection tree by `galaxy/build.sh` — there is **no** `galaxy.yml` at the `an
 (that would make ansible-lint treat the deploy project as a collection). Build/validate with
 `make build` / `make galaxy-check`. **Publishing** is `release.yml` on a `vX.Y.Z` tag,
 together with the chart at the same version, and only while the `PUBLISH_ENABLED`
-repository variable is `true` (RELEASING.md). Log changes under `[Unreleased]` in
+repository variable is `true` (RELEASING.md). The chart's publish also pushes its
+Artifact Hub metadata (`charts/decdn-node/artifacthub-repo.yml`, `.helmignore`d), and
+the packaged `Chart.yaml` gets an `artifacthub.io/changes` annotation generated from the
+release's chart CHANGELOG section (`scripts/chart-artifacthub-changes.py`): never write
+that annotation by hand. Log changes under `[Unreleased]` in
 `ansible/galaxy/CHANGELOG.md` and `charts/decdn-node/CHANGELOG.md`.
 
 **CI.** `ci.yml` is the blocking gate: `pre-commit`, `scripts` and `actionlint` on every PR, the

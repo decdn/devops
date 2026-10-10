@@ -710,7 +710,8 @@ weekly `upstream-drift` workflow fails on it), move every pin in one change:
 4. `DECDN_IMAGE_DIGEST` in `compose/.env.example` (and the example digest in
    `charts/decdn-node/values.yaml`), from the release's signed
    `decdn-node-image-digest.txt` (`image-digest.txt` in v0.0.1).
-5. `appVersion` in `charts/decdn-node/Chart.yaml`, then validate the chart against
+5. `appVersion` in `charts/decdn-node/Chart.yaml` and the image tag in its
+   `artifacthub.io/images` annotation, then validate the chart against
    the real binary: `DECDN_CLI=<the release's decdn> make lint-helm` (CI has no real
    binary for the chart).
 6. `files/decdn-release-KEYS.asc`, if upstream's `KEYS` changed (and the sponsord
@@ -720,6 +721,7 @@ weekly `upstream-drift` workflow fails on it), move every pin in one change:
    `charts/decdn-node/CHANGELOG.md`.
 
 `make test-scripts` fails while the role, the onramp pins (role and Compose
-example), the chart's `appVersion` or the KEYS and SECURITY.md disagree; the weekly
-`upstream-drift` job checks the digests against the release. A decdn/sponsord release is bumped the same way
+example), the chart's `appVersion` and its `artifacthub.io/images` image, or the KEYS
+and SECURITY.md disagree; the weekly `upstream-drift` job checks the digests against
+the release. A decdn/sponsord release is bumped the same way
 ([sponsord's README](../sponsord/README.md#bumping-the-sponsord-release)).

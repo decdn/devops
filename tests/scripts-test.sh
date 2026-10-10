@@ -213,6 +213,116 @@ for section in '^## Ansible collection' '^## Helm chart'; do
 done
 pass "release notes carry both changelog sections"
 
+# --- artifacthub.io/changes, generated from the chart changelog at release ---------
+changes="$repo/scripts/chart-artifacthub-changes.py"
+refuse() { # <description> <expected message, fixed string> <changelog> <version>
+  expect 1 "changes generator rejects $1" "$changes" "$3" "$4"
+  grep -qF -- "$2" "$work/out" || { cat "$work/out" >&2; fail "changes generator: wrong refusal for $1"; }
+}
+expect 2 "changes generator rejects no arguments" "$changes"
+refuse "a missing version" "no '## [9.9.9]' section" "$repo/charts/decdn-node/CHANGELOG.md" 9.9.9
+cat > "$work/changelog.md" <<'MD'
+# Changelog
+
+## [Unreleased]
+
+## [1.2.30] — 2099-02-01
+
+### Added
+
+- Not in 1.2.3 either.
+
+## [1.2.3] — 2099-01-01
+
+Intro text, not an entry.
+
+### Added
+
+- First entry,
+  wrapped over two lines.
+- Second entry.
+
+### Fixed
+
+- A fix.
+
+## [1.2.2] — 2098-01-01
+
+### Removed
+
+- Not in 1.2.3.
+MD
+want='- kind: added
+  description: "First entry, wrapped over two lines."
+- kind: added
+  description: "Second entry."
+- kind: fixed
+  description: "A fix."'
+[[ "$("$changes" "$work/changelog.md" 1.2.3)" == "$want" ]] \
+  || fail "changes generator: unexpected output for the fixture: $("$changes" "$work/changelog.md" 1.2.3)"
+sed 's/$/\r/' "$work/changelog.md" > "$work/changelog-crlf.md"
+[[ "$("$changes" "$work/changelog-crlf.md" 1.2.3)" == "$want" ]] \
+  || fail "changes generator: CRLF line endings change the output"
+pass "changes generator maps headings to kinds, joins wrapped entries, matches the whole version"
+refuse "an empty section" "has no entries" "$work/changelog.md" Unreleased
+bad() { # <description> <expected message> <sed script applied to the fixture>
+  sed "$3" "$work/changelog.md" > "$work/changelog-bad.md"
+  refuse "$1" "$2" "$work/changelog-bad.md" 1.2.3
+}
+bad "an unknown heading"            "heading '### Notes' is not"  's/^### Fixed$/### Notes/'
+bad "an indented heading"           "heading ' ### Fixed' is not" 's/^### Fixed$/ ### Fixed/'
+bad "a '## ' heading in the section" "heading '## Notes' is not"  's/^### Fixed$/## Notes\n\n### Fixed/'
+bad "a bullet before the first heading" "comes before the first"  's/^Intro text, not an entry\.$/- Not under a heading./'
+bad "a stray paragraph"             "neither a '- ' entry"        's/^- A fix\.$/A paragraph./'
+bad "a nested list"                 "a nested list or code block" 's/^- Second entry\.$/- Second entry.\n  - nested/'
+bad "a code block in an entry"      "a nested list or code block" 's/^- Second entry\.$/- Second entry.\n  ```/'
+bad "an empty '-' entry"            "an empty '-' entry"          's/^- A fix\.$/-/'
+bad "an empty '- ' entry"           "an empty '-' entry"          's/^- A fix\.$/- /'
+bad "a duplicated section"          "appears 2 times"             's/^## \[1\.2\.2\] — 2098-01-01$/## [1.2.3] — 2098-01-01/'
+# The real changelog must parse before release day: the section for this version, and
+# [Unreleased], which the release PR folds into it.
+expect 0 "changes generator reads charts/decdn-node/CHANGELOG.md [$version]" \
+  "$changes" "$repo/charts/decdn-node/CHANGELOG.md" "$version"
+if sed -n '/^## \[Unreleased\]/,/^## \[[0-9]/p' "$repo/charts/decdn-node/CHANGELOG.md" | grep -q '^### '; then
+  expect 0 "changes generator reads charts/decdn-node/CHANGELOG.md [Unreleased]" \
+    "$changes" "$repo/charts/decdn-node/CHANGELOG.md" Unreleased
+fi
+if command -v yq >/dev/null && command -v jq >/dev/null && command -v helm >/dev/null; then
+  # release.yml's own steps, read by name and run as Actions runs them, on a released
+  # copy of the chart: the annotation step, then helm package, then the check.
+  step() { # <step name>: its run script, or fail
+    local run
+    run="$(yq ".jobs.build.steps[] | select(.name == \"$1\") | .run" "$repo/.github/workflows/release.yml")"
+    [[ -n "$run" && "$run" != null ]] || fail "release.yml has no build step '$1'"
+    printf '%s\n' "$run"
+  }
+  annotate="$(step "Add the artifacthub.io/changes annotation")"
+  check="$(step "Check the packaged artifacthub.io/changes")"
+  ah="$work/ah"
+  mkdir -p "$ah/scripts" "$ah/charts" "$ah/dist"
+  cp "$changes" "$ah/scripts/"
+  cp -RL "$repo/charts/decdn-node" "$ah/charts/"
+  cp "$rel/charts/decdn-node/CHANGELOG.md" "$ah/charts/decdn-node/"
+  run_step() { (cd "$ah" && TAG="v$version" bash --noprofile --norc -eo pipefail -c "$1") >"$work/out" 2>&1; }
+  run_step "$annotate" || { cat "$work/out" >&2; fail "release.yml's annotation step failed"; }
+  helm package "$ah/charts/decdn-node" --destination "$ah/dist" >"$work/out" 2>&1 \
+    || { cat "$work/out" >&2; fail "helm package failed on the chart with artifacthub.io/changes"; }
+  run_step "$check" || { cat "$work/out" >&2; fail "release.yml's check refuses the generated annotation"; }
+  [[ "$("$changes" "$rel/charts/decdn-node/CHANGELOG.md" "$version" | yq -o=json -I0)" \
+     == "$(helm show chart "$ah/dist/decdn-node-$version.tgz" | yq -o=json -I0 '.annotations["artifacthub.io/changes"] | from_yaml')" ]] \
+    || fail "the packaged artifacthub.io/changes differs from the generator's output"
+  pass "release.yml's annotation step survives helm package unchanged, and its check accepts it"
+  yq -i '.annotations["artifacthub.io/changes"] = "not a list"' "$ah/charts/decdn-node/Chart.yaml"
+  helm package "$ah/charts/decdn-node" --destination "$ah/dist" >/dev/null 2>&1 \
+    || fail "helm package failed on the chart with a scalar artifacthub.io/changes"
+  ! run_step "$check" || fail "release.yml's check accepts a scalar artifacthub.io/changes"
+  pass "release.yml's check refuses an artifacthub.io/changes that is not a list"
+elif [[ -n ${CI:-} ]]; then
+  fail "yq, jq or helm is not on PATH in CI; the artifacthub.io/changes release steps would be skipped"
+else
+  skipped+=("artifacthub.io/changes release steps (needs yq, jq and helm)")
+fi
+
 # --- lint-compose: the real file passes, each broken variant is rejected -------------
 compose="$repo/compose/compose.yaml"
 # The baseline first: a variant below only proves something if the unmodified file
@@ -610,6 +720,18 @@ done
 app="$(sed -nE 's/^appVersion: *"?([^" #]*)"?.*/\1/p' "$repo/charts/decdn-node/Chart.yaml")"
 [ "$app" = "$(pin decdn_node decdn_node_version)" ] \
   || fail "charts/decdn-node/Chart.yaml appVersion '$app' is not decdn_node_version"
+# Artifact Hub scans the images the annotation lists, so it must name the one the
+# chart deploys by default.
+if command -v yq >/dev/null; then
+  ah_images="$(yq '.annotations["artifacthub.io/images"]' "$repo/charts/decdn-node/Chart.yaml" | yq -o=json -I0 '[.[].image]')" \
+    || fail "charts/decdn-node/Chart.yaml: cannot read the artifacthub.io/images annotation"
+  [ "$ah_images" = "[\"ghcr.io/decdn/decdn-node:$app\"]" ] \
+    || fail "charts/decdn-node/Chart.yaml artifacthub.io/images is $ah_images, not [ghcr.io/decdn/decdn-node:$app]"
+elif [[ -n ${CI:-} ]]; then
+  fail "yq is not on PATH in CI; the artifacthub.io/images check would be skipped"
+else
+  skipped+=("artifacthub.io/images check (needs yq)")
+fi
 # Both vendored KEYS hold the same maintainer keys (they differ in header text only),
 # and those are the fingerprints SECURITY.md publishes, so swapping a key takes a
 # visible edit there too.
@@ -625,7 +747,7 @@ want_fprs="$(fprs "$repo/ansible/roles/decdn_node/files/decdn-release-KEYS.asc")
   || fail "the decdn and sponsord release KEYS hold different keys"
 [ "$(sed -nE 's/^Fingerprint: *//p' "$repo/SECURITY.md" | tr -d ' ' | sort)" = "$want_fprs" ] \
   || fail "SECURITY.md's Fingerprint: lines differ from the vendored KEYS"
-pass "release pins agree across roles, Compose and the chart; the vendored KEYS match SECURITY.md"
+pass "release pins agree across roles, Compose, the chart and its artifacthub.io/images; the vendored KEYS match SECURITY.md"
 # iroh_relay's tasks_from node-ids runs `decdn whoami` on the inventory's nodes, where
 # decdn_node's defaults are not loaded: its fallbacks must be those defaults.
 ids="$repo/ansible/roles/iroh_relay/tasks/node-ids.yml"

@@ -1,7 +1,8 @@
 # decdn-node Helm chart
 
 Deploys one **deCDN node** (`decdn-node`) on Kubernetes. It is the Kubernetes
-counterpart of the Ansible [`decdn_node` role](../../ansible/roles/decdn_node/README.md)
+counterpart of the Ansible
+[`decdn_node` role](https://github.com/decdn/devops/blob/main/ansible/roles/decdn_node/README.md)
 and keeps the same guarantees:
 
 - no secrets in git or in values
@@ -17,8 +18,8 @@ keystore would double-sign.
 there is `deny_unknown_fields`, so an unknown key crash-loops the pod. CI renders the
 chart's own fixtures (`ci/*.yaml`) and checks every emitted key against the same
 committed inventory the Ansible `schema` molecule scenario uses
-([`schema-keys.txt`](../../ansible/molecule/schema/files/schema-keys.txt)). Re-sync
-it when bumping the decdn version. Keys and value types **you** add to `config` are
+([`schema-keys.txt`](https://github.com/decdn/devops/blob/main/ansible/molecule/schema/files/schema-keys.txt)).
+Re-sync it when bumping the decdn version. Keys and value types **you** add to `config` are
 validated only by the daemon at startup (a typo is a crash-loop, not a render error),
 and unlike the Ansible role there is no in-cluster `decdn config validate`, because the
 image has no CLI.
@@ -56,8 +57,8 @@ What it does **not** do:
   `image.digest` instead in production: take it from the release's
   `decdn-node-image-digest.txt` (`image-digest.txt` in v0.0.1), after checking its
   `.asc` against the keys in
-  [SECURITY.md](../../SECURITY.md#release-verification). To run an unreleased build,
-  follow the header of the upstream `decdn/Dockerfile`: `cargo build --release -p
+  [SECURITY.md](https://github.com/decdn/devops/blob/main/SECURITY.md#release-verification).
+  To run an unreleased build, follow the header of the upstream `decdn/Dockerfile`: `cargo build --release -p
   decdn-node`, copy the binary to `dist/<arch>/decdn-node`, then `docker build`. The
   Dockerfile only packages that binary, on `debian:bookworm-slim` (glibc 2.36), so build
   on a system with glibc ≤ 2.36 or the binary will not start.
@@ -127,10 +128,10 @@ Take chain IDs and contract addresses from the deployment manifest for your chai
 make them up. The quickest correct source is the CLI itself: `decdn config init --chain
 arbitrum-sepolia --output /tmp/node.toml` writes the manifest's `[blockchain]` section,
 and the Ansible role's mirror of the same manifest is
-[`networks.yml`](../../ansible/roles/decdn_node/vars/main/networks.yml). (The chart has
-no `network` shortcut yet; the addresses stay explicit in values.) Values are validated by `values.schema.json` plus
-template guards, so a missing or malformed value fails `helm install` with a message that
-names it.
+[`networks.yml`](https://github.com/decdn/devops/blob/main/ansible/roles/decdn_node/vars/main/networks.yml).
+(The chart has no `network` shortcut yet; the addresses stay explicit in values.) Values
+are validated by `values.schema.json` plus template guards, so a missing or malformed
+value fails `helm install` with a message that names it.
 
 ```yaml
 # values-node-1.yaml
@@ -158,7 +159,8 @@ helm install decdn-node-1 oci://ghcr.io/decdn/charts/decdn-node --version 0.1.0 
   -n decdn -f values-node-1.yaml
 ```
 
-Published charts are signed with cosign; [RELEASING.md](../../RELEASING.md#verifying-a-release)
+Published charts are signed with cosign;
+[RELEASING.md](https://github.com/decdn/devops/blob/main/RELEASING.md#verifying-a-release)
 shows how to verify one.
 
 ## Configuration (`config`)
@@ -166,8 +168,8 @@ shows how to verify one.
 `config` mirrors `node.toml` section for section. The role's variable names map onto it
 directly: `decdn_cache_size_mb` becomes `config.cache.cache_size_mb`, and
 `decdn_tinylfu_sketch_bytes` becomes `config.cache.tinylfu.sketch_bytes`. The role's
-[README](../../ansible/roles/decdn_node/README.md) documents each knob. Any key you do not
-set takes the daemon default, and a `null` value removes a chart default.
+[README](https://github.com/decdn/devops/blob/main/ansible/roles/decdn_node/README.md)
+documents each knob. Any key you do not set takes the daemon default, and a `null` value removes a chart default.
 
 Chart defaults that differ from the daemon's are the same as the role's:
 
@@ -252,8 +254,8 @@ their own token volume, so they should work with the chart's
 
 The chart ships the deCDN Grafana dashboards and Prometheus alert rules in
 `files/monitoring/`, which in this repo links to
-[`monitoring/decdn-node/`](../../monitoring/README.md). With the Prometheus
-Operator and a Grafana sidecar (kube-prometheus-stack), turn them on next to the
+[`monitoring/decdn-node/`](https://github.com/decdn/devops/blob/main/monitoring/README.md).
+With the Prometheus Operator and a Grafana sidecar (kube-prometheus-stack), turn them on next to the
 ServiceMonitor:
 
 ```yaml
@@ -281,7 +283,7 @@ metrics:
 - `DecdnNodeDown` also fires when a node's `up` stops arriving: a pod replacement that
   takes longer than its `for:` (1m) pages, and scaling a release to zero or changing
   `jobLabel` fires for up to a day. Silence it for planned work
-  ([monitoring README](../../monitoring/README.md#the-down-alerts)).
+  ([monitoring README](https://github.com/decdn/devops/blob/main/monitoring/README.md#the-down-alerts)).
 - Loki and Tempo panels stay empty unless the node's logs and traces reach those
   backends; the chart ships neither.
 

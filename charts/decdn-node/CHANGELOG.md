@@ -23,9 +23,16 @@ both (see [RELEASING.md](../../RELEASING.md)).
   failing, stale pool read, a held top-up, an empty pool, request errors), with
   promtool unit tests. sponsord has no Kubernetes path, so the chart neither renders
   nor packages them; they are for import on the Ansible and Compose paths.
+- Artifact Hub metadata: an `icon`, a maintainer email, and the `artifacthub.io/category`,
+  `license`, `images` and `links` annotations in `Chart.yaml`. A release adds
+  `artifacthub.io/changes`, generated from this changelog, to the packaged chart and
+  pushes `artifacthub-repo.yml` (not packaged) as
+  `ghcr.io/decdn/charts/decdn-node:artifacthub.io`.
 
 ### Changed
 
+- The README links into the rest of the repo are absolute GitHub URLs, so they work
+  wherever the packaged README is shown (Artifact Hub, `helm show readme`).
 - Dashboards follow decdn/decdn#2354, so they need a node built with it: the pull
   leg's `decdn_node_pull_reactive_topup{,_refused}_total` become
   `decdn_node_pull_recovery_step{,_refused}_total`, both refusal panels and the

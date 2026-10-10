@@ -61,7 +61,8 @@ pass "schema-key checker: good/bad/empty fixtures"
 # The node's dashboards and rules live in the repo's monitoring/decdn-node/, which
 # operators on every deploy path import from; the chart reaches them through
 # files/monitoring, a relative symlink, because .Files cannot read outside the chart.
-# helm package must turn it into regular files, and nothing of sponsord's may ship.
+# helm package must turn it into regular files, and nothing of sponsord's or
+# iroh-relay's may ship, nor artifacthub-repo.yml (release.yml pushes it on its own).
 link_target="../../../monitoring/decdn-node"
 # Prints what is wrong and returns non-zero, so the negatives below can call it too.
 check_monitoring_link() { # <chart dir> <monitoring dir> <empty scratch dir>
@@ -93,6 +94,8 @@ if got != want:
 leak = [m.name for m in members if "sponsord" in m.name.lower() or "iroh-relay" in m.name.lower()]
 if leak:
     sys.exit(f"sponsord or iroh-relay files in the chart package: {leak}")
+if any(m.name == "decdn-node/artifacthub-repo.yml" for m in members):
+    sys.exit("artifacthub-repo.yml is in the chart package (.helmignore it; release.yml pushes it on its own)")
 PY
 }
 out="$(check_monitoring_link "$chart" "$monitoring" "$(mktemp -d "$work/pkg.XXXX")")" || fail "$out"
@@ -114,6 +117,10 @@ expect_link_fail() { # <description> <message ERE>
   grep -qE -- "$2" <<<"$out" || { echo "$out" >&2; fail "wrong failure ($2) for: $1"; }
   pass "rejects: $1"
 }
+cp "$negchart/.helmignore" "$work/helmignore"
+sed -i '/^artifacthub-repo\.yml$/d' "$negchart/.helmignore"
+expect_link_fail "artifacthub-repo.yml packaged (not .helmignored)" "artifacthub-repo.yml is in the chart package"
+cp "$work/helmignore" "$negchart/.helmignore"
 rm "$negchart/files/monitoring"
 cp -R "$neg/monitoring/decdn-node" "$negchart/files/monitoring"
 expect_link_fail "files/monitoring a copy, not a symlink" "is not a symlink"
