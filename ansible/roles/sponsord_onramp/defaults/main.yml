@@ -57,7 +57,7 @@ sponsord_onramp_release_base: "https://github.com/decdn/sponsord/releases/downlo
 sponsord_onramp_verify_release_signature: true
 # Upstream signs every decdn/sponsord release with the keys in its one KEYS file,
 # vendored once, in the sponsord role. Both roles ship side by side (this repo and
-# the decdn.node collection), so the path holds in either.
+# the decdn.publisher collection), so the path holds in either.
 sponsord_onramp_release_keyring: "{{ role_path }}/../sponsord/files/sponsord-release-KEYS.asc"
 
 # --- Chain ----------------------------------------------------------------------

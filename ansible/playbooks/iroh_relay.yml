@@ -14,7 +14,7 @@
 # one of them can have them. (Under site.yml, sponsord.yml runs first, so on a host
 # in both groups the onramp is already up when this refuses; either way the deploy
 # fails loudly.) The role itself refuses ports another process holds, so the
-# decdn.node collection gets the same protection without this repo's groups.
+# decdn.publisher collection gets the same protection without this repo's groups.
 # tests/scripts-test.sh runs this play by its name.
 - name: Refuse an iroh relay on a sponsord-onramp host
   hosts: iroh_relay_hosts

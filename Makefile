@@ -168,8 +168,8 @@ molecule:            ## containerised converge/verify of the roles, scenarios in
 molecule-serial:     ## same selection, one scenario at a time (readable output on failure)
 	$(MAKE) -C ansible molecule-serial
 
-galaxy-build:        ## stage + build the decdn.node Galaxy collection artifact
+galaxy-build:        ## stage + build the decdn.node and decdn.publisher Galaxy collection artifacts
 	$(MAKE) -C ansible build
 
-galaxy-check:        ## build + validate the decdn.node collection (galaxy-importer)
+galaxy-check:        ## build + validate both collections (galaxy-importer)
 	$(MAKE) -C ansible galaxy-check

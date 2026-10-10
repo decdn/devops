@@ -1,9 +1,11 @@
 ---
 name: Release collection
 
-# A collection-vX.Y.Z tag releases the `decdn.node` Ansible collection on its own
-# version; the `decdn-node` Helm chart has its own workflow (release-chart.yml). See
-# RELEASING.md.
+# A node-collection-vX.Y.Z tag releases the `decdn.node` Ansible collection, a
+# publisher-collection-vX.Y.Z tag the `decdn.publisher` one, each on its own version;
+# the `decdn-node` Helm chart has its own workflow (release-chart.yml). See
+# RELEASING.md. Each step derives the collection (node|publisher) and the version from
+# the tag, which the gate step has checked.
 #
 # `build` always runs: it gates the tag (galaxy.yml and the collection changelog must
 # agree on X.Y.Z), re-runs the collection checks, builds the collection, and uploads it
@@ -12,11 +14,11 @@ name: Release collection
 # then a tag push is a dry run. A manual dispatch is always a dry run.
 on:
   push:
-    tags: ['collection-v[0-9]+.[0-9]+.[0-9]+']
+    tags: ['node-collection-v[0-9]+.[0-9]+.[0-9]+', 'publisher-collection-v[0-9]+.[0-9]+.[0-9]+']
   workflow_dispatch:
     inputs:
       tag:
-        description: Version to dry-run, e.g. collection-v0.1.0 (nothing is published)
+        description: Version to dry-run, e.g. node-collection-v0.1.0 (nothing is published)
         required: true
 
 permissions:
@@ -44,27 +46,28 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Gate the tag against the collection and its changelog
-        # The gate accepts either artifact's tag; a manual dispatch could pass the other
-        # one, so refuse it here, before anything is built.
+        # The gate accepts every artifact's tag; a manual dispatch could pass the chart's,
+        # so refuse it here, before anything is built.
         run: |
-          [[ "$TAG" == collection-v* ]] || { echo "::error::$TAG is not a collection tag (collection-vX.Y.Z)"; exit 1; }
+          [[ "$TAG" == node-collection-v* || "$TAG" == publisher-collection-v* ]] \
+            || { echo "::error::$TAG is not a collection tag (node-collection-vX.Y.Z or publisher-collection-vX.Y.Z)"; exit 1; }
           scripts/check-release-version.sh "$TAG" --notes release-notes.md
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
       - name: Install collection build + import tooling
         run: python -m pip install --upgrade ansible-core ansible-lint galaxy-importer
-      - name: Build and validate the decdn.node collection
+      - name: Build and validate the collection
         working-directory: ansible
         env:
           ANSIBLE_COLLECTIONS_PATH: collections
         run: |
           make deps
-          make galaxy-check
+          make "galaxy-check-${TAG%-collection-v*}"
       - name: Collect the collection and write checksums
         run: |
           mkdir -p dist
-          cp ansible/build/decdn-node-"${TAG#collection-v}".tar.gz dist/
+          cp ansible/build/decdn-"${TAG%-collection-v*}"-"${TAG##*-collection-v}".tar.gz dist/
           (cd dist && sha256sum -- * > SHA256SUMS)
           # Not a release asset, so outside SHA256SUMS: the Release body.
           cp release-notes.md dist/
@@ -103,22 +106,26 @@ jobs:
           GALAXY_API_KEY: ${{ secrets.GALAXY_API_KEY }}
         run: |
           [ -n "$GALAXY_API_KEY" ] || { echo "::error::secret GALAXY_API_KEY is not set"; exit 1; }
-      # Latest only when no higher collection release exists: a patch to an older line
-      # must not take Latest from a newer one. Explicit, because gh's default leaves it
-      # to GitHub's date-and-version guess across every release, the chart's included.
-      # Before Galaxy, so a failing API call stops the job while it can still re-run.
+      # The repository's Latest follows decdn.node, the node operator's collection: a
+      # decdn.publisher release is never Latest, and a node release is Latest only when
+      # no higher node release exists (a patch to an older line must not take Latest
+      # from a newer one). Explicit, because gh's default leaves it to GitHub's
+      # date-and-version guess across every release, the chart's included. Before
+      # Galaxy, so a failing API call stops the job while it can still re-run.
       - name: Decide whether this release becomes Latest
         id: latest
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          releases="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName')"
-          newest="$(printf '%s\n' "$releases" "$TAG" \
-            | sed -nE 's/^collection-v([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' | sort -V | tail -n1)"
-          latest=false
-          if [[ "$newest" == "${TAG#collection-v}" ]]; then latest=true; fi
+          latest=false newest=""
+          if [[ "$TAG" == node-collection-v* ]]; then
+            releases="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1000 --json tagName --jq '.[].tagName')"
+            newest="$(printf '%s\n' "$releases" "$TAG" \
+              | sed -nE 's/^node-collection-v([0-9]+\.[0-9]+\.[0-9]+)$/\1/p' | sort -V | tail -n1)"
+            if [[ "$newest" == "${TAG##*-collection-v}" ]]; then latest=true; fi
+          fi
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
-          echo "Latest: $latest (newest collection release: $newest)"
+          echo "Latest: $latest (newest node collection release: ${newest:-n/a})"
       - name: Install ansible-core
         run: python3 -m pip install --upgrade ansible-core
       # Not idempotent: Galaxy refuses a version that already exists, so a re-run
@@ -126,7 +133,7 @@ jobs:
       - name: Publish the collection to Galaxy
         env:
           GALAXY_API_KEY: ${{ secrets.GALAXY_API_KEY }}
-        run: ansible-galaxy collection publish dist/decdn-node-"${TAG#collection-v}".tar.gz --api-key "$GALAXY_API_KEY"
+        run: ansible-galaxy collection publish dist/decdn-"${TAG%-collection-v*}"-"${TAG##*-collection-v}".tar.gz --api-key "$GALAXY_API_KEY"
       # Last, so the Release page only appears once the collection is live.
       - name: Create the GitHub Release
         env:
@@ -135,6 +142,6 @@ jobs:
         run: |
           [[ "$LATEST" == true || "$LATEST" == false ]] || { echo "::error::no Latest decision ('$LATEST')"; exit 1; }
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --title "decdn.node collection ${TAG#collection-v}" --latest="$LATEST" \
+            --title "decdn.${TAG%-collection-v*} collection ${TAG##*-collection-v}" --latest="$LATEST" \
             --notes-file dist/release-notes.md \
-            dist/decdn-node-*.tar.gz dist/SHA256SUMS
+            dist/decdn-"${TAG%-collection-v*}"-*.tar.gz dist/SHA256SUMS

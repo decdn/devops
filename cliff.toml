@@ -1,7 +1,7 @@
 # git-cliff configuration for scripts/release.sh, which renders one artifact's
 # changelog section from the conventional commit subjects since its last tag. The
 # script passes the artifact's --tag-pattern and --include-path, so this one file
-# serves both the collection and the chart, and it writes the
+# serves both collections and the chart, and it writes the
 # `## [X.Y.Z] — YYYY-MM-DD` heading itself: the body below renders only the
 # `### <Kind>` groups.
 #

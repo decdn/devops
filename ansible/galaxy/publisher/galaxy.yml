@@ -1,0 +1,50 @@
+---
+# Manifest for the `decdn.publisher` Ansible collection — what a publisher runs
+# beside its origin nodes: the sponsord onboarding sponsor and its public onramp, a
+# self-hosted iroh relay and an iroh DNS server. The origin nodes themselves, the
+# host baseline and observability are `decdn.node` (../node/galaxy.yml).
+#
+# This file is an OVERLAY, not the project root manifest. It is assembled into a
+# clean collection tree (with the roles in roles.txt) by `galaxy/build.sh publisher`;
+# it is deliberately NOT placed at ansible/ root, so the deploy project stays a
+# plain Ansible project (bare role names, roles_path, production-profile
+# ansible-lint) rather than being reinterpreted as a collection. See ../../README.md.
+namespace: decdn
+name: publisher
+# Set only by scripts/release.sh (RELEASING.md); 0.0.0 means never released.
+version: 0.0.0                      # pre-1.0: published shape not yet stable
+readme: README.md
+authors:
+  - deCDN Contributors
+description: >-
+  Publisher-side services for deCDN: the sponsord onboarding sponsor and its public
+  onramp (each with backup and decommission), a self-hosted iroh relay and an iroh
+  DNS server. Run them beside origin nodes from decdn.node.
+license:
+  - MIT
+# Galaxy tags must match ^[a-z0-9]+$ (no hyphens/underscores).
+tags:
+  - decdn
+  - cdn
+  - publisher
+  - sponsor
+  - systemd
+  - debian
+  - ubuntu
+  - iroh
+  - dns
+  - web3
+# Collection-level dependencies. Every SHIPPED role uses ansible.builtin only
+# (sponsord_onramp's Caddy comes from the distro's apt), and none calls into
+# decdn.node. The dependency is for the playbooks that run these roles: a publisher
+# host takes decdn.node.baseline first and decdn.node.grafana_alloy for
+# observability, and its origin nodes are decdn.node.decdn_node. scripts/release.sh
+# refuses this collection's first release before decdn.node has one.
+dependencies:
+  decdn.node: ">=0.1.0"
+repository: https://github.com/decdn/devops
+documentation: https://github.com/decdn/devops/tree/main/ansible
+homepage: https://decdn.org
+issues: https://github.com/decdn/devops/issues
+# No build_ignore: build.sh stages ONLY roles/ + this overlay. Add a NARROW,
+# path-anchored pattern here if something must ever be excluded.

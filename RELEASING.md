@@ -1,31 +1,36 @@
 # Releasing
 
-The repo publishes two artifacts, each on its own version and released by its own tag:
+The repo publishes three artifacts, each on its own version and released by its own tag:
 
 | Artifact | Tag | Workflow | Published to | Install |
 |----------|-----|----------|--------------|---------|
-| `decdn.node` Ansible collection | `collection-vX.Y.Z` | [`release-collection.yml`](.github/workflows/release-collection.yml) | [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/) | `ansible-galaxy collection install decdn.node:==X.Y.Z` |
+| `decdn.node` Ansible collection (node operators) | `node-collection-vX.Y.Z` | [`release-collection.yml`](.github/workflows/release-collection.yml) | [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/) | `ansible-galaxy collection install decdn.node:==X.Y.Z` |
+| `decdn.publisher` Ansible collection (publishers) | `publisher-collection-vX.Y.Z` | [`release-collection.yml`](.github/workflows/release-collection.yml) | [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/) | `ansible-galaxy collection install decdn.publisher:==X.Y.Z` |
 | `decdn-node` Helm chart | `decdn-node-X.Y.Z` | [`release-chart.yml`](.github/workflows/release-chart.yml) | `oci://ghcr.io/decdn/charts`, signed with cosign (keyless) | `helm install <release> oci://ghcr.io/decdn/charts/decdn-node --version X.Y.Z` |
 
-Release an artifact when it has changes; the other one is not touched. The two do not
-depend on each other, and what they must agree on is checked by CI, not by a shared
+Release an artifact when it has changes; the others are not touched. Their versions are
+independent. The one dependency is Galaxy's: `decdn.publisher` requires `decdn.node`
+(its playbooks run `decdn.node`'s baseline, Alloy and origin nodes), so the publisher
+collection's first release comes after the node collection's, and `scripts/release.sh`
+refuses it before. What the artifacts must agree on is checked by CI, not by a shared
 version: the decdn version (the chart's `appVersion` and the role's
 `decdn_node_version`) on every PR (`make test-scripts`), and the config keys each one
 renders against the same upstream schema-key inventory whenever either changes
-(`make lint-helm`, `molecule/schema`). When a change lands in both (a decdn bump,
-say), release both.
+(`make lint-helm`, `molecule/schema`). When a change lands in several (a decdn bump
+touches the node collection, the publisher collection and the chart), release each.
 
 Each workflow's `build` job runs on every matching tag push. It gates the tag
-(`scripts/check-release-version.sh`), re-runs that artifact's checks (`make galaxy-check`
-or `make lint-helm`), packages it, and uploads it with a `SHA256SUMS` as a workflow
-artifact. The `publish` job pushes it to Galaxy or ghcr.io and creates the GitHub
+(`scripts/check-release-version.sh`), re-runs that artifact's checks (`make
+galaxy-check-node`, `make galaxy-check-publisher` or `make lint-helm`), packages it,
+and uploads it with a `SHA256SUMS` as a workflow artifact. The `publish` job pushes it to Galaxy or ghcr.io and creates the GitHub
 Release, but **only** when the repository variable `PUBLISH_ENABLED` is `true`. Until
 then, a tag push is a dry run. So is a manual *Run workflow* (`workflow_dispatch`) with an
 existing tag. Before a tag exists, the rehearsal is `scripts/release.sh`'s dry run and the
-artifact's make target (below). The repo's *Latest* release is the highest collection
-version: a collection release is marked Latest only when no higher `collection-v` release
-exists (so a patch to an older line does not take it), and chart releases never are
-(`--latest=false`). Collection publishes run one at a time, so two cannot race for it.
+artifact's make target (below). The repo's *Latest* release is the highest `decdn.node`
+version, the node operator's collection: a node collection release is marked Latest only
+when no higher `node-collection-v` release exists (so a patch to an older line does not
+take it), and publisher collection and chart releases never are (`--latest=false`).
+Collection publishes run one at a time, so two cannot race for it.
 
 ## Cutting a release
 
@@ -36,18 +41,20 @@ A release is cut on `main`, with no release PR, by
 ```bash
 scripts/release.sh chart                     # dry run: the new tag and the diff
 scripts/release.sh chart --execute           # bump, check, commit, tag, push
-scripts/release.sh collection minor --execute
+scripts/release.sh node-collection minor --execute
 ```
 
-The first argument is the artifact (`collection` or `chart`); the second is the level:
+The first argument is the artifact (`node-collection`, `publisher-collection` or
+`chart`); the second is the level:
 `auto` (the default), `patch`, `minor`, `major` or an explicit `X.Y.Z`. Without
 `--execute`, it is a dry run: it runs steps 1 to 4, prints the new tag and the diff it
 would commit, and changes no file. The script:
 
 1. **Refuses unconventional commits.** It looks at the commits since the artifact's
-   last tag that touched what it ships: for the collection, the roles
-   `ansible/galaxy/build.sh` lists (read from it), the `ansible/galaxy/` overlay and
-   `LICENSE`; for the chart, `charts/decdn-node/` and `monitoring/decdn-node/`.
+   last tag that touched what it ships: for a collection, the roles its
+   `ansible/galaxy/<collection>/roles.txt` lists (the list `galaxy/build.sh` reads), that
+   overlay, `ansible/galaxy/build.sh` and `LICENSE`; for the chart, `charts/decdn-node/`
+   and `monitoring/decdn-node/`.
    git-cliff drops a commit it cannot parse as a Conventional Commit, from the
    changelog and from the bump, and only logs a count. That covers an unconventional
    subject, but also an empty scope (`feat(): …`) and a body right under the subject
@@ -59,7 +66,8 @@ would commit, and changes no file. The script:
    bumps the patch. It refuses when none of those commits makes a changelog entry
    (they are all `ci`, `test`, `style`, `build` or release commits, or unconventional
    ones `--allow-unconventional` leaves out), whatever the level.
-3. **Sets `version:`** in `ansible/galaxy/galaxy.yml` or `charts/decdn-node/Chart.yaml`.
+3. **Sets `version:`** in `ansible/galaxy/<collection>/galaxy.yml` or
+   `charts/decdn-node/Chart.yaml`.
    The chart's `appVersion` and its `artifacthub.io/images` tag already follow the
    role's `decdn_node_version` (`make test-scripts` refuses a PR where they differ), so
    a decdn bump is a chart change too: release the chart.
@@ -80,8 +88,8 @@ would commit, and changes no file. The script:
    so the script refuses any heading that is not a Keep a Changelog kind.
 5. **Checks** (`--execute` only) with `scripts/check-release-version.sh <tag>`, plus
    `scripts/chart-artifacthub-changes.py` for the chart, then the artifact's make
-   target, `make -C ansible galaxy-check` or `make lint-helm` (`--no-verify` skips the
-   make target only). A tag whose workflow fails burns its version, so the checks run
+   target, `make -C ansible galaxy-check-<collection>` or `make lint-helm`
+   (`--no-verify` skips the make target only). A tag whose workflow fails burns its version, so the checks run
    before anything is committed.
 6. **Commits** (`--execute` only) `chore(release): <tag>` and tags `<tag>`, both
    signed, and pushes them with `git push --atomic origin main <tag>`: origin gets both
@@ -98,7 +106,7 @@ and the version is used up all the same.
 Then **watch** the *Release collection* or *Release chart* workflow (`gh run list
 --workflow release-chart.yml`). With publishing enabled, the `publish` job waits for
 approval on the `release` environment. Release each artifact on its own run; when a
-change lands in both, run the script twice.
+change lands in several, run the script once for each.
 
 **Prerequisites.**
 
@@ -138,9 +146,11 @@ Before the first publish:
   reviewers, and put `GALAXY_API_KEY` there rather than as a repository secret if you
   want the reviewer gate to guard it too.
 - **Enable:** set the repository variable `PUBLISH_ENABLED` to `true`, then cut the
-  releases as above. Both artifacts sit at the `0.0.0` placeholder, so
-  `scripts/release.sh <artifact> minor --execute` makes the first two tags
-  `collection-v0.1.0` and `decdn-node-0.1.0`; their versions diverge from then on.
+  releases as above, `node-collection` before `publisher-collection` (Galaxy resolves
+  `decdn.publisher`'s dependency on `decdn.node` at install). Every artifact sits at the
+  `0.0.0` placeholder, so `scripts/release.sh <artifact> minor --execute` makes the
+  first three tags `node-collection-v0.1.0`, `publisher-collection-v0.1.0` and
+  `decdn-node-0.1.0`; their versions diverge from then on.
 
 After the first chart publish (the package does not exist before it):
 
@@ -171,7 +181,8 @@ After the first chart publish (the package does not exist before it):
 
 In both workflows the GitHub Release is the last step, so it only appears once the
 artifact is live. The two workflows share nothing at run time (each has its own
-concurrency group), so a failure in one artifact's release never affects the other's.
+concurrency group), so a failure in the chart's release never affects a collection's,
+or the other way round.
 
 Re-run only the failed `publish` job, never the whole workflow: `publish` reuses the
 artifact `build` checksummed, while a fresh `build` repackages the chart, which need
@@ -185,16 +196,19 @@ asset upload, say), a re-run fails on the existing Release. Finish it by hand wi
 `gh release upload decdn-node-X.Y.Z --repo decdn/devops <missing assets>` from the
 `release-decdn-node-X.Y.Z` workflow artifact.
 
-**Collection** (`release-collection.yml`: Galaxy, then the Release). **Galaxy refuses a
+**Collections** (`release-collection.yml`: Galaxy, then the Release). **Galaxy refuses a
 version that already exists.** If the publish step failed before Galaxy accepted the
 upload, fix the cause and re-run. If Galaxy did accept it, finish by hand from the
-`release-collection-vX.Y.Z` workflow artifact, with the same assets as the workflow
-(`release-notes.md` in it is not an asset):
+`release-<collection>-collection-vX.Y.Z` workflow artifact, with the same assets as the
+workflow (`release-notes.md` in it is not an asset):
 
 ```bash
-# --latest=false if a higher collection-v release already exists
-gh release create collection-vX.Y.Z --repo decdn/devops --title "decdn.node collection X.Y.Z" \
+# decdn.node; --latest=false if a higher node-collection-v release already exists
+gh release create node-collection-vX.Y.Z --repo decdn/devops --title "decdn.node collection X.Y.Z" \
   --latest=true --notes-file release-notes.md decdn-node-X.Y.Z.tar.gz SHA256SUMS
+# decdn.publisher: never Latest
+gh release create publisher-collection-vX.Y.Z --repo decdn/devops --title "decdn.publisher collection X.Y.Z" \
+  --latest=false --notes-file release-notes.md decdn-publisher-X.Y.Z.tar.gz SHA256SUMS
 ```
 
 **Never re-use a version** for different content. Cut the next patch version.

@@ -4,14 +4,15 @@
 #   scripts/check-release-version.sh <tag> [--notes <file>]
 #
 # Each published artifact has its own version and tag, and the tag names it:
-#   decdn-node-X.Y.Z   the decdn-node Helm chart (charts/decdn-node/Chart.yaml)
-#   collection-vX.Y.Z  the decdn.node collection (ansible/galaxy/galaxy.yml)
+#   decdn-node-X.Y.Z             the decdn-node Helm chart (charts/decdn-node/Chart.yaml)
+#   node-collection-vX.Y.Z       the decdn.node collection (ansible/galaxy/node/galaxy.yml)
+#   publisher-collection-vX.Y.Z  the decdn.publisher collection (ansible/galaxy/publisher/galaxy.yml)
 # The artifact's version must equal X.Y.Z and its changelog must carry a released
-# `## [X.Y.Z]` heading (not "unreleased"). The other artifact is not looked at. With
+# `## [X.Y.Z]` heading (not "unreleased"). The other artifacts are not looked at. With
 # --notes, that changelog section is written to <file> as the GitHub Release body.
 set -euo pipefail
 
-usage() { echo "usage: $0 decdn-node-X.Y.Z|collection-vX.Y.Z [--notes <file>]" >&2; exit 2; }
+usage() { echo "usage: $0 decdn-node-X.Y.Z|node-collection-vX.Y.Z|publisher-collection-vX.Y.Z [--notes <file>]" >&2; exit 2; }
 tag="" notes=""
 case $# in
   1) tag="$1" ;;
@@ -21,18 +22,19 @@ esac
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ "$tag" =~ ^decdn-node-([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+  version="${BASH_REMATCH[1]}"
   manifest="charts/decdn-node/Chart.yaml"
   changelog="charts/decdn-node/CHANGELOG.md"
   title="Helm chart \`decdn-node\`"
-elif [[ "$tag" =~ ^collection-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-  manifest="ansible/galaxy/galaxy.yml"
-  changelog="ansible/galaxy/CHANGELOG.md"
-  title="Ansible collection \`decdn.node\`"
+elif [[ "$tag" =~ ^(node|publisher)-collection-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+  collection="${BASH_REMATCH[1]}" version="${BASH_REMATCH[2]}"
+  manifest="ansible/galaxy/$collection/galaxy.yml"
+  changelog="ansible/galaxy/$collection/CHANGELOG.md"
+  title="Ansible collection \`decdn.$collection\`"
 else
-  echo "tag '$tag' is neither decdn-node-X.Y.Z (chart) nor collection-vX.Y.Z (collection)" >&2
+  echo "tag '$tag' is neither decdn-node-X.Y.Z (chart) nor node-collection-vX.Y.Z or publisher-collection-vX.Y.Z (collections)" >&2
   exit 1
 fi
-version="${BASH_REMATCH[1]}"
 
 fail=0
 current="$(sed -nE 's/^version:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$repo/$manifest")"

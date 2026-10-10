@@ -7,8 +7,8 @@ DevOps repo.
 
 The official DevOps project for deploying a **deCDN node**: infrastructure, deployment,
 and operational tooling, for node operators anywhere. There are four deploy paths:
-**Ansible** (`ansible/`, VMs/bare metal, the primary path, also the `decdn.node` Galaxy
-collection, and the only path that also deploys self-hosted iroh relays and the iroh
+**Ansible** (`ansible/`, VMs/bare metal, the primary path, also the `decdn.node` and
+`decdn.publisher` Galaxy collections, and the only path that also deploys self-hosted iroh relays and the iroh
 DNS server), **cloud-init**
 (`cloud-init/`, one VM that runs the Ansible playbook on itself, no control machine),
 **Docker Compose** (`compose/`, a single Docker host) and a **Helm chart**
@@ -513,7 +513,7 @@ make check-sponsord / deploy-sponsord   # sponsord.yml only (sponsord_hosts)
 make check-relay / deploy-relay         # iroh_relay.yml only (iroh_relay_hosts)
 make check-dns / deploy-dns             # iroh_dns_server.yml only (iroh_dns_server_hosts)
 make backup / decommission LIMIT=… # lifecycle playbooks (decommission requires LIMIT)
-make build / galaxy-check          # the decdn.node collection
+make build / galaxy-check          # both collections (build-node, galaxy-check-publisher, … for one)
 ```
 
 **Inventory is private; the firewall hole is not.** This repo is public, so
@@ -531,13 +531,20 @@ to that list, so a co-located host renders one firewall in every play.
 The Alloy per-daemon toggles also live in `all.yml`. Don't move any of it back under
 `inventory/`.
 
-**Galaxy collection (`decdn.node`).** The seven roles (`baseline` + `decdn_node` +
-`grafana_alloy` + `sponsord` + `sponsord_onramp` + `iroh_relay` + `iroh_dns_server`) ship as a
-distributable collection. The overlay lives in `ansible/galaxy/` and is staged into a clean
-collection tree by `galaxy/build.sh` — there is **no** `galaxy.yml` at the `ansible/` root
-(that would make ansible-lint treat the deploy project as a collection). Build/validate with
-`make build` / `make galaxy-check`. **Publishing** is per artifact, each on its own version:
-`release-collection.yml` on a `collection-vX.Y.Z` tag, `release-chart.yml` on a
+**Galaxy collections (`decdn.node`, `decdn.publisher`).** The seven roles ship as two
+distributable collections, split by persona: `decdn.node` (`baseline` + `decdn_node` +
+`grafana_alloy`, what a node operator runs and a publisher's origin nodes) and
+`decdn.publisher` (`sponsord` + `sponsord_onramp` + `iroh_relay` + `iroh_dns_server`,
+which depends on `decdn.node`). Each overlay lives in `ansible/galaxy/<collection>/`, with
+`roles.txt` as the one role list (`galaxy/build.sh` and `scripts/release.sh` both read it;
+`make test-scripts` checks every role ships in exactly one), and is staged into a clean
+collection tree by `galaxy/build.sh <collection>` — there is **no** `galaxy.yml` at the
+`ansible/` root (that would make ansible-lint treat the deploy project as a collection).
+A new role goes in one `roles.txt`. Build/validate with `make build` / `make galaxy-check`
+(both; `-node`/`-publisher` suffixes for one). **Publishing** is per artifact, each on
+its own version: `release-collection.yml` on a `node-collection-vX.Y.Z` or
+`publisher-collection-vX.Y.Z` tag (the repo's Latest follows `decdn.node`; the publisher
+collection's first release waits for node's), `release-chart.yml` on a
 `decdn-node-X.Y.Z` tag (that file name and tag prefix are the chart's cosign identity:
 never rename them), and only while the `PUBLISH_ENABLED` repository variable is `true`
 (RELEASING.md). The chart's publish also pushes its
@@ -546,7 +553,7 @@ the packaged `Chart.yaml` gets an `artifacthub.io/changes` annotation generated 
 release's chart CHANGELOG section (`scripts/chart-artifacthub-changes.py`): never write
 that annotation by hand. **Releases are cut on `main` by `scripts/release.sh`** (a
 git-cliff wrapper, dry run unless `--execute`; RELEASING.md): it bumps the manifest,
-generates the dated section of `ansible/galaxy/CHANGELOG.md` or
+generates the dated section of `ansible/galaxy/<collection>/CHANGELOG.md` or
 `charts/decdn-node/CHANGELOG.md` from the conventional commit subjects since the
 artifact's tag (`cliff.toml`), and pushes a signed `chore(release)` commit and tag, with
 no release PR. The repo squash-merges with the PR title as the subject, so the PR title
