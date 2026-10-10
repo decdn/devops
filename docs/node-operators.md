@@ -32,8 +32,9 @@ A node without an origin backend fills a miss by pulling from other nodes
 you. On Compose, set it in `node.toml`; the daemon's default is off. A pull is paid
 from the node's own PaymentPool (the node-to-node tier of
 [ADR 003](https://github.com/decdn/decdn/blob/main/adr/003-payments.md)), so the node
-fronts USDC for its misses, up to `buyer_working_deposit_micro_usdc`, and pull-through
-needs that buyer pool in place.
+fronts USDC for its misses. `buyer_working_deposit_micro_usdc` is not a cap: it is the
+deposit the pool opens with and the balance every top-up refills it to, so keep the
+node's wallet funded for as long as it pulls.
 
 ## Before it earns
 
@@ -51,7 +52,8 @@ path. This repository stops at host preparation and startup.
 - Relays and discovery: a node uses n0's iroh relays and DNS discovery by default. To
   move to self-hosted ones, set `decdn_relay_urls` and the `decdn_discovery_*` knobs on
   Ansible (`network.relay_urls` and `[network.discovery]` in `node.toml` or the chart's
-  `config`). Two caveats (`roles/iroh_relay/README.md`, `roles/iroh_dns_server/README.md`):
+  `config`). Two caveats ([`iroh_relay`](../ansible/roles/iroh_relay/README.md),
+  [`iroh_dns_server`](../ansible/roles/iroh_dns_server/README.md)):
   a publisher's relay admits only listed node IDs by default, so ask for yours to be
   added; and your own discovery settings drop the n0 leg, so clients must use the same
   `dns_origin` to find your node.

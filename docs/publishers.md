@@ -9,8 +9,10 @@ operators that serve each namespace as **origins**
 You take your steps with the `decdn` CLI, not with this repository
 ([Appendix: Binaries](https://github.com/decdn/decdn/blob/main/adr/appendix-binaries.md)):
 `decdn publish namespace create`, `decdn publish assign` (`OriginAssignment.addOrigin`),
-`decdn publish revoke` (`removeOrigin`), and `decdn origin import` to seed an origin's
-store. The vetting itself is governance's.
+`decdn publish revoke` (`removeOrigin`), and `decdn origin import`, which writes
+content into a local directory in the layout an origin reads: point an `fs` origin at
+it, or sync it to an S3 bucket (the layouts are the same). It does not write to S3 or
+an HTTP store itself. The vetting itself is governance's.
 
 This repository deploys what a publisher runs. Node operators who only run cache nodes
 should read [`node-operators.md`](node-operators.md) instead.
@@ -39,7 +41,8 @@ An origin is a deCDN node like any other: it is bonded and registered
 same hardening, port and day-2 tooling as a cache node. Three things differ:
 
 - **The backend.** Set `decdn_cache_origin_kind` (`http`, `fs` or `s3`) and its fields,
-  or `decdn_cache_origins` for an ordered fallback list (`roles/decdn_node/README.md`).
+  or `decdn_cache_origins` for an ordered fallback list
+  ([`decdn_node` role](../ansible/roles/decdn_node/README.md)).
   S3 keys go in `/etc/decdn/decdn.env` on the host, never in inventory or user-data.
   `playbooks/origin.yml` refuses a `decdn_origin_nodes` host without a backend, or one
   outside `decdn_nodes`.
@@ -67,7 +70,8 @@ behind NAT that serves clients needs its relays in `everyone` mode. The DNS serv
 no replication: each DNS origin (`dns_origin`) is served by exactly one server, a single
 point of failure for pkarr lookups. Give every node and client that uses it the same
 `dns_origin`. Both roles' READMEs have the
-details: `roles/iroh_relay/README.md`, `roles/iroh_dns_server/README.md`.
+details: [`iroh_relay`](../ansible/roles/iroh_relay/README.md),
+[`iroh_dns_server`](../ansible/roles/iroh_dns_server/README.md).
 
 ## Day 2
 
