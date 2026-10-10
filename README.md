@@ -22,7 +22,7 @@ Four ways to deploy the node, cache or origin:
 |------|-----|------------|
 | **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published as the `decdn.node` and `decdn.publisher` Galaxy collections. | [`ansible/README.md`](ansible/README.md) |
 | **cloud-init** (`cloud-init/`) | One VM, no control machine: paste the user-data into your provider's "create server" form. It runs the Ansible playbook on the host itself, hardening included. One template per kind of operator: a cache node, or a publisher's origin with the onboarding sponsor (`sponsord` + its onramp). | [`cloud-init/README.md`](cloud-init/README.md) |
-| **Docker Compose** (`compose/`) | One host that already runs Docker. Profiles for a cache node or an origin, and the onboarding sponsor (`sponsord` + its onramp). | [`compose/README.md`](compose/README.md) |
+| **Docker Compose** (`compose/`) | One host that already runs Docker. Profiles for a cache node or an origin, and the onboarding sponsor (`sponsord` + its onramp), driven by the `decdn-compose` wrapper (set-up, preflight, guarded restarts). | [`compose/README.md`](compose/README.md) |
 | **Helm** (`charts/decdn-node/`) | Kubernetes, one release per node, cache or origin. | [`charts/decdn-node/README.md`](charts/decdn-node/README.md) |
 
 The iroh relay and DNS server a publisher may run deploy with Ansible only.
@@ -116,7 +116,7 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 |------|------------|
 | [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `node.yml` for node operators, `publisher.yml` for publishers with `origin.yml`, `sponsord.yml`, `iroh_relay.yml` and `iroh_dns_server.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`, `iroh_relay`, `iroh_dns_server`), `galaxy/` (the `decdn.node` and `decdn.publisher` collections), `molecule/`. |
 | [`cloud-init/`](cloud-init/README.md) | The cloud-init deploy path: `user-data-node.yaml` (node operators: a cache node), `user-data-publisher.yaml` (publishers: an origin node, sponsord and its onramp), the on-host `bootstrap.sh`, and the pinned ansible-core and collections it installs. |
-| [`compose/`](compose/README.md) | The Docker Compose deploy path: the node, `sponsord`, `sponsord-onramp` and Caddy, one profile each. |
+| [`compose/`](compose/README.md) | The Docker Compose deploy path: the node, `sponsord`, `sponsord-onramp` and Caddy, one profile each, and the `decdn-compose` wrapper. |
 | [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart; it renders the node's dashboards and alert rules from `monitoring/`. |
 | [`monitoring/`](monitoring/README.md) | The deCDN Grafana dashboards and Prometheus alert rules, for the node (`decdn-node/`, every deploy path), sponsord (`sponsord/`, Ansible and Compose) and the iroh relay (`iroh-relay/`, Ansible). |
 | [`docs/`](docs/requirements.md) | Cross-path operator docs: the two front doors ([node operators](docs/node-operators.md), [publishers](docs/publishers.md)), requirements, lifecycle. |

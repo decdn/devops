@@ -2,7 +2,8 @@
 # Tests for the repo's own guard rails that no molecule scenario or chart render
 # exercises: the ansible/ Makefile's scoping guards, the molecule driver's guards
 # and locks (scripts/molecule.sh), the release gate and scripts/release.sh, the
-# lint-compose and lint-cloud-init invariants (negative cases), the firewall holes
+# lint-compose and lint-cloud-init invariants (negative cases), compose/decdn-compose's
+# unit tests, the firewall holes
 # playbooks/group_vars/ derives per host, ci.yml's helm path filter, and — with
 # UPSTREAM=<decdn checkout> — the upstream-mirror generators' exit codes.
 # `make test-scripts` runs it; CI's `scripts` job does too. Needs make, docker
@@ -1022,44 +1023,55 @@ variant() {
   grep -qF -- "$2" "$work/out" || { cat "$work/out" >&2; fail "lint-compose rejected $1, but not with: $2"; }
   pass "lint-compose rejects: $1"
 }
-# Each range ends at the next service or top-level key.
+# Each range ends at the next service or top-level key. The shared hardening is the
+# x-hardened anchor, merged by each service's `<<: *hardened` line, so an edit that
+# weakens one service inserts an overriding key after that line ("${h}").
 node='/^  decdn-node:$/,/^ {0,2}[a-z]/'
 sd='/^  sponsord:$/,/^ {0,2}[a-z]/'
 onr='/^  sponsord-onramp:$/,/^ {0,2}[a-z]/'
 cdy='/^  caddy:$/,/^ {0,2}[a-z]/'
+h='s/^(\s*)<<: \*hardened$/&\n\1'
 # Shape
 variant "unexpected service"       "compose.yaml: services are exactly"           "s/^  caddy:$/  proxy:/"
-variant "sponsord privileged"      "sponsord: sets only allowed keys (extra: privileged)" "${sd} s/^(\s*)cap_drop: \[ALL\]$/&\n\1privileged: true/"
-variant "sponsord host pid"        "sponsord: sets only allowed keys (extra: pid)" "${sd} s/^(\s*)network_mode: host$/&\n\1pid: host/"
-variant "onramp device"            "sponsord-onramp: sets only allowed keys (extra: devices)" "${onr} s/^(\s*)network_mode: host$/&\n\1devices: [\"\/dev\/mem:\/dev\/mem\"]/"
+variant "sponsord privileged"      "sponsord: sets only allowed keys (extra: privileged)" "${sd} ${h}privileged: true/"
+variant "sponsord host pid"        "sponsord: sets only allowed keys (extra: pid)" "${sd} ${h}pid: host/"
+variant "onramp device"            "sponsord-onramp: sets only allowed keys (extra: devices)" "${onr} ${h}devices: [\"\/dev\/mem:\/dev\/mem\"]/"
+variant "hardening dropped"        "sponsord: read_only rootfs"                   "${sd} {/^    <<: \*hardened$/d}"
+variant "anchor weakened"          "caddy: read_only rootfs"                      "/^x-hardened:/,/^[a-z]/ s/^(\s*)read_only: true$/\1read_only: false/"
 # decdn-node
-variant "bridge network"           "decdn-node: network_mode is host"             "${node} s/^(\s*)network_mode: host$/\1network_mode: bridge/"
-variant "writable rootfs"          "decdn-node: read_only rootfs"                 "${node} s/^(\s*)read_only: true$/\1read_only: false/"
+variant "bridge network"           "decdn-node: network_mode is host"             "${node} ${h}network_mode: bridge/"
+variant "writable rootfs"          "decdn-node: read_only rootfs"                 "${node} ${h}read_only: false/"
 variant "short stop grace"         "decdn-node: stop_grace_period"                "${node} s/^(\s*)stop_grace_period: 300s$/\1stop_grace_period: 10s/"
-variant "capabilities kept"        "decdn-node: cap_drop is [ALL]"                "${node} s/^(\s*)cap_drop: \[ALL\]$/\1cap_drop: [NET_RAW]/"
-variant "published port"           "decdn-node: publishes no ports"               "${node} s/^(\s*)network_mode: host$/&\n\1ports: [\"127.0.0.1:9090:9090\"]/"
+variant "capabilities kept"        "decdn-node: cap_drop is [ALL]"                "${node} ${h}cap_drop: [NET_RAW]/"
+variant "published port"           "decdn-node: publishes no ports"               "${node} ${h}ports: [\"127.0.0.1:9090:9090\"]/"
 variant "tag instead of digest"    "decdn-node: image is pinned"                  "${node} s#^(\s*)image: .*#\1image: ghcr.io/decdn/decdn-node:latest#"
-variant "node config writable"     "decdn-node: mounts are exactly"               "${node} s#- /etc/decdn:/etc/decdn:ro\$#- /etc/decdn:/etc/decdn#"
+variant "node config writable"     "decdn-node: mounts are exactly"               "${node} {/target: \/etc\/decdn$/{n;s/read_only: true/read_only: false/}}"
+variant "origin content writable"  "decdn-node: mounts are exactly"               "${node} {/target: \/srv\/decdn-origin$/{n;s/read_only: true/read_only: false/}}"
+variant "node holds a secret"      "decdn-node: sets only allowed keys (extra: secrets)" "${node} ${h}secrets: [sponsord-api-token]/"
 variant "node always on"           "decdn-node: profiles are [node, origin]"      "${node} {/^    profiles: \[node, origin\]$/d}"
 variant "origin without the node"  "decdn-node: profiles are [node, origin]"      "${node} s/^(\s*)profiles: \[node, origin\]$/\1profiles: [node]/"
+variant "node healthcheck dropped" "decdn-node: healthcheck is"                   "${node} s/^(\s*)test: \[\"CMD\", \"decdn\", \"node\", \"health\".*/\1test: [\"NONE\"]/"
+variant "node RPC URL inline"      "decdn-node: sets only allowed environment keys inline (extra: DECDN_RPC_URL)" "${node} ${h}environment:\n\1  DECDN_RPC_URL: https:\/\/rpc.invalid\/key/"
 # sponsord
 variant "sponsord on 0.0.0.0"      "sponsord: SPONSORD_BIND is 127.x"             "${sd} s/SPONSORD_BIND: 127\.0\.0\.1:8090/SPONSORD_BIND: 0.0.0.0:8090/"
 variant "sponsord bind unset"      "sponsord: SPONSORD_BIND is 127.x"             "${sd} {/SPONSORD_BIND: /d}"
-variant "sponsord bind flag"       "sponsord: no command or entrypoint override"  "${sd} s/^(\s*)network_mode: host$/&\n\1command: [--bind, \"0.0.0.0:8090\"]/"
+variant "sponsord bind flag"       "sponsord: no command or entrypoint override"  "${sd} ${h}command: [--bind, \"0.0.0.0:8090\"]/"
 variant "sponsord by tag"          "sponsord: image is pinned"                    "${sd} s#^(\s*)image: .*#\1image: ghcr.io/decdn/sponsord:latest#"
-variant "sponsord capability"      "sponsord: sets only allowed keys (extra: cap_add)" "${sd} s/^(\s*)cap_drop: \[ALL\]$/&\n\1cap_add: [NET_RAW]/"
+variant "sponsord capability"      "sponsord: sets only allowed keys (extra: cap_add)" "${sd} ${h}cap_add: [NET_RAW]/"
 variant "sponsord short grace"     "sponsord: stop_grace_period"                  "${sd} s/^(\s*)stop_grace_period: 120s$/\1stop_grace_period: 10s/"
-variant "sponsord SIGKILL"         "sponsord: stop_signal is SIGTERM"             "${sd} s/^(\s*)stop_signal: SIGTERM$/\1stop_signal: SIGKILL/"
+variant "sponsord SIGKILL"         "sponsord: stop_signal is SIGTERM"             "${sd} ${h}stop_signal: SIGKILL/"
 variant "sponsord as root"         "sponsord: runs as a non-root uid:gid"         "${sd} s/^(\s*)user: .*/\1user: \"0:0\"/"
-variant "privilege escalation"     "sponsord: security_opt is exactly"            "${sd} s/- no-new-privileges:true$/- no-new-privileges:false/"
-variant "seccomp unconfined"       "sponsord: security_opt is exactly"            "${sd} s/^(\s*)- no-new-privileges:true$/&\n\1- seccomp:unconfined/"
-variant "writable keystore mount"  "sponsord: mounts are exactly"                 "${sd} {/target: \/run\/secrets\/treasury-keystore\.json$/{n;s/read_only: true/read_only: false/}}"
-variant "host root as data dir"    "sponsord: mounts are exactly"                 "${sd} s#^(\s*)volumes:\$#\1volumes:\n\1  - /:/data#"
-variant "docker socket"            "sponsord: mounts are exactly"                 "${sd} s#^(\s*)volumes:\$#\1volumes:\n\1  - /var/run/docker.sock:/var/run/docker.sock:ro#"
+variant "privilege escalation"     "sponsord: security_opt is exactly"            "${sd} ${h}security_opt: [\"no-new-privileges:false\"]/"
+variant "seccomp unconfined"       "sponsord: security_opt is exactly"            "${sd} ${h}security_opt: [\"no-new-privileges:true\", \"seccomp:unconfined\"]/"
+variant "writable keystore mount"  "sponsord: mounts are exactly"                 "${sd} ${h}volumes: [\"\/etc\/sponsord\/treasury-keystore.json:\/run\/secrets\/k\"]/"
+variant "host root as data dir"    "sponsord: mounts are exactly"                 "${sd} ${h}volumes: [\"\/:\/data\"]/"
+variant "docker socket"            "sponsord: mounts are exactly"                 "${sd} ${h}volumes: [\"\/var\/run\/docker.sock:\/var\/run\/docker.sock:ro\"]/"
+variant "sponsord extra secret"    "sponsord: mounts are exactly"                 "${sd} s/^(\s*)secrets:$/&\n\1  - sponsord-turnstile-secret/"
+variant "secret moved"             "sponsord: mounts are exactly"                 "s#^(\s*)file: /etc/sponsord/treasury-keystore\.json\$#\1file: /tmp/treasury-keystore.json#"
+variant "secret from environment"  "secrets.sponsord-api-token: is a single absolute host file" "s#^(\s*)file: /etc/sponsord/api-token\$#\1environment: SPONSORD_API_TOKEN#"
 variant "keystore path moved"      "sponsord: SPONSORD_TREASURY_KEYSTORE is"      "${sd} s#SPONSORD_TREASURY_KEYSTORE: .*#SPONSORD_TREASURY_KEYSTORE: /tmp/k.json#"
 variant "inline API token"         "sponsord: no inline SPONSORD_API_TOKEN"       "${sd} s/^(\s*)SPONSORD_BIND: (.*)$/&\n\1SPONSORD_API_TOKEN: x/"
 variant "RPC URL in compose.yaml"   "sponsord: sets only allowed environment keys inline (extra: SPONSORD_RPC_URL)" "${sd} s/^(\s*)SPONSORD_BIND: (.*)$/&\n\1SPONSORD_RPC_URL: https:\/\/rpc.invalid\/key/"
-variant "node RPC URL inline"      "decdn-node: sets only allowed environment keys inline (extra: DECDN_RPC_URL)" "${node} s/^(\s*)read_only: true$/\1environment:\n\1  DECDN_RPC_URL: https:\/\/rpc.invalid\/key\n&/"
 variant "onramp without daemon"    "sponsord: profiles are"                       "${sd} s/^(\s*)profiles: \[sponsord, onramp\]$/\1profiles: [sponsord]/"
 variant "sponsord digest default"  "sponsord: unset image digest"                 "${sd} s#^(\s*)image: .*#\1image: ghcr.io/decdn/sponsord@\\\${SPONSORD_IMAGE_DIGEST:-sha256:$(printf '0%.0s' {1..64})}#"
 variant "sponsord uid default"     "sponsord: unset uid/gid"                      "${sd} s/^(\s*)user: .*/\1user: \"\\\${SPONSORD_UID:-998}:\\\${SPONSORD_GID:-998}\"/"
@@ -1067,12 +1079,12 @@ variant "sponsord uid default"     "sponsord: unset uid/gid"                    
 variant "onramp on 0.0.0.0"        "sponsord-onramp: ONRAMP_BIND is 127.x"        "${onr} s/ONRAMP_BIND: 127\.0\.0\.1:8080/ONRAMP_BIND: 0.0.0.0:8080/"
 variant "onramp bind unset"        "sponsord-onramp: ONRAMP_BIND is 127.x"        "${onr} {/ONRAMP_BIND: /d}"
 variant "onramp remote daemon"     "sponsord-onramp: ONRAMP_DAEMON_URL"           "${onr} s#ONRAMP_DAEMON_URL: http://127\.0\.0\.1:8090#ONRAMP_DAEMON_URL: http://10.0.0.1:8090#"
-variant "onramp published port"    "sponsord-onramp: publishes no ports"          "${onr} s/^(\s*)network_mode: host$/&\n\1ports: [\"8080:8080\"]/"
-variant "onramp writable rootfs"   "sponsord-onramp: read_only rootfs"            "${onr} s/^(\s*)read_only: true$/\1read_only: false/"
+variant "onramp published port"    "sponsord-onramp: publishes no ports"          "${onr} ${h}ports: [\"8080:8080\"]/"
+variant "onramp writable rootfs"   "sponsord-onramp: read_only rootfs"            "${onr} ${h}read_only: false/"
 variant "onramp short grace"       "sponsord-onramp: stop_grace_period"           "${onr} s/^(\s*)stop_grace_period: 30s$/\1stop_grace_period: 5s/"
 variant "onramp by tag"            "sponsord-onramp: image is pinned"             "${onr} s#^(\s*)image: .*#\1image: ghcr.io/decdn/sponsord-onramp:latest#"
-variant "onramp holds keystore"    "sponsord-onramp: mounts are exactly"          "${onr} s#^(\s*)volumes:\$#\1volumes:\n\1  - /etc/sponsord/treasury-keystore.json:/run/secrets/k:ro#"
-variant "writable turnstile mount" "sponsord-onramp: mounts are exactly"          "${onr} {/target: \/run\/secrets\/turnstile-secret$/{n;s/read_only: true/read_only: false/}}"
+variant "onramp holds keystore"    "sponsord-onramp: mounts are exactly"          "${onr} s/^(\s*)secrets:$/&\n\1  - source: sponsord-treasury-keystore\n\1    target: \/run\/secrets\/k/"
+variant "onramp keystore volume"   "sponsord-onramp: mounts are exactly"          "${onr} s#^(\s*)volumes:\$#\1volumes:\n\1  - /etc/sponsord/treasury-keystore.json:/run/secrets/k:ro#"
 variant "writable gate-page mount"  "sponsord-onramp: mounts are exactly"          "${onr} {/target: \/etc\/sponsord\/onramp-gate$/{n;s/read_only: true/read_only: false/}}"
 variant "onramp entrypoint flag"   "sponsord-onramp: entrypoint is exactly"       "${onr} s#^(\s*)exec sponsord-onramp\$#\1exec sponsord-onramp --bind 0.0.0.0:8080#"
 variant "gate check dropped"       "sponsord-onramp: entrypoint is exactly"       "${onr} s#^(\s*)/etc/sponsord/onramp-gate/\*\) ;;\$#\1*) ;;#"
@@ -1082,10 +1094,15 @@ variant "onramp on sponsord hosts" "sponsord-onramp: profiles are [onramp]"     
 variant "resolvable domain default" "sponsord-onramp: unset domain"               "${onr} s#ONRAMP_PUBLIC_URL: .*#ONRAMP_PUBLIC_URL: https://\\\${SPONSORD_ONRAMP_DOMAIN:-unset-SPONSORD_ONRAMP_DOMAIN.invalid}#"
 # caddy
 variant "caddy extra capability"   "caddy: cap_add is exactly"                    "${cdy} s/cap_add: \[NET_BIND_SERVICE\]/cap_add: [NET_BIND_SERVICE, NET_ADMIN]/"
-variant "caddy keeps capabilities" "caddy: cap_drop is [ALL]"                     "${cdy} {/^    cap_drop: /d}"
+variant "caddy keeps capabilities" "caddy: cap_drop is [ALL]"                     "${cdy} ${h}cap_drop: []/"
 variant "caddy as root"            "caddy: runs as a non-root uid:gid"            "${cdy} {/^    user: /d}"
-variant "caddy published port"     "caddy: publishes no ports"                    "${cdy} s/^(\s*)network_mode: host$/&\n\1ports: [\"443:443\"]/"
+variant "caddy published port"     "caddy: publishes no ports"                    "${cdy} ${h}ports: [\"443:443\"]/"
 variant "caddy always on"          "caddy: profiles are [caddy]"                  "${cdy} {/^    profiles: \[caddy\]$/d}"
+
+# --- compose/decdn-compose: the wrapper's decisions (no root, no docker) -----------
+expect 0 "decdn-compose unit tests pass" \
+  env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$repo/compose/tests" -p 'test_*.py'
+expect 2 "decdn-compose refuses an unknown command" "$repo/compose/decdn-compose" deploy
 
 # --- lint-cloud-init negatives: each broken variant must be rejected -------------------
 # Skipped without cloud-init on PATH, except in CI (which installs it), so a broken

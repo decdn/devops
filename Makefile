@@ -62,12 +62,11 @@ security-helm:       ## KICS scan of the decdn-node chart's rendered manifests (
 
 # One query is excluded, deliberately: "Volume Has Sensitive Host Directory"
 # (1c1325ff-…) flags every host-path mount: /etc/decdn (ro) and /var/lib/decdn, the
-# /etc/sponsord credential files (ro, one file each) and /var/lib/caddy. They are
-# the Ansible roles' host layout, which is what lets the host CLI, backups and
-# restores (docs/lifecycle.md) work unchanged; lint-compose pins each container's
-# exact mounts instead. The MEDIUMs (host
-# network, no healthcheck, Caddy's NET_BIND_SERVICE) and the INFO (both sponsord
-# containers mount the API token) are the documented design; see compose/README.md.
+# /etc/sponsord gate-page directory (ro) and /var/lib/caddy. They are the Ansible
+# roles' host layout, which is what lets backups and restores (docs/lifecycle.md)
+# work unchanged; lint-compose pins each container's exact mounts (and secrets)
+# instead. The MEDIUMs (host network, no healthcheck on the sponsor's and Caddy's
+# images, Caddy's NET_BIND_SERVICE) are the documented design; see compose/README.md.
 security-compose:    ## KICS scan of compose/ (pinned engine image)
 	mkdir -p kics-results
 	docker run --rm --user $(shell id -u):$(shell id -g) -w /repo -v "$(CURDIR):/repo" $(KICS_IMAGE) \
@@ -143,7 +142,7 @@ lint-cloud-init:     ## schema-check the cloud-init/ user-data templates and the
 # release gate, the lint-compose and lint-cloud-init negative cases, the cloud-init
 # bootstrap's baseline guard and template contracts, and (with UPSTREAM=<decdn
 # checkout>) the upstream-mirror generators' exit codes. CI job `scripts`.
-test-scripts:        ## test the Makefile and molecule-driver guards, release gate, lint-compose and lint-cloud-init negatives (needs docker, jq, cloud-init, yq)
+test-scripts:        ## test the Makefile and molecule-driver guards, release gate, lint-compose and lint-cloud-init negatives, decdn-compose unit tests (needs docker, jq, python3>=3.11, cloud-init, yq)
 	tests/scripts-test.sh
 
 lint-helm:           ## helm lint + render tests + kubeconform + promtool + shared schema-key check (needs helm, yq, python3>=3.11, docker)

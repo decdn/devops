@@ -1,0 +1,1168 @@
+#!/usr/bin/env python3
+"""decdn-compose: set up and operate this directory's Compose project.
+
+A thin wrapper around `docker compose`: every service command it runs is plain
+`docker compose` against compose.yaml (plus compose.override.yaml when present,
+which a bare `-f compose.yaml` would silently drop). It adds what Compose cannot
+do on its own:
+
+  init      the host side of each profile: system accounts, directories, .env
+            with the real uids, the env-file templates, and every secret that is
+            generated on the host (node keys, keystore password, API token)
+  check     a preflight (also run by `up`): files, owners, modes, settings, the
+            node's config against the decdn CLI, and ports held by something else
+  up / stop / restart / down
+            refuse while sponsord holds an unconfirmed pool top-up, which a stop
+            or a recreate would forget (README.md, "Operate")
+  health    probe each running service
+  cli       the decdn CLI from the node image (no host install needed)
+  backup    an age-encrypted archive of the active profiles' keys and secrets
+
+Python 3.11+, standard library only. Run it as root (sudo): Compose reads the
+root-only env files whenever it creates a container. It never prints a secret
+and never overwrites one.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import os
+import pwd
+import re
+import secrets
+import shutil
+import socket
+import ssl
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+COMPOSE_FILE = HERE / "compose.yaml"
+OVERRIDE_FILE = HERE / "compose.override.yaml"
+DOTENV = HERE / ".env"
+DOTENV_EXAMPLE = HERE / ".env.example"
+# compose.yaml's `name:`.
+PROJECT = "decdn"
+
+# Profile -> the services it starts (compose.yaml's `profiles:`).
+PROFILES: dict[str, tuple[str, ...]] = {
+    "node": ("decdn-node",),
+    "origin": ("decdn-node",),
+    "sponsord": ("sponsord",),
+    "onramp": ("sponsord", "sponsord-onramp"),
+    "caddy": ("caddy",),
+}
+
+# Host layout: the Ansible roles' paths (README.md, "How it is laid out").
+ETC_DECDN = Path("/etc/decdn")
+VAR_DECDN = Path("/var/lib/decdn")
+ETC_SPONSORD = Path("/etc/sponsord")
+VAR_CADDY = Path("/var/lib/caddy")
+NODE_TOML = ETC_DECDN / "node.toml"
+NODE_PASSWORD = ETC_DECDN / "keystore.password"
+NODE_SECRET = VAR_DECDN / "node.secret"
+NODE_KEYSTORE = VAR_DECDN / "keystore.json"
+SD_TOKEN = ETC_SPONSORD / "api-token"
+SD_KEYSTORE = ETC_SPONSORD / "treasury-keystore.json"
+SD_PASSWORD = ETC_SPONSORD / "treasury-password"
+SD_TURNSTILE = ETC_SPONSORD / "turnstile-secret"
+ORIGIN_TARGET = "/srv/decdn-origin"
+
+DEFAULT_ENV_FILES = {
+    "DECDN_ENV_FILE": "/etc/decdn/decdn.env",
+    "SPONSORD_ENV_FILE": "/etc/sponsord/sponsord.env",
+    "SPONSORD_SECRET_ENV_FILE": "/etc/sponsord/secret.env",
+    "SPONSORD_ONRAMP_ENV_FILE": "/etc/sponsord/sponsord-onramp.env",
+}
+
+# Loopback listeners compose.yaml pins (tests/invariants.jq).
+SPONSORD_METRICS = "http://127.0.0.1:8090/metrics"
+HOLD_RE = re.compile(r"(?m)^sponsord_pool_topup_unconfirmed_since_unix(?:\{[^}]*\})?\s+([0-9.eE+]+)\s*$")
+KEEPER_RE = re.compile(r"(?m)^sponsord_pool_keeper_failures_total\s")
+
+# The ports each service binds on the host network, for the preflight.
+PORTS: dict[str, tuple[tuple[str, int], ...]] = {
+    "decdn-node": (("udp", 4433), ("tcp", 9090), ("tcp", 9191)),
+    "sponsord": (("tcp", 8090),),
+    "sponsord-onramp": (("tcp", 8080),),
+    "caddy": (("tcp", 80), ("tcp", 443)),
+}
+
+
+DOMAIN_RE = r"(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}"
+
+
+class Refused(Exception):
+    """A check failed: print the message and exit non-zero."""
+
+
+def say(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def warn(msg: str) -> None:
+    print(f"warning: {msg}", file=sys.stderr, flush=True)
+
+
+# --- secrets never reach the terminal --------------------------------------------
+
+URL_RE = re.compile(r"\b([a-z][a-z0-9+.-]*://)(?:[^/\s@]*@)?([^/\s?#]+)([^\s\"']*)", re.I)
+
+
+def redact(text: str) -> str:
+    """Keep a URL's scheme and host; drop its userinfo, path, query and fragment,
+    where an RPC provider's API key lives (the grafana_alloy role's redact_urls)."""
+
+    def sub(m: re.Match[str]) -> str:
+        return f"{m[1]}{m[2]}/<redacted>" if m[3] not in ("", "/") or "@" in m[0] else m[0]
+
+    return URL_RE.sub(sub, text)
+
+
+# --- .env ------------------------------------------------------------------------
+
+LINE_RE = re.compile(r"^\s*(#\s*)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+
+
+def parse_env(path: Path) -> dict[str, str]:
+    """Compose's env-file format, the subset the templates use: KEY=value, with
+    optional single or double quotes, comments on their own lines."""
+    out: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        m = LINE_RE.match(line)
+        if not m or m[1]:
+            continue
+        value = m[3].strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        out[m[2]] = value
+    return out
+
+
+def set_env(path: Path, updates: dict[str, str]) -> None:
+    """Set KEY=value in place: the active line if there is one, else the first
+    commented one, else appended. Comments and order are kept."""
+    lines = path.read_text().splitlines()
+    for key, value in updates.items():
+        matches = [(i, m) for i, line in enumerate(lines) if (m := LINE_RE.match(line)) and m[2] == key]
+        active = [i for i, m in matches if not m[1]]
+        commented = [i for i, m in matches if m[1]]
+        if active:
+            lines[active[0]] = f"{key}={value}"
+        elif commented:
+            lines[commented[0]] = f"{key}={value}"
+        else:
+            lines.append(f"{key}={value}")
+    write_atomic(path, "\n".join(lines) + "\n", like=path)
+
+
+def write_atomic(path: Path, text: str, like: Path | None = None, mode: int = 0o644) -> None:
+    st = like.stat() if like and like.exists() else None
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.chmod(tmp, stat.S_IMODE(st.st_mode) if st else mode)
+        if st:
+            os.chown(tmp, st.st_uid, st.st_gid)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+@dataclass
+class Project:
+    env: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def load(cls) -> Project:
+        if not DOTENV.exists():
+            raise Refused(f"{DOTENV} does not exist: run `decdn-compose init <profile>…` first")
+        return cls(parse_env(DOTENV))
+
+    @property
+    def profiles(self) -> list[str]:
+        return [p.strip() for p in self.env.get("COMPOSE_PROFILES", "").split(",") if p.strip()]
+
+    @property
+    def services(self) -> set[str]:
+        return {s for p in self.profiles for s in PROFILES.get(p, ())}
+
+    def env_file(self, key: str) -> Path:
+        return Path(self.env.get(key) or DEFAULT_ENV_FILES[key])
+
+    def node_image(self) -> str:
+        repo = self.env.get("DECDN_IMAGE_REPO") or "ghcr.io/decdn/decdn-node"
+        digest = self.env.get("DECDN_IMAGE_DIGEST", "")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            raise Refused("DECDN_IMAGE_DIGEST in .env is not a sha256 digest (README.md, the node's Operate)")
+        return f"{repo}@{digest}"
+
+
+# --- processes -------------------------------------------------------------------
+
+
+def run(
+    argv: list[str],
+    *,
+    check: bool = True,
+    capture: bool = False,
+    quiet: bool = False,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    cp = subprocess.run(
+        argv,
+        text=True,
+        env=env,
+        stdout=subprocess.PIPE if capture or quiet else None,
+        stderr=subprocess.STDOUT if quiet else None,
+    )
+    if check and cp.returncode != 0:
+        if quiet and cp.stdout:
+            sys.stderr.write(redact(cp.stdout))
+        raise Refused(f"{argv[0]} {' '.join(argv[1:3])} … exited {cp.returncode}")
+    return cp
+
+
+def compose_argv(*args: str) -> list[str]:
+    argv = ["docker", "compose", "--project-directory", str(HERE), "-f", str(COMPOSE_FILE)]
+    if OVERRIDE_FILE.exists():
+        argv += ["-f", str(OVERRIDE_FILE)]
+    return argv + list(args)
+
+
+def compose(*args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess[str]:
+    return run(compose_argv(*args), check=check, capture=capture)
+
+
+def container_id(service: str) -> str:
+    """The running container of a service, found by Compose's labels rather than
+    `docker compose ps`, so it does not depend on the active profiles or the env
+    files: a sponsord still running after its profile was dropped is found too."""
+    cp = run(
+        [
+            "docker",
+            "ps",
+            "-q",
+            "--filter",
+            f"label=com.docker.compose.project={PROJECT}",
+            "--filter",
+            f"label=com.docker.compose.service={service}",
+        ],
+        check=False,
+        capture=True,
+    )
+    ids = cp.stdout.split() if cp.returncode == 0 else []
+    return ids[0] if ids else ""
+
+
+def decdn_cli(
+    project: Project,
+    args: list[str],
+    *,
+    etc_rw: bool = False,
+    network: str = "none",
+    env_file: Path | None = None,
+    tty: bool = False,
+    extra_mounts: list[str] | None = None,
+    cli_env: dict[str, str] | None = None,
+    user: str | None = None,
+    quiet: bool = False,
+    capture: bool = False,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """The decdn CLI from the pinned node image, hardened like the daemon."""
+    uid, gid = project.env.get("DECDN_UID", ""), project.env.get("DECDN_GID", "")
+    argv = [
+        "docker",
+        "run",
+        "--rm",
+        "--read-only",
+        "--tmpfs",
+        "/tmp",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges:true",
+        "--network",
+        network,
+        "--user",
+        user or f"{uid}:{gid}",
+        "-e",
+        "HOME=/tmp",
+        "-v",
+        f"{ETC_DECDN}:{ETC_DECDN}{'' if etc_rw else ':ro'}",
+        "-v",
+        f"{VAR_DECDN}:{VAR_DECDN}",
+    ]
+    for m in extra_mounts or []:
+        argv += ["-v", m]
+    if env_file:
+        argv += ["--env-file", str(env_file)]
+    for k, v in (cli_env or {}).items():
+        argv += ["-e", f"{k}={v}"]
+    if tty and sys.stdin.isatty():
+        argv += ["-it"]
+    argv += ["--entrypoint", "decdn", ensure_image(project.node_image()), *args]
+    return run(argv, check=check, quiet=quiet, capture=capture)
+
+
+def ensure_image(image: str) -> str:
+    if run(["docker", "image", "inspect", image], check=False, quiet=True).returncode != 0:
+        say(f"pulling {image}")
+        run(["docker", "pull", "-q", image], quiet=True)
+    return image
+
+
+# --- host accounts and files -----------------------------------------------------
+
+
+def require_root() -> None:
+    if os.geteuid() != 0:
+        raise Refused(
+            "run as root (sudo): Compose reads the root-only env files, and init creates accounts and secrets"
+        )
+
+
+def ensure_account(name: str, home: Path | None = None) -> tuple[int, int]:
+    try:
+        pw = pwd.getpwnam(name)
+    except KeyError:
+        argv = ["useradd", "--system", "--user-group", "--shell", "/usr/sbin/nologin"]
+        argv += ["--home-dir", str(home), "--no-create-home"] if home else ["--no-create-home"]
+        run(argv + [name])
+        say(f"created system account {name}")
+        pw = pwd.getpwnam(name)
+    return pw.pw_uid, pw.pw_gid
+
+
+def ensure_dir(path: Path, mode: int, uid: int, gid: int) -> None:
+    if not path.exists():
+        path.mkdir(parents=True)
+        os.chown(path, uid, gid)
+        os.chmod(path, mode)
+        say(f"created {path} ({mode:04o})")
+
+
+def write_new(path: Path, data: bytes, mode: int, uid: int, gid: int) -> bool:
+    """Create a file that must not exist yet; never replaces one."""
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "wb") as f:
+        os.fchown(f.fileno(), uid, gid)
+        os.fchmod(f.fileno(), mode)
+        f.write(data)
+    return True
+
+
+def install_template(src: str, dst: Path, mode: int) -> bool:
+    if dst.exists():
+        return False
+    write_new(dst, (HERE / src).read_bytes(), mode, 0, 0)
+    say(f"installed {dst} ({mode:04o}) from compose/{src}")
+    return True
+
+
+# --- init ------------------------------------------------------------------------
+
+
+def init(args: argparse.Namespace) -> None:
+    require_root()
+    wanted: list[str] = args.profiles
+    for p in wanted:
+        if p not in PROFILES:
+            raise Refused(f"unknown profile {p!r}: one of {', '.join(PROFILES)}")
+    if {"node", "origin"} <= set(wanted):
+        raise Refused("node and origin are the same decdn-node: pick one")
+    if not NODE_TOML.exists():
+        if "origin" in wanted and not args.origin:
+            raise Refused("init origin needs --origin <https://… | s3://bucket | file:///path>")
+        if {"node", "origin"} & set(wanted) and not args.region:
+            raise Refused("init node/origin needs --region <ISO 3166-1 alpha-2, e.g. DE>")
+    if args.region and not re.fullmatch(r"[A-Z]{2}", args.region):
+        raise Refused(f"--region {args.region!r} is not an ISO 3166-1 alpha-2 code (e.g. DE)")
+    if args.domain and not re.fullmatch(DOMAIN_RE, args.domain):
+        raise Refused(f"--domain {args.domain!r} is not a lower-case DNS name")
+    if shutil.which("docker") is None:
+        raise Refused("docker is not installed")
+
+    fresh = not DOTENV.exists()
+    if fresh:
+        write_new(DOTENV, DOTENV_EXAMPLE.read_bytes(), 0o644, 0, 0)
+        say(f"created {DOTENV} from .env.example")
+    project = Project(parse_env(DOTENV))
+    profiles = [] if fresh else project.profiles
+    if "node" in wanted and "origin" in profiles or "origin" in wanted and "node" in profiles:
+        raise Refused("this host already runs the other one of node/origin (COMPOSE_PROFILES in .env)")
+    updates: dict[str, str] = {
+        "COMPOSE_PROFILES": ",".join(dict.fromkeys(profiles + wanted)),
+    }
+
+    if {"node", "origin"} & set(wanted):
+        uid, gid = ensure_account("decdn", home=VAR_DECDN)
+        updates |= {"DECDN_UID": str(uid), "DECDN_GID": str(gid)}
+    if {"sponsord", "onramp"} & set(wanted):
+        uid, gid = ensure_account("sponsord")
+        updates |= {"SPONSORD_UID": str(uid), "SPONSORD_GID": str(gid)}
+    if "caddy" in wanted:
+        uid, gid = ensure_account("caddy")
+        updates |= {"CADDY_UID": str(uid), "CADDY_GID": str(gid)}
+    if args.domain:
+        updates["SPONSORD_ONRAMP_DOMAIN"] = args.domain
+    origin_url = args.origin
+    if origin_url and origin_url.startswith("file://"):
+        host_dir = Path(origin_url.removeprefix("file://"))
+        if not host_dir.is_absolute() or not host_dir.is_dir():
+            raise Refused(f"--origin {origin_url}: {host_dir} is not an existing absolute directory")
+        updates["DECDN_ORIGIN_DIR"] = str(host_dir)
+        origin_url = f"file://{ORIGIN_TARGET}"
+    set_env(DOTENV, updates)
+    project = Project(parse_env(DOTENV))
+
+    if {"node", "origin"} & set(wanted):
+        init_node(project, args, origin_url)
+    if {"sponsord", "onramp"} & set(wanted):
+        init_sponsord(project, args, wanted)
+    if "caddy" in wanted:
+        uid, gid = int(project.env["CADDY_UID"]), int(project.env["CADDY_GID"])
+        ensure_dir(VAR_CADDY, 0o700, uid, gid)
+
+    todo = problems(project, files_only=True)
+    say("")
+    if todo:
+        say("Still to do before `decdn-compose up`:")
+        for t in todo:
+            say(f"  - {t}")
+    else:
+        say("Nothing left to provide: run `sudo compose/decdn-compose up`.")
+    say(next_steps(wanted))
+
+
+def init_node(project: Project, args: argparse.Namespace, origin_url: str | None) -> None:
+    uid, gid = int(project.env["DECDN_UID"]), int(project.env["DECDN_GID"])
+    ensure_dir(VAR_DECDN, 0o700, uid, gid)
+    ensure_dir(ETC_DECDN, 0o750, uid, gid)
+    # The password file first: key-gen reads it, never creates it.
+    if write_new(NODE_PASSWORD, base64.b64encode(secrets.token_bytes(32)) + b"\n", 0o600, uid, gid):
+        say(f"generated {NODE_PASSWORD} (0600)")
+    have = [p.exists() for p in (NODE_SECRET, NODE_KEYSTORE)]
+    if all(have):
+        say(f"kept the existing node identity in {VAR_DECDN}")
+    elif any(have):
+        raise Refused(
+            f"{VAR_DECDN} holds one of node.secret / keystore.json but not the other: "
+            "restore the missing one from your backup"
+        )
+    else:
+        say("generating the node identity (decdn key-gen, from the node image)")
+        decdn_cli(project, ["key-gen", "--output-dir", str(VAR_DECDN), "--keystore-password-file", str(NODE_PASSWORD)])
+        say(f"back up {NODE_SECRET}, {NODE_KEYSTORE} and {NODE_PASSWORD} now: `decdn-compose backup`")
+    if NODE_TOML.exists():
+        say(f"kept the existing {NODE_TOML}")
+    else:
+        cmd = ["config", "init", "--chain", args.chain, "--output", str(NODE_TOML)]
+        mounts = []
+        if origin_url:
+            cmd += ["--origin", origin_url]
+            if project.env.get("DECDN_ORIGIN_DIR"):
+                mounts.append(f"{project.env['DECDN_ORIGIN_DIR']}:{ORIGIN_TARGET}:ro")
+        decdn_cli(project, cmd, etc_rw=True, extra_mounts=mounts)
+        edit_node_toml(args.region, cache_node=origin_url is None)
+        say(f"wrote {NODE_TOML} ({args.chain}, region {args.region})")
+    install_template("decdn.env.example", project.env_file("DECDN_ENV_FILE"), 0o600)
+
+
+def edit_node_toml(region: str, cache_node: bool) -> None:
+    """What README.md's set-up used to do with sed: the data dir, the region, and
+    for a cache node the pull-through that fills its misses from other nodes (the
+    daemon's default is off; the Ansible role turns it on without an origin)."""
+    text = NODE_TOML.read_text()
+    # data_dir and region live in [identity], where `config init` leaves them
+    # commented; edit only that table (an S3 origin's table has a `# region` too).
+    ident = re.search(r"(?ms)^\[identity\]\n(.*?)(?=^\[|\Z)", text)
+    if not ident:
+        raise Refused(f"{NODE_TOML} has no [identity] table: not a `decdn config init` file")
+    body = ident[1]
+    for key, value in (("data_dir", str(VAR_DECDN)), ("region", region)):
+        if not re.search(rf"(?m)^{key}\s*=", body):
+            body = re.sub(rf"(?m)^# {key} = .*$", f'{key} = "{value}"', body, count=1)
+    text = text[: ident.start(1)] + body + text[ident.end(1) :]
+    if cache_node and not re.search(r"(?m)^node_to_node_pull_through_enabled\s*=", text):
+        text = re.sub(r"(?m)^\[cache\]$", "[cache]\nnode_to_node_pull_through_enabled = true", text, count=1)
+    write_atomic(NODE_TOML, text, like=NODE_TOML)
+
+
+def init_sponsord(project: Project, args: argparse.Namespace, wanted: list[str]) -> None:
+    uid, gid = int(project.env["SPONSORD_UID"]), int(project.env["SPONSORD_GID"])
+    ensure_dir(ETC_SPONSORD, 0o755, 0, 0)
+    if write_new(SD_TOKEN, secrets.token_hex(32).encode() + b"\n", 0o600, uid, gid):
+        say(f"generated {SD_TOKEN} (0600, never replaced: the onramp presents the same token)")
+    install_template("sponsord-secret.env.example", project.env_file("SPONSORD_SECRET_ENV_FILE"), 0o600)
+    sd_env = project.env_file("SPONSORD_ENV_FILE")
+    install_template("sponsord.env.example", sd_env, 0o644)
+    fill_from_mirror(
+        sd_env,
+        "sponsord",
+        args.chain,
+        {"SPONSORD_CHAIN_ID": "chain_id", "SPONSORD_PAYMENT_POOL_ADDR": "payment_pool_address"},
+    )
+    if args.generate_treasury:
+        generate_treasury(project, uid, gid)
+    if "onramp" in wanted:
+        onramp_env = project.env_file("SPONSORD_ONRAMP_ENV_FILE")
+        if install_template("sponsord-onramp.env.example", onramp_env, 0o644) and "caddy" in wanted:
+            # Caddy replaces any client-sent X-Forwarded-For (compose/Caddyfile).
+            set_env(onramp_env, {"ONRAMP_CLIENT_IP_HEADER": "X-Forwarded-For"})
+            say(f"set ONRAMP_CLIENT_IP_HEADER=X-Forwarded-For in {onramp_env} (behind Caddy)")
+        fill_from_mirror(
+            onramp_env,
+            "sponsord_onramp",
+            args.chain,
+            {"ONRAMP_CAPACITY_BOND_ADDR": "capacity_bond_address", "ONRAMP_SLASH_JUDGE_ADDR": "slash_judge_address"},
+        )
+
+
+def network_profile(role: str, chain: str) -> dict[str, str]:
+    """One chain's entry in a role's generated networks mirror
+    (scripts/sync-network-profiles.py): the only place this repo carries contract
+    addresses. Its shape is fixed (`  <chain>:` then `    key: value`)."""
+    path = HERE.parent / "ansible" / "roles" / role / "vars" / "main" / "networks.yml"
+    if not path.exists():
+        return {}
+    out: dict[str, str] = {}
+    current = None
+    for line in path.read_text().splitlines():
+        if m := re.fullmatch(r"  ([a-z0-9-]+):", line):
+            current = m[1]
+        elif current == chain and (m := re.fullmatch(r"    ([a-z_]+): \"?([^\"]*)\"?", line)):
+            out[m[1]] = m[2]
+    return out
+
+
+def fill_from_mirror(env_path: Path, role: str, chain: str, keys: dict[str, str]) -> None:
+    """Fill the chain settings an env file leaves empty from the mirror; a value
+    the operator set is never replaced."""
+    profile = network_profile(role, chain)
+    if not profile:
+        warn(f"no {chain} entry in {role}'s networks mirror: fill {', '.join(keys)} in {env_path} yourself")
+        return
+    current = parse_env(env_path)
+    updates = {k: profile[v] for k, v in keys.items() if v in profile and not current.get(k)}
+    if updates:
+        set_env(env_path, updates)
+        say(f"set {', '.join(updates)} in {env_path} ({chain}, from {role}'s networks mirror)")
+
+
+def generate_treasury(project: Project, uid: int, gid: int) -> None:
+    """A fresh treasury wallet, like the role's sponsord_generate_treasury_wallet:
+    a password and an eth keystore made on this host, owned by `sponsord`."""
+    if SD_KEYSTORE.exists() or SD_PASSWORD.exists():
+        say(f"kept the existing treasury in {ETC_SPONSORD}")
+        return
+    # key-gen writes into a private scratch directory; only the keystore and its
+    # password are kept (its node.secret is not a treasury key).
+    with tempfile.TemporaryDirectory(prefix="decdn-treasury.") as tmp:
+        work = Path(tmp)
+        os.chown(work, uid, gid)
+        pw = work / "password"
+        write_new(pw, base64.b64encode(secrets.token_bytes(32)) + b"\n", 0o600, uid, gid)
+        run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--read-only",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges:true",
+                "--network",
+                "none",
+                "--user",
+                f"{uid}:{gid}",
+                "-e",
+                "HOME=/tmp",
+                "--tmpfs",
+                "/tmp",
+                "-v",
+                f"{work}:/w",
+                "--entrypoint",
+                "decdn",
+                ensure_image(project.node_image()),
+                "key-gen",
+                "--output-dir",
+                "/w",
+                "--keystore-password-file",
+                "/w/password",
+            ]
+        )
+        write_new(SD_KEYSTORE, (work / "keystore.json").read_bytes(), 0o600, uid, gid)
+        write_new(SD_PASSWORD, pw.read_bytes(), 0o600, uid, gid)
+    say(
+        f"generated the treasury wallet {SD_KEYSTORE} (0600). Fund it with USDC and gas, then "
+        "open its pool from it (`decdn pool open`) and set SPONSORD_POOL_ID; back it up now"
+    )
+
+
+def next_steps(wanted: list[str]) -> str:
+    steps = ["", "Then:"]
+    if {"node", "origin"} & set(wanted):
+        steps.append("  - open udp/4433 in the host firewall and your provider's security group")
+    if "caddy" in wanted:
+        steps.append("  - point the onramp domain at this host; open tcp/80 and tcp/443")
+    steps.append("  - sudo compose/decdn-compose up && sudo compose/decdn-compose health")
+    if {"node", "origin"} & set(wanted):
+        steps.append(
+            "  - stake and register: sudo compose/decdn-compose cli setup --rpc-url <your RPC> "
+            "(README.md, step 'Stake and register')"
+        )
+    return "\n".join(steps)
+
+
+# --- check -----------------------------------------------------------------------
+
+
+def file_problem(
+    path: Path, uid: int | None, *, private: bool = True, nonempty: bool = True, what: str = ""
+) -> str | None:
+    hint = f" ({what})" if what else ""
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return f"{path} is missing{hint}"
+    if not stat.S_ISREG(st.st_mode):
+        return f"{path} is not a regular file"
+    if uid is not None and st.st_uid != uid:
+        return f"{path} is owned by uid {st.st_uid}, not {uid}"
+    if private and st.st_mode & 0o077:
+        return f"{path} is mode {stat.S_IMODE(st.st_mode):04o}: make it 0600"
+    if nonempty and st.st_size == 0:
+        return f"{path} is empty{hint}"
+    return None
+
+
+def env_problems(path: Path, required: list[str], what: str) -> list[str]:
+    if not path.exists():
+        return []  # reported by file_problem
+    values = parse_env(path)
+    return [f"{path}: set {k} ({what})" for k in required if not values.get(k)]
+
+
+def problems(project: Project, files_only: bool = False) -> list[str]:
+    out: list[str] = []
+    env = project.env
+    unknown = [p for p in project.profiles if p not in PROFILES]
+    if unknown:
+        out.append(f"COMPOSE_PROFILES names unknown profiles: {', '.join(unknown)}")
+    if not project.profiles:
+        out.append("COMPOSE_PROFILES in .env selects no service")
+    svcs = project.services
+
+    seen: dict[str, int | None] = {}
+
+    def uid_of(prefix: str, account: str) -> int | None:
+        if prefix not in seen:
+            seen[prefix] = _uid_of(prefix, account)
+        return seen[prefix]
+
+    def _uid_of(prefix: str, account: str) -> int | None:
+        raw = env.get(f"{prefix}_UID", "")
+        if not raw.isdigit() or not env.get(f"{prefix}_GID", "").isdigit():
+            out.append(f".env: {prefix}_UID / {prefix}_GID are not set (`init` fills them)")
+            return None
+        try:
+            real = pwd.getpwnam(account).pw_uid
+        except KeyError:
+            out.append(f"the {account} account does not exist (`decdn-compose init`)")
+            return int(raw)
+        if real != int(raw):
+            out.append(f".env: {prefix}_UID={raw}, but `id -u {account}` is {real}")
+        return int(raw)
+
+    if "decdn-node" in svcs:
+        uid = uid_of("DECDN", "decdn")
+        for p in (NODE_PASSWORD, NODE_SECRET, NODE_KEYSTORE):
+            out += filter(None, [file_problem(p, uid)])
+        out += filter(None, [file_problem(NODE_TOML, None, private=False)])
+        dec_env = project.env_file("DECDN_ENV_FILE")
+        out += filter(None, [file_problem(dec_env, 0, nonempty=False)])
+        if dec_env.exists() and not parse_env(dec_env).get("DECDN_RPC_URL"):
+            out.append(f"{dec_env}: set DECDN_RPC_URL, your RPC endpoint (sudoedit {dec_env})")
+        if (
+            "origin" in project.profiles
+            and NODE_TOML.exists()
+            and not re.search(r"(?m)^\[cache\.origin\]", NODE_TOML.read_text())
+        ):
+            out.append(f"{NODE_TOML} has no [cache.origin] table, but the origin profile is on")
+    if "sponsord" in svcs:
+        uid = uid_of("SPONSORD", "sponsord")
+        out += filter(None, [file_problem(SD_TOKEN, uid)])
+        out += filter(
+            None,
+            [
+                file_problem(
+                    SD_KEYSTORE, uid, what="the treasury wallet's eth keystore; or `init sponsord --generate-treasury`"
+                )
+            ],
+        )
+        out += filter(None, [file_problem(SD_PASSWORD, uid, what="its password")])
+        secret_env = project.env_file("SPONSORD_SECRET_ENV_FILE")
+        out += filter(None, [file_problem(secret_env, 0, nonempty=False)])
+        out += env_problems(secret_env, ["SPONSORD_RPC_URL"], "the RPC endpoint")
+        sd_env = project.env_file("SPONSORD_ENV_FILE")
+        out += filter(None, [file_problem(sd_env, 0, private=False, nonempty=False)])
+        out += env_problems(
+            sd_env,
+            ["SPONSORD_CHAIN_ID", "SPONSORD_PAYMENT_POOL_ADDR", "SPONSORD_POOL_ID"],
+            "README.md, sponsord step 4",
+        )
+        if sd_env.exists() and "SPONSORD_RPC_URL" in parse_env(sd_env):
+            out.append(f"{sd_env} is world-readable: move SPONSORD_RPC_URL to {secret_env}")
+    if "sponsord-onramp" in svcs:
+        out += filter(
+            None, [file_problem(SD_TURNSTILE, uid_of("SPONSORD", "sponsord"), what="the Turnstile widget's secret key")]
+        )
+        on_env = project.env_file("SPONSORD_ONRAMP_ENV_FILE")
+        out += filter(None, [file_problem(on_env, 0, private=False, nonempty=False)])
+        out += env_problems(
+            on_env,
+            ["ONRAMP_RPC_URL", "ONRAMP_CAPACITY_BOND_ADDR", "ONRAMP_TURNSTILE_SITEKEY"],
+            "README.md, the onramp step",
+        )
+        rpc = parse_env(on_env).get("ONRAMP_RPC_URL", "") if on_env.exists() else ""
+        # Served to every user: no credentials, no query (the role's preflight).
+        if rpc and not re.fullmatch(r"https?://[^/?#@\s'\"`$\\{}]+(/[^?#\s'\"`$\\{}]*)?", rpc):
+            out.append(
+                f"{on_env}: ONRAMP_RPC_URL must be an http(s) URL with no userinfo, query or "
+                "fragment: every user is served it"
+            )
+    if svcs & {"sponsord-onramp", "caddy"}:
+        dom = env.get("SPONSORD_ONRAMP_DOMAIN", "")
+        if not dom or dom == "onramp.example.org":
+            out.append(".env: set SPONSORD_ONRAMP_DOMAIN, the onramp's public host name")
+    if "caddy" in svcs:
+        uid = uid_of("CADDY", "caddy")
+        if not VAR_CADDY.is_dir():
+            out.append(f"{VAR_CADDY} is missing (`init caddy`)")
+        elif uid is not None and VAR_CADDY.stat().st_uid != uid:
+            out.append(f"{VAR_CADDY} is not owned by the caddy account")
+    if not files_only:
+        for svc in sorted(svcs):
+            key = {
+                "decdn-node": "DECDN_IMAGE_DIGEST",
+                "sponsord": "SPONSORD_IMAGE_DIGEST",
+                "sponsord-onramp": "SPONSORD_ONRAMP_IMAGE_DIGEST",
+            }.get(svc)
+            if key and not re.fullmatch(r"sha256:[0-9a-f]{64}", env.get(key, "")):
+                out.append(f".env: {key} is not a sha256 digest")
+    return out
+
+
+def listeners() -> dict[tuple[str, int], str] | None:
+    """(proto, port) -> the process holding it, from `ss`; None without ss."""
+    if shutil.which("ss") is None:
+        return None
+    cp = run(["ss", "-Hlntup"], check=False, capture=True)
+    held: dict[tuple[str, int], str] = {}
+    for line in cp.stdout.splitlines():
+        cols = line.split()
+        if len(cols) < 5:
+            continue
+        m = re.search(r":(\d+)$", cols[4])
+        if m:
+            proc = re.search(r'users:\(\("([^"]+)"', line)
+            held.setdefault((cols[0], int(m[1])), proc[1] if proc else "?")
+    return held
+
+
+def check_ports(project: Project) -> list[str]:
+    held = listeners()
+    if held is None:
+        warn("`ss` is not installed: skipping the port check")
+        return []
+    out = []
+    for svc in sorted(project.services):
+        if container_id(svc):
+            continue  # it holds its own ports
+        for proto, port in PORTS[svc]:
+            if (proto, port) in held:
+                out.append(f"{proto}/{port}, which {svc} binds, is held by {held[(proto, port)]}")
+    return out
+
+
+def validate_node(project: Project) -> list[str]:
+    """`decdn config validate` against the pinned image, with the daemon's own
+    environment file. Its output can name the RPC endpoint, so only a redacted
+    copy of a failure is shown."""
+    dec_env = project.env_file("DECDN_ENV_FILE")
+    cp = decdn_cli(
+        project,
+        ["config", "validate", "--config", str(NODE_TOML), "--keystore-password-file", str(NODE_PASSWORD)],
+        env_file=dec_env,
+        extra_mounts=origin_mounts(project),
+        quiet=True,
+        check=False,
+    )
+    if cp.returncode == 0:
+        return []
+    tail = "\n    ".join(redact(cp.stdout or "").strip().splitlines()[-15:])
+    return [f"decdn config validate refused {NODE_TOML}:\n    {tail}"]
+
+
+def origin_mounts(project: Project) -> list[str]:
+    d = project.env.get("DECDN_ORIGIN_DIR")
+    return [f"{d}:{ORIGIN_TARGET}:ro"] if d else []
+
+
+def check(args: argparse.Namespace | None = None, project: Project | None = None) -> Project:
+    require_root()
+    project = project or Project.load()
+    found = problems(project)
+    if not found:
+        rendered = json.loads(compose("config", "--format", "json", capture=True).stdout)
+        journald = sorted(
+            n for n, s in rendered.get("services", {}).items() if (s.get("logging") or {}).get("driver") == "journald"
+        )
+        if journald and not Path("/run/systemd/journal/socket").exists():
+            found.append(
+                f"no systemd journal on this host, and {', '.join(journald)} log to journald "
+                "(README.md, Logs, shows a compose.override.yaml for another driver)"
+            )
+        found += check_ports(project)
+        if "decdn-node" in project.services and not found:
+            found += validate_node(project)
+    if found:
+        raise Refused("preflight failed:\n" + "\n".join(f"  - {p}" for p in found))
+    say(f"preflight ok: {', '.join(project.profiles)}")
+    return project
+
+
+# --- sponsord's top-up hold ------------------------------------------------------
+
+
+def fetch(url: str, timeout: float = 5.0) -> tuple[int, str]:
+    """(status, body); status 0 = nothing listening, -1 = no answer."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:  # noqa: S310 (loopback)
+            return r.status, r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, ""
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, ConnectionRefusedError):
+            return 0, ""
+        return -1, ""
+    except (TimeoutError, OSError):
+        return -1, ""
+
+
+def hold_state(status: int, body: str) -> str | None:
+    """None when sponsord holds nothing, else why it must not be stopped.
+
+    A daemon that is not listening yet has never topped up (it binds before it
+    starts the keeper); one that answers without the keeper's series, or does not
+    answer, is in an unknown state; a binary without the hold gauge holds nothing
+    (ansible/roles/sponsord/tasks/topup-hold.yml)."""
+    if status == 0:
+        return None
+    if status != 200 or not KEEPER_RE.search(body):
+        return (
+            f"sponsord's /metrics ({SPONSORD_METRICS}) did not answer with its keeper series "
+            f"(status {status}): its top-up hold state is unknown"
+        )
+    m = HOLD_RE.search(body)
+    since = int(float(m[1])) if m else 0
+    if since > 0:
+        return (
+            f"sponsord holds an unconfirmed pool top-up since "
+            f"{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(since))}: a stop or restart "
+            "forgets it and the pool can be refilled twice. Wait until "
+            "sponsord_pool_topup_unconfirmed_since_unix is 0 (README.md, Operate)"
+        )
+    return None
+
+
+def guard_sponsord(args: argparse.Namespace, action: str) -> None:
+    if args.ignore_topup_hold:
+        warn("--ignore-topup-hold: not checking sponsord for a held pool top-up")
+        return
+    if not container_id("sponsord"):
+        return
+    for _ in range(3):
+        status, body = fetch(SPONSORD_METRICS)
+        if status != -1:
+            break
+        time.sleep(2)
+    reason = hold_state(status, body)
+    if reason:
+        raise Refused(f"refusing to {action} sponsord: {reason}. Override with --ignore-topup-hold.")
+
+
+def touches_sponsord(command: str, services: list[str]) -> bool:
+    """Whether a stop/restart/down would stop the running sponsord."""
+    if command == "down":
+        return True
+    return not services or "sponsord" in services
+
+
+def up_recreates_sponsord(rest: list[str]) -> bool:
+    """Whether `up <rest>` would stop a running sponsord: Compose's own answer,
+    from a dry run of the same command (a changed image, env file or setting
+    recreates it; --remove-orphans can remove it). A dry run that fails counts as
+    yes. Its config hash is no shortcut: `config --hash` and the container's label
+    are computed differently on some Compose releases."""
+    cid = container_id("sponsord")
+    if not cid:
+        return False
+    name = run(["docker", "inspect", "--format", "{{.Name}}", cid], capture=True).stdout.strip().lstrip("/")
+    cp = run(compose_argv("--dry-run", "up", "-d", *rest), check=False, quiet=True)
+    if cp.returncode != 0:
+        return True
+    return touched_in_dry_run(cp.stdout, name)
+
+
+def touched_in_dry_run(output: str, container: str) -> bool:
+    return bool(re.search(rf"(?m)\bContainer {re.escape(container)}\s+(Recreate|Stopping|Removing|Killing)\b", output))
+
+
+# --- service commands ------------------------------------------------------------
+
+
+def split_services(rest: list[str]) -> tuple[list[str], list[str]]:
+    flags = [a for a in rest if a.startswith("-")]
+    svcs = [a for a in rest if not a.startswith("-")]
+    return svcs, flags
+
+
+def cmd_up(args: argparse.Namespace) -> None:
+    check()
+    if up_recreates_sponsord(args.rest):
+        guard_sponsord(args, "recreate")
+    compose("up", "-d", *args.rest)
+
+
+def cmd_stopping(args: argparse.Namespace) -> None:
+    require_root()
+    Project.load()
+    svcs, _ = split_services(args.rest)
+    if touches_sponsord(args.command, svcs):
+        guard_sponsord(args, "stop" if args.command == "down" else args.command)
+    compose(args.command, *args.rest)
+
+
+def cmd_passthrough(args: argparse.Namespace) -> None:
+    require_root()
+    Project.load()
+    os.execvp("docker", compose_argv(args.command, *args.rest))
+
+
+def cmd_cli(args: argparse.Namespace) -> None:
+    require_root()
+    project = Project.load()
+    dec_env = project.env_file("DECDN_ENV_FILE")
+    # The node's own config and keystore password, unless the command names its own:
+    # without them the CLI looks under $HOME/.decdn and finds no identity.
+    cli_args = list(args.rest)
+    if "--config" not in cli_args and NODE_TOML.exists():
+        cli_args = ["--config", str(NODE_TOML), *cli_args]
+    cp = decdn_cli(
+        project,
+        cli_args,
+        cli_env={"DECDN_KEYSTORE_PASSWORD_FILE": str(NODE_PASSWORD)},
+        network="host",
+        tty=True,
+        check=False,
+        extra_mounts=origin_mounts(project),
+        env_file=dec_env if dec_env.exists() else None,
+    )
+    sys.exit(cp.returncode)
+
+
+def tls_healthz(domain: str) -> str:
+    """GET https://<domain>/healthz from Caddy on loopback, against the host's
+    trust store: proves the certificate, not just the listener."""
+    ctx = ssl.create_default_context()
+    try:
+        with (
+            socket.create_connection(("127.0.0.1", 443), timeout=5) as raw,
+            ctx.wrap_socket(raw, server_hostname=domain) as s,
+        ):
+            s.sendall(f"GET /healthz HTTP/1.1\r\nHost: {domain}\r\nConnection: close\r\n\r\n".encode())
+            head = s.recv(4096).decode("latin-1").split("\r\n", 1)[0]
+            return "ok" if head.split()[1:2] == ["200"] else head or "no answer"
+    except (OSError, ssl.SSLError) as e:
+        return str(e)
+
+
+def cmd_health(args: argparse.Namespace) -> None:
+    require_root()
+    project = Project.load()
+    bad = 0
+
+    def report(name: str, ok: bool, detail: str) -> None:
+        nonlocal bad
+        bad += not ok
+        say(f"{'ok  ' if ok else 'FAIL'} {name}: {detail}")
+
+    svcs = project.services
+    for svc in sorted(svcs):
+        if not container_id(svc):
+            report(svc, False, "not running (`decdn-compose ps`, `decdn-compose logs " + svc + "`)")
+            svcs = svcs - {svc}
+    if "decdn-node" in svcs:
+        cp = compose(
+            "exec", "-T", "decdn-node", "decdn", "node", "health", "--config", str(NODE_TOML), check=False, capture=True
+        )
+        report("decdn-node admin RPC", cp.returncode == 0, " ".join(cp.stdout.split()) or "no answer")
+        status, _ = fetch("http://127.0.0.1:9090/metrics")
+        report("decdn-node metrics", status == 200, f"http://127.0.0.1:9090/metrics status {status}")
+    for svc, url in (
+        ("sponsord", "http://127.0.0.1:8090/healthz"),
+        ("sponsord-onramp", "http://127.0.0.1:8080/healthz"),
+    ):
+        if svc in svcs:
+            status, body = fetch(url)
+            report(svc, status == 200, f"{url} {status} {body.strip()}")
+    if "sponsord" in svcs:
+        status, body = fetch(SPONSORD_METRICS)
+        reason = hold_state(status, body)
+        report("sponsord top-up hold", reason is None, reason or "none")
+    if "caddy" in svcs:
+        dom = project.env.get("SPONSORD_ONRAMP_DOMAIN", "")
+        res = tls_healthz(dom)
+        report("caddy", res == "ok", f"https://{dom}/healthz: {res}")
+    sys.exit(1 if bad else 0)
+
+
+def backup_paths(project: Project) -> list[Path]:
+    svcs = project.services
+    paths: list[Path] = []
+    if "decdn-node" in svcs:
+        paths += [NODE_SECRET, NODE_KEYSTORE, NODE_PASSWORD, NODE_TOML, project.env_file("DECDN_ENV_FILE")]
+    if "sponsord" in svcs:
+        paths += [
+            SD_KEYSTORE,
+            SD_PASSWORD,
+            SD_TOKEN,
+            project.env_file("SPONSORD_SECRET_ENV_FILE"),
+            project.env_file("SPONSORD_ENV_FILE"),
+        ]
+    if "sponsord-onramp" in svcs:
+        paths += [SD_TURNSTILE, project.env_file("SPONSORD_ONRAMP_ENV_FILE")]
+    return [p for p in paths if p.exists()]
+
+
+def cmd_backup(args: argparse.Namespace) -> None:
+    """The keys and secrets only (docs/lifecycle.md's manual backup), encrypted on
+    this host to age recipients: nothing readable ever touches the disk."""
+    require_root()
+    project = Project.load()
+    if shutil.which("age") is None:
+        raise Refused("age is not installed (apt install age)")
+    paths = backup_paths(project)
+    if not paths:
+        raise Refused("nothing to back up for COMPOSE_PROFILES=" + ",".join(project.profiles))
+    out = Path(args.output or f"decdn-{socket.gethostname()}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.tar.age")
+    if out.exists():
+        raise Refused(f"{out} exists")
+    recipients = [a for r in args.recipient for a in ("-r", r)]
+    old = os.umask(0o077)
+    try:
+        tar = subprocess.Popen(
+            ["tar", "-C", "/", "--numeric-owner", "-czf", "-", *[str(p.relative_to("/")) for p in paths]],
+            stdout=subprocess.PIPE,
+        )
+        age = subprocess.run(["age", *recipients, "-o", str(out)], stdin=tar.stdout)
+        tar.stdout.close()  # type: ignore[union-attr]
+        if tar.wait() != 0 or age.returncode != 0:
+            out.unlink(missing_ok=True)
+            raise Refused("backup failed; no archive was left behind")
+    finally:
+        os.umask(old)
+    say(f"wrote {out} ({len(paths)} files): {', '.join(map(str, paths))}")
+    say(f"test it: age -d -i <key> {out} | tar -tz")
+
+
+# --- main ------------------------------------------------------------------------
+
+
+def parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        prog="decdn-compose",
+        description=__doc__.split("\n\n")[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Any other argument after a service command goes to docker compose.",
+    )
+    ap.add_argument(
+        "--ignore-topup-hold",
+        action="store_true",
+        help="stop or recreate sponsord even while it holds an unconfirmed pool top-up",
+    )
+    sub = ap.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("init", help="set up the host for one or more profiles")
+    p.add_argument("profiles", nargs="+", metavar="PROFILE", help=", ".join(PROFILES))
+    p.add_argument("--region", help="node/origin: the node's ISO 3166-1 alpha-2 region, e.g. DE")
+    p.add_argument(
+        "--chain",
+        default="arbitrum-sepolia",
+        help="the chain: `decdn config init --chain`, and the sponsor's contract addresses",
+    )
+    p.add_argument("--origin", help="origin: the backend, https://…, s3://bucket or file:///host/path")
+    p.add_argument("--domain", help="onramp/caddy: the onramp's public host name")
+    p.add_argument(
+        "--generate-treasury", action="store_true", help="sponsord/onramp: generate the treasury wallet on this host"
+    )
+    p.set_defaults(func=init)
+
+    sub.add_parser("check", help="preflight: files, settings, ports, the node's config").set_defaults(func=check)
+    sub.add_parser("health", help="probe each running service").set_defaults(func=cmd_health)
+
+    for name, func, hlp in (
+        ("up", cmd_up, "preflight, then docker compose up -d"),
+        ("stop", cmd_stopping, "docker compose stop, guarded"),
+        ("restart", cmd_stopping, "docker compose restart, guarded"),
+        ("down", cmd_stopping, "docker compose down, guarded"),
+        ("pull", cmd_passthrough, "docker compose pull"),
+        ("logs", cmd_passthrough, "docker compose logs"),
+        ("ps", cmd_passthrough, "docker compose ps"),
+        ("exec", cmd_passthrough, "docker compose exec"),
+        ("config", cmd_passthrough, "docker compose config"),
+        ("cli", cmd_cli, "run the decdn CLI from the node image (decdn-compose cli node status)"),
+    ):
+        p = sub.add_parser(name, help=hlp, prefix_chars="+")
+        p.add_argument("rest", nargs=argparse.REMAINDER)
+        p.set_defaults(func=func)
+
+    p = sub.add_parser("backup", help="age-encrypted archive of the active profiles' keys and secrets")
+    p.add_argument("-r", "--recipient", action="append", required=True, help="an age recipient (repeatable)")
+    p.add_argument("-o", "--output", help="the archive (default decdn-<host>-<time>.tar.age)")
+    p.set_defaults(func=cmd_backup)
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        args.func(args)
+    except Refused as e:
+        print(f"decdn-compose: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

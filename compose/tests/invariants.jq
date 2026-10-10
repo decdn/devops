@@ -13,30 +13,36 @@ def base_keys: ["cap_drop", "command", "entrypoint", "environment", "image", "lo
   "network_mode", "profiles", "read_only", "restart", "security_opt", "stop_signal",
   "user", "volumes"];
 def allowed_keys: {
-  "decdn-node": (base_keys + ["stop_grace_period", "tmpfs"]),
-  "sponsord": (base_keys + ["stop_grace_period"]),
-  "sponsord-onramp": (base_keys + ["stop_grace_period", "depends_on"]),
+  "decdn-node": (base_keys + ["healthcheck", "stop_grace_period", "tmpfs"]),
+  "sponsord": (base_keys + ["secrets", "stop_grace_period"]),
+  "sponsord-onramp": (base_keys + ["depends_on", "secrets", "stop_grace_period"]),
   "caddy": (base_keys + ["cap_add", "tmpfs"])
 };
 
-# Every mount, exactly: [source, target, read-only?]. Each container sees only its
-# own files; the only writable ones are the node's data dir and Caddy's ACME state.
-# The Caddyfile's source is absolute (compose.yaml's directory), so it is matched
-# by name.
+# Every mount, exactly: [source, target, read-only?], volumes and secrets alike (a
+# secret is a read-only bind of its host file, listed as "secret:<file>"). Each
+# container sees only its own files; the only writable ones are the node's data
+# dir and Caddy's ACME state. The Caddyfile's source is absolute (compose.yaml's
+# directory), so it is matched by name; the origin content's source is the
+# operator's DECDN_ORIGIN_DIR, so only its target and mode are pinned.
 def allowed_mounts: {
-  "decdn-node": [["/etc/decdn", "/etc/decdn", true], ["/var/lib/decdn", "/var/lib/decdn", false]],
-  "sponsord": [["/etc/sponsord/api-token", "/run/secrets/api-token", true],
-               ["/etc/sponsord/treasury-password", "/run/secrets/treasury-password", true],
-               ["/etc/sponsord/treasury-keystore.json", "/run/secrets/treasury-keystore.json", true]],
-  "sponsord-onramp": [["/etc/sponsord/api-token", "/run/secrets/api-token", true],
-                      ["/etc/sponsord/onramp-gate", "/etc/sponsord/onramp-gate", true],
-                      ["/etc/sponsord/turnstile-secret", "/run/secrets/turnstile-secret", true]],
+  "decdn-node": [["/etc/decdn", "/etc/decdn", true], ["/var/lib/decdn", "/var/lib/decdn", false],
+                 ["DECDN_ORIGIN_DIR", "/srv/decdn-origin", true]],
+  "sponsord": [["secret:/etc/sponsord/api-token", "/run/secrets/api-token", true],
+               ["secret:/etc/sponsord/treasury-password", "/run/secrets/treasury-password", true],
+               ["secret:/etc/sponsord/treasury-keystore.json", "/run/secrets/treasury-keystore.json", true]],
+  "sponsord-onramp": [["/etc/sponsord/onramp-gate", "/etc/sponsord/onramp-gate", true],
+                      ["secret:/etc/sponsord/api-token", "/run/secrets/api-token", true],
+                      ["secret:/etc/sponsord/turnstile-secret", "/run/secrets/turnstile-secret", true]],
   "caddy": [["Caddyfile", "/etc/caddy/Caddyfile", true], ["/var/lib/caddy", "/data", false]]
 };
-def mounts: [(.volumes // [])[]
-  | [(if .type == "bind" then .source else "\(.type):\(.source)" end
-      | if endswith("/Caddyfile") then "Caddyfile" else . end),
-     .target, (.read_only == true)]] | sort;
+def mounts($secrets): [((.volumes // [])[]
+    | [(if .type == "bind" then .source else "\(.type):\(.source)" end
+        | if endswith("/Caddyfile") then "Caddyfile" else . end),
+       .target, (.read_only == true)]
+    | if .[1] == "/srv/decdn-origin" then .[0] = "DECDN_ORIGIN_DIR" else . end),
+  ((.secrets // [])[] | ["secret:\($secrets[.source].file // "?")", (.target // "/run/secrets/\(.source)"), true])]
+  | sort;
 
 # Secrets reach the sponsord daemons only as the files mounted above, never inline.
 def secret_files: {
@@ -57,6 +63,7 @@ def inline_secrets: {
 def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ -n \"$$t\" ]; then\n  r=\"$$(realpath -e -- \"$$t\")\" || { echo \"ONRAMP_GATE_TEMPLATE $$t is not readable\" >&2; exit 1; }\n  case \"$$r\" in\n    /etc/sponsord/onramp-gate/*) ;;\n    *) echo \"ONRAMP_GATE_TEMPLATE must be a file in /etc/sponsord/onramp-gate/ (it resolves to $$r)\" >&2; exit 1 ;;\n  esac\nfi\nexec sponsord-onramp\n"];
 
 .services as $all
+| (.secrets // {}) as $secrets
 | (["caddy", "decdn-node", "sponsord", "sponsord-onramp"] as $want
    | check("compose.yaml"; "services are exactly \($want | join(", "))"; ($all | keys) == $want)),
 
@@ -75,7 +82,17 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
      check($n; "security_opt is exactly [no-new-privileges:true]"; $s.security_opt == ["no-new-privileges:true"]),
      check($n; "runs as a non-root uid:gid"; ($s.user // "") | test("^[1-9][0-9]*:[1-9][0-9]*$")),
      check($n; "stop_signal is SIGTERM"; $s.stop_signal == "SIGTERM"),
-     check($n; "mounts are exactly its allow-list"; ($s | mounts) == (allowed_mounts[$n] // [] | sort))),
+     check($n; "mounts are exactly its allow-list"; ($s | mounts($secrets)) == (allowed_mounts[$n] // [] | sort))),
+
+  # A secret comes from one absolute host file and nothing else: an `environment:`
+  # source would read it from the shell or .env into the container.
+  ($secrets | to_entries[]
+   | check("secrets.\(.key)"; "is a single absolute host file";
+       (.value | del(.name) | keys) == ["file"] and (.value.file | startswith("/etc/")))),
+
+  # The node's healthcheck asks the daemon's admin RPC on loopback.
+  check("decdn-node"; "healthcheck is `decdn node health`";
+    ($all["decdn-node"].healthcheck.test // [])[0:4] == ["CMD", "decdn", "node", "health"]),
 
   # Caddy keeps only the capability for :80/:443 (the daemons may not set cap_add
   # at all: allowed_keys).

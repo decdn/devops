@@ -1,8 +1,12 @@
 # deCDN services under Docker Compose: the same daemons, paths and hardening as the
 # Ansible roles' systemd units, for a single host without Ansible. See README.md.
 #
-#   cp .env.example .env && $EDITOR .env      # COMPOSE_PROFILES, image digests, uids/gids
-#   sudo docker compose up -d
+#   sudo compose/decdn-compose init node     # accounts, dirs, keys, .env
+#   sudo compose/decdn-compose up            # preflight, then `docker compose up -d`
+#
+# decdn-compose is a thin wrapper: every command it runs is plain `docker compose`
+# against this file (plus compose.override.yaml, when present), and it adds the
+# checks Compose cannot make (preflight, sponsord's top-up hold).
 #
 # Each service sits behind a profile, chosen with COMPOSE_PROFILES in .env:
 #   node      the deCDN node, a cache node (node operators)
@@ -19,24 +23,34 @@
 # with a non-numeric port. `make lint-compose` renders an empty .env to check it.
 #
 # Host networking, deliberately. Every backend binds 127.0.0.1, so on the host
-# network it stays loopback-only, exactly as on a systemd host, and host tools (the
-# `decdn` CLI, curl to /healthz) reach it directly. There are no `ports:` for Docker
-# to publish, which also means Docker's own iptables rules never punch a hole past
-# the host firewall. The public ports are the node's QUIC udp/4433 and, with the
-# caddy profile, tcp/80 + tcp/443: open them in the host firewall.
+# network it stays loopback-only, exactly as on a systemd host, and host tools
+# (curl to /healthz, the wrapper's checks) reach it directly. There are no `ports:`
+# for Docker to publish, which also means Docker's own iptables rules never punch a
+# hole past the host firewall. The public ports are the node's QUIC udp/4433 and,
+# with the caddy profile, tcp/80 + tcp/443: open them in the host firewall.
 name: decdn
 
-x-logging: &logging
-  driver: json-file
-  options:
-    max-size: 50m
-    max-file: "5"
-  # Or send the daemons' logs to the host journal, like the systemd units:
-  #   driver: journald
-  #   options: {tag: "{{.Name}}"}
+# What every service shares: the host network, a read-only root filesystem, no
+# capabilities, no privilege escalation, a graceful SIGTERM stop, and logs in the
+# host journal like the systemd units (`journalctl CONTAINER_NAME=decdn-decdn-node-1`;
+# `docker compose logs` reads them back). A service overrides a key only to add to
+# it (Caddy's one capability); tests/invariants.jq checks the rendered result.
+x-hardened: &hardened
+  network_mode: host
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  stop_signal: SIGTERM
+  restart: unless-stopped
+  logging:
+    driver: journald
+    options:
+      tag: "{{.Name}}"
 
 services:
   decdn-node:
+    <<: *hardened
     # One service for both: a cache node and an origin are the same daemon, and they
     # would share the host's ports and /var/lib/decdn. node.toml makes the difference.
     profiles: [node, origin]
@@ -45,9 +59,8 @@ services:
     # decdn-node-image-digest.txt names the digest; upstream only tags an image after
     # a maintainer signs the release.
     image: ${DECDN_IMAGE_REPO:-ghcr.io/decdn/decdn-node}@${DECDN_IMAGE_DIGEST:-sha256:unset-set-DECDN_IMAGE_DIGEST-in-.env}
-    network_mode: host
-    # A dedicated host account (see README.md), not the image's uid 1000, which on
-    # most hosts is the first human login.
+    # The host's `decdn` account, not the image's uid 1000, which on most hosts is
+    # the first human login.
     user: "${DECDN_UID:-unset-DECDN_UID}:${DECDN_GID:-unset-DECDN_GID}"
     # Mirrors the systemd unit's ExecStart.
     command:
@@ -63,36 +76,51 @@ services:
       - path: ${DECDN_ENV_FILE:-/etc/decdn/decdn.env}
         required: true
     volumes:
-      - /etc/decdn:/etc/decdn:ro
-      - /var/lib/decdn:/var/lib/decdn
-    read_only: true
+      - type: bind
+        source: /etc/decdn
+        target: /etc/decdn
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /var/lib/decdn
+        target: /var/lib/decdn
+        bind: {create_host_path: false}
+      # An fs origin's content (publishers): DECDN_ORIGIN_DIR in .env, served
+      # read-only as /srv/decdn-origin (`config init --origin file:///srv/decdn-origin`).
+      # Unset, an empty directory that Docker creates is mounted, unused.
+      - type: bind
+        source: ${DECDN_ORIGIN_DIR:-/var/lib/decdn-compose/no-origin}
+        target: /srv/decdn-origin
+        read_only: true
+        bind: {create_host_path: true}
     tmpfs:
       - /tmp
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
+    # The image ships the decdn CLI (v0.0.2 and later); `node health` asks the
+    # admin RPC on loopback, so a wedged runtime shows as unhealthy, not just a
+    # live process.
+    healthcheck:
+      test: ["CMD", "decdn", "node", "health", "--config", "/etc/decdn/node.toml", "--timeout-ms", "5000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 2m
     # SIGTERM is the daemon's graceful drain. Docker's default 10 s grace would
     # SIGKILL it mid-drain; this matches the unit's TimeoutStopSec.
-    stop_signal: SIGTERM
     stop_grace_period: 300s
-    restart: unless-stopped
-    logging: *logging
-    # No healthcheck: the image has no HTTP client, and the metrics listener only
-    # serves /metrics. Probe http://127.0.0.1:9090/metrics from the host instead.
 
   sponsord:
+    <<: *hardened
     profiles: [sponsord, onramp]
     image: ${SPONSORD_IMAGE_REPO:-ghcr.io/decdn/sponsord}@${SPONSORD_IMAGE_DIGEST:-sha256:unset-set-SPONSORD_IMAGE_DIGEST-in-.env}
-    network_mode: host
-    # The host's `sponsord` account, which owns the credential files below: a bind
-    # mount keeps the host file's owner and mode, and the daemon refuses a treasury
-    # keystore that anyone but its owner can read.
+    # The host's `sponsord` account, which owns the credential files below: a
+    # Compose secret is a bind mount, which keeps the host file's owner and mode,
+    # and the daemon refuses a treasury keystore that anyone but its owner can read.
     user: "${SPONSORD_UID:-unset-SPONSORD_UID}:${SPONSORD_GID:-unset-SPONSORD_GID}"
     # Read by the `docker compose` client when it creates the container, so run it
-    # as root (sudo): secret.env (0600) holds SPONSORD_RPC_URL, which may embed an
-    # API key; sponsord.env (0644) is the pool and limit settings. The later file
-    # wins on a repeated key, so a stray SPONSORD_RPC_URL in the world-readable
-    # file cannot replace the secret one.
+    # as root: secret.env (0600) holds SPONSORD_RPC_URL, which may embed an API key;
+    # sponsord.env (0644) is the pool and limit settings. The later file wins on a
+    # repeated key, so a stray SPONSORD_RPC_URL in the world-readable file cannot
+    # replace the secret one.
     env_file:
       - path: ${SPONSORD_ENV_FILE:-/etc/sponsord/sponsord.env}
         required: true
@@ -107,41 +135,26 @@ services:
       SPONSORD_TREASURY_PASSWORD_FILE: /run/secrets/treasury-password
       SPONSORD_TREASURY_KEYSTORE: /run/secrets/treasury-keystore.json
       NO_COLOR: "1"
-    # One file each, read-only, and only the ones this daemon needs. A missing host
-    # file fails the start instead of Docker creating a directory in its place.
-    volumes:
-      - type: bind
-        source: /etc/sponsord/api-token
+    # One read-only file each, only the ones this daemon needs. A missing host file
+    # fails the start; Docker never creates one in its place.
+    secrets:
+      - source: sponsord-api-token
         target: /run/secrets/api-token
-        read_only: true
-        bind: {create_host_path: false}
-      - type: bind
-        source: /etc/sponsord/treasury-password
+      - source: sponsord-treasury-password
         target: /run/secrets/treasury-password
-        read_only: true
-        bind: {create_host_path: false}
-      - type: bind
-        source: /etc/sponsord/treasury-keystore.json
+      - source: sponsord-treasury-keystore
         target: /run/secrets/treasury-keystore.json
-        read_only: true
-        bind: {create_host_path: false}
-    read_only: true
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
     # On SIGTERM the daemon waits for a pool top-up it already sent; this matches
-    # the unit's TimeoutStopSec.
-    stop_signal: SIGTERM
+    # the unit's TimeoutStopSec. A stop or restart also forgets a held, unconfirmed
+    # top-up: decdn-compose refuses one while the hold is on (README.md, Operate).
     stop_grace_period: 120s
-    restart: unless-stopped
-    logging: *logging
-    # No healthcheck: the image has no HTTP client. Probe
+    # No healthcheck: the image has no HTTP client. `decdn-compose health` probes
     # http://127.0.0.1:8090/healthz from the host.
 
   sponsord-onramp:
+    <<: *hardened
     profiles: [onramp]
     image: ${SPONSORD_ONRAMP_IMAGE_REPO:-ghcr.io/decdn/sponsord-onramp}@${SPONSORD_ONRAMP_IMAGE_DIGEST:-sha256:unset-set-SPONSORD_ONRAMP_IMAGE_DIGEST-in-.env}
-    network_mode: host
     # The same account as sponsord: it reads the daemon's own API token.
     user: "${SPONSORD_UID:-unset-SPONSORD_UID}:${SPONSORD_GID:-unset-SPONSORD_GID}"
     # Public settings only: everything in it (the RPC URL, contract addresses) is
@@ -156,22 +169,17 @@ services:
       ONRAMP_DAEMON_TOKEN_FILE: /run/secrets/api-token
       ONRAMP_TURNSTILE_SECRET_FILE: /run/secrets/turnstile-secret
       NO_COLOR: "1"
-    volumes:
-      - type: bind
-        source: /etc/sponsord/api-token
+    secrets:
+      - source: sponsord-api-token
         target: /run/secrets/api-token
-        read_only: true
-        bind: {create_host_path: false}
-      - type: bind
-        source: /etc/sponsord/turnstile-secret
+      - source: sponsord-turnstile-secret
         target: /run/secrets/turnstile-secret
-        read_only: true
-        bind: {create_host_path: false}
+    volumes:
       # A custom gate page (upstream docs/operator.md, "Your own gate page"): put
       # the HTML in this directory and set ONRAMP_GATE_TEMPLATE to its path in
       # sponsord-onramp.env. A fixed directory rather than a configurable file, so
       # no setting can mount a credential into a server that publishes the page;
-      # the entrypoint above refuses a template path outside it.
+      # the entrypoint below refuses a template path outside it.
       # Created empty when absent: unused, the built-in page is served.
       - type: bind
         source: /etc/sponsord/onramp-gate
@@ -197,32 +205,27 @@ services:
           esac
         fi
         exec sponsord-onramp
-    # It reads the daemon's limits only at start, so `docker compose restart
-    # sponsord` restarts it too, like the unit's PartOf= (a stop does not
-    # propagate). It exits while the daemon is unreachable; the restart policy
-    # retries until the daemon is up.
+    # It reads the daemon's limits only at start, so a sponsord restart restarts it
+    # too, like the unit's PartOf= (a stop does not propagate). It exits while the
+    # daemon is unreachable; the restart policy retries until the daemon is up.
     depends_on:
       sponsord:
         condition: service_started
         restart: true
-    read_only: true
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    stop_signal: SIGTERM
     stop_grace_period: 30s
-    restart: unless-stopped
-    logging: *logging
-    # No healthcheck, as above. Probe http://127.0.0.1:8080/healthz from the host.
+    # No healthcheck, as above. `decdn-compose health` probes
+    # http://127.0.0.1:8080/healthz from the host.
 
   caddy:
+    <<: *hardened
     profiles: [caddy]
     # The official image, pinned by its multi-arch index digest (2.11.6).
     image: ${CADDY_IMAGE_REPO:-docker.io/library/caddy}@${CADDY_IMAGE_DIGEST:-sha256:3422ce6de165df66534f9b9ba50efaf457114ec961763cc52f5dbdaac2972d73}
-    network_mode: host
     # A dedicated host account that owns /var/lib/caddy. NET_BIND_SERVICE is the
-    # one capability it keeps, for tcp/80 and tcp/443.
+    # one capability it keeps, for tcp/80 and tcp/443 (the image's binary carries
+    # it as a file capability, so a non-root user can use it).
     user: "${CADDY_UID:-unset-CADDY_UID}:${CADDY_GID:-unset-CADDY_GID}"
+    cap_add: [NET_BIND_SERVICE]
     environment:
       SPONSORD_ONRAMP_DOMAIN: ${SPONSORD_ONRAMP_DOMAIN:-unset-SPONSORD_ONRAMP_DOMAIN:set-in-.env}
     volumes:
@@ -240,11 +243,16 @@ services:
     # Caddy autosaves the config it loaded here; nothing reads it back.
     tmpfs:
       - /config:uid=${CADDY_UID:-unset-CADDY_UID},gid=${CADDY_GID:-unset-CADDY_GID},mode=0700
-    read_only: true
-    cap_drop: [ALL]
-    cap_add: [NET_BIND_SERVICE]
-    security_opt:
-      - no-new-privileges:true
-    stop_signal: SIGTERM
-    restart: unless-stopped
-    logging: *logging
+
+# The sponsor's credentials, each a single host file owned by the `sponsord` account
+# at 0600 (README.md). Only `file:` sources: an `environment:` source would read the
+# secret from the shell or .env, which tests/invariants.jq refuses.
+secrets:
+  sponsord-api-token:
+    file: /etc/sponsord/api-token
+  sponsord-treasury-password:
+    file: /etc/sponsord/treasury-password
+  sponsord-treasury-keystore:
+    file: /etc/sponsord/treasury-keystore.json
+  sponsord-turnstile-secret:
+    file: /etc/sponsord/turnstile-secret

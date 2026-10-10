@@ -2,7 +2,9 @@
 
 The same services the Ansible roles deploy, on one host, without Ansible: the upstream
 images (amd64 and arm64) under Compose, with the same host paths, the same start
-commands and the same hardening as the roles' systemd units.
+commands and the same hardening as the roles' systemd units. A small wrapper,
+[`decdn-compose`](decdn-compose), prepares the host and runs Compose with the checks
+Compose cannot make by itself.
 
 | Profile | Service | Image | Ansible equivalent |
 |---------|---------|-------|--------------------|
@@ -12,10 +14,9 @@ commands and the same hardening as the roles' systemd units.
 | `onramp` | `sponsord-onramp`, its public side (Turnstile gate, installers); also starts `sponsord` | `ghcr.io/decdn/sponsord-onramp` | `sponsord_onramp` |
 | `caddy` | Caddy, TLS in front of the onramp; leave it out to bring your own proxy | `caddy` (official) | `sponsord_onramp_proxy: caddy` |
 
-Pick the profiles with `COMPOSE_PROFILES` in `.env`. A **node operator** runs `node`.
-A **publisher** runs `origin` for an origin node, `onramp,caddy` for a sponsor, or
-`origin,onramp,caddy` for both on one host. The sponsor is independent of the node.
-`node` and `origin` start the same service, so a host runs one or the other.
+A **node operator** runs `node`. A **publisher** runs `origin` for an origin node,
+`onramp caddy` for a sponsor, or all three on one host. The sponsor is independent of
+the node. `node` and `origin` start the same service, so a host runs one or the other.
 
 Pick this path for a single machine you already run Docker on. For a fleet, or a host
 you want hardened from scratch (firewall, SSH, auto-patching), use the
@@ -23,22 +24,85 @@ you want hardened from scratch (firewall, SSH, auto-patching), use the
 [Helm chart](../charts/decdn-node/README.md). [`docs/requirements.md`](../docs/requirements.md)
 compares the paths.
 
-`compose.yaml` takes every image by digest. `.env.example` carries the digests of
-the releases the Ansible roles pin (decdn/decdn v0.0.2, decdn/sponsord v0.0.2),
-each copied from that release's signed digest file; the node's
-[Operate](#operate) section says how to take a newer one.
+## Requirements
 
-**Upgrading from a node-only `compose.yaml`?** Every service now sits behind a
-profile, so add `COMPOSE_PROFILES=node` to your `.env`. Without it,
-`sudo docker compose -f compose/compose.yaml up -d` selects no service.
+- Linux with systemd: the containers log to the host journal, like the systemd
+  units. Without journald, see [Logs](#logs).
+- Docker Engine with Compose v2.24 or later, and Python 3.11 or later for the wrapper
+  (Debian 12 and Ubuntu 24.04 ship it). `ss` (iproute2) for the port check, and
+  [`age`](https://github.com/FiloSottile/age) for backups.
+- This repository, checked out on the host: the wrapper reads `compose/` and the
+  contract addresses this repo mirrors from upstream.
 
-**Running a cache node from an earlier setup?** Its `/etc/decdn/node.toml` predates
-step 4's pull-through line, and the daemon's default is off, so the node cannot fill a
-miss from other nodes. Add `node_to_node_pull_through_enabled = true` under `[cache]`
-(the same `sed` as step 4), check it (step 6), and restart the node. An origin needs no
-change.
+Every command below runs from the checkout's root, as root: Compose reads the
+root-only env files whenever it creates a container, and `init` creates system
+accounts and secrets.
+
+## The wrapper
+
+`decdn-compose` is a thin layer. Every service command is plain `docker compose`
+against [`compose.yaml`](compose.yaml), plus `compose.override.yaml` when you have one
+(a bare `docker compose -f compose.yaml` silently drops it). On top of that:
+
+| Command | Does |
+|---------|------|
+| `init <profile>…` | creates the system accounts and directories, writes `.env` with their real uids, installs the env-file templates to `/etc`, fills in the chain's contract addresses from this repo's [generated mirror](../ansible/roles/sponsord/vars/main/networks.yml), and generates every secret that is generated on the host. It never replaces a secret, and ends with the list of what you still have to provide. Re-run it any time. |
+| `check` | the preflight `up` also runs: every file present, owned and moded as the services need, the settings filled in, `decdn config validate` against the pinned image, and no other process on the ports the stopped services bind |
+| `up [svc…]` | `check`, then `docker compose up -d` |
+| `stop`, `restart`, `down` | `docker compose …`, but refused while sponsord holds an unconfirmed pool top-up ([below](#the-top-up-hold)) |
+| `health` | probes every running service: the node's admin RPC and metrics, each `/healthz`, sponsord's hold, the onramp's certificate through Caddy |
+| `cli <args>` | the `decdn` CLI from the node image, with the node's config and keys: `cli whoami`, `cli node status`, `cli setup` |
+| `backup -r <age recipient>` | an age-encrypted archive of the active profiles' keys and secrets |
+| `logs`, `ps`, `pull`, `exec`, `config` | plain `docker compose …` |
+
+`.env` (beside `compose.yaml`, not committed) holds `COMPOSE_PROFILES`, the image
+digests, the accounts' uids and the onramp's domain. Nothing in it is secret. `init`
+starts it from `.env.example`, which carries the digests of the releases the Ansible
+roles pin (decdn/decdn v0.0.2, decdn/sponsord v0.0.2), each copied from that
+release's signed digest file; [Operate](#operate) says how to take a newer one.
 
 ## The node
+
+### Set up
+
+1. **Prepare the host:**
+
+   ```bash
+   sudo compose/decdn-compose init node --region DE     # ISO 3166-1 alpha-2
+   ```
+
+   This creates the `decdn` system account, `/etc/decdn` and `/var/lib/decdn`, then
+   uses the node image's `decdn` CLI to generate the keystore password, the node key
+   and the eth keystore (`decdn key-gen`) and the config (`decdn config init --chain
+   arbitrum-sepolia`, with the data dir and region set and, for a cache node,
+   `node_to_node_pull_through_enabled = true` so it fills a miss from other nodes; the
+   daemon's default is off). **Back up the keys now:**
+   `sudo compose/decdn-compose backup -r age1…`.
+
+2. **The RPC endpoint**, which may embed an API key, goes in the root-only env file
+   `init` installed:
+
+   ```bash
+   sudoedit /etc/decdn/decdn.env        # DECDN_RPC_URL=https://…
+   ```
+
+3. **Firewall.** Allow inbound **udp/4433** on the host firewall *and* in your cloud
+   provider's security group. Nothing else needs to be open.
+
+4. **Start it:**
+
+   ```bash
+   sudo compose/decdn-compose up
+   sudo compose/decdn-compose health
+   ```
+
+5. **Stake and register** (on-chain onboarding, ADR 019 Phase 2) with `decdn setup`,
+   described in
+   [`roles/decdn_node/README.md` § On-chain onboarding](../ansible/roles/decdn_node/README.md#on-chain-onboarding).
+   The CLI does not read `DECDN_RPC_URL`, and `node.toml` still names the public RPC
+   `config init` wrote, so pass your endpoint:
+   `sudo compose/decdn-compose cli setup --rpc-url "$RPC"`. The node serves paid
+   traffic only after that.
 
 ### How it is laid out
 
@@ -48,157 +112,69 @@ change.
 | `/etc/decdn/keystore.password` | same, read-only | keystore password (`decdn`, `0600`) |
 | `/etc/decdn/decdn.env` | read by Docker, injected as env | `DECDN_RPC_URL` (`root`, `0600`) |
 | `/var/lib/decdn/` | same, read-write | `node.secret`, `keystore.json`, state, cache |
+| `DECDN_ORIGIN_DIR` (an fs origin only) | `/srv/decdn-origin`, read-only | the origin's content |
 
-The layout matches the Ansible role, so the host `decdn` CLI, backups and restores
-([`docs/lifecycle.md`](../docs/lifecycle.md)) work the same way on both.
+The layout matches the Ansible role, so backups and restores
+([`docs/lifecycle.md`](../docs/lifecycle.md)) work the same way on both, and a host
+moves between the two paths without touching its keys.
 
 **Networking.** Every container uses the host network. The node's metrics
 (`127.0.0.1:9090`) and admin RPC (`127.0.0.1:9191`, hard-wired upstream) stay on the
 host's loopback, and Docker publishes no ports, so its iptables rules never open
 anything past your firewall. The node's only public port is QUIC **udp/4433**.
 
-### Set up
-
-1. **A system account and directories:**
-
-   ```bash
-   sudo useradd --system --home-dir /var/lib/decdn --shell /usr/sbin/nologin decdn
-   sudo install -d -m 0700 -o decdn -g decdn /var/lib/decdn
-   sudo install -d -m 0750 -o decdn -g decdn /etc/decdn
-   ```
-
-2. **The `decdn` CLI on the host.** The image carries it too (since v0.0.2), but the
-   steps below run it before the container exists. Install the CLI from the
-   release tarball, checking it against the GPG-signed `SHA256SUMS` first (the
-   maintainer keys are in `decdn/decdn`'s `KEYS`; their fingerprints are in
-   [SECURITY.md](../SECURITY.md#release-verification)). It is also on crates.io
-   (`cargo install --locked decdn-cli@<version>`), which carries no maintainer
-   signature.
-
-3. **Keys.** Create the password file first (`key-gen` reads it, never creates it),
-   then generate the node key and eth keystore into the data dir:
-
-   ```bash
-   umask 077
-   openssl rand -base64 32 | sudo -u decdn tee /etc/decdn/keystore.password >/dev/null
-   sudo -u decdn decdn key-gen --output-dir /var/lib/decdn \
-     --keystore-password-file /etc/decdn/keystore.password
-   ```
-
-   Back them up now ([`docs/lifecycle.md`](../docs/lifecycle.md#backup-make-backup)).
-
-4. **Config.** Let the CLI write it with the chain's contract addresses already filled
-   in, then point it at `/var/lib/decdn` and set the node's region (ISO 3166-1
-   alpha-2). A cache node has no origin backend and fills a miss from other nodes,
-   which the daemon does only with `node_to_node_pull_through_enabled = true` in
-   `[cache]` (its default is off; the Ansible role turns it on for a node without an
-   origin). An origin has a backend instead ([below](#run-it-as-an-origin-publishers)):
-   leave that line out for one.
-
-   ```bash
-   sudo -u decdn decdn config init --chain arbitrum-sepolia --output /etc/decdn/node.toml
-   sudo -u decdn sed -i \
-     -e 's|^# data_dir = .*|data_dir = "/var/lib/decdn"|' \
-     -e '0,/^# region = /s|^# region = .*|region = "DE"|' \
-     -e '/^\[cache\]$/a node_to_node_pull_through_enabled = true' /etc/decdn/node.toml
-   ```
-
-5. **The RPC endpoint**, which may embed an API key, goes in a root-only env file:
-
-   ```bash
-   sudo install -m 0600 -o root -g root compose/decdn.env.example /etc/decdn/decdn.env
-   sudoedit /etc/decdn/decdn.env        # DECDN_RPC_URL=https://…
-   ```
-
-6. **Check the config** against the CLI, with the same environment the daemon gets:
-
-   ```bash
-   sudo systemd-run --pty --wait --collect -p User=decdn -p EnvironmentFile=/etc/decdn/decdn.env \
-     /usr/local/bin/decdn config validate --config /etc/decdn/node.toml \
-     --keystore-password-file /etc/decdn/keystore.password
-   ```
-
-7. **Firewall.** Allow inbound **udp/4433** on the host firewall *and* in your cloud
-   provider's security group. Nothing else needs to be open.
-
-8. **Start it:**
-
-   ```bash
-   cp compose/.env.example compose/.env
-   $EDITOR compose/.env                  # COMPOSE_PROFILES=node; DECDN_UID/GID = `id -u decdn` / `id -g decdn`
-   sudo docker compose -f compose/compose.yaml up -d
-   curl -s 127.0.0.1:9090/metrics | head   # once "node runtime ready" is in the logs
-   decdn node health                      # admin RPC, from the host
-   ```
-
-9. **Stake and register** (on-chain onboarding, ADR 019 Phase 2) with `decdn setup`,
-   described in
-   [`roles/decdn_node/README.md` § On-chain onboarding](../ansible/roles/decdn_node/README.md#on-chain-onboarding).
-   The CLI does not read `DECDN_RPC_URL`, and `node.toml` still names the public RPC
-   `config init` wrote, so run it through the `decdn_chain` helper in
-   [`docs/lifecycle.md` § Running on-chain commands](../docs/lifecycle.md#running-on-chain-commands),
-   which passes your endpoint as `--rpc-url`. The node serves paid traffic only after
-   that.
+**Health.** The container's healthcheck is `decdn node health` against the admin RPC,
+so `docker compose ps` shows a wedged runtime as unhealthy, not just a live process.
+Dashboards and alert rules are in [`monitoring/`](../monitoring/README.md).
 
 ### Operate
 
-Run these from the repository root with `sudo`, like the set-up steps: Compose reads
-the root-only env files whenever it creates a container.
-
-- **Logs:** `sudo docker compose -f compose/compose.yaml logs -f decdn-node`. To send
-  them to the journal like the systemd unit, switch the `x-logging` driver
-  (commented in `compose.yaml`).
-- **Stop:** `sudo docker compose -f compose/compose.yaml stop decdn-node`. It sends
-  SIGTERM, the daemon's graceful drain, and waits up to 300 s. Do not use
-  `decdn node drain` here: `restart: unless-stopped` starts the drained container
-  again.
+- **Logs:** `sudo compose/decdn-compose logs -f decdn-node`, or
+  `journalctl CONTAINER_NAME=decdn-decdn-node-1`.
+- **Stop:** `sudo compose/decdn-compose stop decdn-node`. It sends SIGTERM, the
+  daemon's graceful drain, and waits up to 300 s. Do not use `decdn node drain` here:
+  `restart: unless-stopped` starts the drained container again.
 - **Upgrade:** download the new release's `decdn-node-image-digest.txt` and its `.asc`
-  from `decdn/decdn`'s releases (v0.0.1 named them `image-digest.txt`), `gpg --verify`
-  against the keys in [SECURITY.md](../SECURITY.md#release-verification), set the
-  digest after its `@` as `DECDN_IMAGE_DIGEST` in `.env`, then
-  `sudo docker compose -f compose/compose.yaml up -d`. sponsord's release carries
-  `sponsord-image-digest.txt` and `sponsord-onramp-image-digest.txt` the same way.
+  from `decdn/decdn`'s releases, `gpg --verify` against the keys in
+  [SECURITY.md](../SECURITY.md#release-verification), set the digest after its `@`
+  as `DECDN_IMAGE_DIGEST` in `compose/.env`, then `sudo compose/decdn-compose up`.
+  sponsord's release carries `sponsord-image-digest.txt` and
+  `sponsord-onramp-image-digest.txt` the same way.
 - **Config change:** edit `/etc/decdn/node.toml`, then
-  `sudo docker compose -f compose/compose.yaml restart decdn-node` (or
-  `decdn node reload` for the hot-reloadable sections).
-- **Health:** there is no container healthcheck. The image has no HTTP client, and the
-  metrics listener serves only `/metrics`. Probe `http://127.0.0.1:9090/metrics` from
-  the host, or ship metrics with Grafana Alloy / Prometheus. Dashboards and alert rules
-  are in [`monitoring/`](../monitoring/README.md).
+  `sudo compose/decdn-compose restart decdn-node` (or
+  `sudo compose/decdn-compose cli node reload` for the hot-reloadable sections).
+- **Coming from an earlier setup** whose `node.toml` predates the pull-through line:
+  add `node_to_node_pull_through_enabled = true` under `[cache]` for a cache node
+  (not an origin), then `restart decdn-node`.
 
 ### Run it as an origin (publishers)
 
 An origin is the same node with an origin backend: the canonical source of a
-publisher's namespace. Set `COMPOSE_PROFILES=origin` and give `node.toml` the
-backend: add `--origin` to step 4's `config init`, with an `https://…` URL for an HTTP
-store, `file:///<path>` for a local or NFS path, or `s3://<bucket>` for S3 (and R2, B2,
-MinIO). For S3 it writes `region = "us-east-1"` for you to confirm and leaves
-`endpoint_url` (R2, B2, MinIO) commented. Or write the `[cache.origin]` table by hand.
-The [`decdn_node` role's README](../ansible/roles/decdn_node/README.md) lists the
-keys, and `decdn config validate` (step 6) checks them. Static S3 keys go in
-`/etc/decdn/decdn.env` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), never in
-`node.toml`.
+publisher's namespace. `init origin` writes the backend into `node.toml`:
 
-A path backend must be visible inside the container. `compose.yaml` mounts only
-`/etc/decdn` and `/var/lib/decdn`, and `make lint-compose` holds it to exactly those,
-so add the content root in a `compose.override.yaml` of your own beside it, read-only.
-Compose reads an override file by itself only when no `-f` is given, and every command
-in this README passes `-f compose/compose.yaml`, so add `-f compose/compose.override.yaml`
-after it on every command (`up`, `logs`, `stop`, `pull`, …): an `up` without it
-recreates the node without the mount. The override:
-
-```yaml
-services:
-  decdn-node:
-    volumes:
-      - /srv/content:/srv/content:ro   # [cache.origin] path = "/srv/content"
+```bash
+sudo compose/decdn-compose init origin --region DE --origin https://store.example.org/bucket
+sudo compose/decdn-compose init origin --region DE --origin s3://my-bucket
+sudo compose/decdn-compose init origin --region DE --origin file:///srv/content
 ```
+
+- **HTTP store:** nothing else to do.
+- **S3** (and R2, B2, MinIO): `config init` writes `region = "us-east-1"` for you to
+  confirm and leaves `endpoint_url` commented. Static keys go in
+  `/etc/decdn/decdn.env` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`), never in
+  `node.toml`.
+- **A local or NFS path:** `init` records it as `DECDN_ORIGIN_DIR` in `.env`, and the
+  node sees it read-only as `/srv/decdn-origin`, which is the path `node.toml` names.
+
+Or write the `[cache.origin]` table by hand: the
+[`decdn_node` role's README](../ansible/roles/decdn_node/README.md) lists the keys,
+and `check` validates them.
 
 With a backend set, the node serves only what its backend holds and declines the rest,
 even a blob already in its cache (`relay_foreign_namespaces` defaults to false;
 [ADR 002 § Retrieval by namespace](https://github.com/decdn/decdn/blob/main/adr/002-content-addressing.md#retrieval-by-namespace)),
-and fills misses from the backend, not from other nodes. The chain recognises it as an origin
-only once the namespace's publisher seats its operator with
+and fills misses from the backend, not from other nodes. The chain recognises it as an
+origin only once the namespace's publisher seats its operator with
 `OriginAssignment.addOrigin`
 ([ADR 011](https://github.com/decdn/decdn/blob/main/adr/011-content-takedown.md#origin-assignment-authority)).
 
@@ -213,27 +189,103 @@ both). The [`sponsord`](../ansible/roles/sponsord/README.md) and
 [`sponsord_onramp`](../ansible/roles/sponsord_onramp/README.md) role READMEs explain
 what each setting does; this section covers the Compose side.
 
+### Set up
+
+1. **Prepare the host:**
+
+   ```bash
+   sudo compose/decdn-compose init onramp caddy --domain onramp.example.org --generate-treasury
+   ```
+
+   This creates the `sponsord` and `caddy` accounts, `/etc/sponsord` and
+   `/var/lib/caddy`, the API token, and the env files, with the chain id and the
+   PaymentPool, CapacityBond and SlashJudge addresses filled in from this repo's
+   mirror of upstream's deployment manifest. Leave out `caddy` to bring your own
+   proxy, and `onramp` (use `sponsord`) for the daemon alone.
+
+   `--generate-treasury` creates the treasury wallet on the host. Without it, copy
+   your own keystore and its password in, owned by `sponsord`, `0600`:
+   `/etc/sponsord/treasury-keystore.json` and `/etc/sponsord/treasury-password`.
+   Either way, fund it with USDC plus gas, then open its pool from it
+   (`decdn pool open`, which prints the pool id). It is a hot key: hold only a few
+   top-ups' worth. Back it up now.
+
+2. **The rest of the settings** (`init` lists exactly which):
+
+   ```bash
+   sudoedit /etc/sponsord/secret.env           # SPONSORD_RPC_URL='https://…' (may embed an API key)
+   sudoedit /etc/sponsord/sponsord.env         # SPONSORD_POOL_ID
+   sudoedit /etc/sponsord/sponsord-onramp.env  # ONRAMP_RPC_URL (public), ONRAMP_TURNSTILE_SITEKEY
+   sudo install -m 0600 -o sponsord -g sponsord /dev/null /etc/sponsord/turnstile-secret
+   sudoedit /etc/sponsord/turnstile-secret     # the Turnstile widget's secret key
+   ```
+
+   `sudoedit` writes a file back with its existing owner and mode.
+
+3. **TLS in front of the onramp.** Either:
+   - **Caddy** (`caddy` profile): point the domain's DNS at this host and open
+     **tcp/80** and **tcp/443** in the host firewall and the cloud security group.
+     Caddy gets the certificate from Let's Encrypt, redirects http to https and
+     proxies to `127.0.0.1:8080`. Its config is [`Caddyfile`](Caddyfile): no admin
+     API, no HTTP/3 (so no udp/443), and an optional ACME contact email. `init` set
+     `ONRAMP_CLIENT_IP_HEADER=X-Forwarded-For` in `sponsord-onramp.env`, so the onramp
+     rate limits each client instead of Caddy as a whole.
+   - **Your own proxy**: leave `caddy` out and proxy the domain to `127.0.0.1:8080`.
+     Then decide on `ONRAMP_CLIENT_IP_HEADER` in `sponsord-onramp.env`. The onramp
+     rate limits by that header's right-most address, so set it only if your proxy is
+     the **only** way in and overwrites that header (e.g. `CF-Connecting-IP` behind
+     Cloudflare). Unset, the onramp limits by the TCP peer, which behind a proxy is
+     the proxy itself.
+
+4. **Start it:**
+
+   ```bash
+   sudo compose/decdn-compose up
+   sudo compose/decdn-compose health
+   ```
+
+   sponsord binds only after it has decrypted the keystore and confirmed on-chain
+   that the treasury owns `SPONSORD_POOL_ID`. Until then it exits and restarts, and
+   its log says why. The onramp exits while the daemon is unreachable, so it restarts
+   until sponsord is up.
+
+**Your own gate page** (optional; upstream `docs/operator.md`, "Your own gate page",
+lists its placeholders): put the HTML in `/etc/sponsord/onramp-gate/`, the one
+directory the onramp mounts for it, and point `ONRAMP_GATE_TEMPLATE` at it in
+`sponsord-onramp.env`:
+
+```bash
+sudo install -D -m 0644 -o root -g root gate.html /etc/sponsord/onramp-gate/gate.html
+# in sponsord-onramp.env: ONRAMP_GATE_TEMPLATE=/etc/sponsord/onramp-gate/gate.html
+```
+
+The onramp serves whatever file `ONRAMP_GATE_TEMPLATE` names, to anyone, and its
+container also holds the API token and the Turnstile secret. So `compose.yaml` starts
+it through a check: unless the path resolves (symlinks followed) to a file in
+`/etc/sponsord/onramp-gate/`, the onramp exits at start and its log says why.
+
 ### How it is laid out
 
 | Host path | Owner, mode | Reaches | As |
 |-----------|-------------|---------|----|
-| `/etc/sponsord/secret.env` | `root`, `0600` | sponsord | env, read by `sudo docker compose`: `SPONSORD_RPC_URL` only |
+| `/etc/sponsord/secret.env` | `root`, `0600` | sponsord | env, read by Compose: `SPONSORD_RPC_URL` only |
 | `/etc/sponsord/sponsord.env` | `root`, `0644` | sponsord | env: chain, PaymentPool, pool id, limits |
 | `/etc/sponsord/sponsord-onramp.env` | `root`, `0644` | onramp | env: public settings |
-| `/etc/sponsord/api-token` | `sponsord`, `0600` | both | read-only file in `/run/secrets/` |
-| `/etc/sponsord/treasury-keystore.json` | `sponsord`, `0600` | sponsord | read-only file in `/run/secrets/` |
-| `/etc/sponsord/treasury-password` | `sponsord`, `0600` | sponsord | read-only file in `/run/secrets/` |
-| `/etc/sponsord/turnstile-secret` | `sponsord`, `0600` | onramp | read-only file in `/run/secrets/` |
+| `/etc/sponsord/api-token` | `sponsord`, `0600` | both | Compose secret, `/run/secrets/api-token` |
+| `/etc/sponsord/treasury-keystore.json` | `sponsord`, `0600` | sponsord | Compose secret |
+| `/etc/sponsord/treasury-password` | `sponsord`, `0600` | sponsord | Compose secret |
+| `/etc/sponsord/turnstile-secret` | `sponsord`, `0600` | onramp | Compose secret |
 | `/etc/sponsord/onramp-gate/` | `root`, `0755` | onramp | read-only directory, same path: an optional custom gate page |
 | `/var/lib/caddy/` | `caddy`, `0700` | Caddy | `/data`: certificates, ACME account |
 
 The paths match the Ansible roles, with one difference: the credential files belong
 to a `sponsord` account instead of root. Under systemd, root hands them to the
-service; here they are bind-mounted, which keeps the host file's owner and mode, and
-sponsord refuses a treasury keystore that anyone but its owner can read. Both daemons
-run as that account, and each container sees only the files it needs. A host moved
-from the Ansible path needs a `chown` of those four files, and running the Ansible
-`sponsord` role on the host again chowns them back to root, which stops this path.
+service; here a Compose secret is a read-only bind mount, which keeps the host file's
+owner and mode, and sponsord refuses a treasury keystore that anyone but its owner can
+read. Both daemons run as that account, and each container sees only the files it
+needs. A host moved from the Ansible path needs a `chown` of those four files, and
+running the Ansible `sponsord` role on the host again chowns them back to root, which
+stops this path.
 
 `compose.yaml` sets both listeners (`127.0.0.1:8090` for sponsord, `127.0.0.1:8080`
 for the onramp), the onramp's daemon URL and every secret file path in
@@ -242,172 +294,78 @@ release images default both listeners to `0.0.0.0`. No container publishes a por
 sponsord is reachable only from the host, and from outside, the onramp only through
 the proxy.
 
-### Set up
-
-1. **System accounts and directories:**
-
-   ```bash
-   sudo useradd --system --no-create-home --shell /usr/sbin/nologin sponsord
-   sudo install -d -m 0755 -o root -g root /etc/sponsord
-   # with the caddy profile:
-   sudo useradd --system --no-create-home --shell /usr/sbin/nologin caddy
-   sudo install -d -m 0700 -o caddy -g caddy /var/lib/caddy
-   ```
-
-2. **The treasury wallet.** Create it with the decdn CLI (`decdn key-gen`, which
-   writes `keystore.json`), fund it with USDC plus gas, then open its pool from it
-   (`decdn pool open`, which prints the pool id). It is a hot key: hold only a few
-   top-ups' worth. Then copy the keystore and its password onto the host:
-
-   ```bash
-   sudo install -m 0600 -o sponsord -g sponsord keystore.json /etc/sponsord/treasury-keystore.json
-   sudo install -m 0600 -o sponsord -g sponsord treasury-password      /etc/sponsord/treasury-password
-   ```
-
-3. **The API token**, generated on the host and never replaced (the onramp presents
-   the same token):
-
-   ```bash
-   openssl rand -hex 32 | sudo install -m 0600 -o sponsord -g sponsord /dev/stdin /etc/sponsord/api-token
-   ```
-
-4. **sponsord's settings.** The RPC URL may embed an API key, so it gets its own
-   root-only file; the rest is not secret. Take the chain id and PaymentPool address
-   from the deployment this repo mirrors,
-   [`roles/sponsord/vars/main/networks.yml`](../ansible/roles/sponsord/vars/main/networks.yml).
-
-   ```bash
-   sudo install -m 0600 -o root -g root compose/sponsord-secret.env.example /etc/sponsord/secret.env
-   sudoedit /etc/sponsord/secret.env        # SPONSORD_RPC_URL='https://…'
-   sudo install -m 0644 -o root -g root compose/sponsord.env.example /etc/sponsord/sponsord.env
-   sudoedit /etc/sponsord/sponsord.env      # SPONSORD_CHAIN_ID, SPONSORD_PAYMENT_POOL_ADDR, SPONSORD_POOL_ID
-   ```
-
-5. **The onramp** (`onramp` profile). Create a Cloudflare Turnstile widget for the
-   onramp's domain, then store its secret and fill in the public settings. The
-   CapacityBond address is in
-   [`roles/sponsord_onramp/vars/main/networks.yml`](../ansible/roles/sponsord_onramp/vars/main/networks.yml).
-
-   ```bash
-   sudo install -m 0600 -o sponsord -g sponsord /dev/null /etc/sponsord/turnstile-secret
-   sudoedit /etc/sponsord/turnstile-secret  # the widget's secret key
-   sudo install -m 0644 -o root -g root compose/sponsord-onramp.env.example /etc/sponsord/sponsord-onramp.env
-   sudoedit /etc/sponsord/sponsord-onramp.env
-   ```
-
-   `sudoedit` writes the file back with its existing owner and mode.
-
-   **Your own gate page** (optional; upstream `docs/operator.md`, "Your own gate
-   page", lists its placeholders): put the HTML in `/etc/sponsord/onramp-gate/`, the
-   one directory the onramp mounts for it (created empty when absent), and point
-   `ONRAMP_GATE_TEMPLATE` at it in `sponsord-onramp.env`:
-
-   ```bash
-   sudo install -D -m 0644 -o root -g root gate.html /etc/sponsord/onramp-gate/gate.html
-   # in sponsord-onramp.env: ONRAMP_GATE_TEMPLATE=/etc/sponsord/onramp-gate/gate.html
-   ```
-
-   The onramp serves whatever file `ONRAMP_GATE_TEMPLATE` names, to anyone, and its
-   container also holds the API token and the Turnstile secret. So `compose.yaml`
-   starts it through a check: unless the path resolves (symlinks followed) to a file
-   in `/etc/sponsord/onramp-gate/`, the onramp exits at start and its log says why.
-
-6. **TLS in front of the onramp.** Either:
-   - **Caddy** (`caddy` profile): point the domain's DNS at this host and open
-     **tcp/80** and **tcp/443** in the host firewall and the cloud security group.
-     Caddy gets the certificate from Let's Encrypt, redirects http to https and
-     proxies to `127.0.0.1:8080`. Its config is [`Caddyfile`](Caddyfile): no admin
-     API, no HTTP/3 (so no udp/443), and an optional ACME contact email. Uncomment
-     `ONRAMP_CLIENT_IP_HEADER=X-Forwarded-For` in `sponsord-onramp.env`, so the onramp
-     rate limits each client instead of Caddy as a whole.
-   - **Your own proxy**: leave `caddy` out of `COMPOSE_PROFILES` and proxy the domain
-     to `127.0.0.1:8080`. Then decide on `ONRAMP_CLIENT_IP_HEADER` in
-     `sponsord-onramp.env`. The onramp rate limits by that header's right-most
-     address, so set it only if your proxy is the **only** way in and overwrites
-     that header (e.g. `CF-Connecting-IP` behind Cloudflare). Unset, the onramp
-     limits by the TCP peer, which behind a proxy is the proxy itself.
-
-7. **Start it:**
-
-   ```bash
-   cp compose/.env.example compose/.env      # unless the node already uses one
-   $EDITOR compose/.env    # COMPOSE_PROFILES=onramp,caddy; SPONSORD_*_IMAGE_DIGEST;
-                           # SPONSORD_UID/GID, CADDY_UID/GID (`id -u sponsord` …);
-                           # SPONSORD_ONRAMP_DOMAIN
-   sudo docker compose -f compose/compose.yaml up -d
-   curl -s 127.0.0.1:8090/healthz             # {"ok":true}
-   curl -s 127.0.0.1:8080/healthz             # {"ok":true}
-   curl -s https://<domain>/healthz           # through Caddy
-   ```
-
-   sponsord binds only after it has decrypted the keystore and confirmed on-chain
-   that the treasury owns `SPONSORD_POOL_ID`. Until then it exits and restarts, and
-   its log says why. The onramp exits while the daemon is unreachable, so it restarts
-   until sponsord is up.
-
 ### Operate
 
-As for the node, run these from the repository root with `sudo`.
+#### The top-up hold
 
-**Before anything that restarts or stops sponsord** (a restart, a stop, an `up -d`
-that recreates it, a treasury rotation), check that it holds no unconfirmed pool
-top-up:
+A stop or a restart of sponsord forgets a held, unconfirmed pool top-up: the keeper
+broadcast one and could not read its receipt, so it sends no other until that
+transaction mines or provably never can. Forget the hold and the pool can be refilled
+twice. So `stop`, `restart`, `down`, and an `up` that would recreate sponsord (a
+changed image, env file or setting), first read sponsord's
+`sponsord_pool_topup_unconfirmed_since_unix` from `127.0.0.1:8090/metrics`, and refuse
+while it is not 0 or cannot be read, as the Ansible role does. Wait for it to clear;
+if the transaction was dropped, send 0-value transactions from the treasury to itself
+until it does (the error log line names the transaction and how many). The
+`SponsordTopupHeld` alert flags it. `--ignore-topup-hold` (before the command)
+overrides the check. A plain `docker compose` command does not check: use the
+wrapper.
 
-```bash
-curl -fsS 127.0.0.1:8090/metrics | grep '^sponsord_pool_topup_unconfirmed_since_unix'
-```
-
-`… 0` means no hold. An error or no output means the state is unknown: do not
-restart until you know. Anything else is a held top-up: the keeper broadcast one and could not read its
-receipt, so it sends no other until that transaction mines or provably never can. A
-restart forgets the hold, and the pool can then be refilled twice. Wait for it to
-clear; if the transaction was dropped, send 0-value transactions from the treasury to
-itself until it does (the error log line names the transaction and how many). The
-Ansible role refuses such a restart on its own; Compose cannot, so this check is
-yours. The `SponsordTopupHeld` alert (below) flags it.
-
-- **Logs:** `sudo docker compose -f compose/compose.yaml logs -f sponsord sponsord-onramp caddy`.
-- **Stop:** `sudo docker compose -f compose/compose.yaml stop caddy sponsord-onramp sponsord`
-  (leave out `caddy` without that profile). On SIGTERM sponsord waits for a pool
-  top-up it already sent, up to 120 s. Stopping sponsord alone leaves the onramp
-  running, and stopping both leaves Caddy on tcp/80 and tcp/443 answering with
-  errors.
-- **Restart:** `sudo docker compose -f compose/compose.yaml restart sponsord` restarts
-  the onramp too, because the onramp reads the daemon's limits only at start.
-- **Config change:** edit the env file, then
-  `sudo docker compose -f compose/compose.yaml up -d`, which recreates a container
-  whose env changed. A changed credential file needs
-  `sudo docker compose -f compose/compose.yaml restart sponsord` (the onramp restarts
-  with it), or `restart sponsord-onramp` for the Turnstile secret alone.
-- **Caddyfile change:** `sudo docker compose -f compose/compose.yaml restart caddy`.
-  The admin API is off, so there is no live reload.
+- **Logs:** `sudo compose/decdn-compose logs -f sponsord sponsord-onramp caddy`.
+- **Stop:** `sudo compose/decdn-compose stop caddy sponsord-onramp sponsord`. On
+  SIGTERM sponsord waits for a pool top-up it already sent, up to 120 s. Stopping
+  sponsord alone leaves the onramp running, and stopping both leaves Caddy on tcp/80
+  and tcp/443 answering with errors.
+- **Restart:** `sudo compose/decdn-compose restart sponsord` restarts the onramp too,
+  because the onramp reads the daemon's limits only at start.
+- **Config change:** edit the env file, then `sudo compose/decdn-compose up`, which
+  recreates a container whose env changed. A changed credential file needs
+  `restart sponsord` (the onramp restarts with it), or `restart sponsord-onramp` for
+  the Turnstile secret alone.
+- **Caddyfile change:** `sudo compose/decdn-compose restart caddy`. The admin API is
+  off, so there is no live reload.
 - **Rotate the treasury:** replace the keystore and password files (same owner and
-  mode), then `sudo docker compose -f compose/compose.yaml restart sponsord`. The new
-  wallet must own `SPONSORD_POOL_ID`, or sponsord exits at start.
-- **Health:** no container healthchecks, as for the node. Probe the two `/healthz`
-  endpoints above from the host. sponsord also serves `/metrics` on the same port, and
-  logs errors only unless `RUST_LOG=info` is set in `sponsord.env`. The onramp logs
-  at info; its `RUST_LOG` takes a level or `target=level` pairs only (a span or
-  field filter makes it log nothing).
+  mode), then `restart sponsord`. The new wallet must own `SPONSORD_POOL_ID`, or
+  sponsord exits at start.
+- **Health:** `health` probes both `/healthz` endpoints and the hold. sponsord logs
+  errors only unless `RUST_LOG=info` is set in `sponsord.env`. The onramp logs at
+  info; its `RUST_LOG` takes a level or `target=level` pairs only (a span or field
+  filter makes it log nothing).
 - **Dashboard and alerts:** a sponsord dashboard and alert rules (pool balance, keeper
   failures, a held top-up) are in
   [`monitoring/sponsord/`](../monitoring/README.md#sponsord).
 - **Backup:** the treasury keystore and password are the only copy of the key that
-  owns the pool and its funds. Copy them off the host encrypted, with the same
-  files the Ansible path's `make backup` takes
-  ([`docs/lifecycle.md`](../docs/lifecycle.md)):
+  owns the pool and its funds: `sudo compose/decdn-compose backup -r age1…` takes them
+  with the API token, the Turnstile secret and the env files.
 
-  ```bash
-  set -o pipefail
-  sudo tar -C / --numeric-owner -czf - etc/sponsord/treasury-keystore.json \
-      etc/sponsord/treasury-password etc/sponsord/api-token etc/sponsord/turnstile-secret \
-    | age -r age1… -o sponsord.tar.age
-  ```
+## Logs
+
+Every container logs to the host journal (Compose's `journald` driver), like the
+systemd units: `journalctl CONTAINER_NAME=decdn-sponsord-1`, or
+`decdn-compose logs`. On a host without journald, `check` refuses to start; set
+another driver per service in a `compose.override.yaml` beside `compose.yaml`, which
+the wrapper always includes:
+
+```yaml
+services:
+  decdn-node:
+    logging: {driver: local}
+```
+
+## Backups
+
+`sudo compose/decdn-compose backup -r age1… [-r age1…] [-o file.tar.age]` writes, in
+the current directory, one archive of the active profiles' keys, secrets and env
+files, encrypted on the host to the age recipients (nothing readable touches the
+disk). It is the same set as the Ansible path's `make backup` takes for the identity;
+restore with `age -d -i <key> <file> | sudo tar -C / -xzp --numeric-owner`, as in
+[`docs/lifecycle.md`](../docs/lifecycle.md#restore-and-host-migration).
 
 ## A local image
 
-To run an unreleased build, build the daemon image from a `decdn/decdn` checkout (its `Dockerfile` header shows
-how) and push it to a registry on the host's loopback, which gives it a digest:
+To run an unreleased build, build the daemon image from a `decdn/decdn` checkout (its
+`Dockerfile` header shows how) and push it to a registry on the host's loopback, which
+gives it a digest:
 
 ```bash
 sudo docker run -d --name registry --restart unless-stopped -p 127.0.0.1:5000:5000 registry:2
@@ -422,9 +380,10 @@ DECDN_IMAGE_REPO=127.0.0.1:5000/decdn-node
 DECDN_IMAGE_DIGEST=sha256:…                       # from the push output
 ```
 
-The upstream image is based on Debian bookworm (glibc 2.36). A `decdn-node` built
-natively on a newer distribution will not start in it; build with `cross`, as the
-upstream release does, or on bookworm.
+The upstream image is based on Debian; a `decdn-node` built natively on a newer
+distribution than the image's may not start in it. Build with `cross`, as the upstream
+release does. The image must carry the `decdn` CLI too: the wrapper and the node's
+healthcheck use it.
 
 The sponsord images work the same way. `decdn/sponsord`'s `deploy/Dockerfile` builds
 either one from source:
@@ -440,20 +399,42 @@ sudo docker push 127.0.0.1:5000/sponsord:dev && sudo docker push 127.0.0.1:5000/
 Then set `SPONSORD_IMAGE_REPO` / `SPONSORD_IMAGE_DIGEST` and
 `SPONSORD_ONRAMP_IMAGE_REPO` / `SPONSORD_ONRAMP_IMAGE_DIGEST` in `.env`.
 
+## Without the wrapper
+
+`compose.yaml` is plain Compose, and every wrapper command maps onto one:
+`sudo docker compose --project-directory compose up -d` (from the checkout's root),
+`… stop decdn-node`, and so on. What you give up: the preflight, and the top-up hold
+check, which you must then make yourself before anything that stops or recreates
+sponsord:
+
+```bash
+curl -fsS 127.0.0.1:8090/metrics | grep '^sponsord_pool_topup_unconfirmed_since_unix'
+```
+
+`… 0` means no hold; an error or no output means the state is unknown. With a
+`compose.override.yaml`, `--project-directory compose` picks it up only when no `-f`
+is given.
+
 ## Security notes
 
 - Every container runs as a dedicated host account (`decdn`, `sponsord`, `caddy`) with
-  a read-only root filesystem, every capability dropped and `no-new-privileges`.
-  Caddy keeps `NET_BIND_SERVICE` and nothing else, for tcp/80 and tcp/443.
-- Secret files are mounted read-only and one by one, so a container sees only its
-  own. The secrets that are environment variables (`DECDN_RPC_URL`,
+  a read-only root filesystem, every capability dropped and `no-new-privileges`, from
+  one shared block (`x-hardened`). Caddy keeps `NET_BIND_SERVICE` and nothing else,
+  for tcp/80 and tcp/443.
+- Secret files reach the sponsor's containers as Compose secrets: read-only, one file
+  each, from a host file only (never an environment source), so a container sees only
+  its own. A missing secret file fails the start; Docker never creates one in its
+  place. The secrets that are environment variables (`DECDN_RPC_URL`,
   `SPONSORD_RPC_URL`) live in root-only files on disk; Compose copies them into the
   container's config when it creates it.
+- The wrapper never prints a secret: a failed `config validate` is shown with every
+  URL cut to its scheme and host.
 - The remaining KICS findings are the design, not an oversight: host networking
-  (loopback-only backends, no Docker-published ports), no healthchecks (see above),
-  Caddy's one added capability, and the API token both sponsord containers mount.
-  The "Volume Has Sensitive Host Directory" query, which flags every host-path mount
-  (the roles' host layout), is excluded for the reason given in the root `Makefile`.
+  (loopback-only backends, no Docker-published ports), no healthchecks on the sponsor's
+  images (they have no HTTP client), Caddy's one added capability, and the API token
+  both sponsord containers mount. The "Volume Has Sensitive Host Directory" query,
+  which flags every host-path mount (the roles' host layout), is excluded for the
+  reason given in the root `Makefile`.
 - Every image is referenced by digest: `compose.yaml` builds `REPO@DIGEST` itself,
   so no `.env` value can turn it into a mutable tag.
 - Compose cannot require a variable without breaking the profiles that do not use
@@ -468,4 +449,5 @@ Then set `SPONSORD_IMAGE_REPO` / `SPONSORD_IMAGE_DIGEST` and
   if any of those properties regress ([`tests/invariants.jq`](tests/invariants.jq),
   [`tests/inline-env.jq`](tests/inline-env.jq),
   [`tests/fail-closed.jq`](tests/fail-closed.jq)); `make test-scripts` checks it
-  rejects broken variants.
+  rejects broken variants and runs the wrapper's unit tests
+  ([`tests/test_decdn_compose.py`](tests/test_decdn_compose.py)).

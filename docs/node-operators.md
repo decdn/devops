@@ -20,7 +20,7 @@ loopback, and the chain's contract addresses taken from upstream's deployment ma
 |------|------------|-------------|
 | **Ansible** (VMs, bare metal, a fleet) | [`ansible/README.md`](../ansible/README.md) | `inventory/hosts-node.yml.example`, `make deploy-node` (`playbooks/node.yml`) |
 | **cloud-init** (one VM, no control machine) | [`cloud-init/README.md`](../cloud-init/README.md) | `cloud-init/user-data-node.yaml` |
-| **Docker Compose** (one Docker host) | [`compose/README.md`](../compose/README.md) | `COMPOSE_PROFILES=node` |
+| **Docker Compose** (one Docker host) | [`compose/README.md`](../compose/README.md) | `decdn-compose init node` |
 | **Helm** (Kubernetes, one release per node) | [`charts/decdn-node/README.md`](../charts/decdn-node/README.md) | the chart, with no `config.cache.origin` |
 
 [`requirements.md`](requirements.md) has the hardware, network and platform requirements,
@@ -29,7 +29,7 @@ and compares the paths. The Galaxy collection for your own playbooks is
 
 A node without an origin backend fills a miss by pulling from other nodes
 (`node_to_node_pull_through_enabled`). The Ansible role and the chart turn that on for
-you. On Compose, set it in `node.toml`; the daemon's default is off. A pull is paid
+you, and so does `decdn-compose init node` on Compose; the daemon's default is off. A pull is paid
 from the node's own PaymentPool (the node-to-node tier of
 [ADR 003](https://github.com/decdn/decdn/blob/main/adr/003-payments.md)), so the node
 fronts USDC for its misses. `buyer_working_deposit_micro_usdc` is not a cap: it is the

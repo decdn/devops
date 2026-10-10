@@ -17,7 +17,7 @@ facts (bond sizing, fees) are not here: they come from the deCDN ADRs.
 | Install source | signed release tarball, build on the host from a git ref, or local build | signed release tarball | image by digest (enforced) | image by digest (recommended) or tag |
 | Chain config | `decdn_network` profile | `decdn_network` profile | `decdn config init --chain` | explicit values |
 | Monitoring | opt-in Grafana Cloud agent | opt-in Grafana Cloud agent (token in a host file) | bring your own | ServiceMonitor, PrometheusRule, dashboards |
-| Backup / decommission | `make backup` / `make decommission` | the Ansible targets, from a workstation inventory | manual commands | PVC snapshot |
+| Backup / decommission | `make backup` / `make decommission` | the Ansible targets, from a workstation inventory | `decdn-compose backup` / `down` | PVC snapshot |
 | Guide | [ansible/README.md](../ansible/README.md) | [cloud-init/README.md](../cloud-init/README.md) | [compose/README.md](../compose/README.md) | [charts/decdn-node/README.md](../charts/decdn-node/README.md) |
 
 If you are unsure: a VPS or dedicated server you control end to end is the Ansible
@@ -34,7 +34,7 @@ and they run the same roles.
 | Ansible (control machine) | ansible-core ≥ 2.15 | CI runs the current release |
 | cloud-init | the provider image's own; the bootstrap installs its pinned ansible-core on the host | the node template is booted with the distro's cloud-init in Debian 12 and Ubuntu 26.04 containers, to a running node; the sponsor template in Ubuntu 26.04, to running `sponsord`, `sponsord-onramp` and Caddy |
 | Kubernetes | ≥ 1.25 | rendered and validated with kubeconform against 1.30 |
-| Docker Compose | v2 with `env_file.required` and `depends_on.restart` support (2.24+) | rendered in CI with every profile on |
+| Docker Compose | v2 with `env_file.required` and `depends_on.restart` support (2.24+), on a host with systemd-journald; Python ≥ 3.11 for the `decdn-compose` wrapper | rendered in CI with every profile on; the wrapper's decisions unit-tested |
 
 On Ubuntu 25.10 and later, `sudo` is sudo-rs; see the `ansible_become_exe` note in
 `ansible/inventory/hosts-node.yml.example`.

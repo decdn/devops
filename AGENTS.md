@@ -92,8 +92,10 @@ ansible/                # the deployment project (DevSec-hardened, lean roles)
 cloud-init/             # user-data-{node,publisher}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
 compose/                # Docker Compose deploy path for a single host (see its README.md)
   compose.yaml          # profiles: node / origin (one decdn-node), sponsord, onramp (+ sponsord), caddy
+  decdn-compose         # the operator's wrapper: init, check, guarded up/stop/restart/down, health, cli, backup
   Caddyfile             # mirrors roles/sponsord_onramp/templates/Caddyfile.j2
   tests/*.jq            # lint-compose: invariants, inline-env, fail-closed
+  tests/test_decdn_compose.py  # the wrapper's unit tests (make test-scripts)
 charts/
   decdn-node/           # Helm chart for the node on Kubernetes (see its README.md)
     ci/                 # CI values files (mirror molecule/schema's three plays)
@@ -275,8 +277,8 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     **The restart-inputs comparison is the role's only restart trigger:** never add
     `notify: Restart sponsord` to another task; make the file a hashed input
     instead, or the restart skips the guard. `sponsord_restart_ignore_topup_hold`
-    overrides it (pass it as JSON). Compose cannot guard itself; its README has the
-    manual check.
+    overrides it (pass it as JSON). On Compose, `decdn-compose` makes the same check
+    (`hold_state`, same semantics) before a stop, restart, down or recreating `up`.
   - **Alloy toggles:** `playbooks/group_vars/all.yml` derives
     `grafana_alloy_node_enabled` / `grafana_alloy_sponsord_enabled` from group
     membership. They are host-scoped so a co-located host's two plays render one
@@ -465,15 +467,35 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   SIGTERM grace. Every service sits behind a profile (`COMPOSE_PROFILES` in `.env`):
   `node` and `origin` (both start the one `decdn-node`: a node operator's cache node,
   or a publisher's origin, whose `node.toml` carries `[cache.origin]`), `sponsord`,
-  `onramp` (also starts `sponsord`) and `caddy`. An fs origin's content mount goes in
-  the operator's own `compose.override.yaml` (passed as a second `-f` on every
-  command: Compose skips it when `-f` is given), so the committed mounts stay exact.
+  `onramp` (also starts `sponsord`) and `caddy`. The shared hardening (host network,
+  read-only rootfs, `cap_drop: [ALL]`, `no-new-privileges`, SIGTERM, journald logging)
+  is one `x-hardened` anchor merged by `<<: *hardened`; the lint checks the rendered
+  result, so a service-level override is caught like an inline one. An fs origin's
+  content is `DECDN_ORIGIN_DIR`, mounted read-only at the fixed `/srv/decdn-origin`.
+  The node's healthcheck is `decdn node health` (the image ships the CLI since decdn
+  v0.0.2).
+  - **`decdn-compose`** (Python ≥ 3.11, stdlib only): every service command is plain
+    `docker compose --project-directory compose/ -f compose.yaml [-f
+    compose.override.yaml]`. `init` creates the accounts, dirs and host-generated
+    secrets (node keys and `config init` through the node image's CLI, the API
+    token, optionally the treasury wallet) and fills chain values from the generated
+    `networks.yml` mirrors (`network_profile`, which parses their fixed shape: keep
+    it, or update the parser); it never replaces a secret. `check` (also run by
+    `up`) is the preflight, including `decdn config validate` with every URL in a
+    failure redacted. The top-up guard asks Compose itself whether an `up` recreates
+    sponsord (`--dry-run up`): `config --hash` differs from the container label on
+    older Compose. Running containers are found by Compose's labels (project
+    `decdn`), not `compose ps`, which loads disabled services' env files.
+    `make test-scripts` runs its unit tests; no CI job runs it end to end, so try a
+    change in a throwaway `docker:27-dind` (privileged) with a `compose.override.yaml`
+    that sets a non-journald logging driver.
   - **sponsord / onramp:** the roles' `/etc/sponsord/` layout, except that the
-    credential files belong to a host `sponsord` account (bind mounts keep owner and
-    mode, and upstream rejects a group-readable keystore). They are mounted
-    read-only one by one into `/run/secrets/`. Listeners and secret paths are set in
-    `environment:`, which beats env files, because the release images default to
-    `0.0.0.0`.
+    credential files belong to a host `sponsord` account (a Compose secret is a bind
+    mount, which keeps owner and mode, and upstream rejects a group-readable
+    keystore). They reach the containers as Compose `secrets:` (`file:` sources
+    only, read-only, one each, in `/run/secrets/`; a missing file fails the start).
+    Listeners and secret paths are set in `environment:`, which beats env files,
+    because the release images default to `0.0.0.0`.
   - **Onramp entrypoint:** upstream serves whatever `ONRAMP_GATE_TEMPLATE` names, and
     the container also mounts the daemon token and the Turnstile secret, so the
     onramp starts through a `/bin/sh` check that the path resolves into
@@ -542,7 +564,7 @@ make lint-helm        # chart: lint + render tests + kubeconform + promtool + sc
 make lint-alloy       # grafana_alloy config against the real pinned Alloy binary
 make lint-compose     # compose/ invariants (three renders, compose/tests/*.jq)
 make lint-cloud-init  # cloud-init/user-data*.yaml: schema + invariants (no secrets, release mode, lock)
-make test-scripts     # Makefile/molecule-driver guards, release gate, lint-compose/lint-cloud-init negatives
+make test-scripts     # Makefile/molecule-driver guards, release gate, lint-compose/lint-cloud-init negatives, decdn-compose unit tests
 make security         # KICS over ansible/, the rendered chart and compose/
 
 # Ansible — run from ansible/

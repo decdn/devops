@@ -68,8 +68,8 @@ applies to a backup that succeeded.
 age -d -i ~/.config/decdn/backup-age.key ansible/backups/<host>/<file>.tar.age | tar -tz
 ```
 
-Without Ansible (Compose or a hand-built host), the same archive is one command on
-the node:
+Without Ansible (a hand-built host; on Compose, `decdn-compose backup`), the same
+archive is one command on the node:
 
 ```bash
 sudo tar -C / --numeric-owner -czf - var/lib/decdn/node.secret var/lib/decdn/keystore.json \
@@ -350,10 +350,11 @@ and certificate, which a new host re-issues for itself.
 
 - **Compose** ([`compose/`](../compose/README.md)) uses the same host paths
   (`/var/lib/decdn`, `/etc/decdn`), so the manual backup command and the restore steps
-  above apply unchanged; stop the node with
-  `sudo docker compose -f compose/compose.yaml stop decdn-node`.
-  sponsord's Compose layout uses `/etc/sponsord` too; its README shows the manual
-  backup and the top-up-hold check before a restart.
+  above apply unchanged. `sudo compose/decdn-compose backup -r age1…` takes the
+  identity (and, on a sponsor host, the treasury and the other secrets under
+  `/etc/sponsord`) in one archive; stop the node with
+  `sudo compose/decdn-compose stop decdn-node`. The wrapper refuses to stop or
+  recreate a sponsord that holds an unconfirmed pool top-up, as the Ansible role does.
 - **Helm**: the identity lives in the operator-provisioned `existingSecret`, which you
   created off-cluster and should already hold elsewhere. The daemon's state is on the
   PVC; snapshot it with your storage's `VolumeSnapshot` support after scaling the
