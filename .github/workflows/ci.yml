@@ -244,7 +244,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.compose == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5          # docker compose + jq ship on ubuntu-latest; seconds in practice
+    timeout-minutes: 5          # docker compose, jq and yq (mikefarah) ship on ubuntu-latest; seconds in practice
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Compose invariants

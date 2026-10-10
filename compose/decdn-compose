@@ -2179,6 +2179,7 @@ def tls_healthz(domain: str, addr: str = "127.0.0.1") -> str:
     relay), against the host's trust store: proves the certificate, not just the
     listener."""
     ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     try:
         with (
             socket.create_connection((addr, 443), timeout=5) as raw,

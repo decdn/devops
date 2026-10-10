@@ -609,8 +609,13 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     variable would break other profiles. An unset variable renders a value its
     service refuses instead (invalid image reference, unknown user, a domain with a
     non-numeric port).
-  - **Gates:** `make lint-compose` renders with `--profile '*'` under `env -i`, three
-    times:
+  - **Gates:** `make lint-compose` first reads the file as written (`yq -o=json`)
+    against `compose/tests/bind-sources.jq`: every bind mount sets `create_host_path`,
+    true only for the onramp's gate-page directory and the volatile journal. That
+    flag is checked on the source because Compose releases render it in opposite
+    ways (v2.33 drops false, v5 drops true) and default it differently; never move
+    it into the render-based invariants. Then it renders with `--profile '*'` under
+    `env -i`, three times:
     - with the example `.env`, against `compose/tests/invariants.jq`: allowed keys
       and exact mounts per service, so `privileged`, `pid: host` or an extra mount
       fail;
@@ -663,7 +668,7 @@ make lint-ansible     # vendor collections + ansible-lint (production profile)
 make molecule         # every ansible/molecule/*/ scenario in parallel (Docker; JOBS=<n>, SCENARIOS='a b')
 make lint-helm        # chart: lint + render tests + kubeconform + promtool + schema keys
 make lint-alloy       # grafana_alloy config against the real pinned Alloy binary
-make lint-compose     # compose/ invariants (three renders, compose/tests/*.jq)
+make lint-compose     # compose/ invariants (the file as written + three renders, compose/tests/*.jq)
 make lint-cloud-init  # cloud-init/user-data*.yaml: schema + invariants (no secrets, release mode, lock)
 make test-scripts     # Makefile/molecule-driver guards, release gate, lint-compose/lint-cloud-init negatives, decdn-compose unit tests
 make security         # KICS over ansible/, the rendered chart and compose/

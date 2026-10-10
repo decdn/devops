@@ -814,9 +814,12 @@ is given.
   everything else
   (`DECDN_RPC_URL`, `SPONSORD_RPC_URL`, `GC_API_TOKEN`, …) comes from its env file on
   the host.
-- `make lint-compose` (CI job `compose`) renders this file with every profile on:
-  with the example `.env`, without the env files, and with an empty `.env`. It fails
-  if any of those properties regress ([`tests/invariants.jq`](tests/invariants.jq),
+- `make lint-compose` (CI job `compose`) reads this file as written, for every bind
+  mount's `create_host_path` ([`tests/bind-sources.jq`](tests/bind-sources.jq):
+  Compose releases render and default that flag differently, so each mount sets it),
+  then renders it with every profile on: with the example `.env`, without the env
+  files, and with an empty `.env`. It fails if any of those properties regress
+  ([`tests/invariants.jq`](tests/invariants.jq),
   [`tests/inline-env.jq`](tests/inline-env.jq),
   [`tests/fail-closed.jq`](tests/fail-closed.jq)); `make test-scripts` checks it
   rejects broken variants and runs the wrapper's unit tests

@@ -34,47 +34,44 @@ def nonroot: test("^[1-9][0-9]*:[1-9][0-9]*$");
 # down gracefully on SIGINT only.
 def stop_signal($n): {"iroh-relay": "SIGINT", "iroh-dns-server": "SIGINT"}[$n] // "SIGTERM";
 
-# Every mount, exactly: [source, target, read-only?, created?], volumes and secrets
-# alike (a secret is a read-only bind of its host file, listed as "secret:<file>").
-# Each container sees only its own files; the only writable ones are the node's
-# data dir, the state of Caddy and the iroh services, and Alloy's WAL. Alloy sees
-# the host read-only (/proc, /sys and / for host metrics, the journal for logs).
-# "created?" is Docker creating a missing source (create_host_path, true unless set
-# false): only for the onramp's optional gate-page directory and the volatile
-# journal (/run, a tmpfs that journald recreates), so a mistyped path or an NFS
-# mount that is not up fails the start instead of mounting an empty directory, and
-# /var/log/journal is never created (that would switch journald to persistent
-# storage). The Caddyfile's and config.alloy's sources are absolute (compose.yaml's
+# Every mount, exactly: [source, target, read-only?], volumes and secrets alike (a
+# secret is a read-only bind of its host file, listed as "secret:<file>"). Each
+# container sees only its own files; the only writable ones are the node's data
+# dir, the state of Caddy and the iroh services, and Alloy's WAL. Alloy sees the
+# host read-only (/proc, /sys and / for host metrics, the journal for logs).
+# Whether Docker may create a missing source (create_host_path) is checked on the
+# file as written (tests/bind-sources.jq): Compose releases render it differently.
+# The Caddyfile's and config.alloy's sources are absolute (compose.yaml's
 # directory), so they are matched by name; the origin content's source is the
 # operator's DECDN_ORIGIN_DIR, so only its target and mode are pinned.
 def allowed_mounts: {
-  "decdn-node": [["/etc/decdn", "/etc/decdn", true, false], ["/var/lib/decdn", "/var/lib/decdn", false, false],
-                 ["DECDN_ORIGIN_DIR", "/srv/decdn-origin", true, false]],
-  "sponsord": [["secret:/etc/sponsord/api-token", "/run/secrets/api-token", true, false],
-               ["secret:/etc/sponsord/treasury-password", "/run/secrets/treasury-password", true, false],
-               ["secret:/etc/sponsord/treasury-keystore.json", "/run/secrets/treasury-keystore.json", true, false]],
-  "sponsord-onramp": [["/etc/sponsord/onramp-gate", "/etc/sponsord/onramp-gate", true, true],
-                      ["secret:/etc/sponsord/api-token", "/run/secrets/api-token", true, false],
-                      ["secret:/etc/sponsord/turnstile-secret", "/run/secrets/turnstile-secret", true, false]],
-  "caddy": [["Caddyfile", "/etc/caddy/Caddyfile", true, false], ["/var/lib/caddy", "/data", false, false]],
-  "iroh-relay": [["/etc/iroh-relay/iroh-relay.toml", "/etc/iroh-relay/iroh-relay.toml", true, false],
-                 ["/var/lib/iroh-relay", "/var/lib/iroh-relay", false, false]],
-  "iroh-dns-server": [["/etc/iroh-dns-server/config.toml", "/etc/iroh-dns-server/config.toml", true, false],
-                      ["/var/lib/iroh-dns-server", "/var/lib/iroh-dns-server", false, false]],
-  "alloy": [["/proc", "/host/proc", true, false], ["/sys", "/host/sys", true, false],
-            ["/", "/host/root", true, false],
-            ["/var/log/journal", "/var/log/journal", true, false], ["/run/log/journal", "/run/log/journal", true, true],
-            ["/etc/machine-id", "/etc/machine-id", true, false],
-            ["alloy/config.alloy", "/etc/alloy/config.alloy", true, false],
-            ["/var/lib/alloy", "/var/lib/alloy", false, false]]
+  "decdn-node": [["/etc/decdn", "/etc/decdn", true], ["/var/lib/decdn", "/var/lib/decdn", false],
+                 ["DECDN_ORIGIN_DIR", "/srv/decdn-origin", true]],
+  "sponsord": [["secret:/etc/sponsord/api-token", "/run/secrets/api-token", true],
+               ["secret:/etc/sponsord/treasury-password", "/run/secrets/treasury-password", true],
+               ["secret:/etc/sponsord/treasury-keystore.json", "/run/secrets/treasury-keystore.json", true]],
+  "sponsord-onramp": [["/etc/sponsord/onramp-gate", "/etc/sponsord/onramp-gate", true],
+                      ["secret:/etc/sponsord/api-token", "/run/secrets/api-token", true],
+                      ["secret:/etc/sponsord/turnstile-secret", "/run/secrets/turnstile-secret", true]],
+  "caddy": [["Caddyfile", "/etc/caddy/Caddyfile", true], ["/var/lib/caddy", "/data", false]],
+  "iroh-relay": [["/etc/iroh-relay/iroh-relay.toml", "/etc/iroh-relay/iroh-relay.toml", true],
+                 ["/var/lib/iroh-relay", "/var/lib/iroh-relay", false]],
+  "iroh-dns-server": [["/etc/iroh-dns-server/config.toml", "/etc/iroh-dns-server/config.toml", true],
+                      ["/var/lib/iroh-dns-server", "/var/lib/iroh-dns-server", false]],
+  "alloy": [["/proc", "/host/proc", true], ["/sys", "/host/sys", true],
+            ["/", "/host/root", true],
+            ["/var/log/journal", "/var/log/journal", true], ["/run/log/journal", "/run/log/journal", true],
+            ["/etc/machine-id", "/etc/machine-id", true],
+            ["alloy/config.alloy", "/etc/alloy/config.alloy", true],
+            ["/var/lib/alloy", "/var/lib/alloy", false]]
 };
 def mounts($secrets): [((.volumes // [])[]
     | [(if .type == "bind" then .source else "\(.type):\(.source)" end
         | if endswith("/Caddyfile") then "Caddyfile"
           elif endswith("/alloy/config.alloy") then "alloy/config.alloy" else . end),
-       .target, (.read_only == true), (.type == "bind" and .bind.create_host_path != false)]
+       .target, (.read_only == true)]
     | if .[1] == "/srv/decdn-origin" then .[0] = "DECDN_ORIGIN_DIR" else . end),
-  ((.secrets // [])[] | ["secret:\($secrets[.source].file // "?")", (.target // "/run/secrets/\(.source)"), true, false])]
+  ((.secrets // [])[] | ["secret:\($secrets[.source].file // "?")", (.target // "/run/secrets/\(.source)"), true])]
   | sort;
 
 # Secrets reach the sponsord daemons only as the files mounted above, never inline.

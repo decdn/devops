@@ -102,17 +102,27 @@ security-compose:    ## KICS scan of compose/ (pinned engine image)
 #    as the CI runner's, still merge the env files with it.)
 #  - with an empty .env, against compose/tests/fail-closed.jq: an unset variable
 #    renders a value its service refuses, since compose.yaml cannot use `:?`.
-# check <jq program> <.env file> <examples|none> does one of them: the service env
-# files are compose/'s examples, or /dev/null for each. All run
+# First, once against the file as written (yq; volumes use no anchors), with
+# compose/tests/bind-sources.jq: every bind mount's create_host_path, which
+# Compose releases render (and default) in opposite ways.
+# check <jq program> <.env file> <examples|none|source> does one of them: the
+# service env files are compose/'s examples, or /dev/null for each; `source` reads
+# the file with yq instead of rendering it. All run
 # under `env -i`, because the caller's shell variables would override the
 # .env and the lint would check something other than the committed defaults.
 # LINT_COMPOSE_FILE (not Compose's own COMPOSE_FILE, which operators export) is
 # overridable so tests/scripts-test.sh can feed it broken variants.
 LINT_COMPOSE_FILE ?= compose/compose.yaml
-lint-compose:        ## render compose/ with its examples and check its security invariants (needs docker, jq)
+lint-compose:        ## render compose/ with its examples and check its security invariants (needs docker, jq, yq)
 	@set -o pipefail; \
 	check() { \
 		mode="$$3"; ef() { if [ "$$mode" = none ]; then echo /dev/null; else echo "$(CURDIR)/compose/$$1"; fi; }; \
+		if [ "$$mode" = source ]; then \
+			yq_err="$$(mktemp)"; \
+			rendered="$$(yq -o=json '.' '$(LINT_COMPOSE_FILE)' 2>"$$yq_err")" \
+				|| { cat "$$yq_err" >&2; rm -f "$$yq_err"; echo "lint-compose: yq could not read $(LINT_COMPOSE_FILE) (see above)" >&2; exit 2; }; \
+			grep -v 'yaml-fix-merge-anchor-to-spec' "$$yq_err" >&2 || true; rm -f "$$yq_err"; \
+		else \
 		rendered="$$(env -i PATH="$$PATH" HOME="$$HOME" \
 			DECDN_ENV_FILE="$$(ef decdn.env.example)" \
 			SPONSORD_SECRET_ENV_FILE="$$(ef sponsord-secret.env.example)" \
@@ -121,12 +131,14 @@ lint-compose:        ## render compose/ with its examples and check its security
 			ALLOY_ENV_FILE="$$(ef grafana-alloy.env.example)" \
 			docker compose -f '$(LINT_COMPOSE_FILE)' --env-file "$$2" --profile '*' config --format json)" \
 			|| { echo "lint-compose: docker compose could not render $(LINT_COMPOSE_FILE) (see above)" >&2; exit 2; }; \
+		fi; \
 		[ -n "$$rendered" ] || { echo "lint-compose: docker compose rendered nothing" >&2; exit 2; }; \
 		violations="$$(jq -r -f "$$1" <<<"$$rendered")" \
 			|| { printf '%s\n' "$$violations" >&2; echo "lint-compose: $$1 failed (see above)" >&2; exit 2; }; \
 		[ -z "$$violations" ] \
 			|| { sed 's/^/  /' <<<"$$violations" >&2; echo "$(LINT_COMPOSE_FILE) violates an invariant (see $$1)" >&2; exit 1; }; \
 	}; \
+	check compose/tests/bind-sources.jq - source; \
 	check compose/tests/invariants.jq compose/.env.example examples; \
 	check compose/tests/inline-env.jq compose/.env.example none; \
 	check compose/tests/fail-closed.jq /dev/null examples
