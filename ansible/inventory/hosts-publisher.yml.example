@@ -18,11 +18,12 @@
 # publisher.yml. An origin is a deCDN node with an origin backend: the canonical
 # source of its namespace's content. decdn_origin_nodes is a child of decdn_nodes, so
 # an origin gets a node's firewall hole, backup, decommission and observability;
-# origin.yml refuses one outside decdn_nodes or without a backend
-# (group_vars/decdn_origin_nodes.yml). The chain recognises it as the origin only once
-# you, the namespace's publisher, seat its operator with OriginAssignment.addOrigin;
-# until then it serves its bytes as a cache does. Per-origin config (the backend,
-# region, …) goes in host_vars/<name>/main.yml (see host_vars/origin-1/).
+# origin.yml refuses one outside decdn_nodes or without a backend. The chain
+# recognises it as the origin only once you, the namespace's publisher, seat its
+# operator with OriginAssignment.addOrigin; until then it serves its bytes as a cache
+# does. The backend goes in group_vars/decdn_origin_nodes.yml (shared by every origin)
+# or host_vars/<name>/main.yml (see host_vars/origin-1/), with the region and the
+# rest of the per-origin config.
 decdn_nodes:
   children:
     decdn_origin_nodes:

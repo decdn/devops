@@ -262,8 +262,8 @@ Configuring a backend does not make the node an origin on-chain: the namespace's
 seats the node's operator with `OriginAssignment.addOrigin`
 ([ADR 011](https://github.com/decdn/decdn/blob/main/adr/011-content-takedown.md#origin-assignment-authority)).
 Until then it serves its bytes as a cache does. With Ansible, the same node is a
-`decdn_origin_nodes` host with `decdn_cache_origin_kind` (or `decdn_cache_origins`) set,
-deployed by
+`decdn_origin_nodes` host (a child group of `decdn_nodes`, which `origin.yml` requires)
+with `decdn_cache_origin_kind` (or `decdn_cache_origins`) set, deployed by
 [`playbooks/origin.yml`](https://github.com/decdn/devops/blob/main/ansible/playbooks/origin.yml).
 
 ## Network

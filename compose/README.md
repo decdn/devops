@@ -6,7 +6,7 @@ commands and the same hardening as the roles' systemd units.
 
 | Profile | Service | Image | Ansible equivalent |
 |---------|---------|-------|--------------------|
-| `node` | `decdn-node`, a deCDN cache node (node operators) | `ghcr.io/decdn/decdn-node` | `decdn_node` on `decdn_nodes` ([`playbooks/node.yml`](../ansible/playbooks/node.yml)) |
+| `node` | `decdn-node`, a deCDN cache node (node operators) | `ghcr.io/decdn/decdn-node` | `decdn_node` on `decdn_nodes` outside `decdn_origin_nodes` ([`playbooks/node.yml`](../ansible/playbooks/node.yml)) |
 | `origin` | the same `decdn-node`, run as a publisher's origin ([below](#run-it-as-an-origin-publishers)) | `ghcr.io/decdn/decdn-node` | `decdn_node` on `decdn_origin_nodes`, with an origin backend ([`playbooks/origin.yml`](../ansible/playbooks/origin.yml)) |
 | `sponsord` | `sponsord`, the onboarding sponsor: treasury signer and PaymentPool keeper | `ghcr.io/decdn/sponsord` | `sponsord` |
 | `onramp` | `sponsord-onramp`, its public side (Turnstile gate, installers); also starts `sponsord` | `ghcr.io/decdn/sponsord-onramp` | `sponsord_onramp` |
