@@ -6,11 +6,45 @@ deCDN node {{ include "decdn-node.fullname" . }} (namespace {{ .Release.Namespac
   ContentBlacklist sync, so check the logs before routing traffic:
 
      kubectl -n {{ .Release.Namespace }} rollout status statefulset/{{ include "decdn-node.fullname" . }}
-{{- if and .Values.service.enabled (eq .Values.service.type "LoadBalancer") }}
+{{- $ns := .Release.Namespace }}
+{{- $name := include "decdn-node.fullname" . }}
+{{- $type := ternary .Values.service.type "" .Values.service.enabled }}
+{{- $addrs := list }}
+{{- if eq $type "LoadBalancer" }}
+{{- $addrs = append $addrs (printf "/ip4/$LB_IP/udp/%d/quic-v1" (int .Values.quic.port)) }}
+{{- else if eq $type "NodePort" }}
+{{- $addrs = append $addrs (printf "/ip4/<a k8s node's public IP>/udp/%s/quic-v1" (ternary (toString (int (.Values.service.nodePort | default 0))) "$NODE_PORT" (not (empty .Values.service.nodePort)))) }}
+{{- end }}
+{{- if .Values.quic.hostPort.enabled }}
+{{- $addrs = append $addrs (printf "/ip4/<public IP of the pod's k8s node>/udp/%d/quic-v1" (int .Values.quic.hostPort.port)) }}
+{{- end }}
+{{- if $addrs }}
 
-- Public QUIC address (udp/{{ .Values.quic.port }}):
+- Register the node's public QUIC address on-chain. Inside the pod the node sees
+  only its pod IP, so peers learn the address only from its registry multiaddrs;
+  without them, inbound goes through hole-punching and relays. Off-cluster, with
+  the same keystore (`decdn setup` and `decdn node register` take the same
+  --multiaddr flags; update-multiaddrs replaces the whole set):
+{{- if eq $type "LoadBalancer" }}
 
-     kubectl -n {{ .Release.Namespace }} get svc {{ include "decdn-node.fullname" . }} -o jsonpath='{.status.loadBalancer.ingress[0]}'
+     LB_IP=$(kubectl -n {{ $ns }} get svc {{ $name }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+{{- else if and (eq $type "NodePort") (not .Values.service.nodePort) }}
+
+     NODE_PORT=$(kubectl -n {{ $ns }} get svc {{ $name }} -o jsonpath='{.spec.ports[0].nodePort}')
+{{- end }}
+
+     decdn node update-multiaddrs{{ range $addrs }} --multiaddr "{{ . }}"{{ end }}
+{{- if eq $type "LoadBalancer" }}
+
+  A load balancer that reports a hostname rather than an IP needs its static IPs
+  instead: a multiaddr is /ip4 or /ip6 only.
+{{- end }}
+{{- end }}
+{{- if and (has $type (list "LoadBalancer" "NodePort")) .Values.quic.hostPort.enabled }}
+
+- WARNING: quic.hostPort and the public {{ $type }} Service are both enabled, so
+  the node is reachable on two public addresses. For a hostPort-only node, set
+  service.enabled=false.
 {{- end }}
 {{- if eq (int $admin) 0 }}
 
@@ -25,6 +59,7 @@ deCDN node {{ include "decdn-node.fullname" . }} (namespace {{ .Release.Namespac
 {{- end }}
 
 - On-chain stake/registration (ADR 019 Phase 2) is a manual operator step:
-  run `decdn setup` off-cluster against the same keystore.
+  run `decdn setup` off-cluster against the same keystore, with --multiaddr for
+  the public address above (without it, it registers no address).
 
 Graceful drain window: {{ .Values.terminationGracePeriodSeconds }}s. Do not force-delete the pod.

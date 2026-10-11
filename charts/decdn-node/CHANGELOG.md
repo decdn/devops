@@ -72,6 +72,14 @@ Initial chart (pre-1.0; the values shape may still change).
   also carries the `decdn` CLI (the chart does not call it) and whose signed digest
   file is `decdn-node-image-digest.txt`. The config schema is unchanged.
 
+- README and install notes: the node cannot see the public address the chart
+  exposes (a pod sees its pod IP, and iroh observes the Kubernetes node's outbound
+  address, not the load balancer's), so peers learn it only from the node's on-chain
+  `multiaddrs`. The notes print the `decdn node update-multiaddrs --multiaddr …`
+  command for the LoadBalancer, NodePort or hostPort address, and warn when hostPort
+  and a public Service are both enabled. The README no longer says a LoadBalancer
+  alone gives the node a stable public address.
+
 ### Fixed
 
 - Delivery dashboard: recency seed failures get their own stat panel, which reads the

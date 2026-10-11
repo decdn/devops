@@ -272,13 +272,33 @@ with `decdn_cache_origin_kind` (or `decdn_cache_origins`) set, deployed by
 ## Network
 
 - **QUIC** (`quic.port`, default 4433/udp) is the only public port.
-  - `service.type: LoadBalancer` (the default) gives the node a stable public UDP
-    address, and `externalTrafficPolicy: Local` preserves client source IPs for
-    per-source rate limiting.
+  - `service.type: LoadBalancer` (the default) gives the node a public UDP address,
+    and `externalTrafficPolicy: Local` preserves client source IPs for per-source
+    rate limiting.
   - For bare-metal-style nodes, set `quic.hostPort.enabled: true` and
     `service.enabled: false`.
-  - Without direct reachability, the node still works through iroh relays, at a latency
-    cost.
+- **The node cannot see its public address.** Inside a pod, its default route's source
+  address is the private pod IP, and the address iroh observes through a relay is the
+  Kubernetes node's outbound (SNAT) address, not the load balancer's. So its pkarr
+  record never carries the address the chart exposes, and at bring-up it logs that it
+  is behind NAT and sets `decdn_node_public_address` to 0: both are expected. Peers
+  learn a forwarded address only from the node's on-chain `multiaddrs`
+  ([ADR 019 § NAT and Multiaddr Handling](https://github.com/decdn/decdn/blob/main/adr/019-node-onboarding.md#nat-and-multiaddr-handling),
+  [ADR 001 § Node Discovery](https://github.com/decdn/decdn/blob/main/adr/001-network.md#node-discovery-registry)),
+  which you register off-cluster with the same keystore: pass
+  `--multiaddr /ip4/<address>/udp/<port>/quic-v1` to `decdn setup` or `decdn node
+  register`, or run `decdn node update-multiaddrs --multiaddr …` on a registered node
+  (it replaces the whole set). The address and port are:
+  - `LoadBalancer`: the load balancer's IP and `quic.port` (the install notes print
+    it once the IP is assigned);
+  - `NodePort`: a Kubernetes node's public IP and the `nodePort`;
+  - `hostPort`: the public IP of the Kubernetes node the pod runs on and
+    `quic.hostPort.port` (pin the pod with `nodeSelector` so it stays true).
+
+  Without a registered address, inbound still works through hole-punching and iroh
+  relays, at a latency cost (`decdn_inbound_connections_relayed_total` counts relayed
+  inbound). A client that resolves nodes only through pkarr/DNS never learns the
+  registered address either.
 - **Metrics** bind `0.0.0.0` inside the pod rather than loopback, which the Ansible role
   requires. That is how kubelet probes and Prometheus reach `/metrics`. Metrics are
   exposed only by a ClusterIP Service, and the NetworkPolicy admits TCP to that port only

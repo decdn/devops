@@ -57,6 +57,9 @@ secrets:
     passthroughKeys: []
 
 # --- Public QUIC (the one public hole) --------------------------------------
+# The node cannot see the public address this exposes (it sees the pod IP): register
+# it on-chain as a multiaddr, or peers reach it only by hole-punching and relays
+# (README "Network").
 quic:
   port: 4433
   # Bind udp/<port> directly on the k8s node as well. Pair with
