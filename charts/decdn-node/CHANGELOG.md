@@ -70,7 +70,7 @@ Initial chart (pre-1.0; the values shape may still change).
 - A headless governing Service (`<fullname>-headless`, no ports) for the StatefulSet;
   `serviceName` used to name the metrics Service.
 - A render-time port-layout check, as upstream's: `quic.port`, `metrics.port` and
-  `config.observability.admin_port` (9191 unless set; 0 disables it; a number) must
+  `config.observability.admin_port` (9191 unless set; 0 disables it; a whole number up to 65535) must
   differ, or the daemon refuses to start.
 - A render-time cap of 52 characters on the full name: a StatefulSet's pods carry a
   `<name>-<revision hash>` label of at most 63 characters, so a longer name created
@@ -136,5 +136,6 @@ Initial chart (pre-1.0; the values shape may still change).
   `appArmorProfile` at either level, a container `runAsGroup: 0`, `fsGroup: 0`, a
   supplemental group 0, `procMount: Unmasked`, a seccomp profile removed at both
   levels (the kubelet then runs Unconfined), a `runAsGroup` removed at both levels,
-  and the legacy AppArmor/seccomp pod annotations, which the API server still
-  copies into the `securityContext` fields.
+  and a legacy AppArmor/seccomp pod annotation set to `unconfined` (its other
+  values stay allowed: before Kubernetes 1.30 it is the only way to pick an
+  AppArmor profile).

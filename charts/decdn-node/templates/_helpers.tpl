@@ -128,8 +128,9 @@ than let a values override win:
 - podLabels re-setting a chart label (the selector labels would detach the pod
   from the StatefulSet and Services);
 - podAnnotations re-setting checksum/config (config changes would stop rolling),
-  or carrying the legacy AppArmor/seccomp annotations, which the API server still
-  copies into the securityContext fields, bypassing the profile checks below;
+  or setting a legacy AppArmor/seccomp annotation to `unconfined`, which would
+  bypass the profile checks below (the annotation is the only way to pick an
+  AppArmor profile before Kubernetes 1.30, so its other values stay allowed);
 - a (pod)securityContext that drops the non-root / no-privilege /
   read-only-rootfs / all-capabilities-dropped / confined (seccomp, AppArmor,
   masked /proc) hardening, at either level (compared as strings: `get`
@@ -154,10 +155,10 @@ than let a values override win:
 {{- if hasKey (default (dict) .Values.podAnnotations) "checksum/config" }}
 {{- fail "podAnnotations.checksum/config is set by the chart (it rolls the pod on config changes) and must not be overridden" }}
 {{- end }}
-{{- range $k, $_ := default (dict) .Values.podAnnotations }}
+{{- range $k, $v := default (dict) .Values.podAnnotations }}
 {{- range $legacy := list "container.apparmor.security.beta.kubernetes.io/" "seccomp.security.alpha.kubernetes.io/" "container.seccomp.security.alpha.kubernetes.io/" }}
-{{- if hasPrefix $legacy $k }}
-{{- fail (printf "podAnnotations.%s is refused: the legacy AppArmor/seccomp annotations would bypass the chart's checks; set the profile in (pod)securityContext instead" $k) }}
+{{- if and (hasPrefix $legacy $k) (eq (lower (trim (toString $v))) "unconfined") }}
+{{- fail (printf "podAnnotations.%s=unconfined is refused: an unconfined AppArmor/seccomp profile would bypass the chart's checks (runtime/default and localhost/<profile> are allowed)" $k) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -294,8 +295,10 @@ Arg: dict "cfg" <map> "root" <$>
      clash outright. admin_port defaults to 9191; 0 disables the admin RPC. */}}
 {{- $ports := list (list "quic.port" (int $root.Values.quic.port)) (list "metrics.port" (int $root.Values.metrics.port)) }}
 {{- $adminRaw := dig "admin_port" 9191 $cfg.observability }}
-{{- if not (has (kindOf $adminRaw) (list "float64" "int64" "int")) }}
-{{- fail (printf "config.observability.admin_port must be a number (0 disables the admin RPC), got %s %q" (kindOf $adminRaw) (toString $adminRaw)) }}
+{{- /* Upstream types it Option<u16>: anything else crash-loops the daemon. (`or`
+     short-circuits, so floor never sees a non-number.) */}}
+{{- if or (not (has (kindOf $adminRaw) (list "float64" "int64" "int"))) (ne (float64 $adminRaw) (floor $adminRaw)) (lt (float64 $adminRaw) 0.0) (gt (float64 $adminRaw) 65535.0) }}
+{{- fail (printf "config.observability.admin_port must be a whole number from 0 to 65535 (0 disables the admin RPC), got %s %q" (kindOf $adminRaw) (toString $adminRaw)) }}
 {{- end }}
 {{- $admin := int $adminRaw }}
 {{- if ne $admin 0 }}

@@ -569,7 +569,10 @@ expect_fail "second fs origin outside"     template 'must be /srv/decdn-origin.*
 expect_fail "fs origin path ends in .."    template "fs origin's path must be /srv/decdn-origin" --set-json 'origin.volume={"emptyDir":{}}' --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin/..
 expect_fail "fs origin without a path"     template 'an fs origin needs a path'                  --set-json 'origin.volume={"emptyDir":{}}' --set-json 'config.cache.origins=[{"kind":"http","url":"https://x.invalid/"},{"kind":"fs","path":null}]'
 expect_fail "origin.subPath, no volume"    template 'origin.subPath is set without origin.volume' --set origin.subPath=published
-expect_fail "admin_port not a number"      template 'admin_port must be a number'                --set-json 'config.observability.admin_port="0"'
+expect_fail "admin_port not a number"      template 'admin_port must be a whole number from 0 to 65535' --set-json 'config.observability.admin_port="0"'
+expect_fail "admin_port fractional"        template 'admin_port must be a whole number from 0 to 65535' --set-json 'config.observability.admin_port=9191.5'
+expect_fail "admin_port above 65535"       template 'admin_port must be a whole number from 0 to 65535' --set config.observability.admin_port=70000
+expect_fail "admin_port negative"          template 'admin_port must be a whole number from 0 to 65535' --set config.observability.admin_port=-1
 expect_fail "full name over 52"            template 'is 53 characters'                           --set fullnameOverride="$(printf 'n%.0s' $(seq 1 53))"
 expect_fail "full name over 52 (nameOverride)" template 'is 53 characters'                       --set nameOverride="$(printf 'n%.0s' $(seq 1 51))"
 expect_fail "full name length not truncated" template 'is 70 characters'                         --set fullnameOverride="$(printf 'n%.0s' $(seq 1 70))"
@@ -598,9 +601,9 @@ expect_fail "fsGroup 0"                    template 'podSecurityContext.fsGroup 
 expect_fail "runAsGroup removed"           template 'runAsGroup must be set'                     --set podSecurityContext.runAsUser=2000 --set podSecurityContext.runAsGroup=null
 expect_fail "seccomp profile removed"      template 'seccompProfile.type must be RuntimeDefault or Localhost' --set podSecurityContext.seccompProfile=null
 expect_fail "seccomp profile not a map"    template ': securityContext\.seccompProfile must be a map' --set-json 'securityContext.seccompProfile="Unconfined"'
-expect_fail "legacy AppArmor annotation"   template 'container.apparmor.security.beta.kubernetes.io/decdn-node is refused' --set-json 'podAnnotations={"container.apparmor.security.beta.kubernetes.io/decdn-node":"unconfined"}'
-expect_fail "legacy seccomp annotation"    template 'seccomp.security.alpha.kubernetes.io/pod is refused' --set-json 'podAnnotations={"seccomp.security.alpha.kubernetes.io/pod":"unconfined"}'
-expect_fail "legacy container seccomp annotation" template 'container.seccomp.security.alpha.kubernetes.io/decdn-node is refused' --set-json 'podAnnotations={"container.seccomp.security.alpha.kubernetes.io/decdn-node":"unconfined"}'
+expect_fail "legacy AppArmor annotation"   template 'container.apparmor.security.beta.kubernetes.io/decdn-node=unconfined is refused' --set-json 'podAnnotations={"container.apparmor.security.beta.kubernetes.io/decdn-node":"unconfined"}'
+expect_fail "legacy seccomp annotation"    template 'seccomp.security.alpha.kubernetes.io/pod=unconfined is refused' --set-json 'podAnnotations={"seccomp.security.alpha.kubernetes.io/pod":"Unconfined"}'
+expect_fail "legacy container seccomp annotation" template 'container.seccomp.security.alpha.kubernetes.io/decdn-node=unconfined is refused' --set-json 'podAnnotations={"container.seccomp.security.alpha.kubernetes.io/decdn-node":"unconfined"}'
 expect_fail "procMount Unmasked"           template 'procMount must not be Unmasked'             --set securityContext.procMount=Unmasked
 expect_fail "privilege escalation"         template 'allowPrivilegeEscalation must be false'     --set securityContext.allowPrivilegeEscalation=true
 expect_fail "privileged"                   template 'privileged must not be true'                --set securityContext.privileged=true
@@ -620,6 +623,8 @@ expect_render() { # <description> <helm args...>
   pass "renders: $desc"
 }
 expect_render "admin_port 0 frees 9191"        --set config.observability.admin_port=0 --set metrics.port=9191
+expect_render "admin_port 65535"               --set config.observability.admin_port=65535
+expect_render "admin_port as a whole float"    --set-json 'config.observability.admin_port=9192.0'
 expect_render "fs origin at the mount root"    --set-json 'origin.volume={"emptyDir":{}}' --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin
 expect_render "fs origin, trailing slash"      --set-json 'origin.volume={"emptyDir":{}}' --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin/
 expect_render "two fs origins, one volume"     --set-json 'origin.volume={"emptyDir":{}}' --set-json 'config.cache.origins=[{"kind":"fs","path":"/srv/decdn-origin/a"},{"kind":"fs","path":"/srv/decdn-origin/b"}]'
@@ -627,6 +632,9 @@ expect_render "fs origin dir named ..x"        --set-json 'origin.volume={"empty
 expect_render "container-level seccomp only"   --set podSecurityContext.seccompProfile=null --set securityContext.seccompProfile.type=Localhost --set securityContext.seccompProfile.localhostProfile=decdn.json
 expect_render "container-level runAsGroup only" --set podSecurityContext.runAsGroup=null --set securityContext.runAsGroup=3000
 expect_render "origin: null"                   --set origin=null
+# Before Kubernetes 1.30 the annotation is the only way to pick an AppArmor profile.
+expect_render "legacy AppArmor, runtime/default" --set-json 'podAnnotations={"container.apparmor.security.beta.kubernetes.io/decdn-node":"runtime/default"}'
+expect_render "legacy AppArmor, localhost"     --set-json 'podAnnotations={"container.apparmor.security.beta.kubernetes.io/decdn-node":"localhost/decdn"}'
 
 # origin.volume: readOnly forced on a source that has the field, even over an
 # explicit false; a pass-through source must not gain the field.

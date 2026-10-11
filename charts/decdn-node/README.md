@@ -208,10 +208,11 @@ either (such as `https://user:pass@…` in an origin URL). Put secrets in the en
 
 **Pod overrides.** `podLabels` cannot re-set a chart label (that would detach the pod from
 its StatefulSet selector and Services), `podAnnotations` cannot re-set `checksum/config`
-or carry the legacy AppArmor/seccomp annotations
+or set a legacy AppArmor/seccomp annotation
 (`container.apparmor.security.beta.kubernetes.io/*`, `seccomp.security.alpha.kubernetes.io/*`,
-`container.seccomp.security.alpha.kubernetes.io/*`, which the API server still copies
-into the `securityContext` fields), and
+`container.seccomp.security.alpha.kubernetes.io/*`) to `unconfined`. Their other values
+(`runtime/default`, `localhost/<profile>`) stay allowed: before Kubernetes 1.30 the
+annotation is the only way to pick an AppArmor profile.
 `podSecurityContext` / `securityContext` can be changed (for example, a different
 non-root uid) but the render fails if the result runs as root (uid, gid or `fsGroup` 0,
 supplemental group 0, or no `runAsGroup` at either level, which leaves a uid the image
