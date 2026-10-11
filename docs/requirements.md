@@ -20,8 +20,10 @@ facts (bond sizing, fees) are not here: they come from the deCDN ADRs.
 | Backup / decommission | `make backup` / `make decommission` | the Ansible targets, from a workstation inventory | `decdn-compose backup` / `down` | PVC snapshot |
 | Guide | [ansible/README.md](../ansible/README.md) | [cloud-init/README.md](../cloud-init/README.md) | [compose/README.md](../compose/README.md) | [charts/decdn-node/README.md](../charts/decdn-node/README.md) |
 
-If you are unsure: a VPS or dedicated server you control end to end is the Ansible
-path, or cloud-init for a single VM when you would rather not run Ansible from a
+If you are unsure, start with Docker Compose: one host, one wrapper, no control
+machine. It installs the node but leaves the host's firewall, SSH and patching to you.
+For a fleet, or a VPS or dedicated server you want hardened from scratch, use Ansible,
+or cloud-init for a single VM when you would rather not run Ansible from a
 workstation. They are the only two that harden the host as well as installing the node,
 and they run the same roles.
 

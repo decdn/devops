@@ -18,9 +18,9 @@ loopback, and the chain's contract addresses taken from upstream's deployment ma
 
 | Path | Start here | Entry point |
 |------|------------|-------------|
+| **Docker Compose** (one Docker host), recommended | [`compose/README.md`](../compose/README.md) | `decdn-compose init node` |
 | **Ansible** (VMs, bare metal, a fleet) | [`ansible/README.md`](../ansible/README.md) | `inventory/hosts-node.yml.example`, `make deploy-node` (`playbooks/node.yml`) |
 | **cloud-init** (one VM, no control machine) | [`cloud-init/README.md`](../cloud-init/README.md) | `cloud-init/user-data-node.yaml` |
-| **Docker Compose** (one Docker host) | [`compose/README.md`](../compose/README.md) | `decdn-compose init node` |
 | **Helm** (Kubernetes, one release per node) | [`charts/decdn-node/README.md`](../charts/decdn-node/README.md) | the chart, with no `config.cache.origin` |
 
 [`requirements.md`](requirements.md) has the hardware, network and platform requirements,
