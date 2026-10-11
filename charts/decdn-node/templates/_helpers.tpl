@@ -64,6 +64,8 @@ fsGroup bits, and upstream refuses a data_dir with any group/world permission.
 {{- define "decdn-node.configFile" -}}/etc/decdn/node.toml{{- end }}
 {{- /* In-memory (emptyDir medium: Memory): the keystore password, off the PVC. */}}
 {{- define "decdn-node.secretsDir" -}}/run/decdn{{- end }}
+{{- /* Read-only, from origin.volume: an fs origin's content (Compose's path too). */}}
+{{- define "decdn-node.originDir" -}}/srv/decdn-origin{{- end }}
 
 {{/* ---------------------------------------------------------------------------
 Required Secret references (the chart never creates a Secret).
@@ -228,6 +230,27 @@ Arg: dict "cfg" <map> "root" <$>
 {{- end }}
 {{- if and $hasOrigin $hasOrigins }}
 {{- fail "config.cache.origin and config.cache.origins are mutually exclusive" }}
+{{- end }}
+{{- /* An fs origin reads origin.volume, mounted read-only at originDir: its path
+     must lie there, and the volume must exist and be used. (A null path is left
+     to the TOML renderer's own error.) */}}
+{{- $originDir := include "decdn-node.originDir" $root }}
+{{- $origins := ternary (list (get $cache "origin")) (default (list) (get $cache "origins")) $hasOrigin }}
+{{- $fsOrigins := 0 }}
+{{- range $origins }}
+{{- if and (kindIs "map" .) (eq (toString (get . "kind")) "fs") (not (kindIs "invalid" (get . "path"))) }}
+{{- $fsOrigins = add1 $fsOrigins }}
+{{- $path := toString (get . "path") }}
+{{- if or (not (or (eq $path $originDir) (hasPrefix (printf "%s/" $originDir) $path))) (regexMatch "(^|/)\\.\\.(/|$)" $path) }}
+{{- fail (printf "config.cache: an fs origin's path must be %s or a directory under it, where origin.volume is mounted (got %q)" $originDir $path) }}
+{{- end }}
+{{- if not $root.Values.origin.volume }}
+{{- fail (printf "config.cache: an fs origin needs origin.volume, the volume holding its content (mounted read-only at %s)" $originDir) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if and $root.Values.origin.volume (eq $fsOrigins 0) }}
+{{- fail "origin.volume is set, but no config.cache origin has kind fs: remove it, or add the fs origin that reads it" }}
 {{- end }}
 {{- /* Ported from the decdn_node role (0f58d03): a node with no origin can only
      fill a miss from other nodes, so pull-through defaults on; with an origin, off. */}}

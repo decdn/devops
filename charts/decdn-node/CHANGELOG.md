@@ -56,6 +56,13 @@ Initial chart (pre-1.0; the values shape may still change).
 - README: running the chart as a publisher's origin node (an origin backend in
   `config.cache`, what it changes, and the on-chain seating step).
 
+- `origin.volume` (+ `origin.subPath`): an fs origin's content, from any one
+  Kubernetes volume source, mounted read-only at `/srv/decdn-origin` (the Compose
+  path) in the daemon container only. An fs origin's `path` must lie there; the
+  render fails on an fs origin without the volume and on a volume no fs origin
+  reads. Before, the content had to sit on the data PVC beside the node identity,
+  writable by the daemon.
+
 ### Changed
 
 - The README links into the rest of the repo are absolute GitHub URLs, so they work

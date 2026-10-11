@@ -644,7 +644,9 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   container that installs the identity files from an `existingSecret` onto the PVC at
   `0600` (upstream rejects symlinked or group/world-readable key files) and the password
   into an in-memory volume, `DECDN_RPC_URL` via `secretKeyRef` (named keys only), public
-  UDP Service (LoadBalancer/NodePort/ClusterIP) or `hostPort`, and metrics bound `0.0.0.0`
+  UDP Service (LoadBalancer/NodePort/ClusterIP) or `hostPort`, an fs origin's content
+  from `origin.volume` (any one volume source, read-only at Compose's
+  `/srv/decdn-origin`, never in `prepare`), and metrics bound `0.0.0.0`
   behind a ClusterIP Service + NetworkPolicy. `values.config` mirrors `node.toml`; the
   chart injects the path/port keys and fails on collisions. **The config-schema coupling
   above applies here too:** `make lint-helm` runs the same `check-schema-keys.py` +

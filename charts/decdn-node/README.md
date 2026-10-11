@@ -257,9 +257,31 @@ fill from the backend), and the daemon defaults `cache.relay_foreign_namespaces`
 blob already in its cache
 ([ADR 002 § Retrieval by namespace](https://github.com/decdn/decdn/blob/main/adr/002-content-addressing.md#retrieval-by-namespace),
 [ADR 037](https://github.com/decdn/decdn/blob/main/adr/037-regional-proxy-warming.md#warming-is-a-relay-edge-mechanism)).
-An `fs` origin reads a path inside the pod, so the content must be on the data PVC (under
-`/var/lib/decdn`); the chart mounts no other volume. CI renders the multi-origin form
-(`ci/ci-origins.yaml`: http, fs and s3) and checks its keys against the upstream schema.
+An `fs` origin reads its content from `origin.volume`, any one Kubernetes volume source
+without a `name` (a PVC, NFS, CSI, …). The chart mounts it read-only at `/srv/decdn-origin`
+in the daemon container only, the path the Compose `origin` profile uses, optionally at
+`origin.subPath`:
+
+```yaml
+origin:
+  volume:
+    persistentVolumeClaim:
+      claimName: my-namespace-content   # provisioned by you, e.g. ReadOnlyMany or NFS-backed
+config:
+  cache:
+    origin:
+      kind: fs
+      path: /srv/decdn-origin
+```
+
+Every fs origin's `path` must be `/srv/decdn-origin` or a directory under it. The render
+fails on an fs origin without `origin.volume`, and on an `origin.volume` that no fs origin
+reads. The files must be readable by the pod's uid or `fsGroup` (1000 by default). A
+`hostPath` source works, but it ties the node to one Kubernetes node and hands the pod a
+host directory, so prefer a PVC, NFS or CSI volume. The content stays off the data PVC,
+so the node cannot write to it, and a snapshot of the data volume (which holds the node
+identity) does not carry it. CI renders the multi-origin form (`ci/ci-origins.yaml`:
+http, fs and s3) and checks its keys against the upstream schema.
 
 Configuring a backend does not make the node an origin on-chain: the namespace's publisher
 seats the node's operator with `OriginAssignment.addOrigin`

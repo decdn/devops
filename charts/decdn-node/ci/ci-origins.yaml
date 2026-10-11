@@ -5,7 +5,8 @@
 # Also the non-default wiring branches: custom ports (so port agreement between
 # node.toml, the pod, the Services and the NetworkPolicy is actually tested),
 # NodePort + nodePort, hostPort, egress rules, custom Secret key names,
-# passthrough env, and an externally managed ServiceAccount.
+# passthrough env, an externally managed ServiceAccount, and the fs origin's
+# read-only origin.volume (with a subPath).
 image:
   tag: 0.0.0-ci
 fullnameOverride: node-origins
@@ -49,6 +50,11 @@ secrets:
     existingSecret: decdn-node-env
     rpcUrlKey: rpc
     passthroughKeys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
+origin:
+  volume:
+    persistentVolumeClaim:
+      claimName: decdn-origin-content
+  subPath: published
 config:
   identity:
     region: DE
@@ -61,7 +67,7 @@ config:
   cache:
     origins:
       - {kind: http, url: "https://primary.example.invalid/", decompress: strict}
-      - {kind: fs, path: /var/lib/decdn/origin}
+      - {kind: fs, path: /srv/decdn-origin/mirror}
       - {kind: s3, bucket: mirror-blobs, region: eu-west-1, path_style: false,
          endpoint_url: "https://acct.b2.example.invalid", prefix: "blobs/",
          credentials: {source: default-chain, profile: mirror}}

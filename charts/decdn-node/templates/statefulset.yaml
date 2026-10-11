@@ -164,6 +164,15 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.origin.volume }}
+            # An fs origin's content: read-only, and never in `prepare`.
+            - name: origin
+              mountPath: {{ include "decdn-node.originDir" . }}
+              readOnly: true
+              {{- with .Values.origin.subPath }}
+              subPath: {{ . | quote }}
+              {{- end }}
+            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -187,6 +196,10 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 64Mi
+        {{- with .Values.origin.volume }}
+        - name: origin
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -141,6 +141,19 @@ persistence:
   accessModes: [ReadWriteOnce]
   annotations: {}
 
+# --- Origin content (an fs origin only) --------------------------------------
+# An fs origin (kind: fs in config.cache.origin or .origins) reads its content from
+# this volume, mounted read-only at /srv/decdn-origin in the daemon container (the
+# path Compose uses); every fs origin path must be /srv/decdn-origin or under it.
+# Any Kubernetes volume source, without `name`, e.g.
+#   volume: {persistentVolumeClaim: {claimName: my-namespace-content}}
+#   volume: {nfs: {server: nfs.example.internal, path: /exports/content}}
+# The files must be readable by the pod's uid or fsGroup. hostPath works, but ties
+# the node to one host: prefer a PVC, NFS or CSI source.
+origin:
+  volume: {}
+  subPath: ""
+
 # --- node.toml ----------------------------------------------------------------
 # Mirrors node.toml section-for-section (upstream decdn
 # crates/common/src/config/types.rs; every section is deny_unknown_fields, so an

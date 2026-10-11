@@ -386,6 +386,29 @@
         }
       }
     },
+    "origin": {
+      "description": "An fs origin's content, mounted read-only at /srv/decdn-origin.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "volume": {
+          "description": "One Kubernetes volume source (e.g. persistentVolumeClaim, nfs, csi), without name; {} = none.",
+          "type": "object",
+          "maxProperties": 1,
+          "not": {
+            "required": [
+              "name"
+            ]
+          }
+        },
+        "subPath": {
+          "type": "string",
+          "not": {
+            "pattern": "(^/|(^|/)\\.\\.(/|$))"
+          }
+        }
+      }
+    },
     "config": {
       "description": "node.toml, section for section. Only the keys the chart must enforce are typed here; the chart's own CI fixtures are checked against the committed upstream key inventory, but operator-supplied keys and value types are validated only by the daemon at startup.",
       "type": "object",

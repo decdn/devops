@@ -487,6 +487,16 @@ if name == "ci-origins.yaml":
     check(main["env"][0]["valueFrom"]["secretKeyRef"]["key"] == "rpc", "rpcUrlKey")
     check([i["key"] for i in vols["keys"]["secret"]["items"]] == ["ks", "ns", "pw"], "custom key names")
     check(pod["serviceAccountName"] == "decdn-sa" and one("ServiceAccount") is None, "external ServiceAccount")
+    # The fs origin's content: read-only, in the daemon only, never in `prepare`.
+    check(vols.get("origin") == {"name": "origin", "persistentVolumeClaim": {"claimName": "decdn-origin-content"}},
+          "origin volume")
+    check([m for m in main["volumeMounts"] if m["name"] == "origin"]
+          == [{"name": "origin", "mountPath": "/srv/decdn-origin", "readOnly": True, "subPath": "published"}],
+          "origin mount (read-only at /srv/decdn-origin)")
+    check(not any(m["name"] == "origin" for m in init["volumeMounts"]), "origin volume mounted in prepare")
+    check(cfg["cache"]["origins"][1]["path"] == "/srv/decdn-origin/mirror", "fs origin path")
+else:
+    check("origin" not in vols, "origin volume rendered without origin.volume")
 
 if errors:
     print("\n".join(f"  {e}" for e in errors), file=sys.stderr)
@@ -539,6 +549,14 @@ expect_fail "bad service type"             schema   '/service/type'             
 expect_fail "origin + origins"             template 'mutually exclusive'                         --set config.cache.origin.kind=fs --set config.cache.origin.path=/o --set 'config.cache.origins[0].kind=fs'
 expect_fail "max_blob > cache_size"        template 'max_blob_size_mb must be <='                --set config.cache.max_blob_size_mb=20000
 expect_fail "integer beyond 2^53"          template 'too large to render exactly'                --set-json 'config.payment.credit_max=18446744073709551615'
+expect_fail "fs origin without volume"     template 'an fs origin needs origin.volume'           --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin
+expect_fail "fs origin outside the mount"  template "fs origin's path must be /srv/decdn-origin" --set-json 'origin.volume={"emptyDir":{}}' --set config.cache.origin.kind=fs --set config.cache.origin.path=/var/lib/decdn/origin
+expect_fail "fs origin path escapes"       template "fs origin's path must be /srv/decdn-origin" --set-json 'origin.volume={"emptyDir":{}}' --set-json 'config.cache.origins=[{"kind":"fs","path":"/srv/decdn-origin/../etc"}]'
+expect_fail "fs origin path prefix only"   template "fs origin's path must be /srv/decdn-origin" --set-json 'origin.volume={"emptyDir":{}}' --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin-x
+expect_fail "origin.volume, no fs origin"  template 'origin.volume is set, but no config.cache origin has kind fs' --set-json 'origin.volume={"emptyDir":{}}'
+expect_fail "origin.volume, two sources"   schema   '/origin/volume'                             --set-json 'origin.volume={"emptyDir":{},"nfs":{"server":"x","path":"/"}}'
+expect_fail "origin.volume with a name"    schema   '/origin/volume'                             --set-json 'origin.volume={"name":"x"}'
+expect_fail "origin.subPath escapes"       schema   '/origin/subPath'                            --set origin.subPath=../data
 expect_fail "null inside a list element"   template 'null inside a list element'                 --set-json 'config.cache.origins=[{"kind":"fs","path":null}]'
 expect_fail "policy off, not acknowledged" template 'allowUnrestrictedMetrics'                   --set networkPolicy.allowUnrestrictedMetrics=false
 expect_fail "podLabels overrides selector" template 'podLabels.app.kubernetes.io/instance is set by the chart' --set-json 'podLabels={"app.kubernetes.io/instance":"x"}'
