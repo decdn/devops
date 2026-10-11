@@ -88,3 +88,8 @@ Initial chart (pre-1.0; the values shape may still change).
   now also fires when the pod is gone for longer than the `for:` (1m), which
   includes a slow pod replacement, and for up to a day after the release scales to
   zero or `metrics.serviceMonitor.jobLabel` changes: silence it (#109).
+- The pod-hardening render check covers the container level too. A container
+  `securityContext.seccompProfile` of `Unconfined` used to render, although the
+  values and README said the render fails; it now fails, as do an `Unconfined`
+  `appArmorProfile` at either level, a container `runAsGroup: 0`, a supplemental
+  group 0 and `procMount: Unmasked`.

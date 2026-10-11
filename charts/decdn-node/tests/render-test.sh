@@ -546,7 +546,13 @@ expect_fail "runAsNonRoot false"           template 'runAsNonRoot must be true' 
 expect_fail "runAsNonRoot removed"         template 'runAsNonRoot must be true'                  --set podSecurityContext.runAsNonRoot=null
 expect_fail "runAsUser 0"                  template 'runAsUser must not be 0'                    --set podSecurityContext.runAsUser=0
 expect_fail "container runAsUser 0"        template 'must not run as root'                       --set securityContext.runAsUser=0
-expect_fail "seccomp Unconfined"           template 'must not be Unconfined'                     --set podSecurityContext.seccompProfile.type=Unconfined
+expect_fail "seccomp Unconfined"           template 'podSecurityContext.seccompProfile.type must not be Unconfined' --set podSecurityContext.seccompProfile.type=Unconfined
+expect_fail "container seccomp Unconfined" template 'securityContext.seccompProfile.type must not be Unconfined' --set securityContext.seccompProfile.type=Unconfined
+expect_fail "AppArmor Unconfined"          template 'podSecurityContext.appArmorProfile.type must not be Unconfined' --set podSecurityContext.appArmorProfile.type=Unconfined
+expect_fail "container AppArmor Unconfined" template 'securityContext.appArmorProfile.type must not be Unconfined' --set securityContext.appArmorProfile.type=Unconfined
+expect_fail "container runAsGroup 0"       template 'securityContext.runAsGroup must not be 0'   --set securityContext.runAsGroup=0
+expect_fail "supplemental group 0"         template 'supplementalGroups must not contain 0'      --set-json 'podSecurityContext.supplementalGroups=[1000,0]'
+expect_fail "procMount Unmasked"           template 'procMount must not be Unmasked'             --set securityContext.procMount=Unmasked
 expect_fail "privilege escalation"         template 'allowPrivilegeEscalation must be false'     --set securityContext.allowPrivilegeEscalation=true
 expect_fail "privileged"                   template 'privileged must not be true'                --set securityContext.privileged=true
 expect_fail "writable root filesystem"     template 'readOnlyRootFilesystem must be true'        --set securityContext.readOnlyRootFilesystem=false

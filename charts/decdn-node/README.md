@@ -208,9 +208,11 @@ either (such as `https://user:pass@…` in an origin URL). Put secrets in the en
 **Pod overrides.** `podLabels` cannot re-set a chart label (that would detach the pod from
 its StatefulSet selector and Services), `podAnnotations` cannot re-set `checksum/config`,
 and `podSecurityContext` / `securityContext` can be changed (for example, a different
-non-root uid) but the render fails if the result runs as root, allows privilege escalation
-or privileged mode, makes the root filesystem writable, adds capabilities, drops fewer than
-`ALL`, or disables seccomp.
+non-root uid) but the render fails if the result runs as root (uid or gid 0, or
+supplemental group 0), allows privilege escalation or privileged mode, makes the root
+filesystem writable, adds capabilities, drops fewer than `ALL`, unmasks `/proc`
+(`procMount: Unmasked`), or sets a seccomp or AppArmor profile to `Unconfined`. Both
+levels are checked, since a container's `securityContext` overrides the pod's.
 
 **Other render-time checks.** Every top-level `config` entry must be a table; a `null`
 inside a list element is refused (omit the key instead); and whole numbers of 2^53 or more

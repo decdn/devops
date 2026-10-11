@@ -89,7 +89,8 @@ than let a values override win:
   from the StatefulSet and Services);
 - podAnnotations re-setting checksum/config (config changes would stop rolling);
 - a (pod)securityContext that drops the non-root / no-privilege /
-  read-only-rootfs / all-capabilities-dropped hardening (compared as strings: `get`
+  read-only-rootfs / all-capabilities-dropped / confined (seccomp, AppArmor,
+  masked /proc) hardening, at either level (compared as strings: `get`
   yields "" for a missing key, which `eq` cannot compare with a bool). Helm merges overrides
   into the defaults, so these must hold on the merged values, and a `null` that
   removes one of them fails too.
@@ -113,10 +114,20 @@ than let a values override win:
 {{- fail (printf "podSecurityContext.%s must not be 0 (root)" $f) }}
 {{- end }}
 {{- end }}
-{{- if eq (dig "seccompProfile" "type" "" $psc) "Unconfined" }}
-{{- fail "podSecurityContext.seccompProfile.type must not be Unconfined" }}
+{{- range (default (list) (get $psc "supplementalGroups")) }}
+{{- if eq (int .) 0 }}
+{{- fail "podSecurityContext.supplementalGroups must not contain 0 (root)" }}
+{{- end }}
 {{- end }}
 {{- $sc := default (dict) .Values.securityContext }}
+{{- /* A container-level profile overrides the pod's, so both levels are checked. */}}
+{{- range $ctx := list (list "podSecurityContext" $psc) (list "securityContext" $sc) }}
+{{- range $p := list "seccompProfile" "appArmorProfile" }}
+{{- if eq (toString (dig $p "type" "" (index $ctx 1))) "Unconfined" }}
+{{- fail (printf "%s.%s.type must not be Unconfined" (index $ctx 0) $p) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- if not (eq (toString (get $sc "allowPrivilegeEscalation")) "false") }}
 {{- fail "securityContext.allowPrivilegeEscalation must be false" }}
 {{- end }}
@@ -128,6 +139,12 @@ than let a values override win:
 {{- end }}
 {{- if or (eq (toString (get $sc "runAsNonRoot")) "false") (and (hasKey $sc "runAsUser") (eq (int (get $sc "runAsUser")) 0)) }}
 {{- fail "securityContext must not run as root (runAsNonRoot=false or runAsUser=0)" }}
+{{- end }}
+{{- if and (hasKey $sc "runAsGroup") (eq (int (get $sc "runAsGroup")) 0) }}
+{{- fail "securityContext.runAsGroup must not be 0 (root)" }}
+{{- end }}
+{{- if eq (toString (get $sc "procMount")) "Unmasked" }}
+{{- fail "securityContext.procMount must not be Unmasked" }}
 {{- end }}
 {{- $caps := default (dict) (get $sc "capabilities") }}
 {{- if not (has "ALL" (default (list) (get $caps "drop"))) }}

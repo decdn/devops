@@ -208,9 +208,10 @@ livenessProbe:
   failureThreshold: 6
 
 # Overridable (e.g. a different non-root uid), but the render fails if the merged
-# result runs as root, allows privilege escalation or privileged mode, has a
-# writable root filesystem, adds capabilities, drops fewer than ALL, or uses an
-# Unconfined seccomp profile.
+# result runs as root (uid or gid 0, or a supplemental group 0), allows privilege
+# escalation or privileged mode, has a writable root filesystem, adds
+# capabilities, drops fewer than ALL, unmasks /proc, or uses an Unconfined seccomp
+# or AppArmor profile at either the pod or the container level.
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 1000
