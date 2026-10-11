@@ -176,15 +176,16 @@ than let a values override win:
 {{- end }}
 {{- end }}
 {{- $sc := default (dict) .Values.securityContext }}
-{{- /* A container-level profile overrides the pod's, so both levels are checked. */}}
-{{- range $ctx := list (list "podSecurityContext" $psc) (list "securityContext" $sc) }}
+{{- /* A container-level profile overrides the pod's, so both levels are checked.
+     `dig <key> nil` is nil for a missing key and a null alike. */}}
+{{- range $ctxName, $ctx := dict "podSecurityContext" $psc "securityContext" $sc }}
 {{- range $p := list "seccompProfile" "appArmorProfile" }}
-{{- $prof := get (index $ctx 1) $p }}
-{{- if and (hasKey (index $ctx 1) $p) (not (kindIs "invalid" $prof)) (not (kindIs "map" $prof)) }}
-{{- fail (printf "%s.%s must be a map with a `type`, got %s" (index $ctx 0) $p (kindOf $prof)) }}
+{{- $prof := dig $p nil $ctx }}
+{{- if not (or (kindIs "invalid" $prof) (kindIs "map" $prof)) }}
+{{- fail (printf "%s.%s must be a map with a `type`, got %s" $ctxName $p (kindOf $prof)) }}
 {{- end }}
-{{- if eq (toString (dig $p "type" "" (index $ctx 1))) "Unconfined" }}
-{{- fail (printf "%s.%s.type must not be Unconfined" (index $ctx 0) $p) }}
+{{- if eq (toString (dig $p "type" "" $ctx)) "Unconfined" }}
+{{- fail (printf "%s.%s.type must not be Unconfined" $ctxName $p) }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -192,7 +193,7 @@ than let a values override win:
 {{- if not (has $seccomp (list "RuntimeDefault" "Localhost")) }}
 {{- fail "seccompProfile.type must be RuntimeDefault or Localhost (securityContext, else podSecurityContext): with no profile the container runs Unconfined" }}
 {{- end }}
-{{- if not (or (and (hasKey $sc "runAsGroup") (not (kindIs "invalid" (get $sc "runAsGroup")))) (and (hasKey $psc "runAsGroup") (not (kindIs "invalid" (get $psc "runAsGroup"))))) }}
+{{- if and (kindIs "invalid" (dig "runAsGroup" nil $sc)) (kindIs "invalid" (dig "runAsGroup" nil $psc)) }}
 {{- fail "runAsGroup must be set (podSecurityContext or securityContext): a uid the image has no passwd entry for would otherwise run with gid 0" }}
 {{- end }}
 {{- if not (eq (toString (get $sc "allowPrivilegeEscalation")) "false") }}
@@ -293,7 +294,7 @@ Arg: dict "cfg" <map> "root" <$>
      clash outright. admin_port defaults to 9191; 0 disables the admin RPC. */}}
 {{- $ports := list (list "quic.port" (int $root.Values.quic.port)) (list "metrics.port" (int $root.Values.metrics.port)) }}
 {{- $adminRaw := dig "admin_port" 9191 $cfg.observability }}
-{{- if not (or (kindIs "float64" $adminRaw) (kindIs "int64" $adminRaw) (kindIs "int" $adminRaw)) }}
+{{- if not (has (kindOf $adminRaw) (list "float64" "int64" "int")) }}
 {{- fail (printf "config.observability.admin_port must be a number (0 disables the admin RPC), got %s %q" (kindOf $adminRaw) (toString $adminRaw)) }}
 {{- end }}
 {{- $admin := int $adminRaw }}
@@ -338,11 +339,12 @@ Arg: dict "cfg" <map> "root" <$>
 {{- range $origins }}
 {{- if and (kindIs "map" .) (eq (toString (get . "kind")) "fs") }}
 {{- $fsOrigins = add1 $fsOrigins }}
-{{- if or (not (hasKey . "path")) (kindIs "invalid" (get . "path")) }}
+{{- if kindIs "invalid" (dig "path" nil .) }}
 {{- fail (printf "config.cache: an fs origin needs a path, %s or a directory under it" $originDir) }}
 {{- end }}
 {{- $path := toString (get . "path") }}
-{{- if or (not (or (eq $path $originDir) (hasPrefix (printf "%s/" $originDir) $path))) (regexMatch "(^|/)\\.\\.(/|$)" $path) }}
+{{- $underMount := or (eq $path $originDir) (hasPrefix (printf "%s/" $originDir) $path) }}
+{{- if or (not $underMount) (regexMatch "(^|/)\\.\\.(/|$)" $path) }}
 {{- fail (printf "config.cache: an fs origin's path must be %s or a directory under it, where origin.volume is mounted (got %q)" $originDir $path) }}
 {{- end }}
 {{- if not $originVolume }}

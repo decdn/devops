@@ -17,7 +17,13 @@ deCDN node {{ include "decdn-node.fullname" . }} (namespace {{ .Release.Namespac
 {{- if eq $type "LoadBalancer" }}
 {{- $addrs = append $addrs (printf "/ip4/$LB_IP/udp/%d/quic-v1" (int .Values.quic.port)) }}
 {{- else if eq $type "NodePort" }}
-{{- $addrs = append $addrs (printf "/ip4/%s/udp/%s/quic-v1" (ternary $podNode "<any k8s node's public IP>" $nodePortLocal) (ternary (toString (int (.Values.service.nodePort | default 0))) "$NODE_PORT" (not (empty .Values.service.nodePort)))) }}
+{{- $nodeAddr := ternary $podNode "<any k8s node's public IP>" $nodePortLocal }}
+{{- /* No fixed nodePort: the notes look it up into $NODE_PORT. */}}
+{{- $nodePort := "$NODE_PORT" }}
+{{- with .Values.service.nodePort }}
+{{- $nodePort = toString (int .) }}
+{{- end }}
+{{- $addrs = append $addrs (printf "/ip4/%s/udp/%s/quic-v1" $nodeAddr $nodePort) }}
 {{- end }}
 {{- if .Values.quic.hostPort.enabled }}
 {{- $addrs = append $addrs (printf "/ip4/%s/udp/%d/quic-v1" $podNode (int .Values.quic.hostPort.port)) }}

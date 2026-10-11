@@ -635,12 +635,14 @@ origin_src() { # <volume JSON> <yq path under the origin volume>
     --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin \
     | yq "select(.kind == \"StatefulSet\") | .spec.template.spec.volumes[] | select(.name == \"origin\") | $2"
 }
-v="$(origin_src '{"csi":{"driver":"d","readOnly":false}}' '.csi.readOnly')" || fail "render (csi origin)"
-[ "$v" = true ] || fail "origin.volume: csi readOnly not forced (got $v)"
-v="$(origin_src '{"nfs":{"server":"s","path":"/x"}}' '.nfs.readOnly')" || fail "render (nfs origin)"
-[ "$v" = true ] || fail "origin.volume: nfs readOnly not forced (got $v)"
-v="$(origin_src '{"gcePersistentDisk":{"pdName":"c"}}' '.gcePersistentDisk.readOnly')" || fail "render (gcePersistentDisk origin)"
-[ "$v" = true ] || fail "origin.volume: gcePersistentDisk readOnly not forced (got $v)"
+forced_read_only() { # <source> <source JSON>
+  local v
+  v="$(origin_src "{\"$1\":$2}" ".$1.readOnly")" || fail "render ($1 origin)"
+  [ "$v" = true ] || fail "origin.volume: $1 readOnly not forced (got $v)"
+}
+forced_read_only csi '{"driver":"d","readOnly":false}'
+forced_read_only nfs '{"server":"s","path":"/x"}'
+forced_read_only gcePersistentDisk '{"pdName":"c"}'
 v="$(origin_src '{"emptyDir":{}}' '.emptyDir | has("readOnly")')" || fail "render (emptyDir origin)"
 [ "$v" = false ] || fail "origin.volume: emptyDir gained a readOnly field"
 pass "origin.volume: readOnly forced per source, pass-through sources untouched"
@@ -648,13 +650,12 @@ pass "origin.volume: readOnly forced per source, pass-through sources untouched"
 # Long release names: every rendered object keeps a unique name. The dashboard
 # ConfigMaps used to truncate to 63 characters and collide.
 long="$(printf 'n%.0s' $(seq 1 52))"
-helm template t "$chart" -f "$chart/ci/ci-values.yaml" --set fullnameOverride="$long" \
-  | yq -N '.kind + "/" + .metadata.name' | grep -v '^null' | sort | uniq -d > "$work/dupes"
+helm template t "$chart" -f "$chart/ci/ci-values.yaml" --set fullnameOverride="$long" > "$work/long.yaml"
+yq -N '.kind + "/" + .metadata.name' "$work/long.yaml" | grep -v '^null' | sort | uniq -d > "$work/dupes"
 [ ! -s "$work/dupes" ] || { cat "$work/dupes" >&2; fail "duplicate object names with a 52-character fullname (the cap)"; }
 pass "unique object names with a 52-character fullname (the cap)"
 # Service names are DNS labels: 63 characters, with the longest fullname allowed.
-helm template t "$chart" -f "$chart/ci/ci-values.yaml" --set fullnameOverride="$long" \
-  | yq -N 'select(.kind == "Service") | .metadata.name' | awk 'length > 63' > "$work/long-svc"
+yq -N 'select(.kind == "Service") | .metadata.name' "$work/long.yaml" | awk 'length > 63' > "$work/long-svc"
 [ ! -s "$work/long-svc" ] || { cat "$work/long-svc" >&2; fail "Service name over 63 characters with a 52-character fullname (the cap)"; }
 pass "Service names fit 63 characters with a 52-character fullname (the cap)"
 
