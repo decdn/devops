@@ -376,6 +376,7 @@ ports = {p["name"]: p for p in main["ports"]}
 quic_port, metrics_port = cfg["network"]["bind_port"], cfg["observability"]["metrics_port"]
 
 check(spec["replicas"] == 1, "replicas != 1")
+check(spec["podManagementPolicy"] == "Parallel", "podManagementPolicy: a crash-looping pod blocks the rollout under OrderedReady")
 check(pod["automountServiceAccountToken"] is False, "SA token automounted")
 check(pod["terminationGracePeriodSeconds"] >= 300, "drain window < 300s")
 check(pod["securityContext"]["runAsNonRoot"] is True, "runAsNonRoot")

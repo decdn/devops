@@ -12,7 +12,12 @@ spec:
   # keystore and node.secret (a double-signing / slashing hazard).
   replicas: 1
   serviceName: {{ include "decdn-node.fullname" . }}-metrics
-  podManagementPolicy: OrderedReady
+  # Parallel, not OrderedReady: with OrderedReady the controller waits for an
+  # unready pod before acting, so a config that crash-loops the pod (an unknown
+  # key, deny_unknown_fields upstream) stays stuck after the fix is rolled out
+  # until someone deletes the pod (the docs' "forced rollback"). With one
+  # replica nothing else changes. Immutable after install.
+  podManagementPolicy: Parallel
   updateStrategy:
     type: RollingUpdate
   selector:

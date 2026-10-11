@@ -371,6 +371,12 @@ metrics:
 - **SIGTERM runs a graceful drain.** `terminationGracePeriodSeconds` defaults to 300, the
   role's `TimeoutStopSec`. Killing a pod mid-drain loses paid deliveries, so do not
   force-delete it.
+- **A config the daemon rejects recovers without a manual delete.** Every `node.toml`
+  section rejects unknown keys, so a typo in `config` crash-loops the pod. The
+  StatefulSet uses `podManagementPolicy: Parallel`, so a fixed `helm upgrade` (or a
+  `helm rollback`) replaces the crash-looping pod. Under the `OrderedReady` default the
+  controller would wait for that pod to become Ready first, and you would have to
+  delete it by hand.
 - **Config changes roll the pod** through the ConfigMap checksum. Secret changes do not:
   after rotating the keystore or RPC URL, run
   `kubectl rollout restart statefulset/<release>`. The daemon's partial

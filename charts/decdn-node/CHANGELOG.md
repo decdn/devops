@@ -80,6 +80,10 @@ Initial chart (pre-1.0; the values shape may still change).
   and a public Service are both enabled. The README no longer says a LoadBalancer
   alone gives the node a stable public address.
 
+- The StatefulSet uses `podManagementPolicy: Parallel`. With `OrderedReady`, a
+  config the daemon rejects (an unknown key) left a crash-looping pod that a fixed
+  `helm upgrade` or `helm rollback` never replaced, until it was deleted by hand.
+
 ### Fixed
 
 - Delivery dashboard: recency seed failures get their own stat panel, which reads the
