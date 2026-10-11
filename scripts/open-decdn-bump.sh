@@ -31,7 +31,9 @@
 #
 # Exit: 0 done or nothing to do; 1 error (no PR opened unless the output says
 # so), the PR is open but needs work, or (--dry-run) the bump would need work;
-# 2 usage.
+# 2 usage. "Needs work" is the body's "Needs work" list: what the script could
+# not finish. Its "Before merging" checklist (the real-binary chart check, the
+# prose) comes with every bump and does not change the exit code.
 set -euo pipefail
 
 DECDN=decdn/decdn
