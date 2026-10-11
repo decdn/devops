@@ -6,7 +6,7 @@ The repo publishes three artifacts, each on its own version and released by its 
 |----------|-----|----------|--------------|---------|
 | `decdn.node` Ansible collection (node operators) | `node-collection-vX.Y.Z` | [`release-collection.yml`](.github/workflows/release-collection.yml) | [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/) | `ansible-galaxy collection install decdn.node:==X.Y.Z` |
 | `decdn.publisher` Ansible collection (publishers) | `publisher-collection-vX.Y.Z` | [`release-collection.yml`](.github/workflows/release-collection.yml) | [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/) | `ansible-galaxy collection install decdn.publisher:==X.Y.Z` |
-| `decdn-node` Helm chart | `decdn-node-X.Y.Z` | [`release-chart.yml`](.github/workflows/release-chart.yml) | `oci://ghcr.io/decdn/charts`, signed with cosign (keyless) | `helm install <release> oci://ghcr.io/decdn/charts/decdn-node --version X.Y.Z` |
+| `decdn-node` Helm chart | `decdn-node-X.Y.Z` | [`release-chart.yml`](.github/workflows/release-chart.yml) | `oci://ghcr.io/decdn/charts`, signed with cosign (keyless), with build-provenance attestations | `helm install <release> oci://ghcr.io/decdn/charts/decdn-node --version X.Y.Z` |
 
 Release an artifact when it has changes; the others are not touched. Their versions are
 independent. The one dependency is Galaxy's: `decdn.publisher` requires `decdn.node`
@@ -135,8 +135,9 @@ version instead, so until then, changes are logged there by hand. After that, no
 generated.
 
 The chart's tag shape (`decdn-node-`) and workflow file name (`release-chart.yml`) are
-part of its cosign certificate identity (see [Verifying a release](#verifying-a-release)):
-never change either once a chart is published.
+part of its cosign certificate identity, and the file name is its attestations' signer
+workflow (see [Verifying a release](#verifying-a-release)): never change either once a
+chart is published.
 
 ## First release only
 
@@ -191,10 +192,11 @@ Re-run only the failed `publish` job, never the whole workflow: `publish` reuses
 artifact `build` checksummed, while a fresh `build` repackages the chart, which need
 not reproduce the same bytes.
 
-**Chart** (`release-chart.yml`: chart push and signature, then the Artifact Hub
-metadata, then the Release). The pushes are repeatable: re-pushing the same package
-moves the version tag to the same digest, and `oras push` moves the `artifacthub.io`
-tag. The Release is not: if `gh release create` made the Release and then failed (an
+**Chart** (`release-chart.yml`: chart push and signature, then the build-provenance
+attestations, then the Artifact Hub metadata, then the Release). The pushes are
+repeatable: re-pushing the same package moves the version tag to the same digest, a
+re-run attestation is one more for the same digest, and `oras push` moves the
+`artifacthub.io` tag. The Release is not: if `gh release create` made the Release and then failed (an
 asset upload, say), a re-run fails on the existing Release. Finish it by hand with
 `gh release upload decdn-node-X.Y.Z --repo decdn/devops <missing assets>` from the
 `release-decdn-node-X.Y.Z` workflow artifact.
@@ -218,6 +220,10 @@ gh release create publisher-collection-vX.Y.Z --repo decdn/devops --title "decdn
 
 ## Verifying a release
 
+The chart's signature needs **cosign v3** or later. The release workflow signs with
+cosign v3, which stores the signature as a Sigstore bundle attached to the chart as an
+OCI referrer; cosign v2 does not look there and reports `no signatures found`.
+
 ```bash
 # The chart's signature: keyless, tied to this repo's chart release workflow and tags.
 cosign verify ghcr.io/decdn/charts/decdn-node:X.Y.Z \
@@ -226,4 +232,15 @@ cosign verify ghcr.io/decdn/charts/decdn-node:X.Y.Z \
 
 # The files attached to the GitHub Release.
 sha256sum --check SHA256SUMS
+```
+
+Every chart release after 0.1.0 also carries SLSA build-provenance attestations, for the
+pushed chart and for the `.tgz` attached to the GitHub Release. They name the commit and
+the workflow run that built it:
+
+```bash
+gh attestation verify oci://ghcr.io/decdn/charts/decdn-node:X.Y.Z \
+  --repo decdn/devops --signer-workflow decdn/devops/.github/workflows/release-chart.yml
+gh attestation verify decdn-node-X.Y.Z.tgz \
+  --repo decdn/devops --signer-workflow decdn/devops/.github/workflows/release-chart.yml
 ```
