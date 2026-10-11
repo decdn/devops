@@ -228,6 +228,10 @@ role describe a change shared with that collection.
   `origin/main`. The weekly `upstream-drift` job checks the mirrors against that
   tag, the onramp's `SHA256SUMS` digests and the Compose image digests against the
   pinned releases, and fails when either upstream repo has a newer `vX.Y.Z` tag.
+- `sponsord_onramp`: the installers' decdn pin defaults to decdn/decdn `v0.0.2` and
+  that release's `SHA256SUMS` digest (was `v0.0.1`), following the `decdn_node`
+  role's `decdn_node_version`. The generated `vars/main/networks.yml` subsets move
+  only their source commit (no address changed).
 - `sponsord`: the restart-inputs comparison is now the only thing that restarts the
   daemon. The tasks that write secret.env, sponsord.env, the unit or the binary no
   longer notify the handler themselves (each is a hashed input already), so a write

@@ -327,6 +327,58 @@ for want in '^iroh_dns_server_metrics_bind: 127\.0\.0\.1([[:space:]]|$)' '^iroh_
 done
 echo "ok: per-daemon scrape toggles"
 
+# --- Gate 1b'': the Compose runtime -------------------------------------------
+# compose/alloy/config.alloy is the committed render of the `compose` case: it must
+# be byte-identical to this run's (scripts/render-compose-alloy.sh regenerates
+# it), and it is validated on its own too, being the file Compose mounts.
+committed="$ansible_dir/../compose/alloy/config.alloy"
+cmp -s "$render_dir/compose.alloy" "$committed" \
+  || fail "compose/alloy/config.alloy differs from a fresh render of the template: run scripts/render-compose-alloy.sh"
+"$alloy" validate "$committed" || fail "alloy validate rejected compose/alloy/config.alloy"
+assert_has compose.alloy 'GENERATED from ansible/roles/grafana_alloy/templates/config.alloy.j2' "the generated-mirror header"
+assert_lacks compose.alloy 'MANAGED BY' "the role's managed-by header"
+# No host value is rendered in: every identity value is a runtime lookup.
+for key in ALLOY_INSTANCE_ID ALLOY_REGION ALLOY_DEPLOYMENT_ENVIRONMENT DECDN_COMPOSE_PROFILES; do
+  assert_has compose.alloy "sys.env(\"$key\")" "the $key lookup"
+done
+assert_lacks compose.alloy 'sys.env:' "an unexpanded identity marker"
+assert_lacks compose.alloy '"instance"    = "' "a literal instance label"
+# Host networking publishes whatever Alloy binds: its OTLP receivers stay on
+# loopback (the role's preflight asserts this for the systemd renders; render.yml
+# bypasses it, so the committed Compose config is checked here).
+assert_has compose.alloy 'endpoint = "127.0.0.1:4317"' "the loopback OTLP gRPC receiver"
+assert_has compose.alloy 'endpoint = "127.0.0.1:4318"' "the loopback OTLP HTTP receiver"
+if grep -nE 'endpoint *= *"(0\.0\.0\.0|\[::\]|:)' "$render_dir/compose.alloy"; then
+  fail "compose/alloy/config.alloy binds a receiver on a wildcard address"
+fi
+assert_lacks compose.alloy 'replacement  = "US"' "a literal region"
+# The host through the read-only /host mounts; no systemd collector (no D-Bus).
+assert_has compose.alloy 'procfs_path              = "/host/proc"' "the host's /proc"
+assert_has compose.alloy 'sysfs_path               = "/host/sys"' "the host's /sys"
+assert_has compose.alloy 'rootfs_path              = "/host/root"' "the host's /"
+assert_has compose.alloy 'udev_data_path           = "/host/root/run/udev/data"' "the host's udev database"
+assert_lacks compose.alloy 'systemd {' "the systemd collector's block"
+assert_lacks compose.alloy '"systemd"' "the systemd collector"
+# Each daemon's scrape is gated on the profiles that start it.
+assert_has compose.alloy 'targets         = discovery.relabel.decdn_node_targets.output' "the profile-gated node scrape"
+assert_has compose.alloy 'targets         = discovery.relabel.sponsord_targets.output' "the profile-gated sponsord scrape"
+assert_has compose.alloy 'targets         = discovery.relabel.iroh_relay_targets.output' "the profile-gated relay scrape"
+assert_has compose.alloy 'targets         = discovery.relabel.iroh_dns_server_targets.output' "the profile-gated DNS server scrape"
+# shellcheck disable=SC2016  # literal backticks: Alloy's raw-string syntax
+assert_has compose.alloy 'regex         = `.*,\s*(?:node|origin|\*)\s*,.*`' "the node's profiles"
+# shellcheck disable=SC2016
+assert_has compose.alloy 'regex         = `.*,\s*(?:sponsord|onramp|\*)\s*,.*`' "sponsord's profiles"
+# shellcheck disable=SC2016
+assert_has compose.alloy 'regex         = `.*,\s*(?:relay|\*)\s*,.*`' "the relay's profile"
+# shellcheck disable=SC2016
+assert_has compose.alloy 'regex         = `.*,\s*(?:dns|\*)\s*,.*`' "the DNS server's profile"
+# Containers' lines get their role's unit, and the exemption reads that unit.
+assert_has compose.alloy 'source_labels = ["__journal_container_name"]' "the container-name mapping"
+assert_has compose.alloy 'regex         = "decdn-(decdn-node|sponsord|sponsord-onramp|caddy|iroh-relay|iroh-dns-server|alloy)-[0-9]+"' "this project's containers"
+# shellcheck disable=SC2016  # a literal ${1}: the relabel replacement
+assert_has compose.alloy 'replacement   = "${1}.service"' "the container's unit"
+echo "ok: the Compose runtime renders what it claims"
+
 # --- Gate 1c: URLs are redacted, and the daemon's level comes from its line ----
 # Loading proves syntax, not behaviour. Run the RENDERED journal_rules,
 # redact_urls and daemon_level blocks in the real Alloy, fed sample lines through
@@ -413,7 +465,7 @@ samples_json() { # nanosecond timestamp
 JSON
 }
 
-run_level_harness() { # rendered config, number of entries expected to survive
+run_level_harness() { # rendered config, number of entries expected to survive[, samples function]
   local src="$render_dir/$1" name="${1%.alloy}" expect="$2"
   local config="$harness/$name.alloy" data="$harness/$name.data" ports api_port http_port
   harness_log="$harness/$name.log"
@@ -464,7 +516,7 @@ ALLOY
   [ -n "$ready" ] || harness_fail "alloy never became ready"
 
   # /-/ready means the graph is loaded; the API listener may bind a moment later.
-  samples_json "$(date +%s%N)" | curl -fsS --retry 10 --retry-connrefused --retry-delay 0 \
+  "${3:-samples_json}" "$(date +%s%N)" | curl -fsS --retry 10 --retry-connrefused --retry-delay 0 \
     -H 'Content-Type: application/json' --data @- "http://127.0.0.1:$api_port/loki/api/v1/push" \
     || harness_fail "pushing sample lines failed"
 
@@ -667,6 +719,120 @@ dropped id-info
 dropped id-debug
 dropped ir-warn                             # the relay is not enabled here
 echo "ok: iroh-dns-server judged by its own level (info in the guardrail)"
+
+# The Compose runtime: dockerd writes every container's lines, so they arrive as
+# docker.service with a CONTAINER_NAME. This project's containers must come out
+# under their role's unit, levelled, guarded and redacted as on the systemd path;
+# any other container keeps docker.service.
+compose_samples_json() { # nanosecond timestamp
+  cat <<JSON
+{"streams":[
+  {"stream":{"journal__systemd_unit":"docker.service","journal_container_name":"other-app-1","journal_priority_keyword":"debug"},"values":[
+    ["$1","c-other-debug"]]},
+  {"stream":{"journal__systemd_unit":"docker.service","journal_container_name":"decdn-decdn-node-1","journal_priority_keyword":"info"},"values":[
+    ["$1","{\"level\":\"DEBUG\",\"fields\":{\"message\":\"c-node-debug\"}}"],
+    ["$1","{\"level\":\"WARN\",\"fields\":{\"message\":\"c-node-warn via https://u:SECRET-CP@rpc.example/v2/SECRET-CK\"}}"]]},
+  {"stream":{"journal__systemd_unit":"docker.service","journal_container_name":"decdn-sponsord-1","journal_priority_keyword":"info"},"values":[
+    ["$1","2026-10-05T07:59:10.000002Z DEBUG sponsord_core::keeper: c-sd-debug"],
+    ["$1","2026-10-05T07:59:10.000004Z  WARN sponsord_core::keeper: c-sd-warn"],
+    ["$1","Error: c-sd-raw error sending request for url (https://rpc.example/v2/SECRET-SK)"]]},
+  {"stream":{"journal__systemd_unit":"docker.service","journal_container_name":"decdn-sponsord-onramp-1","journal_priority_keyword":"info"},"values":[
+    ["$1","2026-10-05T07:59:11.000003Z  WARN sponsord_onramp: c-ro-warn"]]},
+  {"stream":{"journal__systemd_unit":"docker.service","journal_container_name":"decdn-iroh-relay-1","journal_priority_keyword":"info"},"values":[
+    ["$1","2026-10-09T05:30:21.000001Z DEBUG iroh_relay::server::client: c-ir-debug"],
+    ["$1","2026-10-09T05:30:21.000003Z  WARN iroh_relay::server::http_server: c-ir-warn"]]},
+  {"stream":{"journal__systemd_unit":"docker.service","journal_container_name":"decdn-caddy-1","journal_priority_keyword":"info"},"values":[
+    ["$1","{\"level\":\"info\",\"msg\":\"c-caddy\"}"]]},
+  {"stream":{"journal__systemd_unit":"docker.service","journal_container_name":"other-app-1","journal_priority_keyword":"info"},"values":[
+    ["$1","c-other-info"]]},
+  {"stream":{"journal__systemd_unit":"ssh.service","journal_priority_keyword":"info"},"values":[
+    ["$1","c-ssh-info"]]}
+]}
+JSON
+}
+kept_as() { # marker, the exact label set it must carry (as `{…}` prints, unescaped)
+  local want="${2//\"/\\\"}"
+  grep -F "$1" "$harness_log" | grep -qF "labels=\"{$want}\"" \
+    || harness_fail "$1 should be kept with labels {$2}"
+}
+run_level_harness compose.alloy 8 compose_samples_json
+no_secrets
+kept_as c-node-warn 'container="decdn-decdn-node-1", level="warning", unit="decdn-node.service"'
+redacted c-node-warn 'via https://<redacted>@rpc.example/<redacted>'
+kept_as c-sd-warn 'container="decdn-sponsord-1", level="warning", unit="sponsord.service"'
+kept_as c-sd-raw 'container="decdn-sponsord-1", level="error", unit="sponsord.service"'
+kept_as c-ro-warn 'container="decdn-sponsord-onramp-1", level="warning", unit="sponsord-onramp.service"'
+kept_as c-ir-warn 'container="decdn-iroh-relay-1", level="warning", unit="iroh-relay.service"'
+kept_as c-caddy 'container="decdn-caddy-1", level="info", unit="caddy.service"'
+kept_as c-other-info 'container="other-app-1", level="info", unit="docker.service"'
+kept_as c-ssh-info 'level="info", unit="ssh.service"'
+dropped c-node-debug
+dropped c-sd-debug
+dropped c-ir-debug
+dropped c-other-debug
+echo "ok: Compose containers' journal lines get their role's unit, level and redaction"
+
+# --- Gate 1d: the Compose configuration at run time -----------------------------
+# `alloy validate` does not parse OTTL statements or evaluate sys.env, and the
+# profile gating is a runtime decision, so run the committed file in the real
+# Alloy: every component must be healthy, and each daemon's target must exist
+# exactly when DECDN_COMPOSE_PROFILES starts it. The /host paths become this
+# host's own; the Grafana Cloud endpoints point at a closed local port, whose
+# send errors do not make a component unhealthy.
+runtime="$work/runtime"
+mkdir -p "$runtime"
+sed -e 's|"/host/proc"|"/proc"|; s|"/host/sys"|"/sys"|; s|"/host/root"|"/"|; s|"/host/root/|"/|' "$committed" >"$runtime/config.alloy"
+grep -qF '"/host/' "$runtime/config.alloy" && fail "could not point compose/alloy/config.alloy at this host"
+compose_runtime() { # COMPOSE_PROFILES value, then the targets expected for the node, sponsord, the relay, the DNS server
+  local http_port port log="$runtime/run.log" components got pid
+  http_port="$(python3 -c '
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])')" || fail "could not pick a free port (python3 is required)"
+  rm -rf "$runtime/data"
+  # The OTLP receivers bind 127.0.0.1:4317 and :4318, as in production: a host
+  # already listening there (an Alloy of its own) cannot run this gate.
+  for port in 4317 4318; do
+    python3 -c "import socket, sys; sys.exit(socket.socket().connect_ex(('127.0.0.1', $port)) == 0)" \
+      || fail "127.0.0.1:$port is in use: the Compose runtime gate needs the OTLP ports free"
+  done
+  env -i PATH="$PATH" HOME="$runtime" \
+    GC_API_TOKEN=gate GC_PROM_REMOTE_WRITE_URL=http://127.0.0.1:9/push GC_PROM_USERNAME=1 \
+    GC_LOKI_URL=http://127.0.0.1:9/loki/api/v1/push GC_LOKI_USERNAME=2 GC_OTLP_ENDPOINT=http://127.0.0.1:9/otlp \
+    ALLOY_INSTANCE_ID=gate-1 ALLOY_REGION=DE ALLOY_DEPLOYMENT_ENVIRONMENT=production DECDN_COMPOSE_PROFILES="$1" \
+    "$alloy" run "$runtime/config.alloy" --storage.path="$runtime/data" \
+    --server.http.listen-addr="127.0.0.1:$http_port" >"$log" 2>&1 &
+  pid=$!
+  trap 'kill "$pid" 2>/dev/null || true; cleanup' EXIT
+  local ready=""
+  for _ in $(seq 100); do
+    if curl -fs "http://127.0.0.1:$http_port/-/ready" >/dev/null; then ready=1; break; fi
+    kill -0 "$pid" 2>/dev/null || { cat "$log" >&2; fail "alloy run exited on the Compose configuration"; }
+    sleep 0.2
+  done
+  [ -n "$ready" ] || { cat "$log" >&2; fail "alloy never became ready on the Compose configuration"; }
+  components="$(curl -fsS "http://127.0.0.1:$http_port/api/v0/web/components")" \
+    || fail "could not read Alloy's component list"
+  got="$(jq -r '[.[] | select(.health.state != "healthy") | "\(.localID): \(.health.message)"] | join("; ")' <<<"$components")"
+  [ -z "$got" ] || { cat "$log" >&2; fail "COMPOSE_PROFILES=$1: unhealthy components: $got"; }
+  for t in "decdn_node $2" "sponsord $3" "iroh_relay $4" "iroh_dns_server $5"; do
+    got="$(curl -fsS "http://127.0.0.1:$http_port/api/v0/web/components/discovery.relabel.${t% *}_targets" \
+      | jq '[.exports[] | select(.name == "output") | .value.value[]] | length')"
+    [ "$got" = "${t#* }" ] \
+      || fail "COMPOSE_PROFILES=$1: ${t% *} has $got scrape targets, want ${t#* }"
+  done
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  trap cleanup EXIT
+  echo "ok: COMPOSE_PROFILES=$1 scrapes the node $2x, sponsord $3x, the relay $4x, the DNS server $5x; every component healthy"
+}
+compose_runtime "node,alloy" 1 0 0 0
+compose_runtime "origin, onramp,caddy,alloy" 1 1 0 0
+compose_runtime "sponsord,alloy" 0 1 0 0
+compose_runtime "relay,alloy" 0 0 1 0
+compose_runtime "dns,alloy" 0 0 0 1
+compose_runtime "alloy" 0 0 0 0
 
 # --- Gate 2: every ExecStart flag exists -------------------------------------
 # `alloy run` ignores nothing: an unknown flag exits non-zero, i.e. a systemd

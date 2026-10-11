@@ -1,0 +1,55 @@
+# iroh-relay's configuration for the Compose `relay` profile (README.md, "An iroh
+# relay"): `decdn-compose init relay` installs it as /etc/iroh-relay/iroh-relay.toml
+# (root, 0644; nothing in it is secret) with your hostname, contact and access mode
+# filled in. It writes the keys ansible/roles/iroh_relay's template writes.
+#
+# iroh-relay 1.3.0 ignores keys it does not know, and without this file runs on its
+# built-in defaults (metrics on a public port, no TLS), so every key is written out,
+# and `decdn-compose check` refuses a key the binary does not define, metrics off
+# loopback, a cert_dir outside the mounted /var/lib/iroh-relay and an empty
+# allowlist. Restart the relay after an edit: `decdn-compose restart iroh-relay`.
+
+enable_relay = true
+# The captive-portal probe (and nothing else: the relay itself is on https). The
+# ports are fixed: Let's Encrypt's TLS-ALPN-01 challenge comes to 443, iroh's probe
+# to 80, and iroh clients assume 7842 for QUIC address discovery. "[::]" is every
+# address (IPv4 too, unless net.ipv6.bindv6only=1); use "0.0.0.0" on an IPv4-only
+# host, or one of the host's own addresses.
+http_bind_addr = "[::]:80"
+# QUIC address discovery on udp/7842: tells peers the address they are seen at,
+# which is what lets them hole-punch. Off unless asked for.
+enable_quic_addr_discovery = true
+# Loopback only: iroh-relay's default is the public address on :9090. Keep this
+# exact address: `check` requires it, and it is where the dashboards' scrape reads.
+enable_metrics = true
+metrics_bind_addr = "127.0.0.1:9092"
+# Who may relay through it (QUIC address discovery and the probe answer anyone):
+#   access = { allowlist = ["<id>", …] }   only these endpoint IDs (`init relay`'s default)
+#   access = { denylist = ["<id>", …] }    everyone but these
+#   access = "everyone"
+# An ID is 64 lowercase hex, as `sudo compose/decdn-compose cli whoami` prints it on
+# each node ("node id: <hex>"). One per line is fine:
+#   access = { allowlist = [
+#     "<node 1's id>",
+#     "<node 2's id>",
+#   ] }
+# decdn clients use a fresh key per fetch and can never be listed: a node behind
+# NAT that serves clients needs its relays in "everyone" mode (README.md).
+access = { allowlist = [] }
+
+[tls]
+https_bind_addr = "[::]:443"
+quic_bind_addr = "[::]:7842"
+# The DNS name nodes reach the relay at (each node's [network] relay_urls =
+# ["https://<hostname>"]; decdn_relay_urls on Ansible);
+# its A/AAAA records must point at this host.
+hostname = "relay.example.org"
+cert_mode = "LetsEncrypt"
+# Inside the mounted state directory, so the ACME account and certificates survive
+# a restart.
+cert_dir = "/var/lib/iroh-relay/acme"
+# false: Let's Encrypt's staging CA, for a trial run that leaves the production
+# rate limits alone. Its certificates are never trusted.
+prod_tls = true
+# The Let's Encrypt account's email address, without mailto: (required).
+contact = "admin@example.org"

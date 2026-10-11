@@ -26,8 +26,8 @@ committed inventory the Ansible `schema` molecule scenario uses
 ([`schema-keys.txt`](https://github.com/decdn/devops/blob/main/ansible/molecule/schema/files/schema-keys.txt)).
 Re-sync it when bumping the decdn version. Keys and value types **you** add to `config` are
 validated only by the daemon at startup (a typo is a crash-loop, not a render error),
-and unlike the Ansible role there is no in-cluster `decdn config validate`, because the
-image has no CLI.
+and unlike the Ansible role the chart runs no in-cluster `decdn config validate` (the
+image carries the `decdn` CLI since v0.0.2, but the chart does not call it).
 
 ## What it deploys
 
@@ -46,7 +46,8 @@ image has no CLI.
 What it does **not** do:
 
 - **Create Secrets.** The operator provisions them.
-- **Generate keys.** The image is daemon-only, with no `decdn` CLI.
+- **Generate keys.** Run `decdn key-gen` on your workstation before installing (see
+  [Secrets](#secrets)).
 - **Stake or register on-chain** (ADR 019 Phase 2). Run `decdn setup` off-cluster.
 
 ## Prerequisites
@@ -58,15 +59,15 @@ What it does **not** do:
 - **UDP reachability.** Either a load balancer that supports UDP Services, or
   `quic.hostPort.enabled` on nodes with a public IP.
 - **An image.** By default the chart runs `ghcr.io/decdn/decdn-node:<appVersion>`
-  (today `0.0.1`, the decdn/decdn release the chart is synced against). Pin
+  (today `0.0.2`, the decdn/decdn release the chart is synced against). Pin
   `image.digest` instead in production: take it from the release's
   `decdn-node-image-digest.txt` (`image-digest.txt` in v0.0.1), after checking its
   `.asc` against the keys in
   [SECURITY.md](https://github.com/decdn/devops/blob/main/SECURITY.md#release-verification).
   To run an unreleased build, follow the header of the upstream `decdn/Dockerfile`: `cargo build --release -p
-  decdn-node`, copy the binary to `dist/<arch>/decdn-node`, then `docker build`. The
-  Dockerfile only packages that binary, on `debian:bookworm-slim` (glibc 2.36), so build
-  on a system with glibc ≤ 2.36 or the binary will not start.
+  decdn-node -p decdn-cli`, copy both binaries to `dist/<arch>/`, then `docker build`. The
+  Dockerfile only packages those binaries, on `debian:bookworm-slim` (glibc 2.36), so build
+  on a system with glibc ≤ 2.36 or they will not start.
 - **The `decdn` CLI on your workstation**, for `key-gen`, `setup`, and `node health`
   through a port-forward.
 

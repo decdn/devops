@@ -7,12 +7,12 @@ pulls a pinned GitHub Release tarball and verifies it against the GPG-signed
 and `manual` copies locally-built binaries from the Ansible control machine. This
 is the repo's deployment (`playbooks/site.yml`).
 
-**Pinned release.** `decdn_node_version` defaults to `0.0.1`, the decdn/decdn
+**Pinned release.** `decdn_node_version` defaults to `0.0.2`, the decdn/decdn
 release this repo pins; see [Bumping the decdn release](#bumping-the-decdn-release)
 to move it. CI tests the role against stub binaries, not this release.
 
 **Schema tracking.** This role renders `node.toml` against the config schema of
-`decdn/decdn` v0.0.1, the release `decdn_node_version` pins. Upstream marks every config
+`decdn/decdn` v0.0.2, the release `decdn_node_version` pins. Upstream marks every config
 section `#[serde(deny_unknown_fields)]` and defines **no** serde aliases, so a key
 this role emits that your binary does not know is a startup crash-loop, not a
 warning. The role runs `decdn config validate` against the installed binary after
@@ -51,7 +51,7 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
      `decdn_verify_release_signature: false` for an air-gapped mirror that strips
      the signature — that takes the tarballs on trust.
 
-     `decdn_node_version` (default `0.0.1`) names the `v<version>` release, which
+     `decdn_node_version` (default `0.0.2`) names the `v<version>` release, which
      must be reachable from the target host; override `decdn_node_release_base`
      for a mirror.
    - **`source`** — the role builds the two binaries **on the node** from
@@ -103,7 +103,7 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
        rolling the ref back to the previous commit reinstalls that.
      - `decdn_node_version` is not checked in this mode: the backstop only
        requires the binaries to run. To build exactly a release, set
-       `decdn_node_source_ref` to its tag (`v0.0.1`).
+       `decdn_node_source_ref` to its tag (`v0.0.2`).
      - The repo URL may not carry a secret: no password, no user on an http(s)
        URL, no query. The upstream repo is public; for a private fork, root does
        the fetch, so give root on the node an ssh deploy key and the git host's key

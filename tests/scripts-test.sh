@@ -2,7 +2,8 @@
 # Tests for the repo's own guard rails that no molecule scenario or chart render
 # exercises: the ansible/ Makefile's scoping guards, the molecule driver's guards
 # and locks (scripts/molecule.sh), the release gate and scripts/release.sh, the
-# lint-compose and lint-cloud-init invariants (negative cases), the firewall holes
+# lint-compose and lint-cloud-init invariants (negative cases), compose/decdn-compose's
+# unit tests, the firewall holes
 # playbooks/group_vars/ derives per host, ci.yml's helm path filter, and — with
 # UPSTREAM=<decdn checkout> — the upstream-mirror generators' exit codes.
 # `make test-scripts` runs it; CI's `scripts` job does too. Needs make, docker
@@ -1009,7 +1010,7 @@ expect 0 "lint-compose accepts compose/compose.yaml" make -s -C "$repo" lint-com
 # <name> <expected message fragment> <sed expression>: the fragment pins WHICH
 # invariant fired (compose/tests/*.jq print "<service>: <invariant>"), since one
 # edit can trip several. Scope an edit to one service by prefixing a sed range:
-# "${node}", "${sd}", "${onr}" or "${cdy}".
+# "${node}", "${sd}", "${onr}", "${cdy}", "${rly}", "${dns}" or "${aly}".
 variant() {
   sed -E "$3" "$compose" > "$work/$1.yaml"
   cmp -s "$compose" "$work/$1.yaml" && fail "variant $1 did not change compose.yaml"
@@ -1022,44 +1023,62 @@ variant() {
   grep -qF -- "$2" "$work/out" || { cat "$work/out" >&2; fail "lint-compose rejected $1, but not with: $2"; }
   pass "lint-compose rejects: $1"
 }
-# Each range ends at the next service or top-level key.
+# Each range ends at the next service or top-level key. The shared hardening is the
+# x-hardened anchor, merged by each service's `<<: *hardened` line, so an edit that
+# weakens one service inserts an overriding key after that line ("${h}").
 node='/^  decdn-node:$/,/^ {0,2}[a-z]/'
 sd='/^  sponsord:$/,/^ {0,2}[a-z]/'
 onr='/^  sponsord-onramp:$/,/^ {0,2}[a-z]/'
 cdy='/^  caddy:$/,/^ {0,2}[a-z]/'
+rly='/^  iroh-relay:$/,/^ {0,2}[a-z]/'
+dns='/^  iroh-dns-server:$/,/^ {0,2}[a-z]/'
+aly='/^  alloy:$/,/^ {0,2}[a-z]/'
+h='s/^(\s*)<<: \*hardened$/&\n\1'
 # Shape
 variant "unexpected service"       "compose.yaml: services are exactly"           "s/^  caddy:$/  proxy:/"
-variant "sponsord privileged"      "sponsord: sets only allowed keys (extra: privileged)" "${sd} s/^(\s*)cap_drop: \[ALL\]$/&\n\1privileged: true/"
-variant "sponsord host pid"        "sponsord: sets only allowed keys (extra: pid)" "${sd} s/^(\s*)network_mode: host$/&\n\1pid: host/"
-variant "onramp device"            "sponsord-onramp: sets only allowed keys (extra: devices)" "${onr} s/^(\s*)network_mode: host$/&\n\1devices: [\"\/dev\/mem:\/dev\/mem\"]/"
+variant "sponsord privileged"      "sponsord: sets only allowed keys (extra: privileged)" "${sd} ${h}privileged: true/"
+variant "sponsord host pid"        "sponsord: sets only allowed keys (extra: pid)" "${sd} ${h}pid: host/"
+variant "onramp device"            "sponsord-onramp: sets only allowed keys (extra: devices)" "${onr} ${h}devices: [\"\/dev\/mem:\/dev\/mem\"]/"
+variant "hardening dropped"        "sponsord: read_only rootfs"                   "${sd} {/^    <<: \*hardened$/d}"
+variant "anchor weakened"          "caddy: read_only rootfs"                      "/^x-hardened:/,/^[a-z]/ s/^(\s*)read_only: true$/\1read_only: false/"
 # decdn-node
-variant "bridge network"           "decdn-node: network_mode is host"             "${node} s/^(\s*)network_mode: host$/\1network_mode: bridge/"
-variant "writable rootfs"          "decdn-node: read_only rootfs"                 "${node} s/^(\s*)read_only: true$/\1read_only: false/"
+variant "bridge network"           "decdn-node: network_mode is host"             "${node} ${h}network_mode: bridge/"
+variant "writable rootfs"          "decdn-node: read_only rootfs"                 "${node} ${h}read_only: false/"
 variant "short stop grace"         "decdn-node: stop_grace_period"                "${node} s/^(\s*)stop_grace_period: 300s$/\1stop_grace_period: 10s/"
-variant "capabilities kept"        "decdn-node: cap_drop is [ALL]"                "${node} s/^(\s*)cap_drop: \[ALL\]$/\1cap_drop: [NET_RAW]/"
-variant "published port"           "decdn-node: publishes no ports"               "${node} s/^(\s*)network_mode: host$/&\n\1ports: [\"127.0.0.1:9090:9090\"]/"
+variant "capabilities kept"        "decdn-node: cap_drop is [ALL]"                "${node} ${h}cap_drop: [NET_RAW]/"
+variant "published port"           "decdn-node: publishes no ports"               "${node} ${h}ports: [\"127.0.0.1:9090:9090\"]/"
 variant "tag instead of digest"    "decdn-node: image is pinned"                  "${node} s#^(\s*)image: .*#\1image: ghcr.io/decdn/decdn-node:latest#"
-variant "node config writable"     "decdn-node: mounts are exactly"               "${node} s#- /etc/decdn:/etc/decdn:ro\$#- /etc/decdn:/etc/decdn#"
+variant "node config writable"     "decdn-node: mounts are exactly"               "${node} {/target: \/etc\/decdn$/{n;s/read_only: true/read_only: false/}}"
+variant "origin content writable"  "decdn-node: mounts are exactly"               "${node} {/target: \/srv\/decdn-origin$/{n;s/read_only: true/read_only: false/}}"
+variant "origin dir created"       "decdn-node: create_host_path on /srv/decdn-origin is true"               "${node} {/target: \/srv\/decdn-origin$/{n;n;s/create_host_path: false/create_host_path: true/}}"
+variant "node data dir created"    "decdn-node: create_host_path on /var/lib/decdn is true"               "${node} {/target: \/var\/lib\/decdn$/{n;s/create_host_path: false/create_host_path: true/}}"
+variant "create_host_path left out" "decdn-node: bind mount /etc/decdn sets create_host_path explicitly" "${node} {/target: \/etc\/decdn$/{n;n;d}}"
+variant "short-syntax volume"      "caddy: short-syntax volume"                   "${cdy} s#^(\s*)volumes:\$#\1volumes:\n\1  - /srv/x:/srv/x:ro#"
+variant "node holds a secret"      "decdn-node: sets only allowed keys (extra: secrets)" "${node} ${h}secrets: [sponsord-api-token]/"
 variant "node always on"           "decdn-node: profiles are [node, origin]"      "${node} {/^    profiles: \[node, origin\]$/d}"
 variant "origin without the node"  "decdn-node: profiles are [node, origin]"      "${node} s/^(\s*)profiles: \[node, origin\]$/\1profiles: [node]/"
+variant "node healthcheck dropped" "decdn-node: healthcheck is"                   "${node} s/^(\s*)test: \[\"CMD\", \"decdn\", \"node\", \"health\".*/\1test: [\"NONE\"]/"
+variant "node RPC URL inline"      "decdn-node: sets only allowed environment keys inline (extra: DECDN_RPC_URL)" "${node} ${h}environment:\n\1  DECDN_RPC_URL: https:\/\/rpc.invalid\/key/"
 # sponsord
 variant "sponsord on 0.0.0.0"      "sponsord: SPONSORD_BIND is 127.x"             "${sd} s/SPONSORD_BIND: 127\.0\.0\.1:8090/SPONSORD_BIND: 0.0.0.0:8090/"
 variant "sponsord bind unset"      "sponsord: SPONSORD_BIND is 127.x"             "${sd} {/SPONSORD_BIND: /d}"
-variant "sponsord bind flag"       "sponsord: no command or entrypoint override"  "${sd} s/^(\s*)network_mode: host$/&\n\1command: [--bind, \"0.0.0.0:8090\"]/"
+variant "sponsord bind flag"       "sponsord: no command or entrypoint override"  "${sd} ${h}command: [--bind, \"0.0.0.0:8090\"]/"
 variant "sponsord by tag"          "sponsord: image is pinned"                    "${sd} s#^(\s*)image: .*#\1image: ghcr.io/decdn/sponsord:latest#"
-variant "sponsord capability"      "sponsord: sets only allowed keys (extra: cap_add)" "${sd} s/^(\s*)cap_drop: \[ALL\]$/&\n\1cap_add: [NET_RAW]/"
+variant "sponsord capability"      "sponsord: sets only allowed keys (extra: cap_add)" "${sd} ${h}cap_add: [NET_RAW]/"
 variant "sponsord short grace"     "sponsord: stop_grace_period"                  "${sd} s/^(\s*)stop_grace_period: 120s$/\1stop_grace_period: 10s/"
-variant "sponsord SIGKILL"         "sponsord: stop_signal is SIGTERM"             "${sd} s/^(\s*)stop_signal: SIGTERM$/\1stop_signal: SIGKILL/"
+variant "sponsord SIGKILL"         "sponsord: stop_signal is SIGTERM"             "${sd} ${h}stop_signal: SIGKILL/"
 variant "sponsord as root"         "sponsord: runs as a non-root uid:gid"         "${sd} s/^(\s*)user: .*/\1user: \"0:0\"/"
-variant "privilege escalation"     "sponsord: security_opt is exactly"            "${sd} s/- no-new-privileges:true$/- no-new-privileges:false/"
-variant "seccomp unconfined"       "sponsord: security_opt is exactly"            "${sd} s/^(\s*)- no-new-privileges:true$/&\n\1- seccomp:unconfined/"
-variant "writable keystore mount"  "sponsord: mounts are exactly"                 "${sd} {/target: \/run\/secrets\/treasury-keystore\.json$/{n;s/read_only: true/read_only: false/}}"
-variant "host root as data dir"    "sponsord: mounts are exactly"                 "${sd} s#^(\s*)volumes:\$#\1volumes:\n\1  - /:/data#"
-variant "docker socket"            "sponsord: mounts are exactly"                 "${sd} s#^(\s*)volumes:\$#\1volumes:\n\1  - /var/run/docker.sock:/var/run/docker.sock:ro#"
+variant "privilege escalation"     "sponsord: security_opt is exactly"            "${sd} ${h}security_opt: [\"no-new-privileges:false\"]/"
+variant "seccomp unconfined"       "sponsord: security_opt is exactly"            "${sd} ${h}security_opt: [\"no-new-privileges:true\", \"seccomp:unconfined\"]/"
+variant "writable keystore mount"  "sponsord: mounts are exactly"                 "${sd} ${h}volumes: [{type: bind, source: \/etc\/sponsord\/treasury-keystore.json, target: \/run\/secrets\/k, bind: {create_host_path: false}}]/"
+variant "host root as data dir"    "sponsord: mounts are exactly"                 "${sd} ${h}volumes: [{type: bind, source: \/, target: \/data, bind: {create_host_path: false}}]/"
+variant "docker socket"            "sponsord: mounts are exactly"                 "${sd} ${h}volumes: [{type: bind, source: \/var\/run\/docker.sock, target: \/var\/run\/docker.sock, read_only: true, bind: {create_host_path: false}}]/"
+variant "sponsord extra secret"    "sponsord: mounts are exactly"                 "${sd} s/^(\s*)secrets:$/&\n\1  - sponsord-turnstile-secret/"
+variant "secret moved"             "sponsord: mounts are exactly"                 "s#^(\s*)file: /etc/sponsord/treasury-keystore\.json\$#\1file: /tmp/treasury-keystore.json#"
+variant "secret from environment"  "secrets.sponsord-api-token: is a single absolute host file" "s#^(\s*)file: /etc/sponsord/api-token\$#\1environment: SPONSORD_API_TOKEN#"
 variant "keystore path moved"      "sponsord: SPONSORD_TREASURY_KEYSTORE is"      "${sd} s#SPONSORD_TREASURY_KEYSTORE: .*#SPONSORD_TREASURY_KEYSTORE: /tmp/k.json#"
 variant "inline API token"         "sponsord: no inline SPONSORD_API_TOKEN"       "${sd} s/^(\s*)SPONSORD_BIND: (.*)$/&\n\1SPONSORD_API_TOKEN: x/"
 variant "RPC URL in compose.yaml"   "sponsord: sets only allowed environment keys inline (extra: SPONSORD_RPC_URL)" "${sd} s/^(\s*)SPONSORD_BIND: (.*)$/&\n\1SPONSORD_RPC_URL: https:\/\/rpc.invalid\/key/"
-variant "node RPC URL inline"      "decdn-node: sets only allowed environment keys inline (extra: DECDN_RPC_URL)" "${node} s/^(\s*)read_only: true$/\1environment:\n\1  DECDN_RPC_URL: https:\/\/rpc.invalid\/key\n&/"
 variant "onramp without daemon"    "sponsord: profiles are"                       "${sd} s/^(\s*)profiles: \[sponsord, onramp\]$/\1profiles: [sponsord]/"
 variant "sponsord digest default"  "sponsord: unset image digest"                 "${sd} s#^(\s*)image: .*#\1image: ghcr.io/decdn/sponsord@\\\${SPONSORD_IMAGE_DIGEST:-sha256:$(printf '0%.0s' {1..64})}#"
 variant "sponsord uid default"     "sponsord: unset uid/gid"                      "${sd} s/^(\s*)user: .*/\1user: \"\\\${SPONSORD_UID:-998}:\\\${SPONSORD_GID:-998}\"/"
@@ -1067,12 +1086,12 @@ variant "sponsord uid default"     "sponsord: unset uid/gid"                    
 variant "onramp on 0.0.0.0"        "sponsord-onramp: ONRAMP_BIND is 127.x"        "${onr} s/ONRAMP_BIND: 127\.0\.0\.1:8080/ONRAMP_BIND: 0.0.0.0:8080/"
 variant "onramp bind unset"        "sponsord-onramp: ONRAMP_BIND is 127.x"        "${onr} {/ONRAMP_BIND: /d}"
 variant "onramp remote daemon"     "sponsord-onramp: ONRAMP_DAEMON_URL"           "${onr} s#ONRAMP_DAEMON_URL: http://127\.0\.0\.1:8090#ONRAMP_DAEMON_URL: http://10.0.0.1:8090#"
-variant "onramp published port"    "sponsord-onramp: publishes no ports"          "${onr} s/^(\s*)network_mode: host$/&\n\1ports: [\"8080:8080\"]/"
-variant "onramp writable rootfs"   "sponsord-onramp: read_only rootfs"            "${onr} s/^(\s*)read_only: true$/\1read_only: false/"
+variant "onramp published port"    "sponsord-onramp: publishes no ports"          "${onr} ${h}ports: [\"8080:8080\"]/"
+variant "onramp writable rootfs"   "sponsord-onramp: read_only rootfs"            "${onr} ${h}read_only: false/"
 variant "onramp short grace"       "sponsord-onramp: stop_grace_period"           "${onr} s/^(\s*)stop_grace_period: 30s$/\1stop_grace_period: 5s/"
 variant "onramp by tag"            "sponsord-onramp: image is pinned"             "${onr} s#^(\s*)image: .*#\1image: ghcr.io/decdn/sponsord-onramp:latest#"
-variant "onramp holds keystore"    "sponsord-onramp: mounts are exactly"          "${onr} s#^(\s*)volumes:\$#\1volumes:\n\1  - /etc/sponsord/treasury-keystore.json:/run/secrets/k:ro#"
-variant "writable turnstile mount" "sponsord-onramp: mounts are exactly"          "${onr} {/target: \/run\/secrets\/turnstile-secret$/{n;s/read_only: true/read_only: false/}}"
+variant "onramp holds keystore"    "sponsord-onramp: mounts are exactly"          "${onr} s/^(\s*)secrets:$/&\n\1  - source: sponsord-treasury-keystore\n\1    target: \/run\/secrets\/k/"
+variant "onramp keystore volume"   "sponsord-onramp: mounts are exactly"          "${onr} s#^(\s*)volumes:\$#\1volumes:\n\1  - {type: bind, source: /etc/sponsord/treasury-keystore.json, target: /run/secrets/k, read_only: true, bind: {create_host_path: false}}#"
 variant "writable gate-page mount"  "sponsord-onramp: mounts are exactly"          "${onr} {/target: \/etc\/sponsord\/onramp-gate$/{n;s/read_only: true/read_only: false/}}"
 variant "onramp entrypoint flag"   "sponsord-onramp: entrypoint is exactly"       "${onr} s#^(\s*)exec sponsord-onramp\$#\1exec sponsord-onramp --bind 0.0.0.0:8080#"
 variant "gate check dropped"       "sponsord-onramp: entrypoint is exactly"       "${onr} s#^(\s*)/etc/sponsord/onramp-gate/\*\) ;;\$#\1*) ;;#"
@@ -1082,10 +1101,76 @@ variant "onramp on sponsord hosts" "sponsord-onramp: profiles are [onramp]"     
 variant "resolvable domain default" "sponsord-onramp: unset domain"               "${onr} s#ONRAMP_PUBLIC_URL: .*#ONRAMP_PUBLIC_URL: https://\\\${SPONSORD_ONRAMP_DOMAIN:-unset-SPONSORD_ONRAMP_DOMAIN.invalid}#"
 # caddy
 variant "caddy extra capability"   "caddy: cap_add is exactly"                    "${cdy} s/cap_add: \[NET_BIND_SERVICE\]/cap_add: [NET_BIND_SERVICE, NET_ADMIN]/"
-variant "caddy keeps capabilities" "caddy: cap_drop is [ALL]"                     "${cdy} {/^    cap_drop: /d}"
+variant "caddy keeps capabilities" "caddy: cap_drop is [ALL]"                     "${cdy} ${h}cap_drop: []/"
 variant "caddy as root"            "caddy: runs as a non-root uid:gid"            "${cdy} {/^    user: /d}"
-variant "caddy published port"     "caddy: publishes no ports"                    "${cdy} s/^(\s*)network_mode: host$/&\n\1ports: [\"443:443\"]/"
+variant "caddy published port"     "caddy: publishes no ports"                    "${cdy} ${h}ports: [\"443:443\"]/"
 variant "caddy always on"          "caddy: profiles are [caddy]"                  "${cdy} {/^    profiles: \[caddy\]$/d}"
+# Caddy holds NET_BIND_SERVICE too, but only the iroh services may run as uid 0.
+variant "caddy as uid 0"           "caddy: runs as a non-root uid:gid"            "${cdy} s/^(\s*)user: .*/\1user: \"0:0\"/"
+# iroh-relay: uid 0 holding NET_BIND_SERVICE alone, SIGINT, the config read-only
+variant "relay extra capability"   "iroh-relay: runs as uid 0 only with cap_add exactly [NET_BIND_SERVICE]" "${rly} s/cap_add: \[NET_BIND_SERVICE\]/cap_add: [NET_BIND_SERVICE, NET_ADMIN]/"
+variant "relay root, no cap_add"   "iroh-relay: runs as uid 0 only with cap_add exactly [NET_BIND_SERVICE]" "${rly} {/^    cap_add: /d}"
+variant "relay keeps capabilities" "iroh-relay: cap_drop is [ALL]"                "${rly} ${h}cap_drop: []/"
+variant "relay as root by name"    "iroh-relay: runs as a non-root uid:gid"       "${rly} s/^(\s*)user: .*/\1user: root/"
+variant "relay SIGTERM"            "iroh-relay: stop_signal is SIGINT"            "${rly} s/^(\s*)stop_signal: SIGINT$/\1stop_signal: SIGTERM/"
+variant "relay short grace"        "iroh-relay: stop_grace_period is 30s"         "${rly} s/^(\s*)stop_grace_period: 30s$/\1stop_grace_period: 5s/"
+variant "relay writable config"    "iroh-relay: mounts are exactly"               "${rly} {/target: \/etc\/iroh-relay\/iroh-relay.toml$/{n;s/read_only: true/read_only: false/}}"
+variant "relay config directory"   "iroh-relay: mounts are exactly"               "${rly} s#^(\s*)(source|target): /etc/iroh-relay/iroh-relay\.toml\$#\1\2: /etc/iroh-relay#"
+variant "relay docker socket"      "iroh-relay: mounts are exactly"               "${rly} s#^(\s*)volumes:\$#\1volumes:\n\1  - {type: bind, source: /var/run/docker.sock, target: /var/run/docker.sock, read_only: true, bind: {create_host_path: false}}#"
+variant "relay published port"     "iroh-relay: publishes no ports"               "${rly} ${h}ports: [\"443:443\"]/"
+variant "relay bridge network"     "iroh-relay: network_mode is host"             "${rly} ${h}network_mode: bridge/"
+variant "relay writable rootfs"    "iroh-relay: read_only rootfs"                 "${rly} ${h}read_only: false/"
+variant "relay dev mode"           "iroh-relay: command is exactly"               "${rly} s#^(\s*)command: .*#\1command: [\"--dev\"]#"
+variant "relay entrypoint swap"    "iroh-relay: command is exactly"               "${rly} ${h}entrypoint: [\"\/bin\/sh\"]/"
+variant "relay quiet log"          "iroh-relay: RUST_LOG is set"                  "${rly} {/^      RUST_LOG: /d}"
+variant "relay privileged"         "iroh-relay: sets only allowed keys (extra: privileged)"         "${rly} ${h}privileged: true/"
+variant "relay low fd limit"       "iroh-relay: ulimits.nofile is 65536"          "${rly} s/^(\s*)nofile: 65536$/\1nofile: 1024/"
+variant "relay by tag"             "iroh-relay: image is pinned"                  "${rly} s#^(\s*)image: .*#\1image: docker.io/n0computer/iroh-relay:v1.3.0#"
+variant "relay inline secret"      "iroh-relay: sets only allowed environment keys inline (extra: ACME_KEY)" "${rly} s/^(\s*)RUST_LOG: (.*)$/&\n\1ACME_KEY: x/"
+variant "relay always on"          "iroh-relay: profiles are [relay]"             "${rly} {/^    profiles: \[relay\]$/d}"
+# iroh-dns-server: the relay's exception and shape
+variant "dns extra capability"     "iroh-dns-server: runs as uid 0 only with cap_add exactly [NET_BIND_SERVICE]" "${dns} s/cap_add: \[NET_BIND_SERVICE\]/cap_add: [NET_BIND_SERVICE, NET_RAW]/"
+variant "dns root, no cap_add"     "iroh-dns-server: runs as uid 0 only with cap_add exactly [NET_BIND_SERVICE]" "${dns} {/^    cap_add: /d}"
+variant "dns keeps capabilities"   "iroh-dns-server: cap_drop is [ALL]"           "${dns} ${h}cap_drop: []/"
+variant "dns as root by name"      "iroh-dns-server: runs as a non-root uid:gid"  "${dns} s/^(\s*)user: .*/\1user: root/"
+variant "dns SIGTERM"              "iroh-dns-server: stop_signal is SIGINT"       "${dns} s/^(\s*)stop_signal: SIGINT$/\1stop_signal: SIGTERM/"
+variant "dns short grace"          "iroh-dns-server: stop_grace_period is 30s"    "${dns} s/^(\s*)stop_grace_period: 30s$/\1stop_grace_period: 5s/"
+variant "dns writable config"      "iroh-dns-server: mounts are exactly"          "${dns} {/target: \/etc\/iroh-dns-server\/config.toml$/{n;s/read_only: true/read_only: false/}}"
+variant "dns config directory"     "iroh-dns-server: mounts are exactly"          "${dns} s#^(\s*)(source|target): /etc/iroh-dns-server/config\.toml\$#\1\2: /etc/iroh-dns-server#"
+variant "dns docker socket"        "iroh-dns-server: mounts are exactly"          "${dns} s#^(\s*)volumes:\$#\1volumes:\n\1  - {type: bind, source: /var/run/docker.sock, target: /var/run/docker.sock, read_only: true, bind: {create_host_path: false}}#"
+variant "dns published port"       "iroh-dns-server: publishes no ports"          "${dns} ${h}ports: [\"53:53\/udp\"]/"
+variant "dns bridge network"       "iroh-dns-server: network_mode is host"        "${dns} ${h}network_mode: bridge/"
+variant "dns writable rootfs"      "iroh-dns-server: read_only rootfs"            "${dns} ${h}read_only: false/"
+variant "dns privileged"           "iroh-dns-server: sets only allowed keys (extra: privileged)" "${dns} ${h}privileged: true/"
+variant "dns entrypoint swap"      "iroh-dns-server: command is exactly"          "${dns} ${h}entrypoint: [\"\/bin\/sh\"]/"
+variant "dns other config"         "iroh-dns-server: command is exactly"          "${dns} s#^(\s*)command: .*#\1command: [\"--config\", \"/tmp/config.toml\"]#"
+variant "dns quiet log"            "iroh-dns-server: RUST_LOG is set"             "${dns} {/^      RUST_LOG: /d}"
+variant "dns low fd limit"         "iroh-dns-server: ulimits.nofile is 65536"     "${dns} s/^(\s*)nofile: 65536$/\1nofile: 1024/"
+variant "dns by tag"               "iroh-dns-server: image is pinned"             "${dns} s#^(\s*)image: .*#\1image: docker.io/n0computer/iroh-dns-server:v1.3.0#"
+variant "dns inline secret"        "iroh-dns-server: sets only allowed environment keys inline (extra: ACME_KEY)" "${dns} s/^(\s*)RUST_LOG: (.*)$/&\n\1ACME_KEY: x/"
+variant "dns always on"            "iroh-dns-server: profiles are [dns]"          "${dns} {/^    profiles: \[dns\]$/d}"
+
+# alloy
+variant "alloy writable host root" "alloy: mounts are exactly"                    "${aly} {/target: \/host\/root$/{n;s/read_only: true/read_only: false/}}"
+variant "alloy root not rslave"    "alloy: the host root is mounted with rslave"  "${aly} s/propagation: rslave, //"
+variant "caddy rshared state"     "caddy: only alloy's read-only host root sets a mount propagation" "${cdy} {/target: \/data$/{n;s/bind: \{create_host_path: false\}/bind: {propagation: rshared, create_host_path: false}/}}"
+variant "alloy extra mount"        "alloy: mounts are exactly"                    "${aly} s#^(\s*)volumes:\$#&\n\1  - {type: bind, source: /etc/sponsord, target: /host/etc/sponsord, read_only: true, bind: {create_host_path: false}}#"
+variant "alloy docker socket"      "alloy: mounts are exactly"                    "${aly} s#^(\s*)volumes:\$#&\n\1  - {type: bind, source: /var/run/docker.sock, target: /var/run/docker.sock, read_only: true, bind: {create_host_path: false}}#"
+variant "alloy as root"            "alloy: runs as a non-root uid:gid"            "${aly} s/^(\s*)user: .*/\1user: \"0:0\"/"
+variant "alloy root group"         "alloy: group_add is one non-root gid"         "${aly} s/^(\s*)- \".*JOURNAL_GID.*/\1- \"0\"/"
+variant "alloy capability"         "alloy: sets only allowed keys (extra: cap_add)" "${aly} ${h}cap_add: [DAC_READ_SEARCH]/"
+variant "alloy host pid"           "alloy: sets only allowed keys (extra: pid)"   "${aly} ${h}pid: host/"
+variant "alloy published port"     "alloy: publishes no ports"                    "${aly} ${h}ports: [\"12345:12345\"]/"
+variant "alloy UI on 0.0.0.0"      "alloy: --server.http.listen-addr is 127.x"    "${aly} s/listen-addr=127\.0\.0\.1:12345/listen-addr=0.0.0.0:12345/"
+variant "alloy extra flag"         "alloy: command is exactly"                    "${aly} s#^(\s*)- /etc/alloy/config.alloy\$#\1- --config.format=static\n&#"
+variant "alloy inline token"       "alloy: sets only allowed environment keys inline (extra: GC_API_TOKEN)" "${aly} s/^(\s*)ALLOY_REGION: (.*)$/&\n\1GC_API_TOKEN: glc_x/"
+variant "alloy always on"          "alloy: profiles are [alloy]"                  "${aly} {/^    profiles: \[alloy\]$/d}"
+variant "alloy journal gid default" "alloy: unset journal gid"                    "${aly} s/ALLOY_JOURNAL_GID:-unset-ALLOY_JOURNAL_GID/ALLOY_JOURNAL_GID:-101/"
+variant "alloy uid default"        "alloy: unset uid/gid"                         "${aly} s/^(\s*)user: .*/\1user: \"\\\${ALLOY_UID:-996}:\\\${ALLOY_GID:-996}\"/"
+# --- compose/decdn-compose: the wrapper's decisions (no root, no docker) -----------
+expect 0 "decdn-compose unit tests pass" \
+  env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$repo/compose/tests" -p 'test_*.py'
+expect 2 "decdn-compose refuses an unknown command" "$repo/compose/decdn-compose" deploy
 
 # --- lint-cloud-init negatives: each broken variant must be rejected -------------------
 # Skipped without cloud-init on PATH, except in CI (which installs it), so a broken
@@ -1450,6 +1535,26 @@ done
 app="$(sed -nE 's/^appVersion: *"?([^" #]*)"?.*/\1/p' "$repo/charts/decdn-node/Chart.yaml")"
 [ "$app" = "$(pin decdn_node decdn_node_version)" ] \
   || fail "charts/decdn-node/Chart.yaml appVersion '$app' is not decdn_node_version"
+# compose.yaml pins n0's iroh images by digest, with the release they are named in
+# the comment above each image line; it must be the release the roles install. The
+# wrapper's DNS_VERSION (the DNS server has no --version; health reads /healthz) too.
+for p in "iroh_relay iroh-relay" "iroh_dns_server iroh-dns-server"; do
+  role="${p% *}" img="${p#* }"
+  named="$(sed -nE "s#.*n0computer/$img v([0-9][0-9.]*[0-9]).*#\1#p" "$repo/compose/compose.yaml")"
+  want="$(pin "$role" "${role}_version")"
+  # Two empty strings agree: a missing comment or pin must not.
+  if [ -z "$named" ] || [ -z "$want" ]; then
+    fail "no n0computer/$img version in compose/compose.yaml, or no ${role}_version"
+  fi
+  [ "$named" = "$want" ] \
+    || fail "compose/compose.yaml names n0computer/$img v$named, not ${role}_version $(pin "$role" "${role}_version")"
+  grep -qE "image: \\$\\{[A-Z_]+:-docker\.io/n0computer/$img\}@\\$\\{[A-Z_]+:-sha256:[0-9a-f]{64}\}$" "$repo/compose/compose.yaml" \
+    || fail "compose/compose.yaml: n0computer/$img is not pinned by a default digest"
+done
+dns_version="$(sed -nE 's/^DNS_VERSION = "([^"]*)"$/\1/p' "$repo/compose/decdn-compose")"
+[ -n "$dns_version" ] || fail "compose/decdn-compose has no DNS_VERSION"
+[ "$dns_version" = "$(pin iroh_dns_server iroh_dns_server_version)" ] \
+  || fail "compose/decdn-compose DNS_VERSION is not iroh_dns_server_version"
 # Artifact Hub scans the images the annotation lists, so it must name the one the
 # chart deploys by default.
 if command -v yq >/dev/null; then
@@ -1477,7 +1582,23 @@ want_fprs="$(fprs "$repo/ansible/roles/decdn_node/files/decdn-release-KEYS.asc")
   || fail "the decdn and sponsord release KEYS hold different keys"
 [ "$(sed -nE 's/^Fingerprint: *//p' "$repo/SECURITY.md" | tr -d ' ' | sort)" = "$want_fprs" ] \
   || fail "SECURITY.md's Fingerprint: lines differ from the vendored KEYS"
-pass "release pins agree across roles, Compose, the chart and its artifacthub.io/images; the vendored KEYS match SECURITY.md"
+pass "release pins agree across roles, Compose (incl. its iroh images), the chart and its artifacthub.io/images; the vendored KEYS match SECURITY.md"
+# Compose's Alloy image is the release the grafana_alloy role installs: the comment
+# above its digest names the tag the digest was taken from.
+alloy_tag="$(sed -nE 's|^ *# grafana/alloy v([0-9][0-9.]*), the grafana_alloy role.*|\1|p' "$repo/compose/compose.yaml")"
+[ -n "$alloy_tag" ] || fail "compose/compose.yaml: no '# grafana/alloy v<version>, the grafana_alloy role…' comment above the alloy image"
+[ "$alloy_tag" = "$(pin grafana_alloy grafana_alloy_version)" ] \
+  || fail "compose/compose.yaml pins grafana/alloy v$alloy_tag, but grafana_alloy_version is $(pin grafana_alloy grafana_alloy_version): re-pin the image's index digest"
+pass "Compose's grafana/alloy image is grafana_alloy_version"
+# compose/alloy/config.alloy is generated from the grafana_alloy role's template.
+if command -v ansible-playbook >/dev/null; then
+  expect 0 "compose/alloy/config.alloy is a fresh render of the grafana_alloy template" \
+    "$repo/scripts/render-compose-alloy.sh" --check
+elif [[ -n ${CI:-} ]]; then
+  fail "ansible-playbook is not on PATH in CI; the compose/alloy/config.alloy mirror check would be skipped"
+else
+  skipped+=("compose/alloy/config.alloy mirror check (needs ansible-core)")
+fi
 # iroh_relay's tasks_from node-ids runs `decdn whoami` on the inventory's nodes, where
 # decdn_node's defaults are not loaded: its fallbacks must be those defaults.
 ids="$repo/ansible/roles/iroh_relay/tasks/node-ids.yml"

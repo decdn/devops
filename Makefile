@@ -60,27 +60,40 @@ security-helm:       ## KICS scan of the decdn-node chart's rendered manifests (
 		--report-formats json,sarif --output-path /repo/kics-results/helm \
 		--no-progress --fail-on high
 
-# One query is excluded, deliberately: "Volume Has Sensitive Host Directory"
+# Two queries are excluded, deliberately. "Volume Has Sensitive Host Directory"
 # (1c1325ff-…) flags every host-path mount: /etc/decdn (ro) and /var/lib/decdn, the
-# /etc/sponsord credential files (ro, one file each) and /var/lib/caddy. They are
-# the Ansible roles' host layout, which is what lets the host CLI, backups and
-# restores (docs/lifecycle.md) work unchanged; lint-compose pins each container's
-# exact mounts instead. The MEDIUMs (host
-# network, no healthcheck, Caddy's NET_BIND_SERVICE) and the INFO (both sponsord
-# containers mount the API token) are the documented design; see compose/README.md.
+# /etc/sponsord gate-page directory (ro) and /var/lib/caddy. They are the Ansible
+# roles' host layout, which is what lets backups and restores (docs/lifecycle.md)
+# work unchanged, and Alloy's read-only views of the host (/proc, /sys, /, the
+# journal) for host metrics and logs; lint-compose pins each container's exact
+# mounts (and secrets) instead. A second, "Volume Mounted In Multiple Containers"
+# (baa452f0-…, HIGH), flags any mount propagation: Alloy's read-only host root is
+# `rslave`, so a filesystem mounted on the host after the start shows up (without
+# it, the filesystem collector would stat the directory underneath and report the
+# parent's size). rslave only receives from the host, so nothing propagates out;
+# a filesystem mounted later keeps its own flags (only what is mounted at start is
+# read-only, and submounts only with Docker 25+ on kernel 5.12+), which Alloy, as
+# a non-root account with no capability, can still only read as file modes allow.
+# lint-compose refuses propagation on any other mount.
+# The MEDIUMs (host network, no healthcheck on the sponsor's, Caddy's, the iroh
+# services' and Alloy's images, NET_BIND_SERVICE on Caddy and the iroh services)
+# are the documented design; see compose/README.md. KICS has no query for the
+# iroh services' uid 0 (the only root services, NET_BIND_SERVICE alone):
+# lint-compose pins that instead.
 security-compose:    ## KICS scan of compose/ (pinned engine image)
 	mkdir -p kics-results
 	docker run --rm --user $(shell id -u):$(shell id -g) -w /repo -v "$(CURDIR):/repo" $(KICS_IMAGE) \
 		scan --path /repo/compose --type DockerCompose \
-		--exclude-queries 1c1325ff-831d-43a1-973e-839ae57dfcc0 \
+		--exclude-queries 1c1325ff-831d-43a1-973e-839ae57dfcc0,baa452f0-1f21-4a25-ace5-844e7a5f410d \
 		--report-formats json,sarif --output-path /repo/kics-results/compose \
 		--no-progress --fail-on high
 
 # Renders compose/compose.yaml with every profile on, three times, and checks each:
 #  - with the example .env, against compose/tests/invariants.jq: the properties the
 #    README promises (host network, nothing published, images by digest, read-only
-#    rootfs, no capabilities beyond Caddy's NET_BIND_SERVICE, exact security_opt,
-#    non-root users, each container's exact mounts, loopback sponsord listeners,
+#    rootfs, no capabilities beyond NET_BIND_SERVICE for Caddy and the iroh
+#    services, exact security_opt, non-root users (uid 0 for the iroh relay and DNS
+#    server only, with that one capability), each container's exact mounts, loopback sponsord listeners,
 #    secret files only, stop graces long enough for each daemon's drain);
 #  - with every service env file empty (/dev/null), against
 #    compose/tests/inline-env.jq: compose.yaml itself sets only the allowed
@@ -89,30 +102,43 @@ security-compose:    ## KICS scan of compose/ (pinned engine image)
 #    as the CI runner's, still merge the env files with it.)
 #  - with an empty .env, against compose/tests/fail-closed.jq: an unset variable
 #    renders a value its service refuses, since compose.yaml cannot use `:?`.
-# check <jq program> <.env file> <examples|none> does one of them: the service env
-# files are compose/'s examples, or /dev/null for each. All run
+# First, once against the file as written (yq; volumes use no anchors), with
+# compose/tests/bind-sources.jq: every bind mount's create_host_path, which
+# Compose releases render (and default) in opposite ways.
+# check <jq program> <.env file> <examples|none|source> does one of them: the
+# service env files are compose/'s examples, or /dev/null for each; `source` reads
+# the file with yq instead of rendering it. All run
 # under `env -i`, because the caller's shell variables would override the
 # .env and the lint would check something other than the committed defaults.
 # LINT_COMPOSE_FILE (not Compose's own COMPOSE_FILE, which operators export) is
 # overridable so tests/scripts-test.sh can feed it broken variants.
 LINT_COMPOSE_FILE ?= compose/compose.yaml
-lint-compose:        ## render compose/ with its examples and check its security invariants (needs docker, jq)
+lint-compose:        ## render compose/ with its examples and check its security invariants (needs docker, jq, yq)
 	@set -o pipefail; \
 	check() { \
 		mode="$$3"; ef() { if [ "$$mode" = none ]; then echo /dev/null; else echo "$(CURDIR)/compose/$$1"; fi; }; \
+		if [ "$$mode" = source ]; then \
+			yq_err="$$(mktemp)"; \
+			rendered="$$(yq -o=json '.' '$(LINT_COMPOSE_FILE)' 2>"$$yq_err")" \
+				|| { cat "$$yq_err" >&2; rm -f "$$yq_err"; echo "lint-compose: yq could not read $(LINT_COMPOSE_FILE) (see above)" >&2; exit 2; }; \
+			grep -v 'yaml-fix-merge-anchor-to-spec' "$$yq_err" >&2 || true; rm -f "$$yq_err"; \
+		else \
 		rendered="$$(env -i PATH="$$PATH" HOME="$$HOME" \
 			DECDN_ENV_FILE="$$(ef decdn.env.example)" \
 			SPONSORD_SECRET_ENV_FILE="$$(ef sponsord-secret.env.example)" \
 			SPONSORD_ENV_FILE="$$(ef sponsord.env.example)" \
 			SPONSORD_ONRAMP_ENV_FILE="$$(ef sponsord-onramp.env.example)" \
+			ALLOY_ENV_FILE="$$(ef grafana-alloy.env.example)" \
 			docker compose -f '$(LINT_COMPOSE_FILE)' --env-file "$$2" --profile '*' config --format json)" \
 			|| { echo "lint-compose: docker compose could not render $(LINT_COMPOSE_FILE) (see above)" >&2; exit 2; }; \
+		fi; \
 		[ -n "$$rendered" ] || { echo "lint-compose: docker compose rendered nothing" >&2; exit 2; }; \
 		violations="$$(jq -r -f "$$1" <<<"$$rendered")" \
 			|| { printf '%s\n' "$$violations" >&2; echo "lint-compose: $$1 failed (see above)" >&2; exit 2; }; \
 		[ -z "$$violations" ] \
 			|| { sed 's/^/  /' <<<"$$violations" >&2; echo "$(LINT_COMPOSE_FILE) violates an invariant (see $$1)" >&2; exit 1; }; \
 	}; \
+	check compose/tests/bind-sources.jq - source; \
 	check compose/tests/invariants.jq compose/.env.example examples; \
 	check compose/tests/inline-env.jq compose/.env.example none; \
 	check compose/tests/fail-closed.jq /dev/null examples
@@ -140,10 +166,11 @@ lint-cloud-init:     ## schema-check the cloud-init/ user-data templates and the
 	@echo "cloud-init invariants hold: $(strip $(CLOUD_INIT_FILE))"
 
 # The guard rails nothing else exercises: ansible/Makefile's scoping guards, the
-# release gate, the lint-compose and lint-cloud-init negative cases, the cloud-init
+# release gate, the lint-compose and lint-cloud-init negative cases, compose/'s
+# decdn-compose unit tests (compose/tests/test_decdn_compose.py), the cloud-init
 # bootstrap's baseline guard and template contracts, and (with UPSTREAM=<decdn
 # checkout>) the upstream-mirror generators' exit codes. CI job `scripts`.
-test-scripts:        ## test the Makefile and molecule-driver guards, release gate, lint-compose and lint-cloud-init negatives (needs docker, jq, cloud-init, yq)
+test-scripts:        ## test the Makefile and molecule-driver guards, release gate, lint-compose and lint-cloud-init negatives, decdn-compose unit tests (needs docker, jq, python3>=3.11, cloud-init, yq)
 	tests/scripts-test.sh
 
 lint-helm:           ## helm lint + render tests + kubeconform + promtool + shared schema-key check (needs helm, yq, python3>=3.11, docker)

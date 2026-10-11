@@ -1,4 +1,27 @@
+{# Two runtimes, one template. `systemd` (the role; the default) renders one
+   host's identity in as literals. `compose` renders compose/alloy/config.alloy,
+   a committed mirror that every Compose host runs unchanged
+   (scripts/render-compose-alloy.sh; ansible/tests/alloy-config/render.yml has
+   the case): it reads the host's identity, and which daemons the host runs, from
+   the container's environment at runtime, reaches the host's /proc, /sys and /
+   through read-only bind mounts under /host, and tells the containers' journal
+   lines apart by container name. _ga_runtime is set by those renders only; it is
+   not an operator knob. #}
+{% set ga_compose = (_ga_runtime | default('systemd')) == 'compose' %}
+{% if ga_compose %}
+{#- The identity values become sys.env lookups: ga_str below renders a value
+    carrying this prefix as one. The prefix cannot collide with a real value,
+    whose charset preflight limits to [A-Za-z0-9._/-]. #}
+{% set _ga_instance_id = 'sys.env:ALLOY_INSTANCE_ID' %}
+{% set grafana_alloy_region = 'sys.env:ALLOY_REGION' %}
+{% set grafana_alloy_deployment_environment = 'sys.env:ALLOY_DEPLOYMENT_ENVIRONMENT' %}
+// GENERATED from ansible/roles/grafana_alloy/templates/config.alloy.j2 by
+// scripts/render-compose-alloy.sh — do not edit by hand: change the template and
+// regenerate (`make test-scripts` fails while this file differs from a fresh
+// render). compose/compose.yaml's `alloy` service runs it (compose/README.md).
+{% else %}
 // MANAGED BY the grafana_alloy Ansible role — do not edit by hand.
+{% endif %}
 //
 // Alloy's configuration syntax only understands `//` and `/* */` comments — a
 // `#` is an illegal character that aborts the parse, so every comment in this
@@ -11,6 +34,19 @@
 // resource identity on everything, probabilistically sample traces, batch, then
 // export via OTLP/HTTP.
 //
+{% if ga_compose %}
+// Secrets are NOT literals here: every credential is read at config-load time
+// with the `sys.env` stdlib function from the root-owned 0600 environment file
+// Compose hands the container (env_file ALLOY_ENV_FILE, /etc/grafana-alloy.env
+// by default: the same file the Ansible role's unit reads; template:
+// compose/grafana-alloy.env.example). Alloy has no `--config.expand-env` flag —
+// `${VAR}` inside a string is a literal, so `sys.env("VAR")` is the only working
+// indirection.
+//
+// The host's identity (ALLOY_INSTANCE_ID, ALLOY_REGION,
+// ALLOY_DEPLOYMENT_ENVIRONMENT) and the active profiles (DECDN_COMPOSE_PROFILES)
+// come from compose.yaml's `environment:`, which reads them from .env.
+{% else %}
 // Secrets are NOT literals here: every credential is read at config-load time
 // with the `sys.env` stdlib function from the root-owned 0600 environment file
 // systemd hands the unit (EnvironmentFile= in alloy.service; operator template:
@@ -20,6 +56,7 @@
 //
 // The NON-secret half of the credentials (endpoint URLs, the three numeric
 // instance IDs) may instead come from inventory; see the ga_endpoint macro.
+{% endif %}
 
 {# Renders a Grafana Cloud connection value as either an inline string literal
    (when inventory set it) or the sys.env lookup this role has always used (when
@@ -50,19 +87,54 @@
 {% if ga_otlp_user | length > 0 %}{{ ga_otlp_user | tojson }}{% else %}coalesce(sys.env("GC_OTLP_USERNAME"), {{ ga_endpoint(grafana_alloy_prom_username, 'GC_PROM_USERNAME') }}){% endif %}
 {%- endmacro %}
 
+{# An identity value: a string literal, or (the compose runtime, see the top) the
+   sys.env lookup its 'sys.env:' prefix names. #}
+{% macro ga_str(value) -%}
+{% if value is string and value.startswith('sys.env:') %}sys.env({{ value[8:] | tojson }}){% else %}{{ value | tojson }}{% endif %}
+{%- endmacro %}
+{# The compose runtime's scrape targets: the target exists only while
+   COMPOSE_PROFILES (passed in as DECDN_COMPOSE_PROFILES) names a profile that
+   starts the daemon, so a host without it has no target at all, and no
+   up == 0 series for an alert such as DecdnNodeDown to fire on. Relabel regexes
+   are anchored; the commas around the list make each name match whole. #}
+{% macro ga_compose_targets(name, address, job, profiles) -%}
+// Scraped only while COMPOSE_PROFILES starts it ({{ profiles | join(' or ') }}).
+discovery.relabel "{{ name }}_targets" {
+  targets = [
+    { "__address__"      = {{ address | tojson }},
+      "instance"         = sys.env("ALLOY_INSTANCE_ID"),
+{% if job | length > 0 %}
+      "job"              = {{ job | tojson }},
+{% endif %}
+      "__decdn_profiles" = string.format(",%s,", sys.env("DECDN_COMPOSE_PROFILES")) },
+  ]
+
+  rule {
+    source_labels = ["__decdn_profiles"]
+    regex         = `.*,\s*(?:{{ (profiles + ['\\*']) | join('|') }})\s*,.*`
+    action        = "keep"
+  }
+}
+{% endmacro %}
 {# The decdn-node scrape, off on a host that runs no node (grafana_alloy_node_enabled;
    playbooks/group_vars/all.yml derives it from the decdn_nodes group). #}
 {% if grafana_alloy_node_enabled | bool %}
+{% if ga_compose %}
+{{ ga_compose_targets('decdn_node', '127.0.0.1:' ~ decdn_metrics_port | default(9090), grafana_alloy_node_job, _ga_compose_profiles.decdn_node) }}
+prometheus.scrape "decdn_node" {
+  targets         = discovery.relabel.decdn_node_targets.output
+{% else %}
 prometheus.scrape "decdn_node" {
   targets = [
     { "__address__" = "127.0.0.1:{{ decdn_metrics_port | default(9090) }}",
-      "instance"    = "{{ _ga_instance_id }}"{% if grafana_alloy_node_job | length > 0 %},
+      "instance"    = {{ ga_str(_ga_instance_id) }}{% if grafana_alloy_node_job | length > 0 %},
       {# BREAKING-CHANGE ESCAPE HATCH: with no explicit job label Alloy falls back
          to the component ID, so these series used to be job="prometheus.scrape.decdn_node".
          Set grafana_alloy_node_job: "" to keep the old identity for dashboards
          and alerts that already hard-code it. #}
       "job"         = {{ grafana_alloy_node_job | tojson }}{% endif %} },
   ]
+{% endif %}
   forward_to      = [prometheus.relabel.decdn_identity.receiver]
   scrape_interval = {{ grafana_alloy_scrape_interval | to_json }}
 }
@@ -83,7 +155,7 @@ prometheus.relabel "decdn_identity" {
 
   rule {
     target_label = {{ name | tojson }}
-    replacement  = {{ value | tojson }}
+    replacement  = {{ ga_str(value) }}
   }
 {% endfor %}
 }
@@ -93,12 +165,18 @@ prometheus.relabel "decdn_identity" {
 {# sponsord's own /metrics (pool balance, keeper top-ups, issued capabilities) on
    its loopback listener — the same port as its API, but /metrics needs no token.
    Its own relabel, because the shared identity stamps service_name=decdn-node. #}
+{% if ga_compose %}
+{{ ga_compose_targets('sponsord', sponsord_bind_address | default('127.0.0.1') ~ ':' ~ sponsord_port | default(8090), grafana_alloy_sponsord_job, _ga_compose_profiles.sponsord) }}
+prometheus.scrape "sponsord" {
+  targets         = discovery.relabel.sponsord_targets.output
+{% else %}
 prometheus.scrape "sponsord" {
   targets = [
     { "__address__" = {{ (sponsord_bind_address | default('127.0.0.1') ~ ':' ~ sponsord_port | default(8090)) | tojson }},
-      "instance"    = "{{ _ga_instance_id }}",
+      "instance"    = {{ ga_str(_ga_instance_id) }},
       "job"         = {{ grafana_alloy_sponsord_job | tojson }} },
   ]
+{% endif %}
   forward_to      = [prometheus.relabel.sponsord_identity.receiver]
   scrape_interval = {{ grafana_alloy_scrape_interval | to_json }}
 }
@@ -116,7 +194,7 @@ prometheus.relabel "sponsord_identity" {
 
   rule {
     target_label = {{ name | tojson }}
-    replacement  = {{ value | tojson }}
+    replacement  = {{ ga_str(value) }}
   }
 {% endfor %}
 }
@@ -126,12 +204,18 @@ prometheus.relabel "sponsord_identity" {
 {# iroh-relay's /metrics (relayed bytes and packets, client connects, QUIC address
    discovery) on its loopback listener (roles/iroh_relay; the fallbacks match its
    defaults). Its own relabel, as sponsord's. #}
+{% if ga_compose %}
+{{ ga_compose_targets('iroh_relay', iroh_relay_metrics_bind | default('127.0.0.1') ~ ':' ~ iroh_relay_metrics_port | default(9092), grafana_alloy_iroh_relay_job, _ga_compose_profiles.iroh_relay) }}
+prometheus.scrape "iroh_relay" {
+  targets         = discovery.relabel.iroh_relay_targets.output
+{% else %}
 prometheus.scrape "iroh_relay" {
   targets = [
     { "__address__" = {{ (iroh_relay_metrics_bind | default('127.0.0.1') ~ ':' ~ iroh_relay_metrics_port | default(9092)) | tojson }},
-      "instance"    = "{{ _ga_instance_id }}",
+      "instance"    = {{ ga_str(_ga_instance_id) }},
       "job"         = {{ grafana_alloy_iroh_relay_job | tojson }} },
   ]
+{% endif %}
   forward_to      = [prometheus.relabel.iroh_relay_identity.receiver]
   scrape_interval = {{ grafana_alloy_scrape_interval | to_json }}
 }
@@ -149,7 +233,7 @@ prometheus.relabel "iroh_relay_identity" {
 
   rule {
     target_label = {{ name | tojson }}
-    replacement  = {{ value | tojson }}
+    replacement  = {{ ga_str(value) }}
   }
 {% endfor %}
 }
@@ -159,12 +243,18 @@ prometheus.relabel "iroh_relay_identity" {
 {# iroh-dns-server's metrics (pkarr publishes, DNS lookups, record store) on its
    loopback listener (roles/iroh_dns_server; the fallbacks match its defaults). It
    answers on any path. Its own relabel, as the relay's. #}
+{% if ga_compose %}
+{{ ga_compose_targets('iroh_dns_server', iroh_dns_server_metrics_bind | default('127.0.0.1') ~ ':' ~ iroh_dns_server_metrics_port | default(9117), grafana_alloy_iroh_dns_server_job, _ga_compose_profiles.iroh_dns_server) }}
+prometheus.scrape "iroh_dns_server" {
+  targets         = discovery.relabel.iroh_dns_server_targets.output
+{% else %}
 prometheus.scrape "iroh_dns_server" {
   targets = [
     { "__address__" = {{ (iroh_dns_server_metrics_bind | default('127.0.0.1') ~ ':' ~ iroh_dns_server_metrics_port | default(9117)) | tojson }},
-      "instance"    = "{{ _ga_instance_id }}",
+      "instance"    = {{ ga_str(_ga_instance_id) }},
       "job"         = {{ grafana_alloy_iroh_dns_server_job | tojson }} },
   ]
+{% endif %}
   forward_to      = [prometheus.relabel.iroh_dns_server_identity.receiver]
   scrape_interval = {{ grafana_alloy_scrape_interval | to_json }}
 }
@@ -182,7 +272,7 @@ prometheus.relabel "iroh_dns_server_identity" {
 
   rule {
     target_label = {{ name | tojson }}
-    replacement  = {{ value | tojson }}
+    replacement  = {{ ga_str(value) }}
   }
 {% endfor %}
 }
@@ -217,11 +307,14 @@ prometheus.remote_write "cloud" {
 {# Upstream applies disable_collectors FIRST and enable_collectors second, so a
    name in both ends up ENABLED — the opposite of what an operator vetoing a
    collector expects. Subtract the veto list here instead, so it really wins and
-   so the derived `systemd` block below agrees with what actually runs. #}
+   so the derived `systemd` block below agrees with what actually runs.
+   The compose runtime also drops `systemd`: it would need the host's D-Bus
+   socket mounted into the container, and the containers are not units anyway. #}
+{% set ga_host_veto = grafana_alloy_host_disable_collectors + (['systemd'] if ga_compose else []) %}
 {% set ga_host_set_collectors = grafana_alloy_host_collectors
-     | reject('in', grafana_alloy_host_disable_collectors) | list %}
+     | reject('in', ga_host_veto) | list %}
 {% set ga_host_extra_collectors = grafana_alloy_host_extra_collectors
-     | reject('in', grafana_alloy_host_disable_collectors) | list %}
+     | reject('in', ga_host_veto) | list %}
 {% set ga_host_enabled_collectors = ga_host_set_collectors + ga_host_extra_collectors %}
 
 prometheus.exporter.unix "host" {
@@ -237,6 +330,18 @@ prometheus.exporter.unix "host" {
   disable_collectors       = {{ grafana_alloy_host_disable_collectors | tojson }}
 {% endif %}
   include_exporter_metrics = {{ grafana_alloy_host_include_exporter_metrics | bool | tojson }}
+{% if ga_compose %}
+
+  // The host as compose.yaml mounts it, read-only: its /proc (the host's PID
+  // namespace, so the host's mounts), /sys and / (rslave, so later mounts show).
+  // The filesystem collector strips rootfs_path from every mount point, so the
+  // exclusion regex below matches host paths, as on the systemd path. diskstats
+  // reads the host's udev database for its device labels.
+  procfs_path              = "/host/proc"
+  sysfs_path               = "/host/sys"
+  rootfs_path              = "/host/root"
+  udev_data_path           = "/host/root/run/udev/data"
+{% endif %}
 
   filesystem {
     fs_types_exclude     = {{ grafana_alloy_host_fs_types_exclude | tojson }}
@@ -281,7 +386,7 @@ discovery.relabel "host" {
 
   rule {
     target_label = {{ name | tojson }}
-    replacement  = {{ value | tojson }}
+    replacement  = {{ ga_str(value) }}
   }
 {% endfor %}
 }
@@ -312,7 +417,7 @@ discovery.relabel "alloy_self" {
 
   rule {
     target_label = {{ name | tojson }}
-    replacement  = {{ value | tojson }}
+    replacement  = {{ ga_str(value) }}
   }
 {% endfor %}
 }
@@ -347,6 +452,26 @@ loki.relabel "journal_rules" {
     source_labels = ["__journal__systemd_unit"]
     target_label  = "unit"
   }
+{% if ga_compose %}
+
+  // Compose: dockerd writes every container's lines (the journald logging
+  // driver), so their _SYSTEMD_UNIT is docker.service. CONTAINER_NAME tells them
+  // apart: `container` keeps it, and this project's containers (project name
+  // decdn, so decdn-<service>-<n>) get the unit their Ansible role installs, so
+  // the level, guardrail and service_name rules below, and the log panels in
+  // monitoring/, match the same streams on both paths.
+  rule {
+    source_labels = ["__journal_container_name"]
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__journal_container_name"]
+    regex         = {{ ('decdn-(' ~ _ga_compose_units | join('|') ~ ')-[0-9]+') | tojson }}
+    target_label  = "unit"
+    replacement   = "${1}.service"
+  }
+{% endif %}
 
   rule {
     source_labels = ["__journal__hostname"]
@@ -391,7 +516,7 @@ loki.relabel "journal_rules" {
   }
 
   rule {
-    source_labels = ["__journal__systemd_unit"]
+    source_labels = [{{ ('unit' if ga_compose else '__journal__systemd_unit') | tojson }}]
     regex         = {{ ('(?:' ~ (['decdn-node'] + ga_text_units) | join('|') ~ ')\\.service') | tojson }}
     target_label  = "__priority_guardrail"
     replacement   = ""
@@ -581,7 +706,7 @@ loki.relabel "journal_identity" {
 
   rule {
     target_label = {{ name | tojson }}
-    replacement  = {{ value | tojson }}
+    replacement  = {{ ga_str(value) }}
   }
 {% endfor %}
 {% if grafana_alloy_service_name | length > 0 %}
@@ -697,9 +822,20 @@ otelcol.receiver.otlp "local" {
      "service.namespace": grafana_alloy_service_namespace,
    } %}
 {% set ga_res_statements = [] %}
+{# Each statement is an Alloy expression: a backtick-quoted literal, or (an
+   identity value the compose runtime reads from the environment) one built by
+   string.format at load time, %q-quoted for OTTL and guarded by a `where`, so an
+   empty value sets nothing, as an empty literal renders nothing. #}
 {% for attr_key in ga_res_attrs.keys() | sort if ga_res_attrs[attr_key] | length > 0 %}
+{% set ga_attr_value = ga_res_attrs[attr_key] %}
+{% if ga_attr_value is string and ga_attr_value.startswith('sys.env:') %}
 {% set _ = ga_res_statements.append(
-     'set(attributes[' ~ (attr_key | tojson) ~ '], ' ~ (ga_res_attrs[attr_key] | tojson) ~ ')') %}
+     'string.format(`set(attributes[' ~ (attr_key | tojson) ~ '], %q) where %q != ""`, '
+     ~ ga_str(ga_attr_value) ~ ', ' ~ ga_str(ga_attr_value) ~ ')') %}
+{% else %}
+{% set _ = ga_res_statements.append(
+     '`set(attributes[' ~ (attr_key | tojson) ~ '], ' ~ (ga_attr_value | tojson) ~ ')`') %}
+{% endif %}
 {% endfor %}
 otelcol.processor.transform "decdn_identity" {
   // Fail loud rather than silently shipping unlabelled telemetry.
@@ -710,7 +846,7 @@ otelcol.processor.transform "decdn_identity" {
     context = "resource"
     statements = [
 {% for statement in ga_res_statements %}
-      `{{ statement }}`,
+      {{ statement }},
 {% endfor %}
     ]
   }

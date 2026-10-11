@@ -126,8 +126,9 @@ groups:
             so it sends no further top-up until that transaction mines or
             provably never can. DO NOT restart sponsord: a restart forgets
             the hold, and the pool can be refilled twice. The Ansible role
-            refuses restarts while this holds; on Compose, and against a
-            crash or package-upgrade restart, nothing does. It clears by itself
+            and decdn-compose refuse restarts while this holds; a plain
+            `docker compose` command, a crash or a package-upgrade restart
+            does not. It clears by itself
             once the transaction mines. If it was dropped, send 0-value
             transactions from the treasury to itself until it clears; the
             error log line names the transaction and how many it takes.

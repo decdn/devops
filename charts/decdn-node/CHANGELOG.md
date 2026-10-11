@@ -17,9 +17,9 @@ Initial chart (pre-1.0; the values shape may still change).
 
 ### Added
 
-- One-replica `StatefulSet` running the upstream daemon-only image
+- One-replica `StatefulSet` running the upstream `decdn-node` image
   (`ghcr.io/decdn/decdn-node`: `image.digest`, else `image.tag`, else `appVersion`,
-  `0.0.1`, the first decdn/decdn release; `make test-scripts` holds it equal to the
+  `0.0.2`, decdn/decdn v0.0.2; `make test-scripts` holds it equal to the
   `decdn_node` role's `decdn_node_version`), non-root,
   read-only root filesystem, every capability dropped, `RuntimeDefault` seccomp.
 - `PersistentVolumeClaim` data dir. A `prepare` init container installs the node
@@ -68,6 +68,9 @@ Initial chart (pre-1.0; the values shape may still change).
   refusal panel descriptions now name the three wire classes (`NotFound`, `Declined`,
   `Unfunded`) that replaced the per-reason codes. On an older node the renamed and new
   series, and the whole unattributed-failures panel, show no data (#104).
+- The default image is `ghcr.io/decdn/decdn-node:0.0.2` (decdn/decdn v0.0.2), which
+  also carries the `decdn` CLI (the chart does not call it) and whose signed digest
+  file is `decdn-node-image-digest.txt`. The config schema is unchanged.
 
 ### Fixed
 

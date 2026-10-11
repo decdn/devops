@@ -13,7 +13,7 @@ version: 0.0.0
 # image tag used when neither image.tag nor image.digest is set. Keep it equal to
 # the decdn_node role's decdn_node_version, and the tag of the one image in the
 # artifacthub.io/images annotation below (make test-scripts checks both).
-appVersion: "0.0.1"
+appVersion: "0.0.2"
 kubeVersion: ">=1.25.0-0"
 home: https://decdn.org
 icon: https://decdn.org/icon.svg
@@ -37,7 +37,7 @@ annotations:
   artifacthub.io/license: MIT
   artifacthub.io/images: |
     - name: decdn-node
-      image: ghcr.io/decdn/decdn-node:0.0.1
+      image: ghcr.io/decdn/decdn-node:0.0.2
   artifacthub.io/links: |
     - name: Chart source
       url: https://github.com/decdn/devops/tree/main/charts/decdn-node

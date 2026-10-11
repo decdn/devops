@@ -1,7 +1,8 @@
 # iroh-relay reference Prometheus alerting rules
 #
 # For the self-hosted iroh relays deCDN peers fall back to when they cannot
-# hole-punch (roles/iroh_relay), whose /metrics the grafana_alloy role ships as
+# hole-punch (roles/iroh_relay), whose /metrics the grafana_alloy role (and
+# Compose's alloy profile) ships as
 # job="iroh-relay". Every series is a counter in iroh-relay's `relayserver` group;
 # the names are the ones the pinned release exports (exported-metrics.txt beside
 # this file, which `make lint-helm` checks them against). Thresholds are
@@ -12,7 +13,8 @@
 # blackbox or synthetic check of your own. IrohRelayHTTPSErrors and
 # IrohRelayQADHandshakeErrors are the symptoms when the certificate is bad.
 #
-# The relay runs on the Ansible path only. The decdn-node chart does NOT render this
+# The relay runs on the Ansible path and as Compose's `relay` profile. The
+# decdn-node chart does NOT render this
 # file (its PrometheusRule reads ../decdn-node/prometheus-alerts.yml).
 #
 # Validate locally with `make lint-helm`: it runs promtool check rules on this

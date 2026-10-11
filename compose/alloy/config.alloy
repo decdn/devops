@@ -1,0 +1,712 @@
+// GENERATED from ansible/roles/grafana_alloy/templates/config.alloy.j2 by
+// scripts/render-compose-alloy.sh — do not edit by hand: change the template and
+// regenerate (`make test-scripts` fails while this file differs from a fresh
+// render). compose/compose.yaml's `alloy` service runs it (compose/README.md).
+//
+// Alloy's configuration syntax only understands `//` and `/* */` comments — a
+// `#` is an illegal character that aborts the parse, so every comment in this
+// file (and everything the Jinja layer emits) must stay `//`.
+//
+// Pipeline: scrape the node's /metrics and push it to Grafana Cloud Prometheus;
+// scrape the MACHINE (Alloy's in-process node_exporter) and Alloy itself; ship
+// journald to Grafana Cloud Loki; receive OTLP traces (plus any logs/metrics
+// pushed over localhost) on gRPC 4317 / HTTP 4318 bound to loopback only; stamp
+// resource identity on everything, probabilistically sample traces, batch, then
+// export via OTLP/HTTP.
+//
+// Secrets are NOT literals here: every credential is read at config-load time
+// with the `sys.env` stdlib function from the root-owned 0600 environment file
+// Compose hands the container (env_file ALLOY_ENV_FILE, /etc/grafana-alloy.env
+// by default: the same file the Ansible role's unit reads; template:
+// compose/grafana-alloy.env.example). Alloy has no `--config.expand-env` flag —
+// `${VAR}` inside a string is a literal, so `sys.env("VAR")` is the only working
+// indirection.
+//
+// The host's identity (ALLOY_INSTANCE_ID, ALLOY_REGION,
+// ALLOY_DEPLOYMENT_ENVIRONMENT) and the active profiles (DECDN_COMPOSE_PROFILES)
+// come from compose.yaml's `environment:`, which reads them from .env.
+
+
+
+// Scraped only while COMPOSE_PROFILES starts it (node or origin).
+discovery.relabel "decdn_node_targets" {
+  targets = [
+    { "__address__"      = "127.0.0.1:9090",
+      "instance"         = sys.env("ALLOY_INSTANCE_ID"),
+      "job"              = "decdn-node",
+      "__decdn_profiles" = string.format(",%s,", sys.env("DECDN_COMPOSE_PROFILES")) },
+  ]
+
+  rule {
+    source_labels = ["__decdn_profiles"]
+    regex         = `.*,\s*(?:node|origin|\*)\s*,.*`
+    action        = "keep"
+  }
+}
+
+prometheus.scrape "decdn_node" {
+  targets         = discovery.relabel.decdn_node_targets.output
+  forward_to      = [prometheus.relabel.decdn_identity.receiver]
+  scrape_interval = "30s"
+}
+
+prometheus.relabel "decdn_identity" {
+  forward_to = [prometheus.remote_write.cloud.receiver]
+
+  rule {
+    target_label = "service_name"
+    replacement  = "decdn-node"
+  }
+
+  rule {
+    target_label = "service_namespace"
+    replacement  = "decdn"
+  }
+
+  rule {
+    target_label = "service_instance_id"
+    replacement  = sys.env("ALLOY_INSTANCE_ID")
+  }
+
+  rule {
+    target_label = "deployment_environment"
+    replacement  = sys.env("ALLOY_DEPLOYMENT_ENVIRONMENT")
+  }
+
+  rule {
+    target_label = "region"
+    replacement  = sys.env("ALLOY_REGION")
+  }
+}
+
+// Scraped only while COMPOSE_PROFILES starts it (sponsord or onramp).
+discovery.relabel "sponsord_targets" {
+  targets = [
+    { "__address__"      = "127.0.0.1:8090",
+      "instance"         = sys.env("ALLOY_INSTANCE_ID"),
+      "job"              = "sponsord",
+      "__decdn_profiles" = string.format(",%s,", sys.env("DECDN_COMPOSE_PROFILES")) },
+  ]
+
+  rule {
+    source_labels = ["__decdn_profiles"]
+    regex         = `.*,\s*(?:sponsord|onramp|\*)\s*,.*`
+    action        = "keep"
+  }
+}
+
+prometheus.scrape "sponsord" {
+  targets         = discovery.relabel.sponsord_targets.output
+  forward_to      = [prometheus.relabel.sponsord_identity.receiver]
+  scrape_interval = "30s"
+}
+
+prometheus.relabel "sponsord_identity" {
+  forward_to = [prometheus.remote_write.cloud.receiver]
+
+  rule {
+    target_label = "service_name"
+    replacement  = "sponsord"
+  }
+
+  rule {
+    target_label = "service_namespace"
+    replacement  = "decdn"
+  }
+
+  rule {
+    target_label = "service_instance_id"
+    replacement  = sys.env("ALLOY_INSTANCE_ID")
+  }
+
+  rule {
+    target_label = "deployment_environment"
+    replacement  = sys.env("ALLOY_DEPLOYMENT_ENVIRONMENT")
+  }
+
+  rule {
+    target_label = "region"
+    replacement  = sys.env("ALLOY_REGION")
+  }
+}
+
+// Scraped only while COMPOSE_PROFILES starts it (relay).
+discovery.relabel "iroh_relay_targets" {
+  targets = [
+    { "__address__"      = "127.0.0.1:9092",
+      "instance"         = sys.env("ALLOY_INSTANCE_ID"),
+      "job"              = "iroh-relay",
+      "__decdn_profiles" = string.format(",%s,", sys.env("DECDN_COMPOSE_PROFILES")) },
+  ]
+
+  rule {
+    source_labels = ["__decdn_profiles"]
+    regex         = `.*,\s*(?:relay|\*)\s*,.*`
+    action        = "keep"
+  }
+}
+
+prometheus.scrape "iroh_relay" {
+  targets         = discovery.relabel.iroh_relay_targets.output
+  forward_to      = [prometheus.relabel.iroh_relay_identity.receiver]
+  scrape_interval = "30s"
+}
+
+prometheus.relabel "iroh_relay_identity" {
+  forward_to = [prometheus.remote_write.cloud.receiver]
+
+  rule {
+    target_label = "service_name"
+    replacement  = "iroh-relay"
+  }
+
+  rule {
+    target_label = "service_namespace"
+    replacement  = "decdn"
+  }
+
+  rule {
+    target_label = "service_instance_id"
+    replacement  = sys.env("ALLOY_INSTANCE_ID")
+  }
+
+  rule {
+    target_label = "deployment_environment"
+    replacement  = sys.env("ALLOY_DEPLOYMENT_ENVIRONMENT")
+  }
+
+  rule {
+    target_label = "region"
+    replacement  = sys.env("ALLOY_REGION")
+  }
+}
+
+// Scraped only while COMPOSE_PROFILES starts it (dns).
+discovery.relabel "iroh_dns_server_targets" {
+  targets = [
+    { "__address__"      = "127.0.0.1:9117",
+      "instance"         = sys.env("ALLOY_INSTANCE_ID"),
+      "job"              = "iroh-dns-server",
+      "__decdn_profiles" = string.format(",%s,", sys.env("DECDN_COMPOSE_PROFILES")) },
+  ]
+
+  rule {
+    source_labels = ["__decdn_profiles"]
+    regex         = `.*,\s*(?:dns|\*)\s*,.*`
+    action        = "keep"
+  }
+}
+
+prometheus.scrape "iroh_dns_server" {
+  targets         = discovery.relabel.iroh_dns_server_targets.output
+  forward_to      = [prometheus.relabel.iroh_dns_server_identity.receiver]
+  scrape_interval = "30s"
+}
+
+prometheus.relabel "iroh_dns_server_identity" {
+  forward_to = [prometheus.remote_write.cloud.receiver]
+
+  rule {
+    target_label = "service_name"
+    replacement  = "iroh-dns-server"
+  }
+
+  rule {
+    target_label = "service_namespace"
+    replacement  = "decdn"
+  }
+
+  rule {
+    target_label = "service_instance_id"
+    replacement  = sys.env("ALLOY_INSTANCE_ID")
+  }
+
+  rule {
+    target_label = "deployment_environment"
+    replacement  = sys.env("ALLOY_DEPLOYMENT_ENVIRONMENT")
+  }
+
+  rule {
+    target_label = "region"
+    replacement  = sys.env("ALLOY_REGION")
+  }
+}
+
+prometheus.remote_write "cloud" {
+  endpoint {
+    url = sys.env("GC_PROM_REMOTE_WRITE_URL")
+
+    basic_auth {
+      username = sys.env("GC_PROM_USERNAME")
+      password = sys.env("GC_API_TOKEN")
+    }
+  }
+}
+
+
+prometheus.exporter.unix "host" {
+  // set_collectors REPLACES the default set (~45 collectors): anything not
+  // listed is off. enable_collectors adds on top (it is the only way to turn on
+  // an upstream-defaultDisabled collector such as systemd). Both lists already
+  // have grafana_alloy_host_disable_collectors subtracted at render time.
+  set_collectors           = ["cpu", "diskstats", "filefd", "filesystem", "loadavg", "meminfo", "netdev", "os", "pressure", "stat", "time", "uname", "vmstat"]
+  include_exporter_metrics = false
+
+  // The host as compose.yaml mounts it, read-only: its /proc (the host's PID
+  // namespace, so the host's mounts), /sys and / (rslave, so later mounts show).
+  // The filesystem collector strips rootfs_path from every mount point, so the
+  // exclusion regex below matches host paths, as on the systemd path. diskstats
+  // reads the host's udev database for its device labels.
+  procfs_path              = "/host/proc"
+  sysfs_path               = "/host/sys"
+  rootfs_path              = "/host/root"
+  udev_data_path           = "/host/root/run/udev/data"
+
+  filesystem {
+    fs_types_exclude     = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tmpfs|tracefs)$"
+    mount_points_exclude = "^/(dev|proc|run/credentials/.+|sys|var/lib/docker/.+)($|/)"
+    mount_timeout        = "5s"
+  }
+
+  netdev {
+    device_exclude = "^(veth.*|cali.*|docker.*|br-.*|lo|[a-f0-9]{15})$"
+  }
+
+  // `disk` is the block name for the diskstats collector.
+  disk {
+    device_exclude = "^(ram|loop|fd|(h|s|v|xv)d[a-z]|nvme\\d+n\\d+p)\\d+$"
+  }
+}
+
+discovery.relabel "host" {
+  targets = prometheus.exporter.unix.host.targets
+
+  rule {
+    target_label = "job"
+    replacement  = "integrations/node_exporter"
+  }
+
+  rule {
+    target_label = "instance"
+    replacement  = sys.env("ALLOY_INSTANCE_ID")
+  }
+
+  rule {
+    target_label = "service_namespace"
+    replacement  = "decdn"
+  }
+
+  rule {
+    target_label = "deployment_environment"
+    replacement  = sys.env("ALLOY_DEPLOYMENT_ENVIRONMENT")
+  }
+
+  rule {
+    target_label = "region"
+    replacement  = sys.env("ALLOY_REGION")
+  }
+}
+
+prometheus.scrape "host" {
+  targets         = discovery.relabel.host.output
+  forward_to      = [prometheus.remote_write.cloud.receiver]
+  scrape_interval = "60s"
+}
+
+prometheus.exporter.self "alloy" {}
+
+discovery.relabel "alloy_self" {
+  targets = prometheus.exporter.self.alloy.targets
+
+  rule {
+    target_label = "job"
+    replacement  = "integrations/alloy"
+  }
+
+  rule {
+    target_label = "instance"
+    replacement  = sys.env("ALLOY_INSTANCE_ID")
+  }
+
+  rule {
+    target_label = "service_namespace"
+    replacement  = "decdn"
+  }
+
+  rule {
+    target_label = "deployment_environment"
+    replacement  = sys.env("ALLOY_DEPLOYMENT_ENVIRONMENT")
+  }
+
+  rule {
+    target_label = "region"
+    replacement  = sys.env("ALLOY_REGION")
+  }
+}
+
+prometheus.scrape "alloy_self" {
+  targets         = discovery.relabel.alloy_self.output
+  forward_to      = [prometheus.remote_write.cloud.receiver]
+  scrape_interval = "60s"
+}
+
+loki.relabel "journal_rules" {
+  // Rules-only usage: the ruleset is consumed via .rules below, so nothing is
+  // forwarded from here. The argument is still required.
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+
+  // Compose: dockerd writes every container's lines (the journald logging
+  // driver), so their _SYSTEMD_UNIT is docker.service. CONTAINER_NAME tells them
+  // apart: `container` keeps it, and this project's containers (project name
+  // decdn, so decdn-<service>-<n>) get the unit their Ansible role installs, so
+  // the level, guardrail and service_name rules below, and the log panels in
+  // monitoring/, match the same streams on both paths.
+  rule {
+    source_labels = ["__journal_container_name"]
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__journal_container_name"]
+    regex         = "decdn-(decdn-node|sponsord|sponsord-onramp|caddy|iroh-relay|iroh-dns-server|alloy)-[0-9]+"
+    target_label  = "unit"
+    replacement   = "${1}.service"
+  }
+
+  rule {
+    source_labels = ["__journal__hostname"]
+    target_label  = "hostname"
+  }
+
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+
+  rule {
+    source_labels = ["__journal__transport"]
+    target_label  = "transport"
+  }
+
+  rule {
+    source_labels = ["__journal__boot_id"]
+    target_label  = "boot_id"
+  }
+
+  // Cost guardrail: the regex is anchored to the WHOLE value by Prometheus
+  // relabel semantics, so "debug" drops debug and nothing else.
+  //
+  // decdn-node and sponsord and sponsord-onramp and iroh-relay and iroh-dns-server are exempt: journald reports every line it writes as info, so
+  // judging it by priority would be judging it by a level it never set (a
+  // regex containing "info" would drop its errors). loki.process
+  // "daemon_level" below applies the same regex to its real level. The
+  // exemption blanks a scratch copy of the keyword for that one unit; like
+  // every __-prefixed label it never leaves this ruleset.
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "__priority_guardrail"
+  }
+
+  rule {
+    source_labels = ["unit"]
+    regex         = "(?:decdn-node|sponsord|sponsord-onramp|iroh-relay|iroh-dns-server)\\.service"
+    target_label  = "__priority_guardrail"
+    replacement   = ""
+  }
+
+  rule {
+    source_labels = ["__priority_guardrail"]
+    regex         = "debug|trace"
+    action        = "drop"
+  }
+
+  // Cost guardrail: chatty units nobody debugs from Loki. Entries with no unit
+  // (kernel, for example) have an empty value here and are kept.
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    regex         = "(session-\\d+\\.scope|user@\\d+\\.service|systemd-timesyncd\\.service|cron\\.service|systemd-logind\\.service)"
+    action        = "drop"
+  }
+}
+
+loki.source.journal "host" {
+  // No path: Alloy reads both /var/log/journal and /run/log/journal.
+  // Bounds the catch-up burst after an outage or a fresh install.
+  max_age        = "12h"
+  format_as_json = false
+  relabel_rules  = loki.relabel.journal_rules.rules
+  forward_to     = [loki.process.redact_urls.receiver]
+}
+
+loki.process "redact_urls" {
+  forward_to = [loki.process.daemon_level.receiver]
+
+  // 1. userinfo (as upstream's redact_userinfo, which writes ***@ instead).
+  stage.replace {
+    expression = `:\\?/\\?/((?:\\[^\s"]|[^\s"\\])+)@`
+    replace    = "<redacted>"
+  }
+
+  // 2. path, query and fragment; the separator is normalised to /.
+  stage.replace {
+    expression = `:\\?/\\?/(?:\\[^\s"\\/]|[^/?#\s"\\])+((?:\\?/|[?#])(?:\\[^\s"]|[^\s"\\])*)`
+    replace    = "/<redacted>"
+  }
+}
+
+loki.process "daemon_level" {
+  forward_to = [loki.relabel.journal_identity.receiver]
+
+  stage.match {
+    selector = `{unit="decdn-node.service"}`
+
+    stage.json {
+      expressions = { decdn_level = "level" }
+    }
+
+    stage.template {
+      source   = "decdn_level"
+      template = `{{ $l := ToLower (TrimSpace (print .Value)) }}{{ if eq $l "warn" "warning" }}warning{{ else if eq $l "trace" "debug" "info" "error" }}{{ $l }}{{ end }}`
+    }
+
+    stage.labels {
+      values = { level = "decdn_level" }
+    }
+
+    // The priority guardrail for the daemon, which journal_rules exempts: the
+    // same regex, applied to the level the daemon actually logged. Unlike
+    // relabel regexes, stage.drop is NOT anchored, hence the explicit ^...$.
+    stage.drop {
+      source     = "decdn_level"
+      expression = "^(?:debug|trace)$"
+    }
+  }
+
+  // sponsord and sponsord-onramp and iroh-relay and iroh-dns-server log tracing-subscriber's plain-text format with colour off
+  // (NO_COLOR=1 in the units): "<timestamp>  WARN <target>: <message>". The
+  // level is the second whitespace-separated field.
+  stage.match {
+    selector = `{unit=~"(sponsord|sponsord-onramp|iroh-relay|iroh-dns-server)\\.service"}`
+
+    stage.regex {
+      expression = `^\S+\s+(?P<decdn_level>TRACE|DEBUG|INFO|WARN|ERROR)\s`
+    }
+
+    stage.template {
+      source   = "decdn_level"
+      template = `{{ $l := ToLower (TrimSpace (print .Value)) }}{{ if eq $l "warn" "warning" }}warning{{ else if eq $l "trace" "debug" "info" "error" }}{{ $l }}{{ end }}`
+    }
+
+    stage.labels {
+      values = { level = "decdn_level" }
+    }
+
+    // The priority guardrail for the daemon, which journal_rules exempts: the
+    // same regex, applied to the level the daemon actually logged. Unlike
+    // relabel regexes, stage.drop is NOT anchored, hence the explicit ^...$.
+    stage.drop {
+      source     = "decdn_level"
+      expression = "^(?:debug|trace)$"
+    }
+  }
+
+  // What these write raw when they exit on an error carries no level field:
+  // anyhow's "Error: ..." and "Caused by:" lines, and a panic message. They are
+  // the lines that say WHY it stopped, so they are errors. Any other unlevelled
+  // line keeps its journald level.
+  stage.match {
+    selector = `{unit=~"(sponsord|sponsord-onramp|iroh-relay|iroh-dns-server)\\.service"} |~ "^(Error: |Caused by:|thread '.+' panicked)"`
+
+    stage.template {
+      source   = "decdn_level"
+      template = "error"
+    }
+
+    stage.labels {
+      values = { level = "decdn_level" }
+    }
+  }
+}
+
+loki.relabel "journal_identity" {
+  forward_to = [loki.write.cloud.receiver]
+
+  rule {
+    target_label = "job"
+    replacement  = "integrations/node_exporter"
+  }
+
+  rule {
+    target_label = "instance"
+    replacement  = sys.env("ALLOY_INSTANCE_ID")
+  }
+
+  rule {
+    target_label = "service_namespace"
+    replacement  = "decdn"
+  }
+
+  rule {
+    target_label = "deployment_environment"
+    replacement  = sys.env("ALLOY_DEPLOYMENT_ENVIRONMENT")
+  }
+
+  rule {
+    target_label = "region"
+    replacement  = sys.env("ALLOY_REGION")
+  }
+
+  rule {
+    source_labels = ["unit"]
+    regex         = "decdn-node\\.service"
+    target_label  = "service_name"
+    replacement   = "decdn-node"
+  }
+
+  rule {
+    source_labels = ["unit"]
+    regex         = "sponsord\\.service"
+    target_label  = "service_name"
+    replacement   = "sponsord"
+  }
+
+  rule {
+    source_labels = ["unit"]
+    regex         = "sponsord-onramp\\.service"
+    target_label  = "service_name"
+    replacement   = "sponsord-onramp"
+  }
+
+  rule {
+    source_labels = ["unit"]
+    regex         = "iroh-relay\\.service"
+    target_label  = "service_name"
+    replacement   = "iroh-relay"
+  }
+
+  rule {
+    source_labels = ["unit"]
+    regex         = "iroh-dns-server\\.service"
+    target_label  = "service_name"
+    replacement   = "iroh-dns-server"
+  }
+}
+
+loki.write "cloud" {
+  endpoint {
+    url = sys.env("GC_LOKI_URL")
+
+    // Grafana Cloud's Loki instance ID is NOT the Prometheus one; the same
+    // access-policy token authenticates both.
+    basic_auth {
+      username = sys.env("GC_LOKI_USERNAME")
+      password = sys.env("GC_API_TOKEN")
+    }
+  }
+}
+
+otelcol.receiver.otlp "local" {
+  grpc {
+    endpoint = "127.0.0.1:4317"
+  }
+
+  http {
+    endpoint = "127.0.0.1:4318"
+  }
+
+  output {
+    traces  = [otelcol.processor.probabilistic_sampler.traces.input]
+    logs    = [otelcol.processor.transform.decdn_identity.input]
+    metrics = [otelcol.processor.transform.decdn_identity.input]
+  }
+}
+
+otelcol.processor.transform "decdn_identity" {
+  // Fail loud rather than silently shipping unlabelled telemetry.
+  error_mode = "propagate"
+
+  trace_statements {
+    context = "resource"
+    statements = [
+      string.format(`set(attributes["deployment.environment"], %q) where %q != ""`, sys.env("ALLOY_DEPLOYMENT_ENVIRONMENT"), sys.env("ALLOY_DEPLOYMENT_ENVIRONMENT")),
+      string.format(`set(attributes["region"], %q) where %q != ""`, sys.env("ALLOY_REGION"), sys.env("ALLOY_REGION")),
+      string.format(`set(attributes["service.instance.id"], %q) where %q != ""`, sys.env("ALLOY_INSTANCE_ID"), sys.env("ALLOY_INSTANCE_ID")),
+      `set(attributes["service.name"], "decdn-node")`,
+      `set(attributes["service.namespace"], "decdn")`,
+    ]
+  }
+
+  metric_statements {
+    context = "resource"
+    statements = [
+      string.format(`set(attributes["deployment.environment"], %q) where %q != ""`, sys.env("ALLOY_DEPLOYMENT_ENVIRONMENT"), sys.env("ALLOY_DEPLOYMENT_ENVIRONMENT")),
+      string.format(`set(attributes["region"], %q) where %q != ""`, sys.env("ALLOY_REGION"), sys.env("ALLOY_REGION")),
+      string.format(`set(attributes["service.instance.id"], %q) where %q != ""`, sys.env("ALLOY_INSTANCE_ID"), sys.env("ALLOY_INSTANCE_ID")),
+      `set(attributes["service.name"], "decdn-node")`,
+      `set(attributes["service.namespace"], "decdn")`,
+    ]
+  }
+
+  log_statements {
+    context = "resource"
+    statements = [
+      string.format(`set(attributes["deployment.environment"], %q) where %q != ""`, sys.env("ALLOY_DEPLOYMENT_ENVIRONMENT"), sys.env("ALLOY_DEPLOYMENT_ENVIRONMENT")),
+      string.format(`set(attributes["region"], %q) where %q != ""`, sys.env("ALLOY_REGION"), sys.env("ALLOY_REGION")),
+      string.format(`set(attributes["service.instance.id"], %q) where %q != ""`, sys.env("ALLOY_INSTANCE_ID"), sys.env("ALLOY_INSTANCE_ID")),
+      `set(attributes["service.name"], "decdn-node")`,
+      `set(attributes["service.namespace"], "decdn")`,
+    ]
+  }
+
+  output {
+    traces  = [otelcol.processor.batch.decdn.input]
+    logs    = [otelcol.processor.batch.decdn.input]
+    metrics = [otelcol.processor.batch.decdn.input]
+  }
+}
+
+otelcol.processor.probabilistic_sampler "traces" {
+  sampling_percentage = 25.0
+
+  output {
+    traces = [otelcol.processor.transform.decdn_identity.input]
+  }
+}
+
+otelcol.processor.batch "decdn" {
+  send_batch_size     = 1024
+  send_batch_max_size = 2048
+  timeout             = "3s"
+
+  output {
+    traces  = [otelcol.exporter.otlphttp.cloud.input]
+    logs    = [otelcol.exporter.otlphttp.cloud.input]
+    metrics = [otelcol.exporter.otlphttp.cloud.input]
+  }
+}
+
+otelcol.exporter.otlphttp "cloud" {
+  client {
+    endpoint = sys.env("GC_OTLP_ENDPOINT")
+    auth     = otelcol.auth.basic.cloud.handler
+  }
+
+  sending_queue {
+    queue_size = 5000
+  }
+
+  retry_on_failure {
+    initial_interval = "5s"
+    max_elapsed_time = "5m"
+  }
+}
+
+otelcol.auth.basic "cloud" {
+  username = coalesce(sys.env("GC_OTLP_USERNAME"), sys.env("GC_PROM_USERNAME"))
+  password = sys.env("GC_API_TOKEN")
+}

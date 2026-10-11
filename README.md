@@ -22,10 +22,10 @@ Four ways to deploy the node, cache or origin:
 |------|-----|------------|
 | **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published as the `decdn.node` and `decdn.publisher` Galaxy collections. | [`ansible/README.md`](ansible/README.md) |
 | **cloud-init** (`cloud-init/`) | One VM, no control machine: paste the user-data into your provider's "create server" form. It runs the Ansible playbook on the host itself, hardening included. One template per kind of operator: a cache node, or a publisher's origin with the onboarding sponsor (`sponsord` + its onramp). | [`cloud-init/README.md`](cloud-init/README.md) |
-| **Docker Compose** (`compose/`) | One host that already runs Docker. Profiles for a cache node or an origin, and the onboarding sponsor (`sponsord` + its onramp). | [`compose/README.md`](compose/README.md) |
+| **Docker Compose** (`compose/`) | One host that already runs Docker. Profiles for a cache node or an origin, the onboarding sponsor (`sponsord` + its onramp), an iroh relay, an iroh DNS server and Grafana Alloy, driven by the `decdn-compose` wrapper (set-up, preflight, guarded restarts). | [`compose/README.md`](compose/README.md) |
 | **Helm** (`charts/decdn-node/`) | Kubernetes, one release per node, cache or origin. | [`charts/decdn-node/README.md`](charts/decdn-node/README.md) |
 
-The iroh relay and DNS server a publisher may run deploy with Ansible only.
+The iroh relay and DNS server a publisher may run deploy with Ansible or Compose.
 
 Supported hosts: Debian 12/13 and Ubuntu 24.04/26.04 on x86_64 or aarch64. Network,
 disk and platform requirements, and how to choose a path:
@@ -49,7 +49,8 @@ behind `decdn_network`), it is a generated mirror with its upstream commit recor
   `SHA256SUMS`; Compose only takes the image by digest; Helm takes a digest
   (recommended) or a tag.
 - **Monitoring.** The deCDN Grafana dashboards and alert rules, with the labels they
-  expect: opt-in Grafana Cloud shipping via `grafana_alloy` on Ansible, a
+  expect: opt-in Grafana Cloud shipping via `grafana_alloy` on Ansible or Compose's
+  `alloy` profile, a
   `ServiceMonitor` + `PrometheusRule` + dashboard ConfigMaps on Helm
   ([`monitoring/`](monitoring/README.md)).
 - **Day 2.** Encrypted backups, restore and host migration, and a guarded
@@ -96,9 +97,9 @@ This is the canonical statement; the per-path READMEs add only what is specific 
   udp/4433. The sponsor's public onramp (Ansible and Compose) stays on loopback too,
   behind Caddy on tcp/80 + tcp/443 (the default on Ansible, the `caddy` profile on
   Compose; otherwise you bring the proxy and open its ports). A self-hosted iroh relay
-  (Ansible) is public by design: it terminates its own TLS on tcp/80 + tcp/443 and serves
+  (Ansible and Compose) is public by design: it terminates its own TLS on tcp/80 + tcp/443 and serves
   QUIC address discovery on udp/7842, with its metrics on loopback. So is a self-hosted
-  iroh DNS server (Ansible): its own TLS on tcp/443 and DNS on udp/53 + tcp/53, with its
+  iroh DNS server (Ansible and Compose): its own TLS on tcp/443 and DNS on udp/53 + tcp/53, with its
   metrics on loopback. On Kubernetes, metrics bind `0.0.0.0` in the pod only behind a ClusterIP
   Service and a NetworkPolicy.
 - **Default-deny inbound** (Ansible's `baseline`, nftables). SSH is the only
@@ -116,11 +117,11 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 |------|------------|
 | [`ansible/`](ansible/README.md) | The Ansible project: `inventory/`, `playbooks/` (`site.yml`, `node.yml` for node operators, `publisher.yml` for publishers with `origin.yml`, `sponsord.yml`, `iroh_relay.yml` and `iroh_dns_server.yml`, `backup.yml`, `decommission.yml`), `roles/` (`baseline`, `decdn_node`, `grafana_alloy`, `sponsord`, `sponsord_onramp`, `iroh_relay`, `iroh_dns_server`), `galaxy/` (the `decdn.node` and `decdn.publisher` collections), `molecule/`. |
 | [`cloud-init/`](cloud-init/README.md) | The cloud-init deploy path: `user-data-node.yaml` (node operators: a cache node), `user-data-publisher.yaml` (publishers: an origin node, sponsord and its onramp), the on-host `bootstrap.sh`, and the pinned ansible-core and collections it installs. |
-| [`compose/`](compose/README.md) | The Docker Compose deploy path: the node, `sponsord`, `sponsord-onramp` and Caddy, one profile each. |
+| [`compose/`](compose/README.md) | The Docker Compose deploy path: the node, `sponsord`, `sponsord-onramp`, Caddy, an iroh relay, an iroh DNS server and Grafana Alloy, one profile each, and the `decdn-compose` wrapper. |
 | [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart; it renders the node's dashboards and alert rules from `monitoring/`. |
-| [`monitoring/`](monitoring/README.md) | The deCDN Grafana dashboards and Prometheus alert rules, for the node (`decdn-node/`, every deploy path), sponsord (`sponsord/`, Ansible and Compose) and the iroh relay (`iroh-relay/`, Ansible). |
+| [`monitoring/`](monitoring/README.md) | The deCDN Grafana dashboards and Prometheus alert rules, for the node (`decdn-node/`, every deploy path), sponsord (`sponsord/`, Ansible and Compose) and the iroh relay (`iroh-relay/`, Ansible and Compose). |
 | [`docs/`](docs/requirements.md) | Cross-path operator docs: the two front doors ([node operators](docs/node-operators.md), [publishers](docs/publishers.md)), requirements, lifecycle. |
-| `scripts/` | Generators for the upstream mirrors (network profiles) and the release gate. |
+| `scripts/` | Generators for the upstream mirrors (network profiles) and Compose's Alloy config (`render-compose-alloy.sh`), and the release gate. |
 | `Makefile` | Lint, test and security targets; CI runs the same ones. `make help` lists them. |
 | `.github/workflows/` | CI (`ci.yml`, `molecule.yml`), releases (`release-collection.yml`, `release-chart.yml`), the weekly upstream drift check. |
 

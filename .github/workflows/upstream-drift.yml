@@ -146,10 +146,8 @@ jobs:
           check "decdn/sponsord release" release_check decdn/sponsord "$SPONSORD_PIN"
           check "onramp decdn SHA256SUMS digest" sums_check decdn/decdn "$DECDN_PIN" "$DECDN_SUMS"
           check "onramp CLI SHA256SUMS digest" sums_check decdn/sponsord "$SPONSORD_PIN" "$CLI_SUMS"
-          # decdn/decdn names the node's digest file after the image from its next
-          # release on; v0.0.1 has the unprefixed one.
           check "Compose decdn-node digest" digest_check decdn/decdn "$DECDN_PIN" DECDN_IMAGE_DIGEST \
-            decdn-node-image-digest.txt image-digest.txt
+            decdn-node-image-digest.txt
           check "Compose sponsord digest" digest_check decdn/sponsord "$SPONSORD_PIN" SPONSORD_IMAGE_DIGEST \
             sponsord-image-digest.txt
           check "Compose sponsord-onramp digest" digest_check decdn/sponsord "$SPONSORD_PIN" \

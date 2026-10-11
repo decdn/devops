@@ -16,8 +16,8 @@ facts (bond sizing, fees) are not here: they come from the deCDN ADRs.
 | Secrets | host file or git-ignored inventory | host file, written over SSH | host file | operator-created Secrets |
 | Install source | signed release tarball, build on the host from a git ref, or local build | signed release tarball | image by digest (enforced) | image by digest (recommended) or tag |
 | Chain config | `decdn_network` profile | `decdn_network` profile | `decdn config init --chain` | explicit values |
-| Monitoring | opt-in Grafana Cloud agent | opt-in Grafana Cloud agent (token in a host file) | bring your own | ServiceMonitor, PrometheusRule, dashboards |
-| Backup / decommission | `make backup` / `make decommission` | the Ansible targets, from a workstation inventory | manual commands | PVC snapshot |
+| Monitoring | opt-in Grafana Cloud agent | opt-in Grafana Cloud agent (token in a host file) | opt-in Grafana Cloud agent (`alloy` profile, token in a host file) | ServiceMonitor, PrometheusRule, dashboards |
+| Backup / decommission | `make backup` / `make decommission` | the Ansible targets, from a workstation inventory | `decdn-compose backup` / `down` | PVC snapshot |
 | Guide | [ansible/README.md](../ansible/README.md) | [cloud-init/README.md](../cloud-init/README.md) | [compose/README.md](../compose/README.md) | [charts/decdn-node/README.md](../charts/decdn-node/README.md) |
 
 If you are unsure: a VPS or dedicated server you control end to end is the Ansible
@@ -34,7 +34,7 @@ and they run the same roles.
 | Ansible (control machine) | ansible-core ≥ 2.15 | CI runs the current release |
 | cloud-init | the provider image's own; the bootstrap installs its pinned ansible-core on the host | the node template is booted with the distro's cloud-init in Debian 12 and Ubuntu 26.04 containers, to a running node; the sponsor template in Ubuntu 26.04, to running `sponsord`, `sponsord-onramp` and Caddy |
 | Kubernetes | ≥ 1.25 | rendered and validated with kubeconform against 1.30 |
-| Docker Compose | v2 with `env_file.required` and `depends_on.restart` support (2.24+) | rendered in CI with every profile on |
+| Docker Compose | v2 with `env_file.required` and `depends_on.restart` support (2.24+), with systemd-journald (or a `compose.override.yaml` setting another logging driver); Python ≥ 3.11 for the `decdn-compose` wrapper | rendered in CI with every profile on; the wrapper's decisions unit-tested |
 
 On Ubuntu 25.10 and later, `sudo` is sudo-rs; see the `ansible_become_exe` note in
 `ansible/inventory/hosts-node.yml.example`.
@@ -52,26 +52,28 @@ On Ubuntu 25.10 and later, `sudo` is sudo-rs; see the `ansible_become_exe` note 
   Compose, the `caddy` profile runs the official image and you open both ports in the
   host firewall. Either way, open them in the provider's firewall too, and point the
   domain's A/AAAA records at the host.
-- **An iroh relay host (Ansible only) needs inbound tcp/80, tcp/443 and udp/7842**
+- **An iroh relay host (Ansible, or Compose's `relay` profile) needs inbound tcp/80, tcp/443 and udp/7842**
   from anywhere: 443 carries the relay and Let's Encrypt's TLS-ALPN-01 challenge, 80
   iroh's captive-portal probe, and 7842 QUIC address discovery (unless
-  `iroh_relay_enable_quic_addr_discovery` is `false`). `baseline` opens them for hosts
-  in `iroh_relay_hosts`; open them in the provider's firewall too, and point
-  `iroh_relay_hostname`'s A/AAAA records at the host. It also needs outbound HTTPS to
-  Let's Encrypt. A relay cannot share a host with sponsord-onramp (both want 80 and
-  443). It carries the traffic of every peer pair it relays, so size its bandwidth
+  `iroh_relay_enable_quic_addr_discovery` is `false`). On Ansible, `baseline` opens
+  them for hosts in `iroh_relay_hosts`; on Compose you open them in the host firewall.
+  Either way, open them in the provider's firewall too, and point the relay hostname's
+  A/AAAA records at the host. It also needs outbound HTTPS to Let's Encrypt. A relay
+  cannot share a host with sponsord-onramp (both want 80 and 443). It carries the traffic of every peer pair it relays, so size its bandwidth
   for that, and set rate limits (`iroh_relay_client_rx_bytes_per_second`) on a
   metered link. By default only the inventory's deCDN nodes and the IDs in
   `iroh_relay_allowlist` may relay through it: its deploy reads each node's ID on the
-  node, so it needs SSH to every node and every node deployed first. decdn clients
+  node, so it needs SSH to every node and every node deployed first (on Compose you
+  list the IDs in its config yourself). decdn clients
   cannot be listed (a fresh key per fetch), so a node behind NAT that serves clients
   needs relays with `iroh_relay_access: everyone`.
-- **An iroh DNS server host (Ansible only) needs inbound tcp/443, udp/53 and tcp/53**
+- **An iroh DNS server host (Ansible, or Compose's `dns` profile) needs inbound tcp/443, udp/53 and tcp/53**
   from anywhere: 443 carries nodes' record `PUT`s and Let's Encrypt's TLS-ALPN-01
-  challenge, 53 answers resolvers (tcp for answers too large for udp). `baseline`
-  opens them for hosts in `iroh_dns_server_hosts`; open them in the provider's
-  firewall too. It also needs a **delegated zone**: at the parent zone, an NS record
-  for `iroh_dns_server_hostname` naming that hostname, and a glue A record with the
+  challenge, 53 answers resolvers (tcp for answers too large for udp). On Ansible,
+  `baseline` opens them for hosts in `iroh_dns_server_hosts`; on Compose you open them
+  in the host firewall. Either way, open them in the provider's firewall too. It also
+  needs a **delegated zone**: at the parent zone, an NS record for the server's
+  hostname naming that hostname, and a glue A record with the
   host's public address. It needs outbound HTTPS to Let's Encrypt. Port 53 is bound
   on one address (the host's default IPv4), so systemd-resolved's stub listener can
   stay. It cannot share a host with an iroh relay or sponsord-onramp (all want 443).
@@ -138,5 +140,5 @@ elsewhere and use `manual`.
 - An **operator wallet**: the eth keystore `decdn key-gen` creates, funded for gas and
   the bond before `decdn setup`. The bond comes from the on-chain
   `bondRequired(mbps)` curve (ADR 026).
-- Optional: a **Grafana Cloud** stack (Ansible `grafana_alloy`), and an **age key pair**
+- Optional: a **Grafana Cloud** stack (Ansible `grafana_alloy`, Compose `alloy`), and an **age key pair**
   for encrypted backups ([docs/lifecycle.md](lifecycle.md)).

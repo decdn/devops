@@ -10,6 +10,8 @@
 .env
 **/.env
 !**/.env.example
+# An operator's local Compose override (compose/README.md); decdn-compose includes it
+compose/compose.override.yaml
 
 # Private keys & certs (defense-in-depth; real keystores live under /etc on the host)
 **/cert.pem

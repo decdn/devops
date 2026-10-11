@@ -1,8 +1,12 @@
 # deCDN services under Docker Compose: the same daemons, paths and hardening as the
 # Ansible roles' systemd units, for a single host without Ansible. See README.md.
 #
-#   cp .env.example .env && $EDITOR .env      # COMPOSE_PROFILES, image digests, uids/gids
-#   sudo docker compose up -d
+#   sudo compose/decdn-compose init node     # accounts, dirs, keys, .env
+#   sudo compose/decdn-compose up            # preflight, then `docker compose up -d`
+#
+# decdn-compose is a thin wrapper: every command it runs is plain `docker compose`
+# against this file (plus compose.override.yaml, when present), and it adds the
+# checks Compose cannot make (preflight, sponsord's top-up hold).
 #
 # Each service sits behind a profile, chosen with COMPOSE_PROFILES in .env:
 #   node      the deCDN node, a cache node (node operators)
@@ -11,6 +15,12 @@
 #   sponsord  the onboarding sponsor daemon (treasury signer + PaymentPool keeper)
 #   onramp    sponsord-onramp, its public side; also starts sponsord, which it needs
 #   caddy     TLS in front of the onramp (leave it out to bring your own proxy)
+#   relay     a self-hosted iroh relay (publishers); not with onramp or caddy, since
+#             all of them want tcp/80 and tcp/443
+#   dns       a self-hosted iroh DNS server (publishers); not with relay, onramp or
+#             caddy, which want tcp/443 too
+#   alloy     Grafana Alloy shipping this host's metrics and logs to Grafana Cloud
+#             (the Ansible grafana_alloy role's agent and configuration)
 #
 # Compose interpolates every service, enabled or not, so no variable here may be
 # required with `:?`: a host without the node would then need the node's digest.
@@ -19,34 +29,47 @@
 # with a non-numeric port. `make lint-compose` renders an empty .env to check it.
 #
 # Host networking, deliberately. Every backend binds 127.0.0.1, so on the host
-# network it stays loopback-only, exactly as on a systemd host, and host tools (the
-# `decdn` CLI, curl to /healthz) reach it directly. There are no `ports:` for Docker
-# to publish, which also means Docker's own iptables rules never punch a hole past
-# the host firewall. The public ports are the node's QUIC udp/4433 and, with the
-# caddy profile, tcp/80 + tcp/443: open them in the host firewall.
+# network it stays loopback-only, exactly as on a systemd host, and host tools
+# (curl to /healthz, the wrapper's checks) reach it directly. There are no `ports:`
+# for Docker to publish, which also means Docker's own iptables rules never punch a
+# hole past the host firewall. The public ports are the node's QUIC udp/4433; with
+# the caddy profile, tcp/80 + tcp/443; with the relay profile, tcp/80, tcp/443 and
+# udp/7842; with the dns profile, tcp/443, udp/53 and tcp/53. Open them in the host
+# firewall.
 name: decdn
 
-x-logging: &logging
-  driver: json-file
-  options:
-    max-size: 50m
-    max-file: "5"
-  # Or send the daemons' logs to the host journal, like the systemd units:
-  #   driver: journald
-  #   options: {tag: "{{.Name}}"}
+# What every service shares: the host network, a read-only root filesystem, no
+# capabilities, no privilege escalation, a graceful SIGTERM stop, and logs in the
+# host journal like the systemd units (`journalctl CONTAINER_NAME=decdn-decdn-node-1`;
+# `docker compose logs` reads them back). A service overrides a key only to add to
+# it (Caddy's one capability) or for a documented exception (the iroh services' uid
+# 0 and SIGINT); tests/invariants.jq checks the rendered result.
+x-hardened: &hardened
+  network_mode: host
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  stop_signal: SIGTERM
+  restart: unless-stopped
+  logging:
+    driver: journald
+    options:
+      tag: "{{.Name}}"
 
 services:
   decdn-node:
+    <<: *hardened
     # One service for both: a cache node and an origin are the same daemon, and they
     # would share the host's ports and /var/lib/decdn. node.toml makes the difference.
     profiles: [node, origin]
     # Always by digest, structurally: the reference is built here as repo@digest, so
-    # no .env can swap in a mutable tag. The release's signed image-digest.txt names
-    # the digest; upstream only tags an image after a maintainer signs the release.
+    # no .env can swap in a mutable tag. The release's signed
+    # decdn-node-image-digest.txt names the digest; upstream only tags an image after
+    # a maintainer signs the release.
     image: ${DECDN_IMAGE_REPO:-ghcr.io/decdn/decdn-node}@${DECDN_IMAGE_DIGEST:-sha256:unset-set-DECDN_IMAGE_DIGEST-in-.env}
-    network_mode: host
-    # A dedicated host account (see README.md), not the image's uid 1000, which on
-    # most hosts is the first human login.
+    # The host's `decdn` account, not the image's uid 1000, which on most hosts is
+    # the first human login.
     user: "${DECDN_UID:-unset-DECDN_UID}:${DECDN_GID:-unset-DECDN_GID}"
     # Mirrors the systemd unit's ExecStart.
     command:
@@ -62,36 +85,53 @@ services:
       - path: ${DECDN_ENV_FILE:-/etc/decdn/decdn.env}
         required: true
     volumes:
-      - /etc/decdn:/etc/decdn:ro
-      - /var/lib/decdn:/var/lib/decdn
-    read_only: true
+      - type: bind
+        source: /etc/decdn
+        target: /etc/decdn
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /var/lib/decdn
+        target: /var/lib/decdn
+        bind: {create_host_path: false}
+      # An fs origin's content (publishers): DECDN_ORIGIN_DIR in .env, served
+      # read-only as /srv/decdn-origin (`config init --origin file:///srv/decdn-origin`).
+      # Unset, the empty directory `decdn-compose init` creates is mounted, unused.
+      # Never created here: a mistyped path or an NFS mount that is not up yet
+      # fails the start instead of serving an empty origin.
+      - type: bind
+        source: ${DECDN_ORIGIN_DIR:-/var/lib/decdn-compose/no-origin}
+        target: /srv/decdn-origin
+        read_only: true
+        bind: {create_host_path: false}
     tmpfs:
       - /tmp
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
+    # The image ships the decdn CLI (v0.0.2 and later); `node health` asks the
+    # admin RPC on loopback, so a wedged runtime shows as unhealthy, not just a
+    # live process.
+    healthcheck:
+      test: ["CMD", "decdn", "node", "health", "--config", "/etc/decdn/node.toml", "--timeout-ms", "5000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 2m
     # SIGTERM is the daemon's graceful drain. Docker's default 10 s grace would
     # SIGKILL it mid-drain; this matches the unit's TimeoutStopSec.
-    stop_signal: SIGTERM
     stop_grace_period: 300s
-    restart: unless-stopped
-    logging: *logging
-    # No healthcheck: the image has no HTTP client, and the metrics listener only
-    # serves /metrics. Probe http://127.0.0.1:9090/metrics from the host instead.
 
   sponsord:
+    <<: *hardened
     profiles: [sponsord, onramp]
     image: ${SPONSORD_IMAGE_REPO:-ghcr.io/decdn/sponsord}@${SPONSORD_IMAGE_DIGEST:-sha256:unset-set-SPONSORD_IMAGE_DIGEST-in-.env}
-    network_mode: host
-    # The host's `sponsord` account, which owns the credential files below: a bind
-    # mount keeps the host file's owner and mode, and the daemon refuses a treasury
-    # keystore that anyone but its owner can read.
+    # The host's `sponsord` account, which owns the credential files below: a
+    # Compose secret is a bind mount, which keeps the host file's owner and mode,
+    # and the daemon refuses a treasury keystore that anyone but its owner can read.
     user: "${SPONSORD_UID:-unset-SPONSORD_UID}:${SPONSORD_GID:-unset-SPONSORD_GID}"
     # Read by the `docker compose` client when it creates the container, so run it
-    # as root (sudo): secret.env (0600) holds SPONSORD_RPC_URL, which may embed an
-    # API key; sponsord.env (0644) is the pool and limit settings. The later file
-    # wins on a repeated key, so a stray SPONSORD_RPC_URL in the world-readable
-    # file cannot replace the secret one.
+    # as root: secret.env (0600) holds SPONSORD_RPC_URL, which may embed an API key;
+    # sponsord.env (0644) is the pool and limit settings. The later file wins on a
+    # repeated key, so a stray SPONSORD_RPC_URL in the world-readable file cannot
+    # replace the secret one.
     env_file:
       - path: ${SPONSORD_ENV_FILE:-/etc/sponsord/sponsord.env}
         required: true
@@ -106,41 +146,26 @@ services:
       SPONSORD_TREASURY_PASSWORD_FILE: /run/secrets/treasury-password
       SPONSORD_TREASURY_KEYSTORE: /run/secrets/treasury-keystore.json
       NO_COLOR: "1"
-    # One file each, read-only, and only the ones this daemon needs. A missing host
-    # file fails the start instead of Docker creating a directory in its place.
-    volumes:
-      - type: bind
-        source: /etc/sponsord/api-token
+    # One read-only file each, only the ones this daemon needs. A missing host file
+    # fails the start; Docker never creates one in its place.
+    secrets:
+      - source: sponsord-api-token
         target: /run/secrets/api-token
-        read_only: true
-        bind: {create_host_path: false}
-      - type: bind
-        source: /etc/sponsord/treasury-password
+      - source: sponsord-treasury-password
         target: /run/secrets/treasury-password
-        read_only: true
-        bind: {create_host_path: false}
-      - type: bind
-        source: /etc/sponsord/treasury-keystore.json
+      - source: sponsord-treasury-keystore
         target: /run/secrets/treasury-keystore.json
-        read_only: true
-        bind: {create_host_path: false}
-    read_only: true
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
     # On SIGTERM the daemon waits for a pool top-up it already sent; this matches
-    # the unit's TimeoutStopSec.
-    stop_signal: SIGTERM
+    # the unit's TimeoutStopSec. A stop or restart also forgets a held, unconfirmed
+    # top-up: decdn-compose refuses one while the hold is on (README.md, Operate).
     stop_grace_period: 120s
-    restart: unless-stopped
-    logging: *logging
-    # No healthcheck: the image has no HTTP client. Probe
+    # No healthcheck: the image has no HTTP client. `decdn-compose health` probes
     # http://127.0.0.1:8090/healthz from the host.
 
   sponsord-onramp:
+    <<: *hardened
     profiles: [onramp]
     image: ${SPONSORD_ONRAMP_IMAGE_REPO:-ghcr.io/decdn/sponsord-onramp}@${SPONSORD_ONRAMP_IMAGE_DIGEST:-sha256:unset-set-SPONSORD_ONRAMP_IMAGE_DIGEST-in-.env}
-    network_mode: host
     # The same account as sponsord: it reads the daemon's own API token.
     user: "${SPONSORD_UID:-unset-SPONSORD_UID}:${SPONSORD_GID:-unset-SPONSORD_GID}"
     # Public settings only: everything in it (the RPC URL, contract addresses) is
@@ -155,22 +180,17 @@ services:
       ONRAMP_DAEMON_TOKEN_FILE: /run/secrets/api-token
       ONRAMP_TURNSTILE_SECRET_FILE: /run/secrets/turnstile-secret
       NO_COLOR: "1"
-    volumes:
-      - type: bind
-        source: /etc/sponsord/api-token
+    secrets:
+      - source: sponsord-api-token
         target: /run/secrets/api-token
-        read_only: true
-        bind: {create_host_path: false}
-      - type: bind
-        source: /etc/sponsord/turnstile-secret
+      - source: sponsord-turnstile-secret
         target: /run/secrets/turnstile-secret
-        read_only: true
-        bind: {create_host_path: false}
+    volumes:
       # A custom gate page (upstream docs/operator.md, "Your own gate page"): put
       # the HTML in this directory and set ONRAMP_GATE_TEMPLATE to its path in
       # sponsord-onramp.env. A fixed directory rather than a configurable file, so
       # no setting can mount a credential into a server that publishes the page;
-      # the entrypoint above refuses a template path outside it.
+      # the entrypoint below refuses a template path outside it.
       # Created empty when absent: unused, the built-in page is served.
       - type: bind
         source: /etc/sponsord/onramp-gate
@@ -196,32 +216,27 @@ services:
           esac
         fi
         exec sponsord-onramp
-    # It reads the daemon's limits only at start, so `docker compose restart
-    # sponsord` restarts it too, like the unit's PartOf= (a stop does not
-    # propagate). It exits while the daemon is unreachable; the restart policy
-    # retries until the daemon is up.
+    # It reads the daemon's limits only at start, so a sponsord restart restarts it
+    # too, like the unit's PartOf= (a stop does not propagate). It exits while the
+    # daemon is unreachable; the restart policy retries until the daemon is up.
     depends_on:
       sponsord:
         condition: service_started
         restart: true
-    read_only: true
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    stop_signal: SIGTERM
     stop_grace_period: 30s
-    restart: unless-stopped
-    logging: *logging
-    # No healthcheck, as above. Probe http://127.0.0.1:8080/healthz from the host.
+    # No healthcheck, as above. `decdn-compose health` probes
+    # http://127.0.0.1:8080/healthz from the host.
 
   caddy:
+    <<: *hardened
     profiles: [caddy]
     # The official image, pinned by its multi-arch index digest (2.11.6).
     image: ${CADDY_IMAGE_REPO:-docker.io/library/caddy}@${CADDY_IMAGE_DIGEST:-sha256:3422ce6de165df66534f9b9ba50efaf457114ec961763cc52f5dbdaac2972d73}
-    network_mode: host
     # A dedicated host account that owns /var/lib/caddy. NET_BIND_SERVICE is the
-    # one capability it keeps, for tcp/80 and tcp/443.
+    # one capability it keeps, for tcp/80 and tcp/443 (the image's binary carries
+    # it as a file capability, so a non-root user can use it).
     user: "${CADDY_UID:-unset-CADDY_UID}:${CADDY_GID:-unset-CADDY_GID}"
+    cap_add: [NET_BIND_SERVICE]
     environment:
       SPONSORD_ONRAMP_DOMAIN: ${SPONSORD_ONRAMP_DOMAIN:-unset-SPONSORD_ONRAMP_DOMAIN:set-in-.env}
     volumes:
@@ -239,11 +254,203 @@ services:
     # Caddy autosaves the config it loaded here; nothing reads it back.
     tmpfs:
       - /config:uid=${CADDY_UID:-unset-CADDY_UID},gid=${CADDY_GID:-unset-CADDY_GID},mode=0700
-    read_only: true
-    cap_drop: [ALL]
+
+  iroh-relay:
+    <<: *hardened
+    profiles: [relay]
+    # The official image, n0computer/iroh-relay v1.3.0 (the role's
+    # iroh_relay_version, the iroh decdn builds against), pinned by its multi-arch
+    # index digest. Upstream signs neither the image nor the release tarball, so the
+    # digest is all that vouches for it, as the sha256 pin does on the Ansible path.
+    # It is upstream's musl build on Alpine; the role installs the gnu build, whose
+    # glibc allocator serves a busy relay better.
+    image: ${IROH_RELAY_IMAGE_REPO:-docker.io/n0computer/iroh-relay}@${IROH_RELAY_IMAGE_DIGEST:-sha256:7a51e3826531dba5eee73d8b48a8f27284684d98c4d0da271d99127cc43b9d57}
+    # uid 0: the exception to the non-root rule, with the DNS server (README.md,
+    # Security notes). The relay binds tcp/80, tcp/443 and udp/7842 itself
+    # (TLS-ALPN-01 and QUIC address discovery need its certificate in-process, so
+    # no proxy can take the ports), and on the host network Docker cannot give a
+    # non-root process
+    # NET_BIND_SERVICE: it sets no ambient capabilities, the binary carries no file
+    # capability, and the net.ipv4.ip_unprivileged_port_start sysctl is refused with
+    # host networking. So it runs as root holding NET_BIND_SERVICE and nothing else,
+    # on a read-only rootfs with no-new-privileges. tests/invariants.jq allows uid 0
+    # for the iroh services only, and only so.
+    user: "0:0"
     cap_add: [NET_BIND_SERVICE]
-    security_opt:
-      - no-new-privileges:true
-    stop_signal: SIGTERM
-    restart: unless-stopped
-    logging: *logging
+    # The unit's ExecStart (the image's entrypoint is the binary). Never `--dev`,
+    # which serves plain http.
+    command: ["--config-path", "/etc/iroh-relay/iroh-relay.toml"]
+    # iroh-relay logs only errors without RUST_LOG; plain text into the journal.
+    environment:
+      RUST_LOG: info
+      NO_COLOR: "1"
+    volumes:
+      # iroh-relay ignores keys it does not know and runs on built-in defaults
+      # (metrics on a public port, no TLS) without its config, so the config is a
+      # read-only bind of a file that must exist: Docker never creates it, and
+      # `decdn-compose check` reads it first.
+      - type: bind
+        source: /etc/iroh-relay/iroh-relay.toml
+        target: /etc/iroh-relay/iroh-relay.toml
+        read_only: true
+        bind: {create_host_path: false}
+      # The Let's Encrypt account key and certificates (cert_dir is acme/ in here),
+      # kept across restarts so a restart does not spend Let's Encrypt's rate limit.
+      - type: bind
+        source: /var/lib/iroh-relay
+        target: /var/lib/iroh-relay
+        bind: {create_host_path: false}
+    # It shuts down gracefully on SIGINT only: as the container's PID 1 it ignores
+    # SIGTERM. The unit's KillSignal and TimeoutStopSec.
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+    # One socket per client: the unit's LimitNOFILE.
+    ulimits:
+      nofile: 65536
+    # No healthcheck: `decdn-compose health` reads its loopback /metrics and checks
+    # its certificate from the host.
+
+  iroh-dns-server:
+    <<: *hardened
+    profiles: [dns]
+    # The official image, n0computer/iroh-dns-server v1.3.0 (the role's
+    # iroh_dns_server_version, the iroh decdn builds against), pinned by its
+    # multi-arch index digest; unsigned upstream and a musl build on Alpine, as the
+    # relay's.
+    image: ${IROH_DNS_SERVER_IMAGE_REPO:-docker.io/n0computer/iroh-dns-server}@${IROH_DNS_SERVER_IMAGE_DIGEST:-sha256:c76d204bdcd3a354de9bb2e30e43669bbd5c903ee5c8c62772d8dd42779701aa}
+    # uid 0 holding NET_BIND_SERVICE alone, for the relay's reason: it binds tcp/443
+    # (its own TLS-ALPN-01 certificate) and udp+tcp/53 itself on the host network.
+    user: "0:0"
+    cap_add: [NET_BIND_SERVICE]
+    # The unit's ExecStart (the image's entrypoint is the binary).
+    command: ["--config", "/etc/iroh-dns-server/config.toml"]
+    # It logs only errors without RUST_LOG; plain text into the journal.
+    environment:
+      RUST_LOG: info
+      NO_COLOR: "1"
+    volumes:
+      # It ignores keys it does not know, so `decdn-compose check` reads the config
+      # first; a read-only bind of a file that must exist.
+      - type: bind
+        source: /etc/iroh-dns-server/config.toml
+        target: /etc/iroh-dns-server/config.toml
+        read_only: true
+        bind: {create_host_path: false}
+      # data_dir: the record store and cert_cache/ (the ACME account and
+      # certificates), kept across restarts.
+      - type: bind
+        source: /var/lib/iroh-dns-server
+        target: /var/lib/iroh-dns-server
+        bind: {create_host_path: false}
+    # It shuts down gracefully, flushing its record writes, on SIGINT only: as the
+    # container's PID 1 it ignores SIGTERM. The unit's KillSignal and TimeoutStopSec.
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+    # A socket per DNS-over-TCP and https client: the unit's LimitNOFILE.
+    ulimits:
+      nofile: 65536
+    # No healthcheck: `decdn-compose health` reads its loopback /healthz, asks each
+    # origin's SOA and checks its certificate from the host.
+
+  alloy:
+    <<: *hardened
+    profiles: [alloy]
+    # grafana/alloy v1.19.2, the grafana_alloy role's grafana_alloy_version, pinned
+    # by its multi-arch index digest (`make test-scripts` checks the version).
+    image: ${ALLOY_IMAGE_REPO:-docker.io/grafana/alloy}@${ALLOY_IMAGE_DIGEST:-sha256:b8ec653c44235fbe910879145dac3597d66b0aaecf60bcbbe82580767771a839}
+    # The host's `alloy` account, which owns /var/lib/alloy, plus the host's
+    # systemd-journal group, which journald's files are group-readable by (one of
+    # the unit's SupplementaryGroups; `adm` is not needed for the files). No capability: what the account cannot read on
+    # the host, Alloy does not collect, as under the unit.
+    user: "${ALLOY_UID:-unset-ALLOY_UID}:${ALLOY_GID:-unset-ALLOY_GID}"
+    group_add:
+      - "${ALLOY_JOURNAL_GID:-unset-ALLOY_JOURNAL_GID}"
+    # The unit's ExecStart: the UI and API on loopback only.
+    command:
+      - run
+      - --server.http.listen-addr=127.0.0.1:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    # The Grafana Cloud token and endpoints (GC_*), from the root-owned 0600 file
+    # the Ansible role's unit reads too; config.alloy reads them with sys.env().
+    env_file:
+      - path: ${ALLOY_ENV_FILE:-/etc/grafana-alloy.env}
+        required: true
+    # Not secret: the host's identity on every series and log line, and the active
+    # profiles, which decide what config.alloy scrapes (no node, no node target,
+    # so DecdnNodeDown cannot fire on a host that runs none).
+    environment:
+      # Alloy takes any string here, so an unset instance cannot be refused: it
+      # renders a placeholder that names the variable (tests/fail-closed.jq), not
+      # "", which would let every host fall back to the same instance label.
+      ALLOY_INSTANCE_ID: ${ALLOY_INSTANCE_ID:-unset-ALLOY_INSTANCE_ID}
+      ALLOY_REGION: ${ALLOY_REGION:-}
+      ALLOY_DEPLOYMENT_ENVIRONMENT: ${ALLOY_DEPLOYMENT_ENVIRONMENT:-production}
+      DECDN_COMPOSE_PROFILES: ${COMPOSE_PROFILES:-}
+    volumes:
+      # The host, read-only, for the in-process node_exporter (config.alloy's
+      # procfs_path, sysfs_path, rootfs_path). The host's own /proc shows its PID
+      # namespace and mounts; rslave lets mounts made later show up.
+      - type: bind
+        source: /proc
+        target: /host/proc
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /sys
+        target: /host/sys
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /
+        target: /host/root
+        read_only: true
+        bind: {propagation: rslave, create_host_path: false}
+      # The host journal: persistent, and the runtime one (journald creates it at
+      # boot; created empty here if it is missing). /var/log/journal is never
+      # created: that would switch journald to persistent storage.
+      - type: bind
+        source: /var/log/journal
+        target: /var/log/journal
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: /run/log/journal
+        target: /run/log/journal
+        read_only: true
+        bind: {create_host_path: true}
+      # Which journal files are this machine's.
+      - type: bind
+        source: /etc/machine-id
+        target: /etc/machine-id
+        read_only: true
+        bind: {create_host_path: false}
+      # Generated from the grafana_alloy role's template: never edit it here
+      # (scripts/render-compose-alloy.sh).
+      - type: bind
+        source: ./alloy/config.alloy
+        target: /etc/alloy/config.alloy
+        read_only: true
+        bind: {create_host_path: false}
+      # The WAL, the journal positions, the remote-write queue.
+      - type: bind
+        source: /var/lib/alloy
+        target: /var/lib/alloy
+        bind: {create_host_path: false}
+    # Time to flush the exporter queue on SIGTERM (the unit's TimeoutStopSec).
+    stop_grace_period: 90s
+    # No healthcheck: the image has no HTTP client. `decdn-compose health` probes
+    # http://127.0.0.1:12345/-/ready from the host.
+
+# The sponsor's credentials, each a single host file owned by the `sponsord` account
+# at 0600 (README.md). Only `file:` sources: an `environment:` source would read the
+# secret from the shell or .env, which tests/invariants.jq refuses.
+secrets:
+  sponsord-api-token:
+    file: /etc/sponsord/api-token
+  sponsord-treasury-password:
+    file: /etc/sponsord/treasury-password
+  sponsord-treasury-keystore:
+    file: /etc/sponsord/treasury-keystore.json
+  sponsord-turnstile-secret:
+    file: /etc/sponsord/turnstile-secret

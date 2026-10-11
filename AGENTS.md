@@ -16,14 +16,13 @@ split along that line:
   same daemon with an origin backend, seated on-chain via `OriginAssignment.addOrigin`,
   ADR 002/011), and optionally `sponsord` + its onramp, iroh relays and an iroh DNS
   server: `publisher.yml` / `make deploy-publisher` (`origin.yml` + the component
-  playbooks), `cloud-init/user-data-publisher.yaml`, Compose's `origin`/`onramp`
+  playbooks), `cloud-init/user-data-publisher.yaml`, Compose's `origin`/`onramp`/`relay`/`dns`
   profiles, the chart (an origin node only), the `decdn.publisher` collection. Front
   door: `docs/publishers.md`.
 
 There are four deploy paths:
 **Ansible** (`ansible/`, VMs/bare metal, the primary path, also the `decdn.node` and
-`decdn.publisher` Galaxy collections, and the only path that also deploys self-hosted iroh relays and the iroh
-DNS server), **cloud-init**
+`decdn.publisher` Galaxy collections), **cloud-init**
 (`cloud-init/`, one VM that runs the Ansible playbook on itself, no control machine),
 **Docker Compose** (`compose/`, a single Docker host) and a **Helm chart**
 (`charts/decdn-node/`, Kubernetes).
@@ -59,20 +58,33 @@ mirror (`vars/main/networks.yml`), never hand-copied into inventory or docs.
    terminates its own TLS (Let's Encrypt over TLS-ALPN-01; QUIC address discovery needs
    the same certificate in-process), so it binds tcp/80, tcp/443 and udp/7842 on every
    address itself, with no proxy and no backend behind it. Its holes come from
-   `iroh_relay_hosts`; its metrics are asserted onto loopback (`127.0.0.1:9092`).
+   `iroh_relay_hosts`; its metrics are asserted onto loopback (`127.0.0.1:9092`). On
+   Compose (the `relay` profile) the operator opens the same three ports, and
+   `decdn-compose check` refuses metrics off loopback.
    **iroh DNS server exception (`iroh_dns_server` role):** `iroh-dns-server` is public
    by design and terminates its own TLS (Let's Encrypt over TLS-ALPN-01), so it binds
    tcp/443 (`::` by default) and udp/53 + tcp/53 on one address (the host's default
    IPv4 by default, clear of systemd-resolved's `127.0.0.53`) itself, with no proxy
    and no backend behind it. Its holes come from `iroh_dns_server_hosts`; its metrics
    (`127.0.0.1:9117`) and a plain-http health listener (`127.0.0.1:9118`) are
-   asserted onto loopback.
+   asserted onto loopback. On Compose (the `dns` profile) the operator opens the same
+   ports, and `decdn-compose check` refuses either listener off loopback.
    **Kubernetes exception (chart only):** the node's metrics bind `0.0.0.0` inside the pod
    so kubelet probes and Prometheus can reach them. That is allowed only behind a
    ClusterIP-only Service and the chart's NetworkPolicy (metrics ingress limited to
    `metrics.networkPolicy.from`); disabling the policy fails the render unless
    `networkPolicy.allowUnrestrictedMetrics=true` acknowledges it. Never front metrics with
    a LoadBalancer/NodePort/Ingress.
+   **Compose exception (the iroh services only):** every Compose container runs as a
+   non-root host account, except the iroh relay and DNS server, which run as uid 0
+   holding `NET_BIND_SERVICE` and no other capability (read-only rootfs,
+   `no-new-privileges`, everything else dropped). Each must bind its public ports
+   itself, and on the host network Docker cannot give a non-root process that
+   capability (no ambient capabilities, no file capability on the binaries, and the
+   unprivileged-port sysctl is refused with host networking). `compose/tests/invariants.jq`
+   allows uid 0 only for the services in its `root_allowed` list, and only with
+   `cap_add` exactly `[NET_BIND_SERVICE]`; never add a service to that list for any
+   other reason.
 3. **Role templates render to their target paths.** Ansible roles template config directly
    onto the host (e.g. `roles/decdn_node/templates/decdn-node.service.j2` →
    `/etc/systemd/system/`), with secrets generated on the host at `0600`.
@@ -91,9 +103,12 @@ ansible/                # the deployment project (DevSec-hardened, lean roles)
   inventory/ galaxy/ molecule/    # see ansible/README.md
 cloud-init/             # user-data-{node,publisher}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (see its README.md)
 compose/                # Docker Compose deploy path for a single host (see its README.md)
-  compose.yaml          # profiles: node / origin (one decdn-node), sponsord, onramp (+ sponsord), caddy
+  compose.yaml          # profiles: node / origin (one decdn-node), sponsord, onramp (+ sponsord), caddy, relay, dns, alloy
+  alloy/config.alloy    # GENERATED from roles/grafana_alloy's config.alloy.j2 (scripts/render-compose-alloy.sh)
+  decdn-compose         # the operator's wrapper: init, check, guarded up/stop/restart/down, health, cli, backup
   Caddyfile             # mirrors roles/sponsord_onramp/templates/Caddyfile.j2
   tests/*.jq            # lint-compose: invariants, inline-env, fail-closed
+  tests/test_decdn_compose.py  # the wrapper's unit tests (make test-scripts)
 charts/
   decdn-node/           # Helm chart for the node on Kubernetes (see its README.md)
     ci/                 # CI values files (mirror molecule/schema's three plays)
@@ -103,9 +118,9 @@ charts/
 monitoring/             # Grafana dashboards + Prometheus alert rules (maintained here)
   decdn-node/           # the node's (+ promtool unit tests, .helmignored), rendered by the chart
   sponsord/             # sponsord's (+ promtool unit tests), Ansible/Compose only
-  iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible only
+  iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible and Compose
 docs/                   # cross-path operator docs: node-operators.md + publishers.md (the front doors), requirements.md, lifecycle.md
-scripts/                # upstream-mirror generators, the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh), ansible/Makefile's LIMIT preflight (limit-guard.sh)
+scripts/                # upstream-mirror generators, the compose Alloy config generator (render-compose-alloy.sh), the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh), ansible/Makefile's LIMIT preflight (limit-guard.sh)
 ```
 
 **Generated mirrors of upstream — regenerate, never hand-edit:**
@@ -118,8 +133,15 @@ generated from the decdn/decdn tag `decdn_node_version` pins. The weekly
 release of either repo. These are the only protocol facts (contract addresses) the
 repo carries, and `networks.yml` carries its upstream commit.
 
+**Generated from this repo — regenerate, never hand-edit:** `compose/alloy/config.alloy`
+is the `grafana_alloy` role's `templates/config.alloy.j2` rendered in its `compose`
+runtime (`scripts/render-compose-alloy.sh`, which runs the `compose`-tagged task of
+`ansible/tests/alloy-config/render.yml`). Change the template and regenerate; `make
+test-scripts` fails while the committed file differs from a fresh render, and `make
+lint-alloy` validates and runs it.
+
 **Pinned upstream releases.** One decdn/decdn release (`decdn_node_version`, today
-`0.0.1`) and one decdn/sponsord release (`sponsord_version` = `sponsord_onramp_version`,
+`0.0.2`) and one decdn/sponsord release (`sponsord_version` = `sponsord_onramp_version`,
 today `0.0.2`; decdn/sponsord tags its whole workspace `vX.Y.Z`, there are no per-crate
 tags) are pinned across every path: the role defaults, the onramp's installer pins
 (`sponsord_onramp_{decdn,cli}_release` + `_sums_sha256`, copied into
@@ -171,7 +193,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   the publisher's step). **The public deCDN node**
   (baseline + `decdn-node`), installed by `decdn_node_install_method`:
   `release` (the default) — a pinned GitHub release tarball verified against the
-  release's GPG-signed `SHA256SUMS` (`decdn_node_version`, default `0.0.1`); `source` — a git ref (any tag/branch/SHA) cloned and `cargo build`-ed **on the
+  release's GPG-signed `SHA256SUMS` (`decdn_node_version`, default `0.0.2`); `source` — a git ref (any tag/branch/SHA) cloned and `cargo build`-ed **on the
   node** as the unprivileged `decdn-build` user, sha256-pinned rustup, a `<repo>@<commit>`
   stamp (`tasks/source.yml`, copied into both sponsord roles, which share the user,
   home and toolchain). **No build can poison a later one:** root owns the home, the
@@ -242,6 +264,25 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   touched. **`make lint-alloy` is the gate that matters** — the molecule stub exits 0 for
   everything, so only the real pinned binary proves the rendered config loads. See
   `ansible/roles/grafana_alloy/README.md`.
+  **One template, two runtimes.** `config.alloy.j2` also renders Compose's
+  `compose/alloy/config.alloy` (the generated mirror above) when `_ga_runtime` is
+  `compose` (an internal var the render playbook sets, never an operator knob): the
+  host's identity becomes `sys.env("ALLOY_INSTANCE_ID"|"ALLOY_REGION"|
+  "ALLOY_DEPLOYMENT_ENVIRONMENT")` (the `ga_str` macro renders values carrying a
+  `sys.env:` prefix as lookups; OTTL statements are built with `string.format` and a
+  `where` guard), every daemon's scrape (node, sponsord, relay, DNS server) goes through a `discovery.relabel` keep
+  rule on `DECDN_COMPOSE_PROFILES` (Compose's `COMPOSE_PROFILES`), so a daemon is
+  scraped only under the profiles that start it (`_ga_compose_profiles`; the wrapper's
+  unit tests check they match `PROFILES`), the host exporter reads `/host/{proc,sys,root}`
+  and drops `systemd`, and journal lines get `container` from `CONTAINER_NAME` and, for
+  `decdn-<service>-<n>`, the unit the role installs (`_ga_compose_units`), so every
+  `unit`-keyed rule (level, guardrail exemption, service_name) and the dashboards'
+  log panels apply unchanged; `redact_urls` still runs ahead of every level stage.
+  The systemd renders are unchanged by the compose branch: keep it that way (diff
+  `render.yml`'s output before and after a template change). `make lint-alloy` runs
+  the compose render's journal stages on container lines and runs the whole file in
+  Alloy (every component healthy, the targets per profile), since `alloy validate`
+  neither parses OTTL nor evaluates `sys.env`.
 
 - **`ansible/roles/sponsord`** — the deCDN onboarding sponsor (`decdn/sponsord`): the
   treasury wallet's signer for capped capabilities plus the PaymentPool keeper. It is
@@ -275,8 +316,10 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     **The restart-inputs comparison is the role's only restart trigger:** never add
     `notify: Restart sponsord` to another task; make the file a hashed input
     instead, or the restart skips the guard. `sponsord_restart_ignore_topup_hold`
-    overrides it (pass it as JSON). Compose cannot guard itself; its README has the
-    manual check.
+    overrides it (pass it as JSON). On Compose, `decdn-compose` makes the same check
+    (`hold_state`, probing the bind the running container was started with; stricter
+    than the role: a missing or unparseable gauge, which every pinned image exports,
+    is unknown, and any held series holds) before a stop, restart, down or recreating `up`.
   - **Alloy toggles:** `playbooks/group_vars/all.yml` derives
     `grafana_alloy_node_enabled` / `grafana_alloy_sponsord_enabled` from group
     membership. They are host-scoped so a co-located host's two plays render one
@@ -370,6 +413,12 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     access modes; two hosts), `iroh-relay-lifecycle` (decommission) and
     `iroh-relay-install` (release mode against a local mirror), all on the same
     inventory (`make test-scripts` checks), and `validation-iroh-relay`.
+  - **Compose:** the `relay` profile runs the same release from n0's image (see the
+    `compose/` bullet). A bump of `iroh_relay_version` also bumps the image digest in
+    `compose/compose.yaml` and the version its comment names (`make test-scripts`
+    checks the name), and a new key in the role's template or stub goes into
+    `RELAY_KEYS` in `compose/decdn-compose` (its unit tests compare them with the
+    stub's).
 
 - **`ansible/roles/iroh_dns_server`** — a self-hosted iroh DNS server
   (`iroh-dns-server` from n0-computer/iroh): the pkarr relay nodes publish their
@@ -410,6 +459,12 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     inventory (`make test-scripts` checks), and `validation-iroh-dns-server`. The
     real binary's record round-trip (PUT, then `dig TXT`) is a manual check, listed
     in the role README. No `monitoring/` assets yet.
+  - **Compose:** the `dns` profile runs the same release from n0's image (see the
+    `compose/` bullet). A bump of `iroh_dns_server_version` also bumps the image
+    digest in `compose/compose.yaml`, the version its comment names and
+    `DNS_VERSION` in `compose/decdn-compose` (`make test-scripts` checks both), and
+    a new key in the role's template or stub goes into `DNS_KEYS` there (its unit
+    tests compare them with the stub's).
 
 - **`cloud-init/`** — the Ansible path with no control machine. Two templates, one per
   persona: `user-data-node.yaml` (node operators: a cache node) and
@@ -457,7 +512,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   `molecule/cloud-init/pack.yml` and `includes/`. They are the only coverage of the node's and the
   onramp's release download and verify path.
 
-- **`compose/`** — the node and the sponsor under Docker Compose on one host. The
+- **`compose/`** — the node, the sponsor, an iroh relay, an iroh DNS server and Grafana Alloy under Docker Compose on one host. The
   node: the upstream image, always by digest (`compose.yaml` builds
   `DECDN_IMAGE_REPO@DECDN_IMAGE_DIGEST`), the role's host layout (`/etc/decdn`
   read-only, `/var/lib/decdn`), host networking (so loopback metrics/admin stay
@@ -465,15 +520,43 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   SIGTERM grace. Every service sits behind a profile (`COMPOSE_PROFILES` in `.env`):
   `node` and `origin` (both start the one `decdn-node`: a node operator's cache node,
   or a publisher's origin, whose `node.toml` carries `[cache.origin]`), `sponsord`,
-  `onramp` (also starts `sponsord`) and `caddy`. An fs origin's content mount goes in
-  the operator's own `compose.override.yaml` (passed as a second `-f` on every
-  command: Compose skips it when `-f` is given), so the committed mounts stay exact.
+  `onramp` (also starts `sponsord`), `caddy`, `relay`, `dns` and `alloy` (`relay` and
+  `dns` each refused with one another, `onramp` or `caddy`: all want 443). The shared hardening (host network,
+  read-only rootfs, `cap_drop: [ALL]`, `no-new-privileges`, SIGTERM, journald logging)
+  is one `x-hardened` anchor merged by `<<: *hardened`; the lint checks the rendered
+  result, so a service-level override is caught like an inline one. An fs origin's
+  content is `DECDN_ORIGIN_DIR`, mounted read-only at the fixed `/srv/decdn-origin`.
+  The node's healthcheck is `decdn node health` (the image ships the CLI since decdn
+  v0.0.2).
+  - **`decdn-compose`** (Python ≥ 3.11, stdlib only): every service command is plain
+    `docker compose --project-directory compose/ -p decdn -f compose.yaml [-f
+    compose.override.yaml]`, and it refuses to run while `.env` sets a `COMPOSE_*` key
+    other than `COMPOSE_PROFILES` or the shell sets one or a variable `compose.yaml`
+    interpolates (Compose would take those over `.env`, which is all its checks
+    read). Values are checked as Compose renders them (`rendered_environments`), with
+    `parse_env` as the fallback. `init` creates the accounts, dirs and host-generated
+    secrets (node keys and `config init` through the node image's CLI, the API
+    token, optionally the treasury wallet) and fills chain values from the generated
+    `networks.yml` mirrors (`network_profile`, which parses their fixed shape: keep
+    it, or update the parser); it never replaces a secret. `check` (also run by
+    `up`) is the preflight, including `decdn config validate` with every URL in a
+    failure redacted. An env file's values reach a CLI container through a root-only
+    0600 copy (`--env-file`), never argv or the docker client's own environment; `cli` points on-chain commands at
+    `decdn.env`'s endpoint through a config copy with `rpc_url = "${DECDN_RPC_URL}"`;
+    `config` redacts every env-file value; loopback probes bypass any proxy. The top-up guard asks Compose itself whether an `up` recreates
+    sponsord (`--dry-run up`): `config --hash` differs from the container label on
+    older Compose. Running containers are found by Compose's labels (project
+    `decdn`), not `compose ps`, which loads disabled services' env files.
+    `make test-scripts` runs its unit tests; no CI job runs it end to end, so try a
+    change in a throwaway `docker:27-dind` (privileged) with a `compose.override.yaml`
+    that sets a non-journald logging driver.
   - **sponsord / onramp:** the roles' `/etc/sponsord/` layout, except that the
-    credential files belong to a host `sponsord` account (bind mounts keep owner and
-    mode, and upstream rejects a group-readable keystore). They are mounted
-    read-only one by one into `/run/secrets/`. Listeners and secret paths are set in
-    `environment:`, which beats env files, because the release images default to
-    `0.0.0.0`.
+    credential files belong to a host `sponsord` account (a Compose secret is a bind
+    mount, which keeps owner and mode, and upstream rejects a group-readable
+    keystore). They reach the containers as Compose `secrets:` (`file:` sources
+    only, read-only, one each, in `/run/secrets/`; a missing file fails the start).
+    Listeners and secret paths are set in `environment:`, which beats env files,
+    because the release images default to `0.0.0.0`.
   - **Onramp entrypoint:** upstream serves whatever `ONRAMP_GATE_TEMPLATE` names, and
     the container also mounts the daemon token and the Turnstile secret, so the
     onramp starts through a `/bin/sh` check that the path resolves into
@@ -482,12 +565,57 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   - **Caddy:** the official image by digest, non-root, keeping only
     `NET_BIND_SERVICE`. `compose/Caddyfile` is a hand-kept copy of the role's
     `Caddyfile.j2`: change one, change both.
+  - **iroh relay (`relay`):** n0's `n0computer/iroh-relay` image (musl, Alpine;
+    unsigned upstream) pinned in `compose.yaml` by its multi-arch index digest at
+    the role's `iroh_relay_version`; uid 0 with `NET_BIND_SERVICE` only (hard rule
+    2's Compose exception), `stop_signal: SIGINT` (as PID 1 it ignores SIGTERM
+    outright), `ulimits.nofile`, the config a read-only single-file bind
+    (`/etc/iroh-relay/iroh-relay.toml`, from `compose/iroh-relay.toml.example`,
+    which writes every key the role's template does) and `/var/lib/iroh-relay` (ACME
+    state) the only writable mount. iroh-relay ignores unknown keys and runs on
+    public defaults without a config, so `check` parses it (`tomllib`) and refuses
+    unknown keys (`RELAY_KEYS`), metrics off loopback, a `cert_dir` outside the
+    mount, placeholders, a reserved-domain contact (Let's Encrypt refuses it), an
+    empty allowlist and `[::]` under `bindv6only=1`. `health` is the role's gate
+    (loopback `/metrics` with `relayserver_accepts_total`) plus its certificate
+    check (warn-only with `prod_tls = false`).
+  - **iroh DNS server (`dns`):** the relay's pattern with n0's
+    `n0computer/iroh-dns-server` (`--config`, `/etc/iroh-dns-server/config.toml` from
+    `compose/iroh-dns-server.toml.example`, `/var/lib/iroh-dns-server` as
+    `data_dir`). `init dns` binds DNS to one address, the default route's IPv4
+    (`--dns-bind`), so resolved's `127.0.0.53` stub keeps working, and writes `rr_a`
+    from it only when public (`--public-ipv4` behind NAT). `check` refuses unknown
+    keys (`DNS_KEYS`), an origin without its trailing dot or no `"."`, `"smart"`
+    rate limiting, `[http]`/`[metrics]` off loopback and a missing or private
+    `rr_a`; its port guard is address-aware for 53 (`dns_port_problems`, the
+    role's `ports.yml`: a wildcard bind beside resolved's stub names
+    `DNSStubListener=no`). `health`: loopback `/healthz` must report `DNS_VERSION`
+    (unless `.env` overrides the digest), each origin's SOA via `dig` over udp and
+    tcp (skipped with a warning without `dig`), then the certificate.
+  - **Alloy (`alloy` profile):** `grafana/alloy` by its index digest (the comment
+    names the tag; `make test-scripts` checks it is `grafana_alloy_version`), the
+    role's command (UI on `127.0.0.1:12345`), as a host `alloy` account plus
+    `group_add` of the host's `systemd-journal` gid, no capability. It mounts the host
+    read-only (`/proc`, `/sys`, `/` at `/host/root` with `rslave`, the journal dirs,
+    `/etc/machine-id`), the generated `alloy/config.alloy`, and `/var/lib/alloy`
+    read-write. The token and endpoints come from the role's own
+    `/etc/grafana-alloy.env` (`ALLOY_ENV_FILE`, an env file, so never inline: the
+    `inline-env.jq` allow-list is the identity keys and `DECDN_COMPOSE_PROFILES:
+    ${COMPOSE_PROFILES:-}`). `/var/log/journal` is never created (that would switch
+    journald to persistent storage); the wrapper refuses without it. KICS flags the
+    `rslave` propagation HIGH (query `baa452f0`, excluded with its reason in the
+    root `Makefile`; `invariants.jq` refuses propagation on any other mount).
   - **No `${VAR:?}`:** Compose interpolates disabled services too, so a required
     variable would break other profiles. An unset variable renders a value its
     service refuses instead (invalid image reference, unknown user, a domain with a
     non-numeric port).
-  - **Gates:** `make lint-compose` renders with `--profile '*'` under `env -i`, three
-    times:
+  - **Gates:** `make lint-compose` first reads the file as written (`yq -o=json`)
+    against `compose/tests/bind-sources.jq`: every bind mount sets `create_host_path`,
+    true only for the onramp's gate-page directory and the volatile journal. That
+    flag is checked on the source because Compose releases render it in opposite
+    ways (v2.33 drops false, v5 drops true) and default it differently; never move
+    it into the render-based invariants. Then it renders with `--profile '*'` under
+    `env -i`, three times:
     - with the example `.env`, against `compose/tests/invariants.jq`: allowed keys
       and exact mounts per service, so `privileged`, `pid: host` or an extra mount
       fail;
@@ -510,7 +638,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     docker compose …`.
 
 - **`charts/decdn-node/`** — the same node on Kubernetes: a one-replica StatefulSet (one
-  release = one identity) on the upstream daemon-only image (`ghcr.io/decdn/decdn-node`,
+  release = one identity) on the upstream `decdn-node` image (`ghcr.io/decdn/decdn-node`,
   tag `appVersion` = the role's `decdn_node_version` unless `image.tag`/`image.digest`
   is set), PVC data dir, a `prepare` init
   container that installs the identity files from an `existingSecret` onto the PVC at
@@ -540,9 +668,9 @@ make lint-ansible     # vendor collections + ansible-lint (production profile)
 make molecule         # every ansible/molecule/*/ scenario in parallel (Docker; JOBS=<n>, SCENARIOS='a b')
 make lint-helm        # chart: lint + render tests + kubeconform + promtool + schema keys
 make lint-alloy       # grafana_alloy config against the real pinned Alloy binary
-make lint-compose     # compose/ invariants (three renders, compose/tests/*.jq)
+make lint-compose     # compose/ invariants (the file as written + three renders, compose/tests/*.jq)
 make lint-cloud-init  # cloud-init/user-data*.yaml: schema + invariants (no secrets, release mode, lock)
-make test-scripts     # Makefile/molecule-driver guards, release gate, lint-compose/lint-cloud-init negatives
+make test-scripts     # Makefile/molecule-driver guards, release gate, lint-compose/lint-cloud-init negatives, decdn-compose unit tests
 make security         # KICS over ansible/, the rendered chart and compose/
 
 # Ansible — run from ansible/

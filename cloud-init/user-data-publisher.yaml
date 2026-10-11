@@ -142,7 +142,7 @@ write_files:
           # (its vX.Y.Z tag and digest, under "Onramp pin"); decdn/decdn's do not, so
           # take `sha256sum SHA256SUMS` once its SHA256SUMS.asc verifies. Override all
           # four together, e.g.:
-          # sponsord_onramp_decdn_release: "v0.0.1"
+          # sponsord_onramp_decdn_release: "v0.0.2"
           # sponsord_onramp_decdn_sums_sha256: "<64 lowercase hex>"
           # sponsord_onramp_cli_release: "v0.0.2"
           # sponsord_onramp_cli_sums_sha256: "<64 lowercase hex>"

@@ -1,0 +1,2568 @@
+#!/usr/bin/env python3
+"""decdn-compose: set up and operate this directory's Compose project.
+
+A thin wrapper around `docker compose`: every service command it runs is plain
+`docker compose` against compose.yaml (plus compose.override.yaml when present,
+which a bare `-f compose.yaml` would silently drop). It adds what Compose cannot
+do on its own:
+
+  init      the host side of each profile: system accounts, directories, .env
+            with the real uids, the env-file templates, and every secret that is
+            generated on the host (node keys, keystore password, API token)
+  check     a preflight (also run by `up`): files, owners, modes, settings, the
+            node's config against the decdn CLI, and ports held by something else
+  up / stop / restart / down
+            refuse while sponsord holds an unconfirmed pool top-up, which a stop
+            or a recreate would forget (README.md, "Operate")
+  health    probe each running service
+  cli       the decdn CLI from the node image (no host install needed)
+  backup    an age-encrypted archive of the active profiles' keys and secrets
+
+Python 3.11+, standard library only. Run it as root (sudo): Compose reads the
+root-only env files whenever it creates a container. It never prints a secret
+and never overwrites one.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import grp
+import ipaddress
+import json
+import math
+import os
+import pwd
+import re
+import secrets
+import shutil
+import socket
+import ssl
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import tomllib
+import urllib.error
+import urllib.request
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+COMPOSE_FILE = HERE / "compose.yaml"
+OVERRIDE_FILE = HERE / "compose.override.yaml"
+DOTENV = HERE / ".env"
+DOTENV_EXAMPLE = HERE / ".env.example"
+# compose.yaml's `name:`.
+PROJECT = "decdn"
+
+# Profile -> the services it starts (compose.yaml's `profiles:`).
+PROFILES: dict[str, tuple[str, ...]] = {
+    "node": ("decdn-node",),
+    "origin": ("decdn-node",),
+    "sponsord": ("sponsord",),
+    "onramp": ("sponsord", "sponsord-onramp"),
+    "caddy": ("caddy",),
+    "relay": ("iroh-relay",),
+    "dns": ("iroh-dns-server",),
+    "alloy": ("alloy",),
+}
+# Profiles that cannot share a host: each pair wants the same public ports (the
+# Ansible playbooks refuse the same pairs).
+CONFLICTS: tuple[tuple[str, str, str], ...] = (
+    ("relay", "onramp", "tcp/80 and tcp/443"),
+    ("relay", "caddy", "tcp/80 and tcp/443"),
+    ("dns", "relay", "tcp/443"),
+    ("dns", "onramp", "tcp/443"),
+    ("dns", "caddy", "tcp/443"),
+)
+
+# Host layout: the Ansible roles' paths (README.md, "How it is laid out").
+ETC_DECDN = Path("/etc/decdn")
+VAR_DECDN = Path("/var/lib/decdn")
+ETC_SPONSORD = Path("/etc/sponsord")
+VAR_CADDY = Path("/var/lib/caddy")
+VAR_ALLOY = Path("/var/lib/alloy")
+# The Alloy configuration compose.yaml mounts: generated from the grafana_alloy
+# role's template (scripts/render-compose-alloy.sh), never edited here.
+ALLOY_CONFIG = HERE / "alloy" / "config.alloy"
+JOURNAL_DIR = Path("/var/log/journal")
+MACHINE_ID = Path("/etc/machine-id")
+NODE_TOML = ETC_DECDN / "node.toml"
+NODE_PASSWORD = ETC_DECDN / "keystore.password"
+NODE_SECRET = VAR_DECDN / "node.secret"
+NODE_KEYSTORE = VAR_DECDN / "keystore.json"
+SD_TOKEN = ETC_SPONSORD / "api-token"
+SD_KEYSTORE = ETC_SPONSORD / "treasury-keystore.json"
+SD_PASSWORD = ETC_SPONSORD / "treasury-password"
+SD_TURNSTILE = ETC_SPONSORD / "turnstile-secret"
+ORIGIN_TARGET = "/srv/decdn-origin"
+# compose.yaml's default DECDN_ORIGIN_DIR: an empty directory, for a node without one.
+NO_ORIGIN = Path("/var/lib/decdn-compose/no-origin")
+ETC_RELAY = Path("/etc/iroh-relay")
+VAR_RELAY = Path("/var/lib/iroh-relay")
+RELAY_TOML = ETC_RELAY / "iroh-relay.toml"
+# The relay's metrics listener: loopback, and the port the alloy profile scrapes.
+RELAY_METRICS = "127.0.0.1:9092"
+RELAY_CERT_DIR = VAR_RELAY / "acme"
+ETC_DNS = Path("/etc/iroh-dns-server")
+VAR_DNS = Path("/var/lib/iroh-dns-server")
+DNS_TOML = ETC_DNS / "config.toml"
+BINDV6ONLY = Path("/proc/sys/net/ipv6/bindv6only")
+# Never an origin's content: the hosts' secrets and state.
+NOT_ORIGIN = (
+    "/etc/decdn",
+    "/etc/sponsord",
+    "/var/lib/decdn",
+    "/var/lib/caddy",
+    str(VAR_RELAY),
+    str(VAR_DNS),
+    str(VAR_ALLOY),
+    "/etc",
+    "/root",
+    "/proc",
+    "/sys",
+    "/dev",
+    "/run",
+    "/boot",
+)
+
+DEFAULT_ENV_FILES = {
+    "DECDN_ENV_FILE": "/etc/decdn/decdn.env",
+    "SPONSORD_ENV_FILE": "/etc/sponsord/sponsord.env",
+    "SPONSORD_SECRET_ENV_FILE": "/etc/sponsord/secret.env",
+    "SPONSORD_ONRAMP_ENV_FILE": "/etc/sponsord/sponsord-onramp.env",
+    "ALLOY_ENV_FILE": "/etc/grafana-alloy.env",
+}
+
+# What /etc/grafana-alloy.env must set for the Compose configuration, which has no
+# inventory to take the endpoints from (GC_OTLP_USERNAME is optional).
+ALLOY_REQUIRED = (
+    "GC_API_TOKEN",
+    "GC_PROM_REMOTE_WRITE_URL",
+    "GC_PROM_USERNAME",
+    "GC_LOKI_URL",
+    "GC_LOKI_USERNAME",
+    "GC_OTLP_ENDPOINT",
+)
+# The identity config.alloy stamps on every series and log line, from .env: the
+# grafana_alloy role's low-cardinality charset (its preflight).
+ALLOY_IDENTITY = ("ALLOY_INSTANCE_ID", "ALLOY_REGION", "ALLOY_DEPLOYMENT_ENVIRONMENT")
+IDENTITY_RE = re.compile(r"[A-Za-z0-9._/-]{1,63}")
+ALLOY_READY = "http://127.0.0.1:12345/-/ready"
+ALLOY_COMPONENTS = "http://127.0.0.1:12345/api/v0/web/components"
+ALLOY_METRICS = "http://127.0.0.1:12345/metrics"
+# Alloy's own counters of what it failed to deliver: healthy components can still
+# be sending nothing (a wrong token or URL answers 401/404 on every write).
+ALLOY_FAILED_SENDS = re.compile(
+    r"^(prometheus_remote_storage_samples_failed_total|loki_write_dropped_entries_total"
+    r"|otelcol_exporter_send_failed_[a-z_]+)(?:\{[^}]*\})?\s+([0-9.eE+-]+)"
+)
+
+# Loopback listeners compose.yaml pins (tests/invariants.jq).
+SPONSORD_METRICS = "http://127.0.0.1:8090/metrics"
+HOLD_GAUGE = "sponsord_pool_topup_unconfirmed_since_unix"
+# One sample line of the gauge: name, optional labels, value, optional timestamp.
+HOLD_RE = re.compile(rf"^{HOLD_GAUGE}(?:\{{[^}}]*\}})?\s+([0-9.eE+-]+|NaN|[+-]Inf)(?:\s+-?[0-9]+)?\s*$")
+KEEPER_RE = re.compile(r"(?m)^sponsord_pool_keeper_failures_total\s")
+
+# The ports each service binds on the host network, for the preflight.
+PORTS: dict[str, tuple[tuple[str, int], ...]] = {
+    "decdn-node": (("udp", 4433), ("tcp", 9090), ("tcp", 9191)),
+    "sponsord": (("tcp", 8090),),
+    "sponsord-onramp": (("tcp", 8080),),
+    "caddy": (("tcp", 80), ("tcp", 443)),
+    # udp/7842 only with QUIC address discovery on, and the metrics port as
+    # configured: relay_ports() reads both from the config.
+    "iroh-relay": (("tcp", 80), ("tcp", 443), ("udp", 7842), ("tcp", 9092)),
+    # Port 53 counts only on the DNS bind address (or a wildcard): dns_port_problems.
+    "iroh-dns-server": (("tcp", 443), ("udp", 53), ("tcp", 53), ("tcp", 9117), ("tcp", 9118)),
+    "alloy": (("tcp", 12345), ("tcp", 4317), ("tcp", 4318)),
+}
+
+# The keys iroh-relay 1.3.0 deserialises (iroh-relay/src/main.rs: Config, TlsConfig,
+# Limits), the same sets as the role's molecule stub
+# (ansible/molecule/iroh-relay/files/iroh-relay-stub; the unit tests compare them).
+# The binary ignores any other key, so a typo would silently drop a setting.
+RELAY_KEYS: dict[str, set[str]] = {
+    "the top level": {
+        "enable_relay",
+        "http_bind_addr",
+        "tls",
+        "enable_quic_addr_discovery",
+        "limits",
+        "enable_metrics",
+        "metrics_bind_addr",
+        "key_cache_capacity",
+        "access",
+    },
+    "[tls]": {
+        "https_bind_addr",
+        "quic_bind_addr",
+        "hostname",
+        "cert_mode",
+        "cert_dir",
+        "manual_cert_path",
+        "manual_key_path",
+        "prod_tls",
+        "contact",
+        "dangerous_http_only",
+    },
+    "[limits]": {"accept_conn_limit", "accept_conn_burst", "client"},
+    "[limits.client]": {"rx"},
+    "[limits.client.rx]": {"bytes_per_second", "max_burst_bytes"},
+}
+# Not knobs (the role's vars): ACME's TLS-ALPN-01 challenge comes to 443, iroh's
+# captive-portal probe to 80, and iroh clients assume 7842 for QUIC address discovery.
+RELAY_FIXED_PORTS = {"http_bind_addr": 80, "https_bind_addr": 443, "quic_bind_addr": 7842}
+# iroh-relay.toml.example's placeholders, which `init relay` replaces.
+RELAY_PLACEHOLDERS = {"hostname": "relay.example.org", "contact": "admin@example.org"}
+# One series the relay always exports (monitoring/iroh-relay/exported-metrics.txt).
+RELAY_GATE_METRIC = "relayserver_accepts_total"
+
+# The keys iroh-dns-server 1.3.0 deserialises (iroh-dns-server/src/config.rs), the
+# same sets as the role's molecule stub
+# (ansible/molecule/iroh-dns-server/files/iroh-dns-server-stub; the unit tests
+# compare them). It too ignores any other key.
+DNS_KEYS: dict[str, set[str]] = {
+    "the top level": {"http", "https", "dns", "metrics", "mainline", "zone_store", "pkarr_put_rate_limit", "data_dir"},
+    "[http]": {"port", "bind_addr"},
+    "[https]": {"port", "bind_addr", "domains", "cert_mode", "letsencrypt_contact", "letsencrypt_prod"},
+    "[dns]": {"port", "bind_addr", "default_soa", "default_ttl", "origins", "rr_a", "rr_aaaa", "rr_ns"},
+    "[metrics]": {"disabled", "bind_addr"},
+    "[mainline]": {"enabled", "bootstrap"},
+    "[zone_store]": {"max_batch_size", "max_batch_time", "eviction", "eviction_interval"},
+}
+# iroh-dns-server.toml.example's placeholders, which `init dns` replaces.
+DNS_PLACEHOLDERS = {"hostname": "dns.example.org", "contact": "admin@example.org", "address": "192.0.2.1"}
+# The release compose.yaml pins (the role's iroh_dns_server_version; `make
+# test-scripts` checks both): the binary has no --version, its /healthz says.
+DNS_VERSION = "1.3.0"
+DNS_NAME_RE = r"(?=.{1,254}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\."
+
+
+DOMAIN_RE = r"(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}"
+
+
+class Refused(Exception):
+    """A check failed: print the message and exit non-zero."""
+
+
+def say(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def warn(msg: str) -> None:
+    print(f"warning: {msg}", file=sys.stderr, flush=True)
+
+
+# --- secrets never reach the terminal --------------------------------------------
+
+URL_RE = re.compile(r"\b([a-z][a-z0-9+.-]*://)(?:[^/\s@]*@)?([^/\s?#]+)([^\s\"']*)", re.I)
+
+
+def redact(text: str) -> str:
+    """Keep a URL's scheme and host; drop its userinfo, path, query and fragment,
+    where an RPC provider's API key lives (the grafana_alloy role's redact_urls)."""
+
+    def sub(m: re.Match[str]) -> str:
+        return f"{m[1]}{m[2]}/<redacted>" if m[3] not in ("", "/") or "@" in m[0] else m[0]
+
+    return URL_RE.sub(sub, text)
+
+
+# --- .env ------------------------------------------------------------------------
+
+# A setting as Compose's dotenv parser reads one: `KEY=value`, also `KEY = value`
+# and the YAML-style `KEY: value`, with an optional `export `.
+SETTING_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|:(?=\s|$))\s*(.*)$")
+# A commented-out `# KEY=value` example, which set_env fills in place.
+COMMENTED_RE = re.compile(r"^\s*#\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=")
+
+
+def parse_env(path: Path) -> dict[str, str]:
+    """Compose's env-file format, as far as these files need it: every form of a
+    setting Compose reads (SETTING_RE), single or double quotes (anything after the
+    closing quote dropped), an unquoted value's ` # comment` dropped. A line that
+    is neither blank, a comment nor a setting is refused rather than skipped:
+    Compose may read it some other way (a bare `KEY` takes the shell's value), and
+    a skipped setting would leave a check looking at a default Compose does not
+    use. It does not expand `${VAR}`: where a value matters, problems() and the
+    CLI take the environment Compose itself renders (rendered_environments), and
+    this is the fallback."""
+    out: dict[str, str] = {}
+    for n, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        m = SETTING_RE.match(line)
+        if not m:
+            raise Refused(f"{path}:{n}: not a KEY=value line, which decdn-compose cannot check: fix or remove it")
+        raw = m[2].strip()
+        if raw[:1] in ("'", '"'):
+            end = raw.find(raw[0], 1)
+            value = raw[1:end] if end > 0 else raw[1:]
+        else:
+            value = re.split(r"\s+#", raw, maxsplit=1)[0].strip()
+        out[m[1]] = value
+    return out
+
+
+def set_env(path: Path, updates: dict[str, str]) -> None:
+    """Set KEY=value in place: the active line if there is one, else the first
+    commented `# KEY=` one, else appended. Comments and order are kept."""
+    lines = path.read_text().splitlines()
+    for key, value in updates.items():
+        active = [i for i, line in enumerate(lines) if (m := SETTING_RE.match(line)) and m[1] == key]
+        commented = [i for i, line in enumerate(lines) if (m := COMMENTED_RE.match(line)) and m[1] == key]
+        if active:
+            lines[active[0]] = f"{key}={value}"
+        elif commented:
+            lines[commented[0]] = f"{key}={value}"
+        else:
+            lines.append(f"{key}={value}")
+    write_atomic(path, "\n".join(lines) + "\n", like=path)
+
+
+def write_atomic(path: Path, text: str, like: Path | None = None, mode: int = 0o644) -> None:
+    st = like.stat() if like and like.exists() else None
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            os.fchmod(f.fileno(), stat.S_IMODE(st.st_mode) if st else mode)
+            if st:
+                os.fchown(f.fileno(), st.st_uid, st.st_gid)
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+@dataclass
+class Project:
+    env: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def load(cls) -> Project:
+        if not DOTENV.exists():
+            raise Refused(f"{DOTENV} does not exist: run `decdn-compose init <profile>…` first")
+        env = parse_env(DOTENV)
+        refuse_compose_overrides(env, os.environ)
+        return cls(env)
+
+    @property
+    def profiles(self) -> list[str]:
+        return [p.strip() for p in self.env.get("COMPOSE_PROFILES", "").split(",") if p.strip()]
+
+    @property
+    def services(self) -> set[str]:
+        return {s for p in self.profiles for s in PROFILES.get(p, ())}
+
+    def env_file(self, key: str) -> Path:
+        return Path(self.env.get(key) or DEFAULT_ENV_FILES[key])
+
+    def node_image(self) -> str:
+        repo = self.env.get("DECDN_IMAGE_REPO") or "ghcr.io/decdn/decdn-node"
+        digest = self.env.get("DECDN_IMAGE_DIGEST", "")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            raise Refused("DECDN_IMAGE_DIGEST in .env is not a sha256 digest (README.md, the node's Operate)")
+        return f"{repo}@{digest}"
+
+
+def interpolated_names() -> set[str]:
+    """Every variable compose.yaml (and the override) interpolates."""
+    names: set[str] = set()
+    for f in (COMPOSE_FILE, OVERRIDE_FILE):
+        if f.exists():
+            # `$${…}` is Compose's escape for a literal (the onramp's shell script).
+            names |= set(re.findall(r"(?<!\$)\$\{([A-Za-z_][A-Za-z0-9_]*)", f.read_text()))
+    return names
+
+
+def refuse_compose_overrides(dotenv: dict[str, str], environ: Mapping[str, str]) -> None:
+    """The preflight reads .env; Compose lets the shell's environment win over it,
+    and a COMPOSE_* setting can rename the project (whose label the top-up guard
+    finds sponsord by), swap the files or the env file. So every input Compose
+    takes comes from .env, and only COMPOSE_PROFILES among the COMPOSE_* keys."""
+    in_dotenv = sorted(k for k in dotenv if k.startswith("COMPOSE_") and k != "COMPOSE_PROFILES")
+    if in_dotenv:
+        raise Refused(f"{DOTENV} sets {', '.join(in_dotenv)}: decdn-compose fixes the project, its files and .env")
+    in_shell = sorted(k for k in environ if k.startswith("COMPOSE_") or k in interpolated_names())
+    if in_shell:
+        raise Refused(
+            f"the environment sets {', '.join(in_shell)}, which Compose would take over {DOTENV}: "
+            "unset them (decdn-compose reads .env only, so its checks see what Compose runs)"
+        )
+
+
+def compose_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The environment for `docker compose`: the caller's, minus anything Compose
+    would read in place of .env (refuse_compose_overrides already refused them; this
+    keeps an internal call honest too), plus `extra`."""
+    drop = interpolated_names()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("COMPOSE_") and k not in drop}
+    return env | dict(extra or {})
+
+
+# --- processes -------------------------------------------------------------------
+
+
+def run(
+    argv: list[str],
+    *,
+    check: bool = True,
+    capture: bool = False,
+    quiet: bool = False,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    if env is None and argv[:2] == ["docker", "compose"]:
+        env = compose_env()
+    cp = subprocess.run(
+        argv,
+        text=True,
+        env=env,
+        stdout=subprocess.PIPE if capture or quiet else None,
+        stderr=subprocess.STDOUT if quiet else None,
+    )
+    if check and cp.returncode != 0:
+        if quiet and cp.stdout:
+            sys.stderr.write(redact(cp.stdout))
+        raise Refused(f"{argv[0]} {' '.join(argv[1:3])} … exited {cp.returncode}")
+    return cp
+
+
+def compose_argv(*args: str) -> list[str]:
+    # -p: the project name the top-up guard finds sponsord's container by.
+    argv = ["docker", "compose", "--project-directory", str(HERE), "-p", PROJECT, "-f", str(COMPOSE_FILE)]
+    if OVERRIDE_FILE.exists():
+        argv += ["-f", str(OVERRIDE_FILE)]
+    return argv + list(args)
+
+
+def compose(*args: str, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess[str]:
+    return run(compose_argv(*args), check=check, capture=capture)
+
+
+def rendered_environments() -> dict[str, dict[str, str]]:
+    """Each active service's environment as Compose renders it (env files merged,
+    parsed and interpolated by Compose itself), or {} when it cannot render (an env
+    file is missing: problems() reports that on its own)."""
+    cp = subprocess.run(
+        compose_argv("config", "--format", "json"),
+        text=True,
+        env=compose_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if cp.returncode != 0:
+        return {}
+    try:
+        services = json.loads(cp.stdout).get("services") or {}
+    except ValueError:
+        return {}
+    return {
+        name: {k: "" if v is None else str(v) for k, v in (svc.get("environment") or {}).items()}
+        for name, svc in services.items()
+    }
+
+
+def container_id(service: str) -> str:
+    """The running container of a service, found by Compose's labels rather than
+    `docker compose ps`, so it does not depend on the active profiles or the env
+    files: a sponsord still running after its profile was dropped is found too."""
+    cp = run(
+        [
+            "docker",
+            "ps",
+            "-q",
+            "--filter",
+            f"label=com.docker.compose.project={PROJECT}",
+            "--filter",
+            f"label=com.docker.compose.service={service}",
+        ],
+        check=False,
+        capture=True,
+    )
+    ids = cp.stdout.split() if cp.returncode == 0 else []
+    return ids[0] if ids else ""
+
+
+def decdn_cli(
+    project: Project,
+    args: list[str],
+    *,
+    etc_rw: bool = False,
+    network: str = "none",
+    env_values: Mapping[str, str] | None = None,
+    tty: bool = False,
+    extra_mounts: list[str] | None = None,
+    cli_env: dict[str, str] | None = None,
+    user: str | None = None,
+    quiet: bool = False,
+    capture: bool = False,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """The decdn CLI from the pinned node image, hardened like the daemon.
+
+    `env_values` (the daemon's environment, node_environment()) reach the container
+    through a root-only copy: never on an argv that `ps` or a sudo log shows, and
+    never in the docker client's environment."""
+    uid, gid = project.env.get("DECDN_UID", ""), project.env.get("DECDN_GID", "")
+    argv = [
+        "docker",
+        "run",
+        "--rm",
+        "--read-only",
+        "--tmpfs",
+        "/tmp",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges:true",
+        "--network",
+        network,
+        "--user",
+        user or f"{uid}:{gid}",
+        "-e",
+        "HOME=/tmp",
+        "-v",
+        f"{ETC_DECDN}:{ETC_DECDN}{'' if etc_rw else ':ro'}",
+        "-v",
+        f"{VAR_DECDN}:{VAR_DECDN}",
+    ]
+    for m in extra_mounts or []:
+        argv += ["-v", m]
+    for k, v in (cli_env or {}).items():
+        argv += ["-e", f"{k}={v}"]
+    if tty and sys.stdin.isatty():
+        argv += ["-it"]
+    with tempfile.TemporaryDirectory(prefix="decdn-env.") as tmp:
+        if env_values:
+            # The values as the daemon gets them, rewritten in `docker run`'s literal
+            # format into a root-only copy: they stay off argv and out of the docker
+            # client's own environment, where a stray DOCKER_HOST or PATH line would
+            # steer the client itself. That format has no quoting, so no newlines.
+            if any("\n" in v or "\r" in v for v in env_values.values()):
+                raise Refused("an env-file value holds a line break, which `docker run --env-file` cannot carry")
+            copy = Path(tmp) / "env"
+            write_new(
+                copy,
+                "".join(f"{k}={v}\n" for k, v in env_values.items()).encode(),
+                0o600,
+                os.geteuid(),
+                os.getegid(),
+            )
+            argv += ["--env-file", str(copy)]
+        argv += ["--entrypoint", "decdn", ensure_image(project.node_image()), *args]
+        return run(argv, check=check, quiet=quiet, capture=capture)
+
+
+def ensure_image(image: str) -> str:
+    if run(["docker", "image", "inspect", image], check=False, quiet=True).returncode != 0:
+        say(f"pulling {image}")
+        run(["docker", "pull", "-q", image], quiet=True)
+    return image
+
+
+# --- host accounts and files -----------------------------------------------------
+
+
+def require_root() -> None:
+    if os.geteuid() != 0:
+        raise Refused(
+            "run as root (sudo): Compose reads the root-only env files, and init creates accounts and secrets"
+        )
+
+
+def ensure_account(name: str, home: Path | None = None) -> tuple[int, int]:
+    try:
+        pw = pwd.getpwnam(name)
+    except KeyError:
+        argv = ["useradd", "--system", "--user-group", "--shell", "/usr/sbin/nologin"]
+        argv += ["--home-dir", str(home), "--no-create-home"] if home else ["--no-create-home"]
+        run(argv + [name])
+        say(f"created system account {name}")
+        pw = pwd.getpwnam(name)
+    return pw.pw_uid, pw.pw_gid
+
+
+def ensure_dir(path: Path, mode: int, uid: int, gid: int) -> None:
+    if not path.exists():
+        path.mkdir(parents=True)
+        os.chown(path, uid, gid)
+        os.chmod(path, mode)
+        say(f"created {path} ({mode:04o})")
+
+
+def write_new(path: Path, data: bytes, mode: int, uid: int, gid: int) -> bool:
+    """Create a file that must not exist yet; never replaces one."""
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "wb") as f:
+        os.fchown(f.fileno(), uid, gid)
+        os.fchmod(f.fileno(), mode)
+        f.write(data)
+    return True
+
+
+def install_template(src: str, dst: Path, mode: int) -> bool:
+    if dst.exists():
+        return False
+    if not write_new(dst, (HERE / src).read_bytes(), mode, 0, 0):
+        raise Refused(f"{dst} appeared or is a dangling symlink: not installing compose/{src} over it")
+    say(f"installed {dst} ({mode:04o}) from compose/{src}")
+    return True
+
+
+# --- init ------------------------------------------------------------------------
+
+
+def init(args: argparse.Namespace) -> None:
+    require_root()
+    wanted: list[str] = args.profiles
+    for p in wanted:
+        if p not in PROFILES:
+            raise Refused(f"unknown profile {p!r}: one of {', '.join(PROFILES)}")
+    if {"node", "origin"} <= set(wanted):
+        raise Refused("node and origin are the same decdn-node: pick one")
+    if not NODE_TOML.exists():
+        if "origin" in wanted and not args.origin:
+            raise Refused("init origin needs --origin <https://… | s3://bucket | file:///path>")
+        if {"node", "origin"} & set(wanted) and not args.region:
+            raise Refused("init node/origin needs --region <ISO 3166-1 alpha-2, e.g. DE>")
+    if args.region and not re.fullmatch(r"[A-Z]{2}", args.region):
+        raise Refused(f"--region {args.region!r} is not an ISO 3166-1 alpha-2 code (e.g. DE)")
+    if args.domain and not re.fullmatch(DOMAIN_RE, args.domain):
+        raise Refused(f"--domain {args.domain!r} is not a lower-case DNS name")
+    refuse_conflicts(wanted)
+    if "relay" in wanted:
+        relay_args_problem = check_relay_args(args)
+        if relay_args_problem:
+            raise Refused(relay_args_problem)
+    if "dns" in wanted:
+        dns_args_problem = check_dns_args(args)
+        if dns_args_problem:
+            raise Refused(dns_args_problem)
+    if shutil.which("docker") is None:
+        raise Refused("docker is not installed")
+
+    fresh = not DOTENV.exists()
+    if fresh:
+        write_new(DOTENV, DOTENV_EXAMPLE.read_bytes(), 0o644, 0, 0)
+        say(f"created {DOTENV} from .env.example")
+    project = Project(parse_env(DOTENV))
+    profiles = [] if fresh else project.profiles
+    if "node" in wanted and "origin" in profiles or "origin" in wanted and "node" in profiles:
+        raise Refused("this host already runs the other one of node/origin (COMPOSE_PROFILES in .env)")
+    refuse_conflicts(profiles + wanted)
+    updates: dict[str, str] = {
+        "COMPOSE_PROFILES": ",".join(dict.fromkeys(profiles + wanted)),
+    }
+
+    if {"node", "origin"} & set(wanted):
+        uid, gid = ensure_account("decdn", home=VAR_DECDN)
+        updates |= {"DECDN_UID": str(uid), "DECDN_GID": str(gid)}
+    if {"sponsord", "onramp"} & set(wanted):
+        uid, gid = ensure_account("sponsord")
+        updates |= {"SPONSORD_UID": str(uid), "SPONSORD_GID": str(gid)}
+    if "caddy" in wanted:
+        uid, gid = ensure_account("caddy")
+        updates |= {"CADDY_UID": str(uid), "CADDY_GID": str(gid)}
+    if "alloy" in wanted:
+        try:
+            journal_gid = grp.getgrnam("systemd-journal").gr_gid
+        except KeyError:
+            raise Refused("no systemd-journal group on this host: the alloy profile reads the host journal") from None
+        uid, gid = ensure_account("alloy", home=VAR_ALLOY)
+        updates |= {"ALLOY_UID": str(uid), "ALLOY_GID": str(gid), "ALLOY_JOURNAL_GID": str(journal_gid)}
+    if args.domain:
+        updates["SPONSORD_ONRAMP_DOMAIN"] = args.domain
+    origin_url = args.origin
+    if origin_url and origin_url.startswith("file://"):
+        host_dir = origin_url.removeprefix("file://")
+        found = origin_dir_problems(host_dir) if host_dir else ["file:// names no directory"]
+        if found:
+            raise Refused(f"--origin {origin_url}: {found[0]}")
+        updates["DECDN_ORIGIN_DIR"] = host_dir
+        origin_url = f"file://{ORIGIN_TARGET}"
+    set_env(DOTENV, updates)
+    project = Project(parse_env(DOTENV))
+
+    if {"node", "origin"} & set(wanted):
+        init_node(project, args, origin_url)
+    if {"sponsord", "onramp"} & set(wanted):
+        init_sponsord(project, args, wanted)
+    if "caddy" in wanted:
+        uid, gid = int(project.env["CADDY_UID"]), int(project.env["CADDY_GID"])
+        ensure_dir(VAR_CADDY, 0o700, uid, gid)
+    if "relay" in wanted:
+        init_relay(args)
+    if "dns" in wanted:
+        init_dns(args)
+    if "alloy" in wanted:
+        init_alloy(project, args)
+        project = Project(parse_env(DOTENV))
+
+    todo = problems(project, files_only=True)
+    say("")
+    if todo:
+        say("Still to do before `decdn-compose up`:")
+        for t in todo:
+            say(f"  - {t}")
+    else:
+        say("Nothing left to provide: run `sudo compose/decdn-compose up`.")
+    say(next_steps(wanted, project))
+
+
+def init_node(project: Project, args: argparse.Namespace, origin_url: str | None) -> None:
+    uid, gid = int(project.env["DECDN_UID"]), int(project.env["DECDN_GID"])
+    NO_ORIGIN.parent.mkdir(mode=0o755, exist_ok=True)
+    ensure_dir(NO_ORIGIN, 0o555, 0, 0)
+    ensure_dir(VAR_DECDN, 0o700, uid, gid)
+    ensure_dir(ETC_DECDN, 0o750, uid, gid)
+    # The password file first: key-gen reads it, never creates it.
+    if write_new(NODE_PASSWORD, base64.b64encode(secrets.token_bytes(32)) + b"\n", 0o600, uid, gid):
+        say(f"generated {NODE_PASSWORD} (0600)")
+    have = [p.exists() for p in (NODE_SECRET, NODE_KEYSTORE)]
+    if all(have):
+        say(f"kept the existing node identity in {VAR_DECDN}")
+    elif any(have):
+        raise Refused(
+            f"{VAR_DECDN} holds one of node.secret / keystore.json but not the other: "
+            "restore the missing one from your backup"
+        )
+    else:
+        say("generating the node identity (decdn key-gen, from the node image)")
+        decdn_cli(project, ["key-gen", "--output-dir", str(VAR_DECDN), "--keystore-password-file", str(NODE_PASSWORD)])
+        say(f"back up {NODE_SECRET}, {NODE_KEYSTORE} and {NODE_PASSWORD} now: `decdn-compose backup`")
+    if NODE_TOML.exists():
+        say(f"kept the existing {NODE_TOML}")
+    else:
+        cmd = ["config", "init", "--chain", args.chain, "--output", str(NODE_TOML)]
+        mounts = []
+        if origin_url:
+            cmd += ["--origin", origin_url]
+            if project.env.get("DECDN_ORIGIN_DIR"):
+                mounts.append(f"{project.env['DECDN_ORIGIN_DIR']}:{ORIGIN_TARGET}:ro")
+        decdn_cli(project, cmd, etc_rw=True, extra_mounts=mounts)
+        edit_node_toml(args.region, cache_node=origin_url is None)
+        say(f"wrote {NODE_TOML} ({args.chain}, region {args.region})")
+    install_template("decdn.env.example", project.env_file("DECDN_ENV_FILE"), 0o600)
+
+
+def edit_node_toml(region: str, cache_node: bool) -> None:
+    """Fill in what `config init` leaves commented: the data dir, the region, and
+    for a cache node the pull-through that fills its misses from other nodes (the
+    daemon's default is off; the Ansible role turns it on without an origin). The
+    result is parsed back and checked, so a change in `config init`'s output fails
+    here instead of leaving a node without its region or pull-through."""
+    text = NODE_TOML.read_text()
+    # data_dir and region live in [identity], where `config init` leaves them
+    # commented; edit only that table (an S3 origin's table has a `# region` too).
+    ident = re.search(r"(?ms)^\[identity\]\n(.*?)(?=^\[|\Z)", text)
+    if not ident:
+        raise Refused(f"{NODE_TOML} has no [identity] table: not a `decdn config init` file")
+    body = ident[1]
+    for key, value in (("data_dir", str(VAR_DECDN)), ("region", region)):
+        if not re.search(rf"(?m)^{key}\s*=", body):
+            body = re.sub(rf"(?m)^# {key} = .*$", f'{key} = "{value}"', body, count=1)
+    text = text[: ident.start(1)] + body + text[ident.end(1) :]
+    if cache_node and not re.search(r"(?m)^node_to_node_pull_through_enabled\s*=", text):
+        if re.search(r"(?m)^\[cache\]$", text):
+            text = re.sub(r"(?m)^\[cache\]$", "[cache]\nnode_to_node_pull_through_enabled = true", text, count=1)
+        else:
+            text = text.rstrip("\n") + "\n\n[cache]\nnode_to_node_pull_through_enabled = true\n"
+    try:
+        parsed = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        raise Refused(f"editing {NODE_TOML} left invalid TOML ({e}); it was not written") from e
+    want = {("identity", "data_dir"): str(VAR_DECDN), ("identity", "region"): region}
+    if cache_node:
+        want[("cache", "node_to_node_pull_through_enabled")] = True
+    wrong = [f"{t}.{k}" for (t, k), v in want.items() if parsed.get(t, {}).get(k) != v]
+    if wrong:
+        raise Refused(
+            f"`config init` wrote a {NODE_TOML} this wrapper could not fill in ({', '.join(wrong)}): "
+            "set them by hand, then re-run init"
+        )
+    write_atomic(NODE_TOML, text, like=NODE_TOML)
+
+
+def init_sponsord(project: Project, args: argparse.Namespace, wanted: list[str]) -> None:
+    uid, gid = int(project.env["SPONSORD_UID"]), int(project.env["SPONSORD_GID"])
+    ensure_dir(ETC_SPONSORD, 0o755, 0, 0)
+    if write_new(SD_TOKEN, secrets.token_hex(32).encode() + b"\n", 0o600, uid, gid):
+        say(f"generated {SD_TOKEN} (0600, never replaced: the onramp presents the same token)")
+    install_template("sponsord-secret.env.example", project.env_file("SPONSORD_SECRET_ENV_FILE"), 0o600)
+    sd_env = project.env_file("SPONSORD_ENV_FILE")
+    install_template("sponsord.env.example", sd_env, 0o644)
+    fill_from_mirror(
+        sd_env,
+        "sponsord",
+        args.chain,
+        {"SPONSORD_CHAIN_ID": "chain_id", "SPONSORD_PAYMENT_POOL_ADDR": "payment_pool_address"},
+    )
+    if args.generate_treasury:
+        generate_treasury(project, uid, gid)
+    if "onramp" in wanted:
+        onramp_env = project.env_file("SPONSORD_ONRAMP_ENV_FILE")
+        if install_template("sponsord-onramp.env.example", onramp_env, 0o644) and "caddy" in wanted:
+            # Caddy replaces any client-sent X-Forwarded-For (compose/Caddyfile).
+            set_env(onramp_env, {"ONRAMP_CLIENT_IP_HEADER": "X-Forwarded-For"})
+            say(f"set ONRAMP_CLIENT_IP_HEADER=X-Forwarded-For in {onramp_env} (behind Caddy)")
+        fill_from_mirror(
+            onramp_env,
+            "sponsord_onramp",
+            args.chain,
+            {"ONRAMP_CAPACITY_BOND_ADDR": "capacity_bond_address", "ONRAMP_SLASH_JUDGE_ADDR": "slash_judge_address"},
+        )
+
+
+def network_profile(role: str, chain: str) -> dict[str, str]:
+    """One chain's entry in a role's generated networks mirror
+    (scripts/sync-network-profiles.py): the only place this repo carries contract
+    addresses. Its shape is fixed (`  <chain>:` then `    key: value`)."""
+    path = HERE.parent / "ansible" / "roles" / role / "vars" / "main" / "networks.yml"
+    if not path.exists():
+        return {}
+    out: dict[str, str] = {}
+    current = None
+    for line in path.read_text().splitlines():
+        if m := re.fullmatch(r"  ([a-z0-9-]+):", line):
+            current = m[1]
+        elif current == chain and (m := re.fullmatch(r"    ([a-z_]+): \"?([^\"]*)\"?", line)):
+            out[m[1]] = m[2]
+    return out
+
+
+def fill_from_mirror(env_path: Path, role: str, chain: str, keys: dict[str, str]) -> None:
+    """Fill the chain settings an env file leaves empty from the mirror; a value
+    the operator set is never replaced."""
+    profile = network_profile(role, chain)
+    if not profile:
+        warn(f"no {chain} entry in {role}'s networks mirror: fill {', '.join(keys)} in {env_path} yourself")
+        return
+    current = parse_env(env_path)
+    updates = {k: profile[v] for k, v in keys.items() if v in profile and not current.get(k)}
+    if updates:
+        set_env(env_path, updates)
+        say(f"set {', '.join(updates)} in {env_path} ({chain}, from {role}'s networks mirror)")
+
+
+def generate_treasury(project: Project, uid: int, gid: int) -> None:
+    """A fresh treasury wallet, like the role's sponsord_generate_treasury_wallet:
+    a password and an eth keystore made on this host, owned by `sponsord`."""
+    if SD_KEYSTORE.exists() or SD_PASSWORD.exists():
+        say(f"kept the existing treasury in {ETC_SPONSORD}")
+        return
+    # key-gen writes into a private scratch directory; only the keystore and its
+    # password are kept (its node.secret is not a treasury key).
+    with tempfile.TemporaryDirectory(prefix="decdn-treasury.") as tmp:
+        work = Path(tmp)
+        os.chown(work, uid, gid)
+        pw = work / "password"
+        write_new(pw, base64.b64encode(secrets.token_bytes(32)) + b"\n", 0o600, uid, gid)
+        run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--read-only",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges:true",
+                "--network",
+                "none",
+                "--user",
+                f"{uid}:{gid}",
+                "-e",
+                "HOME=/tmp",
+                "--tmpfs",
+                "/tmp",
+                "-v",
+                f"{work}:/w",
+                "--entrypoint",
+                "decdn",
+                ensure_image(project.node_image()),
+                "key-gen",
+                "--output-dir",
+                "/w",
+                "--keystore-password-file",
+                "/w/password",
+            ]
+        )
+        write_new(SD_KEYSTORE, (work / "keystore.json").read_bytes(), 0o600, uid, gid)
+        write_new(SD_PASSWORD, pw.read_bytes(), 0o600, uid, gid)
+    say(
+        f"generated the treasury wallet {SD_KEYSTORE} (0600). Fund it with USDC and gas, then "
+        "open its pool from it (`decdn pool open`) and set SPONSORD_POOL_ID; back it up now"
+    )
+
+
+def conflicts(profiles: list[str]) -> list[str]:
+    have = set(profiles)
+    return [
+        f"the {a} and {b} profiles cannot share a host: both want {why}" for a, b, why in CONFLICTS if {a, b} <= have
+    ]
+
+
+def refuse_conflicts(profiles: list[str]) -> None:
+    found = conflicts(profiles)
+    if found:
+        raise Refused(f"{found[0]} (COMPOSE_PROFILES in .env, and the profiles named here)")
+
+
+EMAIL_RE = r"[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,63}"
+
+
+def reserved_mail_domain(email: str) -> bool:
+    """RFC 2606's example domains and reserved TLDs, whose contact Let's Encrypt
+    refuses ("contact email has forbidden domain"): the relay would never get a
+    certificate, and say so only in its log."""
+    domain = email.rsplit("@", 1)[-1].lower()
+    labels = domain.split(".")
+    return ".".join(labels[-2:]) in {"example.com", "example.net", "example.org"} or labels[-1] in {
+        "example",
+        "invalid",
+        "localhost",
+        "test",
+    }
+
+
+def check_relay_args(args: argparse.Namespace) -> str | None:
+    """`init relay`'s inputs, before anything on the host changes. With a config
+    already installed they are not applied (it is never replaced), so only their
+    shape is checked."""
+    if not RELAY_TOML.exists() and not (args.hostname and args.contact):
+        return (
+            "init relay needs --hostname <the relay's DNS name> and --contact <email for Let's Encrypt> "
+            "(iroh-relay refuses to start without a contact)"
+        )
+    return hostname_contact_problem(args)
+
+
+def hostname_contact_problem(args: argparse.Namespace) -> str | None:
+    """--hostname and --contact, for the iroh services' Let's Encrypt certificates."""
+    if args.hostname and not re.fullmatch(DOMAIN_RE, args.hostname):
+        return f"--hostname {args.hostname!r} is not a lower-case DNS name (no scheme, port or IP address)"
+    if args.contact and not re.fullmatch(EMAIL_RE, args.contact):
+        return f"--contact {args.contact!r} is not an email address (without mailto:)"
+    if args.contact and reserved_mail_domain(args.contact):
+        return f"--contact {args.contact}: Let's Encrypt refuses an account on a reserved domain"
+    return None
+
+
+def render_relay_toml(hostname: str, contact: str, access: str, staging: bool) -> str:
+    """compose/iroh-relay.toml.example with the operator's values in place."""
+    text = (HERE / "iroh-relay.toml.example").read_text()
+    lines = {
+        "hostname": f"hostname = {json.dumps(hostname)}",
+        "contact": f"contact = {json.dumps(contact)}",
+        "prod_tls": f"prod_tls = {'false' if staging else 'true'}",
+        "access": 'access = "everyone"' if access == "everyone" else "access = { allowlist = [] }",
+    }
+    for key, line in lines.items():
+        text, n = re.subn(rf"(?m)^{key} = .*$", line.replace("\\", "\\\\"), text, count=1)
+        if n != 1:
+            raise Refused(f"compose/iroh-relay.toml.example has no `{key} = ` line")
+    tomllib.loads(text)  # the template stays valid TOML
+    return text
+
+
+def init_relay(args: argparse.Namespace) -> None:
+    """The relay's config and state directory, root-owned like the role's: the
+    container runs as uid 0 (compose.yaml says why)."""
+    ensure_dir(ETC_RELAY, 0o755, 0, 0)
+    ensure_dir(VAR_RELAY, 0o700, 0, 0)
+    ensure_dir(RELAY_CERT_DIR, 0o700, 0, 0)
+    if RELAY_TOML.exists():
+        given = [f"--{k}" for k in ("hostname", "contact") if getattr(args, k)]
+        say(f"kept the existing {RELAY_TOML}" + (f" (not applied: {', '.join(given)}; edit the file)" if given else ""))
+        return
+    write_new(
+        RELAY_TOML, render_relay_toml(args.hostname, args.contact, args.access, args.staging).encode(), 0o644, 0, 0
+    )
+    say(f"wrote {RELAY_TOML} (0644) for {args.hostname}, access {args.access}{', staging CA' if args.staging else ''}")
+    if args.access == "allowlist":
+        say(
+            "  list your nodes' IDs in its allowlist: `sudo compose/decdn-compose cli whoami` on each node "
+            "prints its node id (README.md, An iroh relay)"
+        )
+
+
+# The role's named private ranges (RFC 1918, shared CGNAT, ULA), not is_global, so
+# documentation addresses still pass: no resolver on the internet reaches these.
+PRIVATE_NETS = tuple(
+    ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7")
+)
+
+
+def private_address(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(addr.version == n.version and addr in n for n in PRIVATE_NETS)
+
+
+def default_ipv4() -> str:
+    """The address the host's default route leaves from (the role's
+    ansible_facts.default_ipv4): a UDP connect sends nothing."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 53))
+            return s.getsockname()[0]
+    except OSError:
+        return ""
+
+
+def check_dns_args(args: argparse.Namespace) -> str | None:
+    """`init dns`'s inputs, before anything on the host changes."""
+    if not DNS_TOML.exists() and not (args.hostname and args.contact):
+        return (
+            "init dns needs --hostname <the zone delegated to this host, also its https name> and "
+            "--contact <email for Let's Encrypt> (iroh-dns-server refuses to start without a contact)"
+        )
+    problem = hostname_contact_problem(args)
+    if problem:
+        return problem
+    for flag, value, version in (("--dns-bind", args.dns_bind, 4), ("--public-ipv4", args.public_ipv4, 4)):
+        if value is None:
+            continue
+        try:
+            addr = ipaddress.ip_address(value)
+        except ValueError:
+            return f"{flag} {value!r} is not an IPv4 address"
+        if addr.version != version or addr.is_loopback or addr.is_link_local or addr.is_multicast:
+            return f"{flag} {value}: an IPv4 address of this host, not loopback, link-local or multicast"
+        if flag == "--public-ipv4" and private_address(addr):
+            return f"{flag} {value} is private: the parent zone's glue needs the address the internet reaches"
+    return None
+
+
+def render_dns_toml(hostname: str, contact: str, dns_bind: str, rr_a: str | None, staging: bool) -> str:
+    """compose/iroh-dns-server.toml.example with the operator's values in place."""
+    text = (HERE / "iroh-dns-server.toml.example").read_text()
+    text = text.replace(DNS_PLACEHOLDERS["hostname"], hostname).replace(DNS_PLACEHOLDERS["contact"], contact)
+    lines = {
+        r"^bind_addr = \"192\.0\.2\.1\"$": f"bind_addr = {json.dumps(dns_bind)}",
+        r"^letsencrypt_prod = .*$": f"letsencrypt_prod = {'false' if staging else 'true'}",
+        # Without a public address, no rr_a: `check` then asks for one.
+        r"^rr_a = .*$": f"rr_a = {json.dumps(rr_a)}" if rr_a else '# rr_a = "<this host\'s public IPv4>"',
+    }
+    for pattern, line in lines.items():
+        text, n = re.subn(f"(?m){pattern}", line.replace("\\", "\\\\"), text, count=1)
+        if n != 1:
+            raise Refused(f"compose/iroh-dns-server.toml.example has no line matching {pattern}")
+    tomllib.loads(text)
+    return text
+
+
+def init_dns(args: argparse.Namespace) -> None:
+    """The DNS server's config and state directory, root-owned (it runs as uid 0,
+    as the relay does)."""
+    ensure_dir(ETC_DNS, 0o755, 0, 0)
+    ensure_dir(VAR_DNS, 0o700, 0, 0)
+    if DNS_TOML.exists():
+        given = [
+            f"--{k.replace('_', '-')}" for k in ("hostname", "contact", "dns_bind", "public_ipv4") if getattr(args, k)
+        ]
+        say(f"kept the existing {DNS_TOML}" + (f" (not applied: {', '.join(given)}; edit the file)" if given else ""))
+        return
+    dns_bind = args.dns_bind or default_ipv4()
+    if not dns_bind:
+        raise Refused("this host has no default IPv4 route: pass --dns-bind <one of its IPv4 addresses>")
+    rr_a = args.public_ipv4 or (dns_bind if ipaddress.ip_address(dns_bind).is_global else None)
+    write_new(
+        DNS_TOML, render_dns_toml(args.hostname, args.contact, dns_bind, rr_a, args.staging).encode(), 0o644, 0, 0
+    )
+    say(f"wrote {DNS_TOML} (0644) for {args.hostname}, DNS on {dns_bind}{', staging CA' if args.staging else ''}")
+    if not rr_a:
+        say(
+            f"  {dns_bind} is not a public address (1:1 NAT?): set rr_a in {DNS_TOML} to the public IPv4 "
+            "the parent zone's glue names (or re-run init with --public-ipv4 on a fresh config)"
+        )
+
+
+def init_alloy(project: Project, args: argparse.Namespace) -> None:
+    """The alloy account's state directory, the Grafana Cloud env file (the role's
+    path, so a host that ran the Ansible role keeps its own), and the identity
+    config.alloy stamps: the instance is the host name, the region the node's.
+    A value already in .env is kept."""
+    uid, gid = int(project.env["ALLOY_UID"]), int(project.env["ALLOY_GID"])
+    ensure_dir(VAR_ALLOY, 0o700, uid, gid)
+    env_path = project.env_file("ALLOY_ENV_FILE")
+    if not install_template("grafana-alloy.env.example", env_path, 0o600):
+        say(f"kept the existing {env_path}")
+    updates = {}
+    if not project.env.get("ALLOY_INSTANCE_ID"):
+        host = socket.gethostname().split(".")[0]
+        if IDENTITY_RE.fullmatch(host):
+            updates["ALLOY_INSTANCE_ID"] = host
+    if not project.env.get("ALLOY_REGION"):
+        region = args.region or node_region()
+        if region:
+            updates["ALLOY_REGION"] = region
+    if updates:
+        set_env(DOTENV, updates)
+        say(f"set {', '.join(f'{k}={v}' for k, v in updates.items())} in {DOTENV}")
+
+
+def node_region() -> str:
+    """The region node.toml's [identity] sets, if any."""
+    if not NODE_TOML.exists():
+        return ""
+    ident = re.search(r"(?ms)^\[identity\]\n(.*?)(?=^\[|\Z)", NODE_TOML.read_text())
+    m = re.search(r'(?m)^region\s*=\s*"([^"]*)"', ident[1]) if ident else None
+    return m[1] if m and IDENTITY_RE.fullmatch(m[1]) else ""
+
+
+def next_steps(wanted: list[str], project: Project) -> str:
+    steps = ["", "Then:"]
+    if {"node", "origin"} & set(wanted):
+        steps.append("  - open udp/4433 in the host firewall and your provider's security group")
+    if "caddy" in wanted:
+        steps.append("  - point the onramp domain at this host; open tcp/80 and tcp/443")
+    if "relay" in wanted:
+        steps.append("  - point the relay's hostname (A/AAAA) at this host; open tcp/80, tcp/443 and udp/7842")
+    if "dns" in wanted:
+        steps.append(
+            "  - delegate the hostname to this host at the parent zone (NS + glue A, README.md); "
+            "open tcp/443, udp/53 and tcp/53"
+        )
+    if "alloy" in wanted:
+        steps.append(
+            f"  - fill in the Grafana Cloud token and endpoints: sudoedit {project.env_file('ALLOY_ENV_FILE')}"
+        )
+    steps.append("  - sudo compose/decdn-compose up && sudo compose/decdn-compose health")
+    if {"node", "origin"} & set(wanted):
+        steps.append(
+            "  - stake and register: sudo compose/decdn-compose cli setup (README.md, step 'Stake and register')"
+        )
+    if "relay" in wanted:
+        steps.append("  - point the nodes at it: relay_urls in their node.toml (README.md, An iroh relay)")
+    if "dns" in wanted:
+        steps.append(
+            "  - point the nodes at it: [network.discovery] pkarr_url and dns_origin in node.toml, "
+            "and clients the same dns_origin (README.md, An iroh DNS server)"
+        )
+    return "\n".join(steps)
+
+
+# --- check -----------------------------------------------------------------------
+
+
+def file_problem(
+    path: Path, uid: int | None, *, private: bool = True, nonempty: bool = True, what: str = ""
+) -> str | None:
+    hint = f" ({what})" if what else ""
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return f"{path} is missing{hint}"
+    if not stat.S_ISREG(st.st_mode):
+        return f"{path} is not a regular file"
+    if uid is not None and st.st_uid != uid:
+        return f"{path} is owned by uid {st.st_uid}, not {uid}"
+    if private and st.st_mode & 0o077:
+        return f"{path} is mode {stat.S_IMODE(st.st_mode):04o}: make it 0600"
+    if nonempty and st.st_size == 0:
+        return f"{path} is empty{hint}"
+    return None
+
+
+def env_problems(path: Path, values: Mapping[str, str], required: list[str], what: str) -> list[str]:
+    if not path.exists():
+        return []  # reported by file_problem
+    return [f"{path}: set {k} ({what})" for k in required if not values.get(k)]
+
+
+def problems(project: Project, files_only: bool = False) -> list[str]:
+    out: list[str] = []
+    env = project.env
+    unknown = [p for p in project.profiles if p not in PROFILES]
+    if unknown:
+        out.append(f"COMPOSE_PROFILES names unknown profiles: {', '.join(unknown)}")
+    if not project.profiles:
+        out.append("COMPOSE_PROFILES in .env selects no service")
+    svcs = project.services
+    rendered = rendered_environments()
+
+    def values(svc: str, path: Path) -> Mapping[str, str]:
+        """What the service gets: Compose's render, else the file as parse_env reads it."""
+        if svc in rendered:
+            return rendered[svc]
+        return parse_env(path) if path.exists() else {}
+
+    seen: dict[str, int | None] = {}
+
+    def uid_of(prefix: str, account: str) -> int | None:
+        if prefix not in seen:
+            seen[prefix] = _uid_of(prefix, account)
+        return seen[prefix]
+
+    def _uid_of(prefix: str, account: str) -> int | None:
+        raw = env.get(f"{prefix}_UID", "")
+        if not raw.isdigit() or not env.get(f"{prefix}_GID", "").isdigit():
+            out.append(f".env: {prefix}_UID / {prefix}_GID are not set (`init` fills them)")
+            return None
+        try:
+            real = pwd.getpwnam(account).pw_uid
+        except KeyError:
+            out.append(f"the {account} account does not exist (`decdn-compose init`)")
+            return int(raw)
+        if real != int(raw):
+            out.append(f".env: {prefix}_UID={raw}, but `id -u {account}` is {real}")
+        return int(raw)
+
+    if "decdn-node" in svcs:
+        uid = uid_of("DECDN", "decdn")
+        for p in (NODE_PASSWORD, NODE_SECRET, NODE_KEYSTORE):
+            out += filter(None, [file_problem(p, uid)])
+        out += filter(None, [file_problem(NODE_TOML, None, private=False)])
+        dec_env = project.env_file("DECDN_ENV_FILE")
+        out += filter(None, [file_problem(dec_env, 0, nonempty=False)])
+        if dec_env.exists() and not values("decdn-node", dec_env).get("DECDN_RPC_URL"):
+            out.append(f"{dec_env}: set DECDN_RPC_URL, your RPC endpoint (sudoedit {dec_env})")
+        if (
+            "origin" in project.profiles
+            and NODE_TOML.exists()
+            and not re.search(r"(?m)^\[cache\.origin\]", NODE_TOML.read_text())
+        ):
+            out.append(f"{NODE_TOML} has no [cache.origin] table, but the origin profile is on")
+        out += origin_dir_problems(env.get("DECDN_ORIGIN_DIR", ""))
+    if "sponsord" in svcs:
+        uid = uid_of("SPONSORD", "sponsord")
+        out += filter(None, [file_problem(SD_TOKEN, uid)])
+        out += filter(
+            None,
+            [
+                file_problem(
+                    SD_KEYSTORE, uid, what="the treasury wallet's eth keystore; or `init sponsord --generate-treasury`"
+                )
+            ],
+        )
+        out += filter(None, [file_problem(SD_PASSWORD, uid, what="its password")])
+        secret_env = project.env_file("SPONSORD_SECRET_ENV_FILE")
+        out += filter(None, [file_problem(secret_env, 0, nonempty=False)])
+        out += env_problems(secret_env, values("sponsord", secret_env), ["SPONSORD_RPC_URL"], "the RPC endpoint")
+        sd_env = project.env_file("SPONSORD_ENV_FILE")
+        out += filter(None, [file_problem(sd_env, 0, private=False, nonempty=False)])
+        out += env_problems(
+            sd_env,
+            values("sponsord", sd_env),
+            ["SPONSORD_CHAIN_ID", "SPONSORD_PAYMENT_POOL_ADDR", "SPONSORD_POOL_ID"],
+            "README.md, sponsord step 2",
+        )
+        if sd_env.exists() and "SPONSORD_RPC_URL" in parse_env(sd_env):
+            out.append(f"{sd_env} is world-readable: move SPONSORD_RPC_URL to {secret_env}")
+    if "sponsord-onramp" in svcs:
+        out += filter(
+            None, [file_problem(SD_TURNSTILE, uid_of("SPONSORD", "sponsord"), what="the Turnstile widget's secret key")]
+        )
+        on_env = project.env_file("SPONSORD_ONRAMP_ENV_FILE")
+        out += filter(None, [file_problem(on_env, 0, private=False, nonempty=False)])
+        onramp_values = values("sponsord-onramp", on_env)
+        out += env_problems(
+            on_env,
+            onramp_values,
+            ["ONRAMP_RPC_URL", "ONRAMP_CAPACITY_BOND_ADDR", "ONRAMP_TURNSTILE_SITEKEY"],
+            "README.md, sponsord step 2",
+        )
+        rpc = onramp_values.get("ONRAMP_RPC_URL", "")
+        # Served to every user: no credentials, no query (the role's preflight).
+        if rpc and not re.fullmatch(r"https?://[^/?#@\s'\"`$\\{}]+(/[^?#\s'\"`$\\{}]*)?", rpc):
+            out.append(
+                f"{on_env}: ONRAMP_RPC_URL must be an http(s) URL with no userinfo, query or "
+                "fragment: every user is served it"
+            )
+    if svcs & {"sponsord-onramp", "caddy"}:
+        dom = env.get("SPONSORD_ONRAMP_DOMAIN", "")
+        if not dom or dom == "onramp.example.org":
+            out.append(".env: set SPONSORD_ONRAMP_DOMAIN, the onramp's public host name")
+    if "caddy" in svcs:
+        uid = uid_of("CADDY", "caddy")
+        if not VAR_CADDY.is_dir():
+            out.append(f"{VAR_CADDY} is missing (`init caddy`)")
+        elif uid is not None and VAR_CADDY.stat().st_uid != uid:
+            out.append(f"{VAR_CADDY} is not owned by the caddy account")
+    out += conflicts(project.profiles)
+    for svc, key, conf, var, problems_of in (
+        ("iroh-relay", "IROH_RELAY_IMAGE_DIGEST", RELAY_TOML, VAR_RELAY, relay_problems),
+        ("iroh-dns-server", "IROH_DNS_SERVER_IMAGE_DIGEST", DNS_TOML, VAR_DNS, dns_problems),
+    ):
+        if svc not in svcs:
+            continue
+        profile = "relay" if svc == "iroh-relay" else "dns"
+        out += filter(None, [file_problem(conf, 0, private=False, what=f"`init {profile}`")])
+        if conf.is_file():
+            out += problems_of(conf)
+        out += state_dir_problems(var, profile)
+        digest = env.get(key)
+        if digest is not None and not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            out.append(f".env: {key} is set but not a sha256 digest (unset it for compose.yaml's pin)")
+    if "alloy" in svcs:
+        out += alloy_problems(project, uid_of("ALLOY", "alloy"), values("alloy", project.env_file("ALLOY_ENV_FILE")))
+    if not files_only:
+        for svc in sorted(svcs):
+            key = {
+                "decdn-node": "DECDN_IMAGE_DIGEST",
+                "sponsord": "SPONSORD_IMAGE_DIGEST",
+                "sponsord-onramp": "SPONSORD_ONRAMP_IMAGE_DIGEST",
+            }.get(svc)
+            if key and not re.fullmatch(r"sha256:[0-9a-f]{64}", env.get(key, "")):
+                out.append(f".env: {key} is not a sha256 digest")
+    return out
+
+
+def alloy_problems(project: Project, uid: int | None, values: Mapping[str, str] | None = None) -> list[str]:
+    """The alloy profile: its state directory, the journal it reads and the group
+    that reads it, the Grafana Cloud env file (root, 0600, every key the Compose
+    configuration reads), the identity it stamps, and the generated config.
+    `values`: Alloy's environment as Compose renders it (problems()), else the env
+    file as parse_env reads it."""
+    out: list[str] = []
+    env = project.env
+    if not VAR_ALLOY.is_dir():
+        out.append(f"{VAR_ALLOY} is missing (`init alloy`)")
+    elif uid is not None and VAR_ALLOY.stat().st_uid != uid:
+        out.append(f"{VAR_ALLOY} is not owned by the alloy account")
+    try:
+        journal_gid = grp.getgrnam("systemd-journal").gr_gid
+    except KeyError:
+        out.append("no systemd-journal group on this host: Alloy could not read the journal")
+    else:
+        if env.get("ALLOY_JOURNAL_GID") != str(journal_gid):
+            out.append(
+                f".env: ALLOY_JOURNAL_GID={env.get('ALLOY_JOURNAL_GID', '')!r}, but the systemd-journal "
+                f"group is {journal_gid} (`init alloy` sets it)"
+            )
+    if not JOURNAL_DIR.is_dir():
+        out.append(
+            f"{JOURNAL_DIR} is missing: the journal is not persistent. Make it so "
+            "(mkdir -p /var/log/journal && systemd-tmpfiles --create --prefix /var/log/journal && "
+            "journalctl --flush), or drop the alloy profile"
+        )
+    if not MACHINE_ID.is_file():
+        out.append(f"{MACHINE_ID} is missing")
+    if not ALLOY_CONFIG.is_file():
+        out.append(f"{ALLOY_CONFIG} is missing (scripts/render-compose-alloy.sh generates it)")
+    env_path = project.env_file("ALLOY_ENV_FILE")
+    out += filter(None, [file_problem(env_path, 0, what="the Grafana Cloud token and endpoints")])
+    if values is None:
+        values = parse_env(env_path) if env_path.exists() else {}
+    out += env_problems(env_path, values, list(ALLOY_REQUIRED), f"sudoedit {env_path}; README.md, Grafana Cloud")
+    if "replace_me" in values.get("GC_API_TOKEN", ""):
+        out.append(f"{env_path}: GC_API_TOKEN is still the example value")
+    if not env.get("ALLOY_INSTANCE_ID") or env["ALLOY_INSTANCE_ID"].startswith("unset-"):
+        out.append(".env: set ALLOY_INSTANCE_ID, the host's name in Grafana Cloud (`init alloy` sets the host name)")
+    for key in ALLOY_IDENTITY:
+        value = env.get(key, "")
+        if value and not IDENTITY_RE.fullmatch(value):
+            out.append(f".env: {key}={value!r} is not 1-63 of letters, digits, . _ / - (a low-cardinality label)")
+    return out
+
+
+def origin_dir_problems(value: str) -> list[str]:
+    """DECDN_ORIGIN_DIR: an existing absolute directory that neither is, sits
+    inside nor contains one holding the host's secrets or state: the fs origin
+    serves every file under it that the node's account can read, and that
+    includes its own key in /var/lib/decdn (the lint cannot pin an operator's
+    path)."""
+    if not value:
+        if not NO_ORIGIN.is_dir():
+            return [f"{NO_ORIGIN} is missing (`decdn-compose init node` creates it)"]
+        return []
+    path = Path(value)
+    if not path.is_absolute() or not path.is_dir():
+        return [f".env: DECDN_ORIGIN_DIR={value} is not an existing absolute directory (an NFS mount not up?)"]
+    real = path.resolve()
+    # Both the protected paths and where they resolve to: /var/lib/decdn may be a
+    # symlink onto a data disk, and Docker follows it when it mounts the state dir.
+    protected = {Path(p) for p in NOT_ORIGIN} | {Path(p).resolve() for p in NOT_ORIGIN}
+    if any(real == p or real in p.parents or p in real.parents for p in protected):
+        return [f".env: DECDN_ORIGIN_DIR={value} resolves to {real}, which holds this host's secrets or state"]
+    return []
+
+
+def rendered_origin_problems(rendered: Mapping) -> list[str]:
+    """origin_dir_problems for the directory Compose actually mounts as the fs
+    origin, whatever .env, the shell or an override made of DECDN_ORIGIN_DIR."""
+    node = (rendered.get("services") or {}).get("decdn-node") or {}
+    for vol in node.get("volumes") or []:
+        if vol.get("target") == ORIGIN_TARGET:
+            source = str(vol.get("source") or "")
+            return [] if source == str(NO_ORIGIN) else origin_dir_problems(source)
+    return []
+
+
+def state_dir_problems(path: Path, profile: str) -> list[str]:
+    """An iroh service's state directory: root's, private (its ACME account key)."""
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return [f"{path} is missing (`init {profile}`)"]
+    if not stat.S_ISDIR(st.st_mode):
+        return [f"{path} is not a directory"]
+    if st.st_uid != 0 or st.st_mode & 0o077:
+        return [f"{path} must be root's, mode 0700 (it holds the ACME account key): chown root: and chmod 0700 it"]
+    return []
+
+
+def socket_addr(value: object) -> tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, int] | None:
+    """A Rust SocketAddr as iroh's configs write it: 1.2.3.4:80 or [::]:80."""
+    if not isinstance(value, str):
+        return None
+    m = re.fullmatch(r"\[([0-9A-Fa-f:.]+)\]:(\d{1,5})|([0-9.]+):(\d{1,5})", value)
+    if not m:
+        return None
+    try:
+        addr = ipaddress.ip_address(m[1] or m[3])
+    except ValueError:
+        return None
+    if isinstance(addr, ipaddress.IPv6Address) != bool(m[1]):
+        return None
+    return addr, int(m[2] or m[4])
+
+
+def bindv6only() -> bool:
+    try:
+        return BINDV6ONLY.read_text().strip() == "1"
+    except OSError:
+        return False
+
+
+def public_bind_problem(what: str, value: object, port: int) -> str | None:
+    """A public listener: a fixed port on a wildcard or one of the host's own
+    unicast addresses (the role parses its bind address the same way)."""
+    sa = socket_addr(value)
+    if sa is None:
+        return f'{what} = {value!r} is not an address:port such as "[::]:{port}" or "0.0.0.0:{port}"'
+    addr, got = sa
+    if got != port:
+        return f"{what} must use port {port}, not {got}"
+    if addr.is_loopback or addr.is_link_local or addr.is_multicast:
+        return f"{what} = {value!r}: a loopback, link-local or multicast address serves no peer"
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        return f"{what} = {value!r}: an IPv4-mapped address; write the IPv4 address itself"
+    if addr == ipaddress.IPv6Address("::") and bindv6only():
+        return (
+            f"{what} = {value!r}: this host has net.ipv6.bindv6only=1, so [::] serves no IPv4 peer; "
+            "use 0.0.0.0 or set the sysctl to 0"
+        )
+    return None
+
+
+def load_toml(path: Path) -> tuple[dict, str | None]:
+    try:
+        return tomllib.loads(path.read_text()), None
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+        return {}, f"{path} is not readable TOML: {e}"
+
+
+def relay_problems(path: Path) -> list[str]:
+    """What the relay would ignore, or run unsafely with: iroh-relay itself reports
+    neither an unknown key nor most bad values until a peer trips over them."""
+    cfg, err = load_toml(path)
+    if err:
+        return [err]
+    out: list[str] = []
+    where = f"{path}:"
+
+    def unknown(section: str, table: object) -> None:
+        if not isinstance(table, dict):
+            out.append(f"{where} {section} is not a table")
+            return
+        extra = sorted(set(table) - RELAY_KEYS[section])
+        if extra:
+            out.append(f"{where} unknown key(s) in {section}: {', '.join(extra)} (iroh-relay 1.3.0 would ignore them)")
+
+    unknown("the top level", cfg)
+    tls = cfg.get("tls")
+    if tls is None:
+        out.append(f"{where} no [tls] table: the relay must get its certificate from Let's Encrypt")
+        tls = {}
+    else:
+        unknown("[tls]", tls)
+        tls = tls if isinstance(tls, dict) else {}
+    limits = cfg.get("limits")
+    if limits is not None:
+        unknown("[limits]", limits)
+        client = limits.get("client") if isinstance(limits, dict) else None
+        if client is not None:
+            unknown("[limits.client]", client)
+            if isinstance(client, dict) and client.get("rx") is not None:
+                unknown("[limits.client.rx]", client["rx"])
+
+    if cfg.get("enable_relay") is not True:
+        out.append(f"{where} enable_relay must be true")
+    if cfg.get("enable_metrics") is not True:
+        out.append(f"{where} enable_metrics must be true (`decdn-compose health` reads /metrics)")
+    if cfg.get("metrics_bind_addr") != RELAY_METRICS:
+        out.append(
+            f'{where} metrics_bind_addr must be "{RELAY_METRICS}" (got {cfg.get("metrics_bind_addr")!r}): '
+            "iroh-relay's default is public, metrics never are, and that is where the dashboards' "
+            "scrape (and the alloy profile) reads them"
+        )
+    qad = cfg.get("enable_quic_addr_discovery", False)
+    if not isinstance(qad, bool):
+        out.append(f"{where} enable_quic_addr_discovery must be true or false")
+    for key, table, port in (
+        ("http_bind_addr", cfg, RELAY_FIXED_PORTS["http_bind_addr"]),
+        ("https_bind_addr", tls, RELAY_FIXED_PORTS["https_bind_addr"]),
+        ("quic_bind_addr", tls, RELAY_FIXED_PORTS["quic_bind_addr"]),
+    ):
+        if key == "quic_bind_addr" and qad is not True and key not in table:
+            continue
+        problem = public_bind_problem(key, table.get(key), port)
+        if problem:
+            out.append(f"{where} {problem}")
+
+    if tls.get("cert_mode") != "LetsEncrypt":
+        out.append(f'{where} [tls] cert_mode must be "LetsEncrypt" (got {tls.get("cert_mode")!r})')
+    for key in ("manual_cert_path", "manual_key_path", "dangerous_http_only"):
+        if key in tls:
+            out.append(f"{where} [tls] {key} is not for this profile: remove it")
+    cert_dir = tls.get("cert_dir")
+    inside = isinstance(cert_dir, str) and os.path.normpath(cert_dir).startswith(f"{VAR_RELAY}/")
+    if not inside or os.path.normpath(cert_dir) != cert_dir.rstrip("/"):
+        out.append(
+            f"{where} [tls] cert_dir must be a directory in the mounted {VAR_RELAY}, such as "
+            f'"{RELAY_CERT_DIR}" (got {cert_dir!r}): elsewhere the certificate is lost on every restart'
+        )
+    hostname = tls.get("hostname")
+    if not isinstance(hostname, str) or not re.fullmatch(DOMAIN_RE, hostname):
+        out.append(f"{where} [tls] hostname must be the relay's lower-case DNS name (got {hostname!r})")
+    elif hostname == RELAY_PLACEHOLDERS["hostname"]:
+        out.append(f"{where} [tls] hostname is still the example's {hostname}")
+    contact = tls.get("contact")
+    if not isinstance(contact, str) or not re.fullmatch(EMAIL_RE, contact):
+        out.append(f"{where} [tls] contact must be an email address, without mailto: (got {contact!r})")
+    elif contact == RELAY_PLACEHOLDERS["contact"]:
+        out.append(f"{where} [tls] contact is still the example's {contact}")
+    elif reserved_mail_domain(contact):
+        out.append(f"{where} [tls] contact {contact}: Let's Encrypt refuses an account on a reserved domain")
+    if not isinstance(tls.get("prod_tls"), bool):
+        out.append(f"{where} [tls] prod_tls must be true or false")
+
+    access = cfg.get("access", "everyone")
+    if access != "everyone":
+        if not isinstance(access, dict) or list(access) not in (["allowlist"], ["denylist"]):
+            out.append(f'{where} access must be "everyone", {{ allowlist = [...] }} or {{ denylist = [...] }}')
+        else:
+            kind, ids = next(iter(access.items()))
+            if not isinstance(ids, list) or not all(
+                isinstance(i, str) and re.fullmatch(r"[0-9a-f]{64}", i) for i in ids
+            ):
+                out.append(
+                    f"{where} access.{kind} must list endpoint IDs, each 64 lowercase hex (`cli whoami` on a node)"
+                )
+            elif len(set(ids)) != len(ids):
+                out.append(f"{where} access.{kind} lists an ID twice")
+            elif kind == "allowlist" and not ids:
+                out.append(
+                    f"{where} the allowlist is empty, so the relay would admit nobody: add your nodes' IDs "
+                    '(`sudo compose/decdn-compose cli whoami` on each node), or set access = "everyone" deliberately'
+                )
+    return out
+
+
+def bare_bind_problem(what: str, value: object, wildcard_ok: bool = True) -> str | None:
+    """A public listener's bare address (iroh-dns-server's bind_addr)."""
+    try:
+        addr = ipaddress.ip_address(value) if isinstance(value, str) else None
+    except ValueError:
+        addr = None
+    if addr is None:
+        return f"{what} = {value!r} is not a bare IP address (no brackets or port)"
+    if str(addr) != value:
+        return f"{what} = {value!r}: write it in its canonical form, {str(addr)!r}"
+    if addr.is_unspecified and not wildcard_ok:
+        return f"{what} = {value!r}: not a wildcard here"
+    if addr.is_loopback or addr.is_link_local or addr.is_multicast:
+        return f"{what} = {value!r}: a loopback, link-local or multicast address serves no peer"
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        return f"{what} = {value!r}: an IPv4-mapped address; write the IPv4 address itself"
+    if addr == ipaddress.IPv6Address("::") and bindv6only():
+        return (
+            f"{what} = {value!r}: this host has net.ipv6.bindv6only=1, so :: serves no IPv4 peer; "
+            "use 0.0.0.0 or set the sysctl to 0"
+        )
+    return None
+
+
+def dns_problems(path: Path) -> list[str]:
+    """What iroh-dns-server would ignore, refuse late, or serve wrongly with."""
+    cfg, err = load_toml(path)
+    if err:
+        return [err]
+    out: list[str] = []
+    where = f"{path}:"
+    tables: dict[str, dict] = {}
+    extra = sorted(set(cfg) - DNS_KEYS["the top level"])
+    if extra:
+        out.append(
+            f"{where} unknown key(s) at the top level: {', '.join(extra)} (iroh-dns-server 1.3.0 would ignore them)"
+        )
+    for name in ("http", "https", "dns", "metrics", "mainline", "zone_store"):
+        section = f"[{name}]"
+        table = cfg.get(name)
+        if not isinstance(table, dict):
+            out.append(f"{where} no {section} table (every key is written out: start from the example)")
+            table = {}
+        extra = sorted(set(table) - DNS_KEYS[section])
+        if extra:
+            out.append(
+                f"{where} unknown key(s) in {section}: {', '.join(extra)} (iroh-dns-server 1.3.0 would ignore them)"
+            )
+        tables[name] = table
+    http, https, dns, metrics = tables["http"], tables["https"], tables["dns"], tables["metrics"]
+
+    rate = cfg.get("pkarr_put_rate_limit")
+    if rate == "smart":
+        out.append(
+            f'{where} pkarr_put_rate_limit = "smart" reads X-Forwarded-For, which a client can forge with no proxy '
+            'in front: use "simple" (1.3.0 treats smart as simple anyway)'
+        )
+    elif rate not in ("simple", "disabled"):
+        out.append(f'{where} pkarr_put_rate_limit must be "simple" or "disabled" (got {rate!r})')
+    if cfg.get("data_dir") != str(VAR_DNS):
+        out.append(
+            f"{where} data_dir must be {str(VAR_DNS)!r}, the mounted state directory (got {cfg.get('data_dir')!r}): "
+            "elsewhere the records and the certificate are lost on every restart"
+        )
+
+    for name, table in (("[http]", http), ("[metrics]", metrics)):
+        raw = table.get("bind_addr")
+        addr = socket_addr(raw) if name == "[metrics]" else None
+        host = addr[0] if addr else None
+        if name == "[http]":
+            try:
+                host = ipaddress.ip_address(raw) if isinstance(raw, str) else None
+            except ValueError:
+                host = None
+        if host is None or not host.is_loopback:
+            out.append(f"{where} {name} bind_addr must be loopback (got {raw!r}): never public")
+    if http.get("port") != 9118:
+        out.append(f"{where} [http] port must be 9118 (`decdn-compose health` reads /healthz there)")
+    if metrics.get("disabled") is not False:
+        out.append(f"{where} [metrics] disabled must be false")
+    metrics_addr = socket_addr(metrics.get("bind_addr"))
+    if metrics_addr and metrics_addr[1] != 9117:
+        out.append(f"{where} [metrics] bind_addr must use port 9117 (the port check and README assume it)")
+
+    if https.get("port") != 443:
+        out.append(f"{where} [https] port must be 443 (Let's Encrypt's TLS-ALPN-01 challenge comes there)")
+    problem = bare_bind_problem("[https] bind_addr", https.get("bind_addr", "::"))
+    if problem:
+        out.append(f"{where} {problem}")
+    if https.get("cert_mode") != "lets_encrypt":
+        out.append(f'{where} [https] cert_mode must be "lets_encrypt" (got {https.get("cert_mode")!r})')
+    domains = https.get("domains")
+    hostname = domains[0] if isinstance(domains, list) and len(domains) == 1 else None
+    if not isinstance(hostname, str) or not re.fullmatch(DOMAIN_RE, hostname):
+        out.append(f"{where} [https] domains must be one lower-case DNS name, the delegated hostname (got {domains!r})")
+        hostname = None
+    elif hostname == DNS_PLACEHOLDERS["hostname"]:
+        out.append(f"{where} [https] domains is still the example's {hostname}")
+    contact = https.get("letsencrypt_contact")
+    if not isinstance(contact, str) or not re.fullmatch(EMAIL_RE, contact):
+        out.append(f"{where} [https] letsencrypt_contact must be an email address, without mailto: (got {contact!r})")
+    elif contact == DNS_PLACEHOLDERS["contact"]:
+        out.append(f"{where} [https] letsencrypt_contact is still the example's {contact}")
+    elif reserved_mail_domain(contact):
+        out.append(
+            f"{where} [https] letsencrypt_contact {contact}: Let's Encrypt refuses an account on a reserved domain"
+        )
+    if not isinstance(https.get("letsencrypt_prod"), bool):
+        out.append(f"{where} [https] letsencrypt_prod must be true or false (unset means staging)")
+
+    if dns.get("port") != 53:
+        out.append(f"{where} [dns] port must be 53")
+    bind = dns.get("bind_addr")
+    if bind == DNS_PLACEHOLDERS["address"]:
+        out.append(f"{where} [dns] bind_addr is still the example's {bind}: this host's address (`init dns` picks it)")
+    else:
+        problem = bare_bind_problem("[dns] bind_addr", bind)
+        if problem:
+            out.append(f"{where} {problem}")
+    origins = dns.get("origins")
+    if not isinstance(origins, list) or not all(isinstance(o, str) for o in origins):
+        out.append(f"{where} [dns] origins must be a list of names")
+        origins = []
+    if "." not in origins:
+        out.append(f'{where} [dns] origins must include "." (the static zone is rooted there; 1.3.0 refuses to start)')
+    for o in origins:
+        if o != "." and not re.fullmatch(DNS_NAME_RE, o):
+            out.append(
+                f"{where} [dns] origin {o!r} must be a lower-case name with its trailing dot: without it "
+                "1.3.0 answers SOA but no record at the apex"
+            )
+    apexes = {o.rstrip(".") for o in origins if o != "."}
+    if hostname and hostname not in apexes and not any(hostname.endswith(f".{a}") for a in apexes):
+        out.append(f"{where} [dns] origins do not cover the hostname {hostname} (nodes resolve under it)")
+    soa = dns.get("default_soa")
+    fields = soa.split() if isinstance(soa, str) else []
+    if len(fields) != 7 or not all(f.isdigit() for f in fields[2:]):
+        out.append(f'{where} [dns] default_soa must be "<mname> <rname> <serial> <refresh> <retry> <expire> <minimum>"')
+    ttl = dns.get("default_ttl")
+    if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl <= 0:
+        out.append(f"{where} [dns] default_ttl must be a positive number of seconds")
+    for key, version in (("rr_a", 4), ("rr_aaaa", 6)):
+        if key not in dns:
+            continue
+        try:
+            addr = ipaddress.ip_address(dns[key])
+        except (ValueError, TypeError):
+            addr = None
+        if (
+            addr is None
+            or addr.version != version
+            or addr.is_unspecified
+            or addr.is_loopback
+            or addr.is_multicast
+            or addr.is_link_local
+        ):
+            out.append(f"{where} [dns] {key} must be a public IPv{version} address (got {dns[key]!r})")
+        elif private_address(addr):
+            out.append(
+                f"{where} [dns] {key} = {dns[key]!r} is private: set the public address the parent zone's glue names"
+            )
+    if dns.get("rr_a") == DNS_PLACEHOLDERS["address"]:
+        out.append(f"{where} [dns] rr_a is still the example's {dns['rr_a']}")
+    ns = dns.get("rr_ns")
+    if ns is not None and (not isinstance(ns, str) or not re.fullmatch(DNS_NAME_RE, ns)):
+        out.append(f"{where} [dns] rr_ns must be an absolute name with its trailing dot (got {ns!r})")
+    elif isinstance(ns, str):
+        # The server answers A/AAAA/NS only at an origin's apex and reads a name below
+        # one as a node key, so an NS name there leaves the delegation unanswerable
+        # (the role's "Validate the NS record").
+        below = sorted(a for a in apexes if ns.rstrip(".").lower().endswith(f".{a}"))
+        if below:
+            out.append(
+                f"{where} [dns] rr_ns {ns!r} is below the origin {below[0]}., which the server reads as a node "
+                "key and cannot answer: use an origin's apex (the hostname) or a name outside every origin"
+            )
+    at_apex = hostname in apexes or (isinstance(ns, str) and ns.rstrip(".") in apexes)
+    if at_apex and not ("rr_a" in dns or "rr_aaaa" in dns):
+        out.append(
+            f"{where} [dns] no rr_a: this server answers its own hostname, so set rr_a to the host's public IPv4 "
+            "(the glue's address; behind NAT, not the bind address)"
+        )
+
+    if not isinstance(tables["mainline"].get("enabled"), bool):
+        out.append(f"{where} [mainline] enabled must be true or false")
+    missing = sorted(DNS_KEYS["[zone_store]"] - set(tables["zone_store"]))
+    if missing:
+        out.append(f"{where} [zone_store] lacks {', '.join(missing)} (write upstream's defaults, as the example does)")
+    return out
+
+
+def dns_bind(path: Path = DNS_TOML) -> str:
+    cfg, _ = load_toml(path)
+    dns = cfg.get("dns") if isinstance(cfg.get("dns"), dict) else {}
+    return str(dns.get("bind_addr", ""))
+
+
+def dns_port_problems(bind: str, rows: list[tuple[str, str, int, str]]) -> list[str]:
+    """Port 53 held by another process where the DNS listener binds: on its own
+    address, or anywhere for a wildcard bind (the role's tasks/ports.yml). A
+    resolver on another address (systemd-resolved's stub on 127.0.0.53) is fine,
+    unless the bind is a wildcard."""
+    wildcard = bind in ("::", "0.0.0.0")
+    out = []
+    for proto, addr, port, proc in rows:
+        if port != 53 or proto not in ("udp", "tcp"):
+            continue
+        holder_wild = addr in ("*", "0.0.0.0", "::", "[::]")
+        if not (wildcard or holder_wild or addr.strip("[]").split("%")[0] == bind):
+            continue
+        msg = f"{proto}/53 on {addr}, which iroh-dns-server binds ({bind}), is held by {proc}"
+        if wildcard and addr.startswith("127.0.0.5"):
+            msg += (
+                " (where systemd-resolved's stub listens). Bind [dns] to one address (`init dns` picks the default "
+                "IPv4) or turn the stub off first (DNSStubListener=no in /etc/systemd/resolved.conf.d/)"
+            )
+        out.append(msg)
+    return list(dict.fromkeys(out))
+
+
+def relay_ports(path: Path = RELAY_TOML) -> tuple[tuple[str, int], ...]:
+    """The relay's listeners as its config sets them (PORTS when it cannot be read)."""
+    cfg, err = load_toml(path)
+    if err:
+        return PORTS["iroh-relay"]
+    ports = [("tcp", 80), ("tcp", 443)]
+    if cfg.get("enable_quic_addr_discovery") is True:
+        ports.append(("udp", 7842))
+    metrics = socket_addr(cfg.get("metrics_bind_addr"))
+    ports.append(("tcp", metrics[1] if metrics else 9092))
+    return tuple(ports)
+
+
+def service_ports(svc: str) -> tuple[tuple[str, int], ...]:
+    if svc == "iroh-relay":
+        return relay_ports()
+    if svc == "iroh-dns-server":
+        # Port 53 is address-aware: dns_port_problems.
+        return tuple(p for p in PORTS[svc] if p[1] != 53)
+    return PORTS[svc]
+
+
+def listener_rows(text: str) -> list[tuple[str, str, int, str]]:
+    """`ss -Hlntup` -> (proto, local address, port, process) per listener."""
+    rows = []
+    for line in text.splitlines():
+        cols = line.split()
+        if len(cols) < 5:
+            continue
+        m = re.fullmatch(r"(.*):(\d+)", cols[4])
+        if m:
+            proc = re.search(r'users:\(\("([^"]+)"', line)
+            rows.append((cols[0], m[1], int(m[2]), proc[1] if proc else "?"))
+    return rows
+
+
+def listeners() -> list[tuple[str, str, int, str]] | None:
+    """Every listener, from `ss`; None without ss."""
+    if shutil.which("ss") is None:
+        return None
+    cp = run(["ss", "-Hlntup"], check=False, capture=True)
+    if cp.returncode != 0:
+        # An empty answer would read as "nothing holds any port".
+        raise Refused(f"`ss -Hlntup` failed (exit {cp.returncode}): cannot check the ports (iproute2 too old?)")
+    return listener_rows(cp.stdout)
+
+
+def check_ports(project: Project) -> list[str]:
+    rows = listeners()
+    if rows is None:
+        warn("`ss` is not installed: skipping the port check")
+        return []
+    held: dict[tuple[str, int], str] = {}
+    for proto, _, port, proc in rows:
+        held.setdefault((proto, port), proc)
+    out = []
+    for svc in sorted(project.services):
+        if container_id(svc):
+            continue  # it holds its own ports
+        for proto, port in service_ports(svc):
+            if (proto, port) in held:
+                out.append(f"{proto}/{port}, which {svc} binds, is held by {held[(proto, port)]}")
+        if svc == "iroh-dns-server":
+            out += dns_port_problems(dns_bind(), rows)
+    return out
+
+
+def validate_node(project: Project) -> list[str]:
+    """`decdn config validate` against the pinned image, with the daemon's own
+    environment file. Its output can name the RPC endpoint, so only a redacted
+    copy of a failure is shown."""
+    cp = decdn_cli(
+        project,
+        ["config", "validate", "--config", str(NODE_TOML), "--keystore-password-file", str(NODE_PASSWORD)],
+        env_values=node_environment(project),
+        extra_mounts=origin_mounts(project),
+        quiet=True,
+        check=False,
+    )
+    if cp.returncode == 0:
+        return []
+    tail = "\n    ".join(redact(cp.stdout or "").strip().splitlines()[-15:])
+    return [f"decdn config validate refused {NODE_TOML}:\n    {tail}"]
+
+
+def node_environment(project: Project) -> dict[str, str]:
+    """The node daemon's environment as Compose renders it (decdn-node sets
+    nothing inline, so that is decdn.env as Compose reads it), else decdn.env as
+    parse_env reads it."""
+    rendered = rendered_environments().get("decdn-node")
+    if rendered is not None:
+        return rendered
+    dec_env = project.env_file("DECDN_ENV_FILE")
+    return parse_env(dec_env) if dec_env.exists() else {}
+
+
+def origin_mounts(project: Project) -> list[str]:
+    d = project.env.get("DECDN_ORIGIN_DIR")
+    return [f"{d}:{ORIGIN_TARGET}:ro"] if d else []
+
+
+def check(args: argparse.Namespace | None = None, project: Project | None = None) -> Project:
+    require_root()
+    project = project or Project.load()
+    found = problems(project)
+    if not found:
+        rendered = json.loads(compose("config", "--format", "json", capture=True).stdout)
+        journald = sorted(
+            n for n, s in rendered.get("services", {}).items() if (s.get("logging") or {}).get("driver") == "journald"
+        )
+        if journald and not Path("/run/systemd/journal/socket").exists():
+            found.append(
+                f"no systemd journal on this host, and {', '.join(journald)} log to journald "
+                "(README.md, Logs, shows a compose.override.yaml for another driver)"
+            )
+        found += rendered_origin_problems(rendered)
+        found += check_ports(project)
+        if "decdn-node" in project.services and not found:
+            found += validate_node(project)
+    if found:
+        raise Refused("preflight failed:\n" + "\n".join(f"  - {p}" for p in found))
+    say(f"preflight ok: {', '.join(project.profiles)}")
+    return project
+
+
+# --- sponsord's top-up hold ------------------------------------------------------
+
+
+# Every probe goes to loopback, never through a proxy: urllib honours http_proxy
+# with no loopback bypass, and sudo can carry one in from /etc/environment.
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def fetch(url: str, timeout: float = 5.0) -> tuple[int, str]:
+    """(status, body); status 0 = nothing listening, -1 = no answer."""
+    try:
+        with _DIRECT.open(url, timeout=timeout) as r:
+            return r.status, r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, ""
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, ConnectionRefusedError):
+            return 0, ""
+        return -1, ""
+    except (TimeoutError, OSError):
+        return -1, ""
+
+
+def hold_state(status: int, body: str, url: str = SPONSORD_METRICS) -> str | None:
+    """None when sponsord holds nothing, else why it must not be stopped.
+
+    A daemon that is not listening yet has never topped up (it binds before it
+    starts the keeper); one that answers without the keeper's series, or does not
+    answer, is in an unknown state (ansible/roles/sponsord/tasks/topup-hold.yml).
+    Stricter than the role, which takes a missing gauge for a binary that predates
+    it: Compose runs only pinned images, which all export it, so a missing,
+    unparseable or non-finite sample is unknown too, and any held series holds."""
+    if status == 0:
+        return None
+    if status != 200 or not KEEPER_RE.search(body):
+        return (
+            f"sponsord's /metrics ({url}) did not answer with its keeper series "
+            f"(status {status}): its top-up hold state is unknown"
+        )
+    samples = [line for line in body.splitlines() if line.startswith(HOLD_GAUGE)]
+    values = [m[1] for line in samples if (m := HOLD_RE.match(line))]
+    try:
+        parsed = [float(v) for v in values]
+    except ValueError:
+        parsed = []
+    if not samples or len(values) != len(samples) or not all(math.isfinite(v) for v in parsed) or not parsed:
+        return f"sponsord's /metrics ({url}) has no readable {HOLD_GAUGE} sample: its top-up hold state is unknown"
+    since = int(max(parsed))
+    if since > 0:
+        return (
+            f"sponsord holds an unconfirmed pool top-up since "
+            f"{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(since))}: a stop or restart "
+            "forgets it and the pool can be refilled twice. Wait until "
+            "sponsord_pool_topup_unconfirmed_since_unix is 0 (README.md, Operate)"
+        )
+    return None
+
+
+def guard_sponsord(args: argparse.Namespace, action: str) -> None:
+    if args.ignore_topup_hold:
+        warn("--ignore-topup-hold: not checking sponsord for a held pool top-up")
+        return
+    cid = container_id("sponsord")
+    if not cid:
+        return
+    url = sponsord_metrics_url(cid)
+    if url is None:
+        raise Refused(
+            "refusing to touch sponsord: the running container's SPONSORD_BIND is not a loopback "
+            "host:port, so its top-up hold cannot be read. Override with --ignore-topup-hold."
+        )
+    for _ in range(3):
+        status, body = fetch(url)
+        if status != -1:
+            break
+        time.sleep(2)
+    reason = hold_state(status, body, url)
+    if reason:
+        raise Refused(f"refusing to {action} sponsord: {reason}. Override with --ignore-topup-hold.")
+
+
+def sponsord_metrics_url(cid: str) -> str | None:
+    """The /metrics of the address the running sponsord was started with, not a
+    constant: an override can move SPONSORD_BIND, and a probe refused on the old
+    port would read as "not listening, holds nothing" (the role probes the running
+    process's listener for the same reason)."""
+    return bind_metrics_url(container_env(cid).get("SPONSORD_BIND", ""))
+
+
+def container_env(cid: str) -> dict[str, str]:
+    """A running container's environment ({} when it cannot be read)."""
+    cp = run(["docker", "inspect", "--format", "{{json .Config.Env}}", cid], check=False, capture=True)
+    try:
+        entries = json.loads(cp.stdout or "null")
+    except ValueError:
+        return {}
+    if not isinstance(entries, list):
+        return {}
+    return dict(e.split("=", 1) for e in entries if isinstance(e, str) and "=" in e)
+
+
+def bind_metrics_url(bind: str) -> str | None:
+    return loopback_url(bind, "/metrics")
+
+
+def loopback_url(bind: str, path: str) -> str | None:
+    """http://<bind><path> for a loopback host:port bind, else None."""
+    m = re.fullmatch(r"(127(?:\.\d{1,3}){3}):(\d{1,5})", bind)
+    return f"http://{m[1]}:{m[2]}{path}" if m else None
+
+
+# compose.yaml's services: a stop/restart argument outside this set is an
+# option's value (`-t 10`), which the guard cannot place, so it is checked.
+SERVICES = frozenset(s for svcs in PROFILES.values() for s in svcs)
+
+
+def touches_sponsord(command: str, rest: list[str]) -> bool:
+    """Whether a stop/restart/down would stop the running sponsord. Fails closed:
+    anything but a list of known services that leaves sponsord out counts."""
+    if command == "down":
+        return True
+    names = [a for a in rest if not a.startswith("-")]
+    return not names or "sponsord" in names or not set(names) <= SERVICES
+
+
+def up_recreates_sponsord(rest: list[str]) -> bool:
+    """Whether `up <rest>` would stop a running sponsord: Compose's own answer,
+    from a dry run of the same command (a changed image, env file or setting
+    recreates it; --remove-orphans can remove it). A dry run that fails counts as
+    yes. Its config hash is no shortcut: `config --hash` and the container's label
+    are computed differently on some Compose releases."""
+    cid = container_id("sponsord")
+    if not cid:
+        return False
+    name = run(["docker", "inspect", "--format", "{{.Name}}", cid], capture=True).stdout.strip().lstrip("/")
+    # Plain progress, so every container's line is printed: a quieter mode would
+    # print nothing to match, which would read as "not touched".
+    cp = run(compose_argv("--progress", "plain", "--dry-run", "up", "-d", *rest), check=False, quiet=True)
+    if cp.returncode != 0:
+        return True
+    return touched_in_dry_run(cp.stdout, name)
+
+
+def touched_in_dry_run(output: str, container: str) -> bool:
+    return bool(re.search(rf"(?m)\bContainer {re.escape(container)}\s+(Recreate|Stopping|Removing|Killing)\b", output))
+
+
+# --- service commands ------------------------------------------------------------
+
+
+def cmd_up(args: argparse.Namespace) -> None:
+    check()
+    if up_recreates_sponsord(args.rest):
+        guard_sponsord(args, "recreate")
+    compose("up", "-d", *args.rest)
+
+
+# The configs a service reads only at start, which nothing but these checks guards
+# (the iroh servers ignore unknown keys and fall back to built-in defaults, public
+# ones included): `restart` is how an edit is applied, so it runs them first.
+CONFIG_CHECKS: dict[str, Callable[[], list[str]]] = {
+    "iroh-relay": lambda: relay_problems(RELAY_TOML),
+    "iroh-dns-server": lambda: dns_problems(DNS_TOML),
+}
+
+
+def cmd_stopping(args: argparse.Namespace) -> None:
+    require_root()
+    project = Project.load()
+    if args.command == "restart":
+        names = [a for a in args.rest if not a.startswith("-")]
+        found = [
+            p
+            for svc, checks in CONFIG_CHECKS.items()
+            if svc in project.services and (not names or svc in names or not set(names) <= SERVICES)
+            for p in checks()
+        ]
+        if found:
+            raise Refused(
+                "refusing to restart with a config the service would misread:\n" + "\n".join(f"  - {p}" for p in found)
+            )
+    if touches_sponsord(args.command, args.rest):
+        guard_sponsord(args, "stop" if args.command == "down" else args.command)
+    compose(args.command, *args.rest)
+
+
+def cmd_config(args: argparse.Namespace) -> None:
+    """`docker compose config`, with every environment value that came from an env
+    file replaced by <redacted>: Compose merges env_file into `environment:`, so
+    the plain command prints DECDN_RPC_URL and the rest in clear. A value written
+    inline in compose.yaml (listeners, secret paths) is kept. --services,
+    --profiles, --images, --volumes and --networks list names only and pass
+    through; any other argument is refused (--environment would print it all)."""
+    require_root()
+    Project.load()
+    listing = {"--services", "--profiles", "--images", "--volumes", "--networks"}
+    if args.rest and set(args.rest) <= listing:
+        os.execvpe("docker", compose_argv("config", *args.rest), compose_env())
+    if args.rest:
+        raise Refused("config takes no other arguments here: it prints the redacted model as JSON")
+    full = json.loads(compose("config", "--format", "json", capture=True).stdout)
+    no_files = {k: "/dev/null" for k in DEFAULT_ENV_FILES}
+    inline = json.loads(run(compose_argv("config", "--format", "json"), capture=True, env=compose_env(no_files)).stdout)
+    for name, svc in full.get("services", {}).items():
+        keep = (inline.get("services", {}).get(name) or {}).get("environment") or {}
+        env = svc.get("environment") or {}
+        for k in env:
+            if keep.get(k) != env[k]:
+                env[k] = "<redacted>"
+    say(json.dumps(full, indent=2))
+
+
+def cmd_passthrough(args: argparse.Namespace) -> None:
+    require_root()
+    Project.load()
+    os.execvpe("docker", compose_argv(args.command, *args.rest), compose_env())
+
+
+def cmd_cli(args: argparse.Namespace) -> None:
+    require_root()
+    project = Project.load()
+    # The node's own config and keystore password, unless the command names its own:
+    # without them the CLI looks under $HOME/.decdn and finds no identity.
+    cli_args = list(args.rest)
+    mounts = origin_mounts(project)
+    node_env = node_environment(project)
+    with tempfile.TemporaryDirectory(prefix="decdn-cli.") as tmp:
+        if "--config" not in cli_args and NODE_TOML.exists():
+            config = NODE_TOML
+            # On-chain commands read blockchain.rpc_url, which still names the public
+            # endpoint `config init` wrote. A copy that says "${DECDN_RPC_URL}" (the
+            # loader expands it) gives them yours, from decdn.env: the URL never
+            # reaches an argv, a sudo log or shell history. The copy holds no secret.
+            if node_env.get("DECDN_RPC_URL"):
+                copy = Path(tmp) / "node.toml"
+                copy.write_text(with_env_rpc_url(NODE_TOML.read_text()))
+                os.chmod(tmp, 0o755)
+                copy.chmod(0o644)
+                mounts.append(f"{copy}:{CLI_CONFIG}:ro")
+                config = Path(CLI_CONFIG)
+            cli_args = ["--config", str(config), *cli_args]
+        cp = decdn_cli(
+            project,
+            cli_args,
+            cli_env={"DECDN_KEYSTORE_PASSWORD_FILE": str(NODE_PASSWORD)},
+            network="host",
+            tty=True,
+            check=False,
+            extra_mounts=mounts,
+            env_values=node_env,
+        )
+    sys.exit(cp.returncode)
+
+
+CLI_CONFIG = "/run/decdn-cli/node.toml"
+
+
+def with_env_rpc_url(text: str) -> str:
+    """node.toml with [blockchain] rpc_url = "${DECDN_RPC_URL}"."""
+    line = 'rpc_url = "${DECDN_RPC_URL}"'
+    m = re.search(r"(?ms)^\[blockchain\]\n(.*?)(?=^\[|\Z)", text)
+    if not m:
+        return text.rstrip("\n") + f"\n\n[blockchain]\n{line}\n"
+    body = m[1]
+    if re.search(r"(?m)^rpc_url\s*=", body):
+        body = re.sub(r"(?m)^rpc_url\s*=.*$", line, body, count=1)
+    else:
+        body = f"{line}\n{body}"
+    return text[: m.start(1)] + body + text[m.end(1) :]
+
+
+def tls_healthz(domain: str, addr: str = "127.0.0.1") -> str:
+    """GET https://<domain>/healthz from the listener on <addr>:443 (Caddy, the
+    relay), against the host's trust store: proves the certificate, not just the
+    listener."""
+    ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    try:
+        with (
+            socket.create_connection((addr, 443), timeout=5) as raw,
+            ctx.wrap_socket(raw, server_hostname=domain) as s,
+        ):
+            s.sendall(f"GET /healthz HTTP/1.1\r\nHost: {domain}\r\nConnection: close\r\n\r\n".encode())
+            head = s.recv(4096).decode("latin-1").split("\r\n", 1)[0]
+            return "ok" if head.split()[1:2] == ["200"] else head or "no answer"
+    except (OSError, ssl.SSLError) as e:
+        return str(e)
+
+
+def cmd_health(args: argparse.Namespace) -> None:
+    require_root()
+    project = Project.load()
+    bad = 0
+
+    def report(name: str, ok: bool, detail: str, warn_only: bool = False) -> None:
+        nonlocal bad
+        bad += not ok and not warn_only
+        say(f"{'ok  ' if ok else 'warn' if warn_only else 'FAIL'} {name}: {detail}")
+
+    svcs = project.services
+    for svc in sorted(svcs):
+        if not container_id(svc):
+            report(svc, False, "not running (`decdn-compose ps`, `decdn-compose logs " + svc + "`)")
+            svcs = svcs - {svc}
+    if "decdn-node" in svcs:
+        cp = compose(
+            "exec", "-T", "decdn-node", "decdn", "node", "health", "--config", str(NODE_TOML), check=False, capture=True
+        )
+        report("decdn-node admin RPC", cp.returncode == 0, " ".join(cp.stdout.split()) or "no answer")
+        status, _ = fetch("http://127.0.0.1:9090/metrics")
+        report("decdn-node metrics", status == 200, f"http://127.0.0.1:9090/metrics status {status}")
+    # Each at the bind its running container was started with, not a constant.
+    for svc, bind_key in (("sponsord", "SPONSORD_BIND"), ("sponsord-onramp", "ONRAMP_BIND")):
+        if svc in svcs:
+            url = loopback_url(container_env(container_id(svc)).get(bind_key, ""), "/healthz")
+            if url is None:
+                report(svc, False, f"its {bind_key} is not a loopback host:port")
+                continue
+            status, body = fetch(url)
+            report(svc, status == 200, f"{url} {status} {body.strip()}")
+    if "sponsord" in svcs:
+        url = sponsord_metrics_url(container_id("sponsord"))
+        reason = hold_state(*fetch(url), url) if url else "its SPONSORD_BIND is not a loopback host:port"
+        report("sponsord top-up hold", reason is None, reason or "none")
+    if "caddy" in svcs:
+        dom = project.env.get("SPONSORD_ONRAMP_DOMAIN", "")
+        res = tls_healthz(dom)
+        report("caddy", res == "ok", f"https://{dom}/healthz: {res}")
+    if "iroh-relay" in svcs:
+        for name, ok, detail, warn_only in relay_health(RELAY_TOML):
+            report(name, ok, detail, warn_only)
+    if "iroh-dns-server" in svcs:
+        pinned = not project.env.get("IROH_DNS_SERVER_IMAGE_DIGEST")
+        for name, ok, detail, warn_only in dns_health(DNS_TOML, pinned):
+            report(name, ok, detail, warn_only)
+    if "alloy" in svcs:
+        status, body = fetch(ALLOY_READY)
+        report("alloy", status == 200, f"{ALLOY_READY} {status} {body.strip()}")
+        status, body = fetch(ALLOY_COMPONENTS)
+        sick = unhealthy_components(body) if status == 200 else ["(no answer)"]
+        report("alloy components", not sick, ", ".join(sick) or "all healthy")
+        status, body = fetch(ALLOY_METRICS)
+        failed = failed_sends(body) if status == 200 else {"(no answer from /metrics)": 1.0}
+        report(
+            "alloy delivery",
+            not failed,
+            ", ".join(f"{k} {v:g}" for k, v in failed.items()) + " (check GC_API_TOKEN and the endpoints)"
+            if failed
+            else "nothing dropped",
+            True,
+        )
+    sys.exit(1 if bad else 0)
+
+
+def failed_sends(body: str) -> dict[str, float]:
+    """Alloy's dropped/failed-send counters that are above 0, summed per metric."""
+    out: dict[str, float] = {}
+    for line in body.splitlines():
+        m = ALLOY_FAILED_SENDS.match(line)
+        if m:
+            try:
+                out[m[1]] = out.get(m[1], 0.0) + float(m[2])
+            except ValueError:
+                continue
+    return {k: v for k, v in out.items() if v > 0}
+
+
+def dig_soa(origin: str, addr: str, tcp: bool) -> str:
+    """The first field (the mname) of <origin>'s SOA from <addr>:53, or the error."""
+    cp = run(
+        ["dig", "+norecurse", "+time=2", "+tries=1", "+short", "+tcp" if tcp else "+notcp", "SOA", origin, f"@{addr}"],
+        check=False,
+        capture=True,
+    )
+    first = (cp.stdout or "").split()
+    return first[0].lower() if cp.returncode == 0 and first else (cp.stdout or "").strip() or "no answer"
+
+
+def dns_health(path: Path, pinned: bool) -> list[tuple[str, bool, str, bool]]:
+    """The role's gate and certificate check: loopback /healthz reporting the
+    pinned version (the binary has no --version), each origin's SOA over udp and
+    tcp at the DNS bind address (loopback for a wildcard), then
+    https://<hostname>/healthz against the host trust store (warn-only on staging)."""
+    cfg, err = load_toml(path)
+    if err:
+        return [("iroh-dns-server", False, err, False)]
+
+    def section(name: str) -> dict:
+        v = cfg.get(name)
+        return v if isinstance(v, dict) else {}
+
+    https, dns = section("https"), section("dns")
+    out = []
+    url = "http://127.0.0.1:9118/healthz"
+    status, body = fetch(url)
+    try:
+        version = json.loads(body).get("version", "?") if status == 200 else "?"
+    except (ValueError, AttributeError):
+        version = "?"
+    ok = status == 200 and (version == DNS_VERSION or not pinned)
+    out.append(("iroh-dns-server", ok, f"{url} {status}, version {version} (compose.yaml pins {DNS_VERSION})", False))
+
+    bind = str(dns.get("bind_addr", ""))
+    addr = "127.0.0.1" if bind in ("::", "0.0.0.0") else bind
+    soa = dns.get("default_soa")
+    mname = soa.split()[0].lower().rstrip(".") + "." if isinstance(soa, str) and soa.split() else "?"
+    origins = [o for o in dns.get("origins", []) if isinstance(o, str) and o != "."]
+    if shutil.which("dig") is None:
+        out.append(
+            ("iroh-dns-server DNS", False, "`dig` is not installed (dnsutils/bind9-dnsutils): not checked", True)
+        )
+    else:
+        for origin in origins:
+            for tcp in (False, True):
+                got = dig_soa(origin, addr, tcp)
+                out.append(
+                    (f"iroh-dns-server SOA {origin} {'tcp' if tcp else 'udp'}", got == mname, f"@{addr}: {got}", False)
+                )
+    domains = https.get("domains")
+    hostname = str(domains[0]) if isinstance(domains, list) and domains else ""
+    hbind = str(https.get("bind_addr", "::"))
+    haddr = "127.0.0.1" if hbind in ("::", "0.0.0.0") else hbind
+    res = tls_healthz(hostname, haddr)
+    staging = https.get("letsencrypt_prod") is not True
+    detail = f"https://{hostname}/healthz via {haddr}: {res}"
+    if staging and res != "ok":
+        detail += " (letsencrypt_prod = false: Let's Encrypt's staging certificates are never trusted)"
+    out.append(("iroh-dns-server certificate", res == "ok", detail, staging))
+    return out
+
+
+def relay_health(path: Path) -> list[tuple[str, bool, str, bool]]:
+    """The role's gate and certificate check: loopback /metrics with the relay's
+    series, then https://<hostname>/healthz on the relay's own address (loopback
+    for a wildcard bind) against the host trust store. A staging certificate is
+    never trusted, so with prod_tls = false that check only warns."""
+    cfg, err = load_toml(path)
+    if err:
+        return [("iroh-relay", False, err, False)]
+    tls = cfg.get("tls") if isinstance(cfg.get("tls"), dict) else {}
+    out = []
+    metrics = socket_addr(cfg.get("metrics_bind_addr"))
+    if metrics is None:
+        out.append(("iroh-relay metrics", False, "metrics_bind_addr is not an address", False))
+    else:
+        host = f"[{metrics[0]}]" if metrics[0].version == 6 else str(metrics[0])
+        url = f"http://{host}:{metrics[1]}/metrics"
+        status, body = fetch(url)
+        has = RELAY_GATE_METRIC in body
+        out.append(
+            (
+                "iroh-relay metrics",
+                status == 200 and has,
+                f"{url} {status}{'' if has else f', no {RELAY_GATE_METRIC}'}",
+                False,
+            )
+        )
+    https = socket_addr(tls.get("https_bind_addr"))
+    addr = "127.0.0.1" if https is None or https[0].is_unspecified else str(https[0])
+    hostname = str(tls.get("hostname", ""))
+    res = tls_healthz(hostname, addr)
+    staging = tls.get("prod_tls") is False
+    detail = f"https://{hostname}/healthz via {addr}: {res}"
+    if staging and res != "ok":
+        detail += " (prod_tls = false: Let's Encrypt's staging certificates are never trusted)"
+    out.append(("iroh-relay certificate", res == "ok", detail, staging))
+    return out
+
+
+def unhealthy_components(body: str) -> list[str]:
+    """The components Alloy's UI API reports as anything but healthy: a config
+    that loads can still fail at run time (an OTTL statement, an unreadable
+    journal). A remote-write error is not one: read Alloy's log for those."""
+    try:
+        components = json.loads(body)
+    except ValueError:
+        return ["(unreadable component list)"]
+    return sorted(
+        f"{c.get('localID', '?')} ({(c.get('health') or {}).get('message', '')})".replace(" ()", "")
+        for c in components
+        if (c.get("health") or {}).get("state") != "healthy"
+    )
+
+
+def backup_paths(project: Project) -> list[Path]:
+    svcs = project.services
+    paths: list[Path] = []
+    if "decdn-node" in svcs:
+        paths += [NODE_SECRET, NODE_KEYSTORE, NODE_PASSWORD, NODE_TOML, project.env_file("DECDN_ENV_FILE")]
+    if "sponsord" in svcs:
+        paths += [
+            SD_KEYSTORE,
+            SD_PASSWORD,
+            SD_TOKEN,
+            project.env_file("SPONSORD_SECRET_ENV_FILE"),
+            project.env_file("SPONSORD_ENV_FILE"),
+        ]
+    if "sponsord-onramp" in svcs:
+        paths += [SD_TURNSTILE, project.env_file("SPONSORD_ONRAMP_ENV_FILE")]
+    if "iroh-relay" in svcs:
+        # The config only: the relay generates its ACME account and certificate
+        # itself and gets them again on a new host (the Ansible path backs up none).
+        paths += [RELAY_TOML]
+    if "iroh-dns-server" in svcs:
+        # The config only, likewise: nodes republish their records every 5 minutes.
+        paths += [DNS_TOML]
+    if "alloy" in svcs:
+        paths += [project.env_file("ALLOY_ENV_FILE")]
+    return paths
+
+
+def cmd_backup(args: argparse.Namespace) -> None:
+    """The active profiles' keys, secrets, node.toml and env files, encrypted on
+    this host to age recipients: nothing readable ever touches the disk. Every
+    file the profiles need must be there: a backup missing a key is found out
+    only at restore time."""
+    require_root()
+    project = Project.load()
+    if shutil.which("age") is None:
+        raise Refused("age is not installed (apt install age)")
+    paths = backup_paths(project)
+    if not paths:
+        raise Refused("nothing to back up for COMPOSE_PROFILES=" + ",".join(project.profiles))
+
+    # lstat, not is_file(): tar archives a symlink as the link, so a credential
+    # replaced by one would back up nothing restorable.
+    def regular(p: Path) -> bool:
+        try:
+            return stat.S_ISREG(p.lstat().st_mode)
+        except FileNotFoundError:
+            return False
+
+    missing = [str(p) for p in paths if not regular(p)]
+    if missing:
+        raise Refused(
+            f"not backing up an incomplete set: {', '.join(missing)} missing or not a regular file "
+            "(a symlink would be archived as the link) (`decdn-compose check`)"
+        )
+    out = Path(args.output or f"decdn-{socket.gethostname()}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}.tar.age")
+    if out.exists():
+        raise Refused(f"{out} exists")
+    recipients = [a for r in args.recipient for a in ("-r", r)]
+    old = os.umask(0o077)
+    try:
+        tar = subprocess.Popen(
+            ["tar", "-C", "/", "--numeric-owner", "-czf", "-", *[str(p.relative_to("/")) for p in paths]],
+            stdout=subprocess.PIPE,
+        )
+        age = subprocess.run(["age", *recipients, "-o", str(out)], stdin=tar.stdout)
+        tar.stdout.close()  # type: ignore[union-attr]
+        if tar.wait() != 0 or age.returncode != 0:
+            out.unlink(missing_ok=True)
+            raise Refused("backup failed; no archive was left behind")
+    finally:
+        os.umask(old)
+    say(f"wrote {out} ({len(paths)} files): {', '.join(map(str, paths))}")
+    say(f"test it: age -d -i <key> {out} | tar -tz")
+
+
+# --- main ------------------------------------------------------------------------
+
+
+def parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        prog="decdn-compose",
+        description=__doc__.split("\n\n")[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Any other argument after a service command goes to docker compose.",
+    )
+    ap.add_argument(
+        "--ignore-topup-hold",
+        action="store_true",
+        help="stop or recreate sponsord even while it holds an unconfirmed pool top-up",
+    )
+    sub = ap.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("init", help="set up the host for one or more profiles")
+    p.add_argument("profiles", nargs="+", metavar="PROFILE", help=", ".join(PROFILES))
+    p.add_argument(
+        "--region", help="node/origin: the node's ISO 3166-1 alpha-2 region, e.g. DE (alloy: its region label)"
+    )
+    p.add_argument(
+        "--chain",
+        default="arbitrum-sepolia",
+        help="the chain: `decdn config init --chain`, and the sponsor's contract addresses",
+    )
+    p.add_argument("--origin", help="origin: the backend, https://…, s3://bucket or file:///host/path")
+    p.add_argument("--domain", help="onramp/caddy: the onramp's public host name")
+    p.add_argument(
+        "--generate-treasury", action="store_true", help="sponsord/onramp: generate the treasury wallet on this host"
+    )
+    p.add_argument(
+        "--hostname",
+        help="relay: its public DNS name (A/AAAA here); dns: the zone delegated to this host, also its https name",
+    )
+    p.add_argument("--contact", help="relay/dns: the Let's Encrypt account's email address")
+    p.add_argument(
+        "--access",
+        choices=("allowlist", "everyone"),
+        default="allowlist",
+        help="relay: who may relay through it (default allowlist: fill in your nodes' IDs)",
+    )
+    p.add_argument(
+        "--staging",
+        action="store_true",
+        help="relay/dns: Let's Encrypt's staging CA, for a trial (untrusted certificates)",
+    )
+    p.add_argument(
+        "--dns-bind", help="dns: the one IPv4 address DNS (udp+tcp/53) binds (default: the default route's source)"
+    )
+    p.add_argument("--public-ipv4", help="dns: the public IPv4 the parent zone's glue names, behind 1:1 NAT (rr_a)")
+    p.set_defaults(func=init)
+
+    sub.add_parser("check", help="preflight: files, settings, ports, the node's config").set_defaults(func=check)
+    sub.add_parser("health", help="probe each running service").set_defaults(func=cmd_health)
+
+    for name, func, hlp in (
+        ("up", cmd_up, "preflight, then docker compose up -d"),
+        ("stop", cmd_stopping, "docker compose stop, guarded"),
+        ("restart", cmd_stopping, "docker compose restart, guarded"),
+        ("down", cmd_stopping, "docker compose down, guarded"),
+        ("pull", cmd_passthrough, "docker compose pull"),
+        ("logs", cmd_passthrough, "docker compose logs"),
+        ("ps", cmd_passthrough, "docker compose ps"),
+        ("exec", cmd_passthrough, "docker compose exec"),
+        ("config", cmd_config, "docker compose config, env-file values redacted"),
+        ("cli", cmd_cli, "run the decdn CLI from the node image (decdn-compose cli node status)"),
+    ):
+        p = sub.add_parser(name, help=hlp, prefix_chars="+")
+        p.add_argument("rest", nargs=argparse.REMAINDER)
+        p.set_defaults(func=func)
+
+    p = sub.add_parser("backup", help="age-encrypted archive of the active profiles' keys and secrets")
+    p.add_argument("-r", "--recipient", action="append", required=True, help="an age recipient (repeatable)")
+    p.add_argument("-o", "--output", help="the archive (default decdn-<host>-<time>.tar.age)")
+    p.set_defaults(func=cmd_backup)
+    return ap
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        args.func(args)
+    except Refused as e:
+        print(f"decdn-compose: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -68,8 +68,9 @@ applies to a backup that succeeded.
 age -d -i ~/.config/decdn/backup-age.key ansible/backups/<host>/<file>.tar.age | tar -tz
 ```
 
-Without Ansible (Compose or a hand-built host), the same archive is one command on
-the node:
+Without Ansible, the same archive is one command on the node (on Compose,
+`sudo compose/decdn-compose backup -r age1…` writes it, adding `node.toml` and the
+env files):
 
 ```bash
 sudo tar -C / --numeric-owner -czf - var/lib/decdn/node.secret var/lib/decdn/keystore.json \
@@ -191,9 +192,11 @@ Do not use `decdn node drain` to take a systemd-managed node down: the unit is
 and need the RPC endpoint. **They do not read `DECDN_RPC_URL`** from the environment,
 unlike the daemon: they take `--rpc-url`, or `blockchain.rpc_url` from `node.toml`.
 The Ansible role leaves `rpc_url` out of `node.toml` on purpose (it may embed an API
-key), and on Compose `config init` wrote the public endpoint there. So pass it
-explicitly. This helper runs the CLI as `decdn` with the unit's own environment file
-and hands the URL over as `--rpc-url`:
+key), and on Compose `config init` wrote the public endpoint there. On Compose, run
+them as `sudo compose/decdn-compose cli node bond …`: it hands the CLI a `node.toml`
+whose `rpc_url` reads `DECDN_RPC_URL` from `decdn.env`, so the URL never reaches a
+command line. Elsewhere, pass it explicitly. This helper runs the CLI as `decdn` with
+the unit's own environment file and hands the URL over as `--rpc-url`:
 
 ```bash
 decdn_chain() {
@@ -350,10 +353,11 @@ and certificate, which a new host re-issues for itself.
 
 - **Compose** ([`compose/`](../compose/README.md)) uses the same host paths
   (`/var/lib/decdn`, `/etc/decdn`), so the manual backup command and the restore steps
-  above apply unchanged; stop the node with
-  `sudo docker compose -f compose/compose.yaml stop decdn-node`.
-  sponsord's Compose layout uses `/etc/sponsord` too; its README shows the manual
-  backup and the top-up-hold check before a restart.
+  above apply unchanged. `sudo compose/decdn-compose backup -r age1…` takes the
+  identity (and, on a sponsor host, the treasury and the other secrets under
+  `/etc/sponsord`) in one archive; stop the node with
+  `sudo compose/decdn-compose stop decdn-node`. The wrapper refuses to stop or
+  recreate a sponsord that holds an unconfirmed pool top-up, as the Ansible role does.
 - **Helm**: the identity lives in the operator-provisioned `existingSecret`, which you
   created off-cluster and should already hold elsewhere. The daemon's state is on the
   PVC; snapshot it with your storage's `VolumeSnapshot` support after scaling the
