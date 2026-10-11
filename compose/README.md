@@ -110,8 +110,10 @@ release's signed digest file; [Operate](#operate) says how to take a newer one.
 5. **Stake and register** (on-chain onboarding, ADR 019 Phase 2) with `decdn setup`,
    described in
    [`roles/decdn_node/README.md` § On-chain onboarding](../ansible/roles/decdn_node/README.md#on-chain-onboarding).
-   Run `sudo compose/decdn-compose cli setup`. `node.toml` still names the public RPC
-   `config init` wrote, so `cli` hands the CLI a copy whose `rpc_url` reads your
+   Find the node's wallet with `sudo compose/decdn-compose cli whoami` and fund it, then
+   run `sudo compose/decdn-compose cli setup --mbps 100 --region DE --dry-run`, and
+   again without `--dry-run` (`--mbps` and `--region` are required). `node.toml` still
+   names the public RPC `config init` wrote, so `cli` hands the CLI a copy whose `rpc_url` reads your
    endpoint from `decdn.env` (`"${DECDN_RPC_URL}"`, which the config loader
    expands): it never appears on a command line, in a sudo log or in shell history.
    The node serves paid traffic only after that.

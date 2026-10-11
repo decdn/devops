@@ -21,11 +21,11 @@ split along that line:
   door: `docs/publishers.md`.
 
 There are four deploy paths:
-**Ansible** (`ansible/`, VMs/bare metal, the primary path, also the `decdn.node` and
-`decdn.publisher` Galaxy collections), **cloud-init**
-(`cloud-init/`, one VM that runs the Ansible playbook on itself, no control machine),
-**Docker Compose** (`compose/`, a single Docker host) and a **Helm chart**
-(`charts/decdn-node/`, Kubernetes).
+**Ansible** (`ansible/`, VMs/bare metal and fleets, the only path besides cloud-init
+that hardens the host, also the `decdn.node` and `decdn.publisher` Galaxy collections),
+**cloud-init** (`cloud-init/`, one VM that runs the Ansible playbook on itself, no
+control machine), **Docker Compose** (`compose/`, a single Docker host, the recommended
+quickstart) and a **Helm chart** (`charts/decdn-node/`, Kubernetes).
 
 This repo is **infrastructure only**. It is *not* a source of truth for protocol or
 economic claims — those trace to the deCDN ADRs. If something here states a protocol fact

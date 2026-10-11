@@ -20,9 +20,9 @@ Four ways to deploy the node, cache or origin:
 
 | Path | For | Start here |
 |------|-----|------------|
+| **Docker Compose** (`compose/`), recommended | One host that already runs Docker. The quickest start, [below](#quickstart-docker-compose). Profiles for a cache node or an origin, the onboarding sponsor (`sponsord` + its onramp), an iroh relay, an iroh DNS server and Grafana Alloy, driven by the `decdn-compose` wrapper (set-up, preflight, guarded restarts). | [`compose/README.md`](compose/README.md) |
 | **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published as the `decdn.node` and `decdn.publisher` Galaxy collections. | [`ansible/README.md`](ansible/README.md) |
 | **cloud-init** (`cloud-init/`) | One VM, no control machine: paste the user-data into your provider's "create server" form. It runs the Ansible playbook on the host itself, hardening included. One template per kind of operator: a cache node, or a publisher's origin with the onboarding sponsor (`sponsord` + its onramp). | [`cloud-init/README.md`](cloud-init/README.md) |
-| **Docker Compose** (`compose/`) | One host that already runs Docker. Profiles for a cache node or an origin, the onboarding sponsor (`sponsord` + its onramp), an iroh relay, an iroh DNS server and Grafana Alloy, driven by the `decdn-compose` wrapper (set-up, preflight, guarded restarts). | [`compose/README.md`](compose/README.md) |
 | **Helm** (`charts/decdn-node/`) | Kubernetes, one release per node, cache or origin. | [`charts/decdn-node/README.md`](charts/decdn-node/README.md) |
 
 The iroh relay and DNS server a publisher may run deploy with Ansible or Compose.
@@ -60,24 +60,30 @@ On-chain stake and registration (ADR 019 Phase 2) is an **operator step** on eve
 path: the node serves paid traffic only after it. Upstream's `decdn setup` walks it
 end to end (with `--dry-run`); this repo stops at host prep and startup.
 
-## Quickstart (Ansible)
+## Quickstart (Docker Compose)
+
+On the host (a systemd distro with Docker, Compose v2.24+, Python 3.11+ and
+[`age`](https://github.com/FiloSottile/age)), from an account with sudo:
 
 ```bash
-cd ansible
-make deps                                          # vendor pinned Galaxy collections
-cp inventory/hosts-node.yml.example inventory/hosts.yml   # node operators; its host is decdn-node-1
-# publishers instead: cp inventory/hosts-publisher.yml.example inventory/hosts.yml  (host origin-1)
-HOST=decdn-node-1                                   # or origin-1
-$EDITOR inventory/hosts.yml                         # your hosts
-$EDITOR inventory/host_vars/$HOST/main.yml          # binaries, region (an origin: its backend); chain via decdn_network
-# RPC URL: provision 0600 /etc/decdn/decdn.env on the host (preferred), or secret.yml
-make check  LIMIT=$HOST ANSIBLE_ARGS='-u root'      # dry run; -u root only until the first converge
-make deploy LIMIT=$HOST ANSIBLE_ARGS='-u root'      # first converge creates your admin account
-make deploy LIMIT=$HOST                             # every run after that
+git clone https://github.com/decdn/devops.git && cd devops
+sudo compose/decdn-compose init node --region DE      # ISO 3166-1 alpha-2; account, keys, node.toml, decdn.env
+# publishers: sudo compose/decdn-compose init origin --region DE --origin https://store.example.org/bucket
+sudo compose/decdn-compose backup -r age1…            # a key from age-keygen off the host; copy the .tar.age off too
+sudoedit /etc/decdn/decdn.env                         # DECDN_RPC_URL=https://…
+# open udp/4433 inbound: host firewall and your provider's security group
+sudo compose/decdn-compose up                         # preflight, then docker compose up -d
+sudo compose/decdn-compose health
+sudo compose/decdn-compose cli whoami                 # the node's wallet: fund it before setup
+sudo compose/decdn-compose cli setup --mbps 100 --region DE --dry-run
+sudo compose/decdn-compose cli setup --mbps 100 --region DE   # stake and register (ADR 019 Phase 2)
 ```
 
-The full flow (bootstrap user, keystore, secrets, fleets in a private inventory) is in
-[`ansible/README.md`](ansible/README.md). cloud-init, Compose and Helm have their own quickstarts.
+Compose installs the node, not the host around it: firewall, SSH and patching stay
+yours. The full flow (origins, the sponsor, relays, DNS, Alloy, upgrades) is in
+[`compose/README.md`](compose/README.md). For a fleet, or a host you want hardened from
+scratch, use [Ansible](ansible/README.md) (or [cloud-init](cloud-init/README.md) for
+one VM); on Kubernetes, the [Helm chart](charts/decdn-node/README.md).
 
 ## Security model
 
@@ -102,9 +108,9 @@ This is the canonical statement; the per-path READMEs add only what is specific 
   iroh DNS server (Ansible and Compose): its own TLS on tcp/443 and DNS on udp/53 + tcp/53, with its
   metrics on loopback. On Kubernetes, metrics bind `0.0.0.0` in the pod only behind a ClusterIP
   Service and a NetworkPolicy.
-- **Default-deny inbound** (Ansible's `baseline`, nftables). SSH is the only
+- **Default-deny inbound** (Ansible's `baseline`, nftables; on Compose, your own firewall). SSH is the only
   universally open port; extra public ports are declared via `baseline_extra_inbound`.
-- **DevSec host hardening** (`os_hardening` + `ssh_hardening`: key-only SSH, no root
+- **DevSec host hardening** (Ansible and cloud-init; `os_hardening` + `ssh_hardening`: key-only SSH, no root
   login, kernel/sysctl/PAM hardening), applied last, after the admin key is in place, so
   you can't lock yourself out.
 - **Pinned supply chain.** Release tarballs are GPG-verified; images, CI actions and
