@@ -58,15 +58,17 @@ Initial chart (pre-1.0; the values shape may still change).
 
 - `origin.volume` (+ `origin.subPath`): an fs origin's content, from any one
   Kubernetes volume source, mounted read-only at `/srv/decdn-origin` (the Compose
-  path) in the daemon container only, with `readOnly` also forced on the source (a
-  PVC, CSI, NFS, …), so the kubelet does not re-group it for `fsGroup`. An fs
+  path) in the daemon container only, with `readOnly` also forced on the source
+  wherever it has the field (PVC, CSI, disk and network-share sources), so the
+  kubelet does not re-group a PVC or CSI volume for `fsGroup`; `hostPath`,
+  `emptyDir`, `image` and `ephemeral` pass through, and other sources are refused. An fs
   origin's `path` must lie there; the render fails on an fs origin without a path
   or the volume, on a volume no fs origin reads, and on `origin.subPath` without
   a volume. Before, the content had to sit on the data PVC beside the node
   identity, writable by the daemon.
 
-- A headless governing Service (`<fullname>-headless`, no ports) for the StatefulSet,
-  whose `serviceName` pointed at the metrics Service.
+- A headless governing Service (`<fullname>-headless`, no ports) for the StatefulSet;
+  `serviceName` used to name the metrics Service.
 - A render-time port-layout check, as upstream's: `quic.port`, `metrics.port` and
   `config.observability.admin_port` (9191 unless set; 0 disables it; a number) must
   differ, or the daemon refuses to start.
@@ -93,8 +95,9 @@ Initial chart (pre-1.0; the values shape may still change).
 - README and install notes: the node cannot see the public address the chart
   exposes (a pod sees its pod IP, and iroh observes the cluster's egress address,
   not the load balancer's), so registry readers learn it only from the node's
-  on-chain `multiaddrs`. The notes print `decdn setup --multiaddr …` (not yet
-  registered) and `decdn node update-multiaddrs --multiaddr …` (registered) for the
+  on-chain `multiaddrs`. The notes print `decdn setup --mbps … --region …
+  --multiaddr … --dry-run` (not yet registered) and `decdn node update-multiaddrs
+  --multiaddr …` (registered; the multiaddr cooldown runs from registration) for the
   LoadBalancer, NodePort or hostPort address, name the pod's own Kubernetes node
   where `externalTrafficPolicy: Local` or hostPort requires it, say when no public
   address is exposed, and warn when hostPort and a public Service are both enabled.
@@ -133,4 +136,5 @@ Initial chart (pre-1.0; the values shape may still change).
   `appArmorProfile` at either level, a container `runAsGroup: 0`, `fsGroup: 0`, a
   supplemental group 0, `procMount: Unmasked`, a seccomp profile removed at both
   levels (the kubelet then runs Unconfined), a `runAsGroup` removed at both levels,
-  and the legacy AppArmor/seccomp pod annotations, which Kubernetes still honours.
+  and the legacy AppArmor/seccomp pod annotations, which the API server still
+  copies into the `securityContext` fields.

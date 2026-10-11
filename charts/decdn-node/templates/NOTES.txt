@@ -22,6 +22,7 @@ deCDN node {{ include "decdn-node.fullname" . }} (namespace {{ .Release.Namespac
 {{- if .Values.quic.hostPort.enabled }}
 {{- $addrs = append $addrs (printf "/ip4/%s/udp/%d/quic-v1" $podNode (int .Values.quic.hostPort.port)) }}
 {{- end }}
+{{- $region := dig "identity" "region" "<CC>" (.Values.config | default dict) }}
 {{- $flags := "" }}
 {{- range $addrs }}
 {{- $flags = printf "%s --multiaddr \"%s\"" $flags . }}
@@ -29,47 +30,56 @@ deCDN node {{ include "decdn-node.fullname" . }} (namespace {{ .Release.Namespac
 {{- if $addrs }}
 
 - Register the node's public QUIC address on-chain (ADR 019 Phase 2 is a manual
-  operator step). Inside the pod the node sees only its pod IP, so peers learn
-  the address only from its registry multiaddrs; without them, inbound goes
-  through hole-punching and relays. Off-cluster, against the same keystore:
+  operator step). Inside the pod the node sees only its pod IP, so peers that
+  read the registry learn the address from its on-chain multiaddrs; without
+  them, inbound goes through hole-punching and relays. Off-cluster, against the
+  same keystore (add your --config, --rpc-url and --keystore-password-file: the
+  on-chain commands do not read DECDN_RPC_URL; docs/lifecycle.md, "Running
+  on-chain commands"):
 {{- if eq $type "LoadBalancer" }}
 
      LB_IP=$(kubectl -n {{ $ns }} get svc {{ $name }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+     : "${LB_IP:?no load-balancer IP yet: re-run once kubectl get svc shows one}"
 {{- else if and (eq $type "NodePort") (not .Values.service.nodePort) }}
 
      NODE_PORT=$(kubectl -n {{ $ns }} get svc {{ $name }} -o jsonpath='{.spec.ports[0].nodePort}')
 {{- end }}
 
-     # Not registered yet: stake and register with the address.
-     decdn setup{{ $flags }}
-     # Already registered: replace the whole registered set (the node must be
-     # active, and a cooldown applies between updates).
+     # Not registered yet: stake and register with the address (check the
+     # plan with --dry-run, then run it again without).
+     decdn setup --mbps <MBPS> --region {{ $region }}{{ $flags }} --dry-run
+     # Already registered: replace the whole registered set. The node must be
+     # active, and a governance-set cooldown (at most a day) runs from
+     # registration and from each update.
      decdn node update-multiaddrs{{ $flags }}
 
   Without --multiaddr, `decdn setup` registers the public address of the
-  machine it runs on (if it has one), which is not this node's.
+  machine it runs on (if it has one), which is not this node's, and the
+  cooldown then delays the correction: get the address right the first time.
 {{- if eq $type "LoadBalancer" }}
-  The command above reads an IPv4 ingress: write /ip6/ for an IPv6 one. A load
-  balancer that reports only a hostname needs its static IPs instead: a
+
+  The LB_IP lookup above reads an IPv4 ingress: write /ip6/ for an IPv6 one. A
+  load balancer that reports only a hostname needs its static IPs instead: a
   multiaddr is /ip4 or /ip6 only.
 {{- end }}
 {{- if or $nodePortLocal .Values.quic.hostPort.enabled }}
-  The "{{ $podNode }}" is the IP of the k8s node
-  the pod runs on{{ if $nodePortLocal }} (with externalTrafficPolicy Local, no other node
-  forwards the NodePort){{ end }}. Pin the pod there with nodeSelector, or the
-  address moves when the pod is rescheduled.
+
+  Replace {{ $podNode }} with the public IP of the k8s node the pod
+  runs on{{ if $nodePortLocal }} (with externalTrafficPolicy Local, no other node forwards the
+  NodePort){{ end }}. Pin the pod there with nodeSelector, or the address moves
+  when the pod is rescheduled.
 {{- end }}
 {{- else }}
 
-- No public QUIC address: the public Service is {{ ternary "ClusterIP" "disabled" .Values.service.enabled }} and quic.hostPort is
-  off, so inbound reaches the node only by hole-punching and relays. For a
-  public address, set service.type to LoadBalancer or NodePort, or enable
-  quic.hostPort.
+- No public QUIC address: {{ ternary "the QUIC Service is ClusterIP (cluster-internal)" "the QUIC Service is disabled" .Values.service.enabled }}
+  and quic.hostPort is off, so inbound reaches the node only by hole-punching
+  and relays. For a public address, set service.enabled=true with service.type
+  LoadBalancer or NodePort, or enable quic.hostPort.
 
 - On-chain stake/registration (ADR 019 Phase 2) is a manual operator step: run
-  `decdn setup` off-cluster against the same keystore. Without --multiaddr it
-  registers the public address of the machine it runs on (if it has one), which
-  is not this node's.
+  `decdn setup --mbps <MBPS> --region {{ $region }}` off-cluster against the same
+  keystore. Without --multiaddr it registers the public address of the machine
+  it runs on (if it has one), which is not this node's.
 {{- end }}
 {{- if and (has $type (list "LoadBalancer" "NodePort")) .Values.quic.hostPort.enabled }}
 

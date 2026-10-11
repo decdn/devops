@@ -210,7 +210,8 @@ either (such as `https://user:pass@…` in an origin URL). Put secrets in the en
 its StatefulSet selector and Services), `podAnnotations` cannot re-set `checksum/config`
 or carry the legacy AppArmor/seccomp annotations
 (`container.apparmor.security.beta.kubernetes.io/*`, `seccomp.security.alpha.kubernetes.io/*`,
-`container.seccomp.security.alpha.kubernetes.io/*`, which Kubernetes still honours), and
+`container.seccomp.security.alpha.kubernetes.io/*`, which the API server still copies
+into the `securityContext` fields), and
 `podSecurityContext` / `securityContext` can be changed (for example, a different
 non-root uid) but the render fails if the result runs as root (uid, gid or `fsGroup` 0,
 supplemental group 0, or no `runAsGroup` at either level, which leaves a uid the image
@@ -218,13 +219,14 @@ has no passwd entry for in gid 0), allows privilege escalation or privileged mod
 the root filesystem writable, adds capabilities, drops fewer than `ALL`, unmasks `/proc`
 (`procMount: Unmasked`), sets a seccomp or AppArmor profile to `Unconfined`, or has no
 `RuntimeDefault`/`Localhost` seccomp profile at either level (the kubelet's default is
-`Unconfined`). Both levels are checked, since a container's `securityContext` overrides
+`Unconfined` unless it runs with `seccompDefault: true`). Both levels are checked, since a container's `securityContext` overrides
 the pod's.
 
-**Name length.** The full name (`fullnameOverride`, else the release name, plus
-`-decdn-node` unless it already contains it) must be 52 characters or fewer: Kubernetes
-labels each StatefulSet pod with `<name>-<revision hash>`, at most 63 characters, and
-could not create the pod.
+**Name length.** The full name (`fullnameOverride`, else
+`<release>-<nameOverride or decdn-node>`, or just the release name when it already
+contains that name) must be 52 characters or fewer: each StatefulSet pod gets a
+`controller-revision-hash` label of `<name>-<hash>`, at most 63 characters, so with a
+longer name the StatefulSet cannot create its pod.
 
 **Other render-time checks.** Every top-level `config` entry must be a table; a `null`
 inside a list element is refused (omit the key instead); and whole numbers of 2^53 or more
@@ -287,12 +289,17 @@ config:
 ```
 
 Every fs origin's `path` must be `/srv/decdn-origin` or a directory under it. The render
-fails on an fs origin without `origin.volume`, and on an `origin.volume` that no fs origin
-reads. The chart also sets `readOnly: true` on the volume source itself (a PVC, CSI,
-NFS, iSCSI, RBD, CephFS or FC source): the kubelet decides from that flag, not the
-mount's, whether to apply the pod's `fsGroup` ownership, which would recursively
-re-group and re-mode your content. So the files must already be readable by the pod's
-uid or `fsGroup` (1000 by default). A
+fails on an fs origin without a `path` or without `origin.volume`, on an `origin.volume`
+that no fs origin reads, and on `origin.subPath` without `origin.volume`.
+
+The chart also sets `readOnly: true` on the volume source itself wherever the source
+has the field (`persistentVolumeClaim`, `csi`, the block and cloud-disk sources, and
+`nfs`, `cephfs`, `glusterfs`, `quobyte`). For a PVC or a CSI or disk volume, that flag,
+not the mount's, is what stops the kubelet applying the pod's `fsGroup` ownership, which
+would recursively re-group and re-mode your content; for a network share it mounts the
+export read-only. `hostPath`, `emptyDir`, `image` and `ephemeral` are passed through
+(nothing there is re-owned in place), and any other source fails the render. So the
+files must already be readable by the pod's uid or `fsGroup` (1000 by default). A
 `hostPath` source works, but it ties the node to one Kubernetes node and hands the pod a
 host directory, so prefer a PVC, NFS or CSI volume. The content stays off the data PVC,
 so the node cannot write to it, and a snapshot of the data volume (which holds the node
@@ -331,8 +338,9 @@ with `decdn_cache_origin_kind` (or `decdn_cache_origins`) set, deployed by
   `decdn setup` or `decdn node register`: without it they register the public address
   of the machine they run on, if it has one, which is not the node's. On a registered
   node, `decdn node update-multiaddrs --multiaddr …` replaces the whole set; the node
-  must be active, and a governable cooldown applies between updates. The address and
-  port are:
+  must be active, and a governance-set cooldown (at most a day) runs from registration
+  and from each update, so get the address right the first time (`decdn setup
+  --dry-run` shows it). The address and port are:
   - `LoadBalancer`: the load balancer's IP and `quic.port` (the install notes print
     the command that reads it; `helm get notes` shows them again). A load balancer
     that reports only a hostname needs its static IPs: a multiaddr is `/ip4` or `/ip6`
@@ -442,9 +450,11 @@ metrics:
   ```
 
   The pod keeps running throughout; the upgraded StatefulSet adopts it. A CSI driver
-  that expands only offline grows the filesystem at the pod's next restart.
-  The same orphan-and-upgrade step applies to an install made from this repo's `main`
-  before `podManagementPolicy` and `serviceName` changed (both are immutable too).
+  that expands only offline grows the filesystem once the pod is deleted and recreated
+  (`kubectl -n decdn delete pod decdn-node-1-0`; the StatefulSet recreates it). The
+  same orphan-and-upgrade step applies to an install made from this repo's `main`
+  before `podManagementPolicy` and `serviceName` changed (both are immutable too); the
+  adopted pod restarts once if the pod template changed.
 - **Config changes roll the pod** through the ConfigMap checksum. Secret changes do not:
   after rotating the keystore or RPC URL, run
   `kubectl rollout restart statefulset/<release>`. The daemon's partial
@@ -460,6 +470,9 @@ supports `--dry-run`, from your workstation against the same keystore you put in
 Secret. Pass the node's public QUIC address with `--multiaddr` (see [Network](#network)):
 from inside the pod the node cannot see it, and without the flag `decdn setup` registers
 the public address of the machine it runs on, if it has one, which is not the node's.
+It takes `--mbps` and `--region` too, and, like every on-chain command, reads the RPC
+endpoint from `--rpc-url` or its config's `blockchain.rpc_url`, never `DECDN_RPC_URL`
+([Running on-chain commands](https://github.com/decdn/devops/blob/main/docs/lifecycle.md#running-on-chain-commands)).
 
 ## Development
 

@@ -6,14 +6,16 @@ Names and labels
 {{- end }}
 
 {{- define "decdn-node.fullname" -}}
+{{- /* No trunc: validatePod caps the result at 52 characters, and reports the
+     real length. */}}
 {{- if .Values.fullnameOverride }}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- .Values.fullnameOverride | trimSuffix "-" }}
 {{- else }}
 {{- $name := default .Chart.Name .Values.nameOverride }}
 {{- if contains $name .Release.Name }}
-{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- .Release.Name | trimSuffix "-" }}
 {{- else }}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- printf "%s-%s" .Release.Name $name | trimSuffix "-" }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -77,12 +79,24 @@ fsGroup bits, and upstream refuses a data_dir with any group/world permission.
 {{- /* Read-only, from origin.volume: an fs origin's content (Compose's path too). */}}
 {{- define "decdn-node.originDir" -}}/srv/decdn-origin{{- end }}
 
-{{/* origin.volume's source with readOnly forced on, for every source that has the
-field. The mount's readOnly alone does not stop the kubelet applying fsGroup
-ownership (a recursive chgrp) to a PVC or CSI volume: it reads the source's flag. */}}
+{{/* The volume sources origin.volume may use. Those with a `readOnly` field get it
+forced on: for a PVC (any plugin), CSI, or a block/disk source the kubelet reads
+the source's flag, not the mount's, to skip applying the pod's fsGroup ownership
+(a recursive chgrp and group mode bits on the publisher's content); for nfs,
+cephfs, glusterfs or quobyte it mounts the export read-only. The rest hold
+nothing fsGroup re-owns in place (hostPath is never re-owned; emptyDir, image and
+ephemeral start fresh). Any other source fails the render (decdn-node.config). */}}
+{{- define "decdn-node.originReadOnlySources" -}}
+persistentVolumeClaim csi nfs iscsi rbd cephfs fc glusterfs quobyte gcePersistentDisk awsElasticBlockStore azureDisk azureFile cinder flexVolume portworxVolume scaleIO storageos
+{{- end }}
+{{- define "decdn-node.originOtherSources" -}}
+hostPath emptyDir image ephemeral
+{{- end }}
+
+{{/* origin.volume's source, with readOnly forced on where the source has it. */}}
 {{- define "decdn-node.originVolume" -}}
 {{- $v := deepCopy (default (dict) (get (default (dict) .Values.origin) "volume")) }}
-{{- range $src := list "persistentVolumeClaim" "csi" "nfs" "iscsi" "rbd" "cephfs" "fc" }}
+{{- range $src := splitList " " (include "decdn-node.originReadOnlySources" .) }}
 {{- if kindIs "map" (get $v $src) }}
 {{- $_ := set (get $v $src) "readOnly" true }}
 {{- end }}
@@ -114,21 +128,22 @@ than let a values override win:
 - podLabels re-setting a chart label (the selector labels would detach the pod
   from the StatefulSet and Services);
 - podAnnotations re-setting checksum/config (config changes would stop rolling),
-  or carrying the legacy AppArmor/seccomp annotations, which Kubernetes still
-  honours and which would bypass the profile checks below;
+  or carrying the legacy AppArmor/seccomp annotations, which the API server still
+  copies into the securityContext fields, bypassing the profile checks below;
 - a (pod)securityContext that drops the non-root / no-privilege /
   read-only-rootfs / all-capabilities-dropped / confined (seccomp, AppArmor,
   masked /proc) hardening, at either level (compared as strings: `get`
   yields "" for a missing key, which `eq` cannot compare with a bool). Helm merges overrides
   into the defaults, so these must hold on the merged values, and a `null` that
   removes one of them fails too: no seccomp profile at either level means
-  Unconfined (the kubelet's default), and no runAsGroup means gid 0 for a uid the
+  Unconfined (the kubelet's default unless it runs with seccompDefault), and no
+  runAsGroup means gid 0 for a uid the
   image has no passwd entry for.
 --------------------------------------------------------------------------- */}}
 {{- define "decdn-node.validatePod" -}}
 {{- $fullname := include "decdn-node.fullname" . }}
 {{- if gt (len $fullname) 52 }}
-{{- fail (printf "the full name %q is %d characters; a StatefulSet's pods need 52 or fewer (Kubernetes labels each pod with <name>-<revision hash>, 63 characters at most): use a shorter release name or fullnameOverride" $fullname (len $fullname)) }}
+{{- fail (printf "the full name %q is %d characters; a StatefulSet's pods need 52 or fewer (Kubernetes labels each pod with <name>-<revision hash>, 63 characters at most): use a shorter release name, nameOverride or fullnameOverride" $fullname (len $fullname)) }}
 {{- end }}
 {{- $chartLabels := include "decdn-node.labels" . | fromYaml }}
 {{- range $k, $_ := default (dict) .Values.podLabels }}
@@ -310,6 +325,13 @@ Arg: dict "cfg" <map> "root" <$>
 {{- $originVolume := get $originValues "volume" }}
 {{- if and (get $originValues "subPath") (not $originVolume) }}
 {{- fail "origin.subPath is set without origin.volume: it selects a directory of that volume" }}
+{{- end }}
+{{- $roSources := splitList " " (include "decdn-node.originReadOnlySources" $root) }}
+{{- $otherSources := splitList " " (include "decdn-node.originOtherSources" $root) }}
+{{- range $src, $_ := default (dict) $originVolume }}
+{{- if not (or (has $src $roSources) (has $src $otherSources)) }}
+{{- fail (printf "origin.volume.%s is not supported: use a source the chart can force read-only (%s) or one of %s" $src (join ", " $roSources) (join ", " $otherSources)) }}
+{{- end }}
 {{- end }}
 {{- $origins := ternary (list (get $cache "origin")) (default (list) (get $cache "origins")) $hasOrigin }}
 {{- $fsOrigins := 0 }}

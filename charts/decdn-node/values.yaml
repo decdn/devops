@@ -19,6 +19,7 @@ image:
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
+# The full name these yield must be 52 characters or fewer (README "Name length").
 nameOverride: ""
 fullnameOverride: ""
 
@@ -152,10 +153,12 @@ persistence:
 # Any Kubernetes volume source, without `name`, e.g.
 #   volume: {persistentVolumeClaim: {claimName: my-namespace-content}}
 #   volume: {nfs: {server: nfs.example.internal, path: /exports/content}}
-# The chart forces readOnly on the source too (PVC, CSI, NFS, …), so the kubelet
-# does not re-group it for fsGroup: the files must already be readable by the
-# pod's uid or fsGroup. hostPath works, but ties the node to one host: prefer a
-# PVC, NFS or CSI source.
+# The chart forces readOnly on the source too wherever it has the field (PVC,
+# CSI, disk and network-share sources), so the kubelet does not re-group a PVC or
+# CSI volume for fsGroup: the files must already be readable by the pod's uid or
+# fsGroup. hostPath, emptyDir, image and ephemeral pass through; any other source
+# fails the render (README "Origins"). hostPath works, but ties the node to one
+# host: prefer a PVC, NFS or CSI source.
 origin:
   volume: {}
   subPath: ""

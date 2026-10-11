@@ -571,6 +571,10 @@ expect_fail "fs origin without a path"     template 'an fs origin needs a path' 
 expect_fail "origin.subPath, no volume"    template 'origin.subPath is set without origin.volume' --set origin.subPath=published
 expect_fail "admin_port not a number"      template 'admin_port must be a number'                --set-json 'config.observability.admin_port="0"'
 expect_fail "full name over 52"            template 'is 53 characters'                           --set fullnameOverride="$(printf 'n%.0s' $(seq 1 53))"
+expect_fail "full name over 52 (nameOverride)" template 'is 53 characters'                       --set nameOverride="$(printf 'n%.0s' $(seq 1 51))"
+expect_fail "full name length not truncated" template 'is 70 characters'                         --set fullnameOverride="$(printf 'n%.0s' $(seq 1 70))"
+expect_fail "fs origin, no path key"       template 'an fs origin needs a path'                  --set-json 'origin.volume={"emptyDir":{}}' --set config.cache.origin.kind=fs
+expect_fail "origin.volume source refused" template 'origin.volume.vsphereVolume is not supported' --set-json 'origin.volume={"vsphereVolume":{"volumePath":"p"}}' --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin
 expect_fail "origin.volume, no fs origin"  template 'origin.volume is set, but no config.cache origin has kind fs' --set-json 'origin.volume={"emptyDir":{}}'
 expect_fail "origin.volume, two sources"   schema   '/origin/volume'                             --set-json 'origin.volume={"emptyDir":{},"nfs":{"server":"x","path":"/"}}'
 expect_fail "origin.volume with a name"    schema   '/origin/volume'                             --set-json 'origin.volume={"name":"x"}'
@@ -593,9 +597,10 @@ expect_fail "pod runAsGroup 0"             template 'podSecurityContext.runAsGro
 expect_fail "fsGroup 0"                    template 'podSecurityContext.fsGroup must not be 0'    --set podSecurityContext.fsGroup=0
 expect_fail "runAsGroup removed"           template 'runAsGroup must be set'                     --set podSecurityContext.runAsUser=2000 --set podSecurityContext.runAsGroup=null
 expect_fail "seccomp profile removed"      template 'seccompProfile.type must be RuntimeDefault or Localhost' --set podSecurityContext.seccompProfile=null
-expect_fail "seccomp profile not a map"    template 'securityContext.seccompProfile must be a map' --set-json 'securityContext.seccompProfile="Unconfined"'
+expect_fail "seccomp profile not a map"    template ': securityContext\.seccompProfile must be a map' --set-json 'securityContext.seccompProfile="Unconfined"'
 expect_fail "legacy AppArmor annotation"   template 'container.apparmor.security.beta.kubernetes.io/decdn-node is refused' --set-json 'podAnnotations={"container.apparmor.security.beta.kubernetes.io/decdn-node":"unconfined"}'
 expect_fail "legacy seccomp annotation"    template 'seccomp.security.alpha.kubernetes.io/pod is refused' --set-json 'podAnnotations={"seccomp.security.alpha.kubernetes.io/pod":"unconfined"}'
+expect_fail "legacy container seccomp annotation" template 'container.seccomp.security.alpha.kubernetes.io/decdn-node is refused' --set-json 'podAnnotations={"container.seccomp.security.alpha.kubernetes.io/decdn-node":"unconfined"}'
 expect_fail "procMount Unmasked"           template 'procMount must not be Unmasked'             --set securityContext.procMount=Unmasked
 expect_fail "privilege escalation"         template 'allowPrivilegeEscalation must be false'     --set securityContext.allowPrivilegeEscalation=true
 expect_fail "privileged"                   template 'privileged must not be true'                --set securityContext.privileged=true
@@ -623,6 +628,23 @@ expect_render "container-level seccomp only"   --set podSecurityContext.seccompP
 expect_render "container-level runAsGroup only" --set podSecurityContext.runAsGroup=null --set securityContext.runAsGroup=3000
 expect_render "origin: null"                   --set origin=null
 
+# origin.volume: readOnly forced on a source that has the field, even over an
+# explicit false; a pass-through source must not gain the field.
+origin_src() { # <volume JSON> <yq path under the origin volume>
+  helm template t "$chart" -f "$base" --set-json "origin.volume=$1" \
+    --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin \
+    | yq "select(.kind == \"StatefulSet\") | .spec.template.spec.volumes[] | select(.name == \"origin\") | $2"
+}
+v="$(origin_src '{"csi":{"driver":"d","readOnly":false}}' '.csi.readOnly')" || fail "render (csi origin)"
+[ "$v" = true ] || fail "origin.volume: csi readOnly not forced (got $v)"
+v="$(origin_src '{"nfs":{"server":"s","path":"/x"}}' '.nfs.readOnly')" || fail "render (nfs origin)"
+[ "$v" = true ] || fail "origin.volume: nfs readOnly not forced (got $v)"
+v="$(origin_src '{"gcePersistentDisk":{"pdName":"c"}}' '.gcePersistentDisk.readOnly')" || fail "render (gcePersistentDisk origin)"
+[ "$v" = true ] || fail "origin.volume: gcePersistentDisk readOnly not forced (got $v)"
+v="$(origin_src '{"emptyDir":{}}' '.emptyDir | has("readOnly")')" || fail "render (emptyDir origin)"
+[ "$v" = false ] || fail "origin.volume: emptyDir gained a readOnly field"
+pass "origin.volume: readOnly forced per source, pass-through sources untouched"
+
 # Long release names: every rendered object keeps a unique name. The dashboard
 # ConfigMaps used to truncate to 63 characters and collide.
 long="$(printf 'n%.0s' $(seq 1 52))"
@@ -639,33 +661,52 @@ pass "Service names fit 63 characters with a 52-character fullname (the cap)"
 # Install notes: `helm template` executes NOTES.txt but prints none of it, so read
 # them from a client-side dry-run install (no cluster needed). Captured, then
 # grepped: an early `grep -q` exit in a pipe would SIGPIPE helm under pipefail.
-notes_of() { helm install t "$chart" --dry-run=client "$@" 2>/dev/null | sed -n '/^NOTES:/,$p'; }
+notes_of() { # <helm args...>: the install notes; on a failed render, helm's error to stderr
+  local out
+  out="$(helm install t "$chart" --dry-run=client "$@" 2>"$work/notes.err")" || { cat "$work/notes.err" >&2; return 1; }
+  sed -n '/^NOTES:/,$p' <<<"$out"
+}
 has() { grep -qF -- "$1" <<<"$n"; }
 n="$(notes_of -f "$chart/ci/ci-values.yaml")" || fail "notes render (ci-values)"
 # $LB_IP is literal: the notes print it for the operator's shell to expand.
 # shellcheck disable=SC2016
-has 'decdn setup --multiaddr "/ip4/$LB_IP/udp/4433/quic-v1"' || fail "notes: LoadBalancer setup command"
+has 'decdn setup --mbps <MBPS> --region DE --multiaddr "/ip4/$LB_IP/udp/4433/quic-v1" --dry-run' \
+  || fail "notes: LoadBalancer setup command (setup requires --mbps and --region)"
 # shellcheck disable=SC2016
 has 'decdn node update-multiaddrs --multiaddr "/ip4/$LB_IP/udp/4433/quic-v1"' || fail "notes: LoadBalancer update command"
 has "LB_IP=\$(kubectl" || fail "notes: LB_IP lookup"
+# shellcheck disable=SC2016
+has ': "${LB_IP:?' || fail "notes: an empty LB_IP must stop the commands"
 has 'registers the public address of the' || fail "notes: setup without --multiaddr"
+has 'runs from' || fail "notes: the cooldown runs from registration"
 n="$(notes_of -f "$chart/ci/ci-origins.yaml")" || fail "notes render (ci-origins)"
-has "--multiaddr \"/ip4/<public IP of the pod's k8s node>/udp/30443/quic-v1\" --multiaddr \"/ip4/<public IP of the pod's k8s node>/udp/5001/quic-v1\"" \
-  || fail "notes: NodePort (Local) and hostPort multiaddrs"
+pod_node="<public IP of the pod's k8s node>"
+for cmd in "decdn setup --mbps <MBPS> --region DE" "decdn node update-multiaddrs"; do
+  has "$cmd --multiaddr \"/ip4/$pod_node/udp/30443/quic-v1\" --multiaddr \"/ip4/$pod_node/udp/5001/quic-v1\"" \
+    || fail "notes: NodePort (Local) and hostPort multiaddrs in: $cmd"
+done
+! has 'NODE_PORT' || fail "notes: NODE_PORT lookup with a fixed nodePort"
 has 'no other node' || fail "notes: NodePort under externalTrafficPolicy Local"
 has 'WARNING: quic.hostPort and the public NodePort Service' || fail "notes: hostPort + Service warning"
-n="$(notes_of -f "$chart/ci/ci-origins.yaml" --set service.nodePort=null --set service.externalTrafficPolicy=Cluster)" \
-  || fail "notes render (NodePort, Cluster)"
+n="$(notes_of -f "$chart/ci/ci-origins.yaml" --set service.nodePort=null --set service.externalTrafficPolicy=Cluster \
+  --set quic.hostPort.enabled=false)" || fail "notes render (NodePort, Cluster)"
 if ! { has "/ip4/<any k8s node's public IP>/udp/\$NODE_PORT/quic-v1" && has "NODE_PORT=\$(kubectl"; }; then
   fail "notes: NodePort without nodePort, externalTrafficPolicy Cluster"
 fi
+! has 'no other node' || fail "notes: the Local-only NodePort note under Cluster"
+! has 'nodeSelector' || fail "notes: pinning advice for a NodePort under Cluster"
 n="$(notes_of -f "$base" --set service.enabled=false --set quic.hostPort.enabled=true --set quic.hostPort.port=5001)" \
   || fail "notes render (hostPort only)"
 has '/udp/5001/quic-v1"' || fail "notes: hostPort multiaddr must use quic.hostPort.port"
+has 'Pin the pod there with nodeSelector' || fail "notes: hostPort pinning advice"
 ! grep -qE 'WARNING|LB_IP|NODE_PORT' <<<"$n" || fail "notes: hostPort-only node told about a Service"
 n="$(notes_of -f "$base")" || fail "notes render (ClusterIP)"
-has 'No public QUIC address' || fail "notes: ClusterIP-only node not told it has no public address"
+has 'No public QUIC address: the QUIC Service is ClusterIP' || fail "notes: ClusterIP-only node not told it has no public address"
 ! has 'update-multiaddrs' || fail "notes: multiaddr command for a ClusterIP-only node"
+n="$(notes_of -f "$base" --set service.enabled=false)" || fail "notes render (Service disabled)"
+if ! { has 'the QUIC Service is disabled' && has 'service.enabled=true'; }; then
+  fail "notes: Service-disabled node not told to enable it"
+fi
 n="$(notes_of -f "$base" --set config.observability.admin_port=0 --set metrics.port=9191)" || fail "notes render (admin off)"
 if ! { has 'admin RPC is disabled' && ! has 'port-forward'; }; then fail "notes: admin_port 0"; fi
 pass "install notes: multiaddrs per exposure, hostPort warning, no-address note, admin RPC"
