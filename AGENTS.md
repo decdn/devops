@@ -721,9 +721,9 @@ A new role goes in one `roles.txt`. Build/validate from `ansible/` with `make bu
 its own version: `release-collection.yml` on a `node-collection-vX.Y.Z` or
 `publisher-collection-vX.Y.Z` tag (the repo's Latest follows `decdn.node`; release.sh
 refuses a publisher release until a node tag satisfies its `decdn.node` constraint), `release-chart.yml` on a
-`decdn-node-X.Y.Z` tag (that file name and tag prefix are the chart's cosign identity:
-never rename them), and only while the `PUBLISH_ENABLED` repository variable is `true`
-(RELEASING.md). The chart's publish also pushes its
+`decdn-node-X.Y.Z` tag (that file name and tag shape are the chart's cosign identity
+and its attestations' signer workflow and source ref: never rename them), and only
+while the `PUBLISH_ENABLED` repository variable is `true` (RELEASING.md). The chart's publish also pushes its
 Artifact Hub metadata (`charts/decdn-node/artifacthub-repo.yml`, `.helmignore`d), and
 the packaged `Chart.yaml` gets an `artifacthub.io/changes` annotation generated from the
 release's chart CHANGELOG section (`scripts/chart-artifacthub-changes.py`): never write
