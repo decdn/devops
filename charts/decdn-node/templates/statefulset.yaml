@@ -1,5 +1,6 @@
 {{- include "decdn-node.validateSecrets" . }}
 {{- include "decdn-node.validatePod" . }}
+{{- $origin := default (dict) .Values.origin }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -11,8 +12,14 @@ spec:
   # One release = one node identity. Never scale this: two pods would share one
   # keystore and node.secret (a double-signing / slashing hazard).
   replicas: 1
-  serviceName: {{ include "decdn-node.fullname" . }}-metrics
-  podManagementPolicy: OrderedReady
+  # The headless governing Service: per-pod DNS only, no ports. Immutable after install.
+  serviceName: {{ include "decdn-node.headlessServiceName" . }}
+  # Parallel, not OrderedReady: with OrderedReady the controller waits for an
+  # unready pod before acting, so a config that crash-loops the pod (an unknown
+  # key, deny_unknown_fields upstream) stays stuck after the fix is rolled out
+  # until someone deletes the pod (Kubernetes docs, StatefulSet § Forced
+  # rollback). With one replica nothing else changes. Immutable after install.
+  podManagementPolicy: Parallel
   updateStrategy:
     type: RollingUpdate
   selector:
@@ -159,6 +166,15 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            {{- if $origin.volume }}
+            # An fs origin's content: read-only, and never in `prepare`.
+            - name: origin
+              mountPath: {{ include "decdn-node.originDir" . }}
+              readOnly: true
+              {{- with $origin.subPath }}
+              subPath: {{ . | quote }}
+              {{- end }}
+            {{- end }}
       volumes:
         - name: config
           configMap:
@@ -182,6 +198,10 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 64Mi
+        {{- if $origin.volume }}
+        - name: origin
+          {{- include "decdn-node.originVolume" . | nindent 10 }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

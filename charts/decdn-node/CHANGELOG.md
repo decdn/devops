@@ -56,6 +56,26 @@ Initial chart (pre-1.0; the values shape may still change).
 - README: running the chart as a publisher's origin node (an origin backend in
   `config.cache`, what it changes, and the on-chain seating step).
 
+- `origin.volume` (+ `origin.subPath`): an fs origin's content, from any one
+  Kubernetes volume source, mounted read-only at `/srv/decdn-origin` (the Compose
+  path) in the daemon container only, with `readOnly` also forced on the source
+  wherever it has the field (PVC, CSI, disk and network-share sources), so the
+  kubelet does not re-group a PVC or CSI volume for `fsGroup`; `hostPath`,
+  `emptyDir`, `image` and `ephemeral` pass through, and other sources are refused. An fs
+  origin's `path` must lie there; the render fails on an fs origin without a path
+  or the volume, on a volume no fs origin reads, and on `origin.subPath` without
+  a volume. Before, the content had to sit on the data PVC beside the node
+  identity, writable by the daemon.
+
+- A headless governing Service (`<fullname>-headless`, no ports) for the StatefulSet;
+  `serviceName` used to name the metrics Service.
+- A render-time port-layout check, as upstream's: `quic.port`, `metrics.port` and
+  `config.observability.admin_port` (9191 unless set; 0 disables it; a whole number up to 65535) must
+  differ, or the daemon refuses to start.
+- A render-time cap of 52 characters on the full name: a StatefulSet's pods carry a
+  `<name>-<revision hash>` label of at most 63 characters, so a longer name created
+  no pod (and made the metrics Service name invalid).
+
 ### Changed
 
 - The README links into the rest of the repo are absolute GitHub URLs, so they work
@@ -71,6 +91,28 @@ Initial chart (pre-1.0; the values shape may still change).
 - The default image is `ghcr.io/decdn/decdn-node:0.0.2` (decdn/decdn v0.0.2), which
   also carries the `decdn` CLI (the chart does not call it) and whose signed digest
   file is `decdn-node-image-digest.txt`. The config schema is unchanged.
+
+- README and install notes: the node cannot see the public address the chart
+  exposes (a pod sees its pod IP, and iroh observes the cluster's egress address,
+  not the load balancer's), so registry readers learn it only from the node's
+  on-chain `multiaddrs`. The notes print `decdn setup --mbps … --region …
+  --multiaddr … --dry-run` (not yet registered) and `decdn node update-multiaddrs
+  --multiaddr …` (registered; the multiaddr cooldown runs from registration) for the
+  LoadBalancer, NodePort or hostPort address, name the pod's own Kubernetes node
+  where `externalTrafficPolicy: Local` or hostPort requires it, say when no public
+  address is exposed, and warn when hostPort and a public Service are both enabled.
+  Without `--multiaddr`, `decdn setup` registers the public address of the machine
+  it runs on, which is not the node's. The README no longer says a LoadBalancer
+  alone gives the node a stable public address.
+
+- The StatefulSet uses `podManagementPolicy: Parallel`. With `OrderedReady`, a
+  config the daemon rejects (an unknown key) left a crash-looping pod that a fixed
+  `helm upgrade` or `helm rollback` never replaced, until it was deleted by hand.
+
+- README: `persistence.size` is fixed at install (an upgrade cannot change the
+  StatefulSet's `volumeClaimTemplates`), with the steps to grow the data volume; the
+  same orphan-and-upgrade step moves an install from `main` onto this chart's
+  immutable `podManagementPolicy` and `serviceName`.
 
 ### Fixed
 
@@ -88,3 +130,12 @@ Initial chart (pre-1.0; the values shape may still change).
   now also fires when the pod is gone for longer than the `for:` (1m), which
   includes a slow pod replacement, and for up to a day after the release scales to
   zero or `metrics.serviceMonitor.jobLabel` changes: silence it (#109).
+- The pod-hardening render check covers the container level too. A container
+  `securityContext.seccompProfile` of `Unconfined` used to render, although the
+  values and README said the render fails; it now fails, as do an `Unconfined`
+  `appArmorProfile` at either level, a container `runAsGroup: 0`, `fsGroup: 0`, a
+  supplemental group 0, `procMount: Unmasked`, a seccomp profile removed at both
+  levels (the kubelet then runs Unconfined), a `runAsGroup` removed at both levels,
+  and a legacy AppArmor/seccomp pod annotation set to `unconfined` (its other
+  values stay allowed: before Kubernetes 1.30 it is the only way to pick an
+  AppArmor profile).

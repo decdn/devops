@@ -38,6 +38,7 @@ image carries the `decdn` CLI since v0.0.2, but the chart does not call it).
 | `ConfigMap` | The rendered `node.toml`. Its checksum rolls the pod on any change. |
 | `Service` (quic) | Public UDP. The type is `LoadBalancer`, `NodePort` or `ClusterIP`, with `externalTrafficPolicy: Local`. |
 | `Service` (metrics) | ClusterIP only, never public. |
+| `Service` (headless) | The StatefulSet's governing Service: no ports, only the pod's DNS record. |
 | `NetworkPolicy` | Ingress allows QUIC from anywhere and metrics only from `metrics.networkPolicy.from`. Egress is open unless `networkPolicy.egress` is set. |
 | `ServiceMonitor` | Optional (`metrics.serviceMonitor.enabled`). Adds the `job`, `region`, `deployment_environment` and `instance` target labels the dashboards and alerts in `files/monitoring/` select on. |
 | `PrometheusRule` | Optional (`metrics.prometheusRule.enabled`). The deCDN reference alert rules (`files/monitoring/`). |
@@ -206,11 +207,27 @@ the namespace. The guard checks key names only: never embed a credential in a va
 either (such as `https://user:pass@…` in an origin URL). Put secrets in the env Secret.
 
 **Pod overrides.** `podLabels` cannot re-set a chart label (that would detach the pod from
-its StatefulSet selector and Services), `podAnnotations` cannot re-set `checksum/config`,
-and `podSecurityContext` / `securityContext` can be changed (for example, a different
-non-root uid) but the render fails if the result runs as root, allows privilege escalation
-or privileged mode, makes the root filesystem writable, adds capabilities, drops fewer than
-`ALL`, or disables seccomp.
+its StatefulSet selector and Services), `podAnnotations` cannot re-set `checksum/config`
+or set a legacy AppArmor/seccomp annotation
+(`container.apparmor.security.beta.kubernetes.io/*`, `seccomp.security.alpha.kubernetes.io/*`,
+`container.seccomp.security.alpha.kubernetes.io/*`) to `unconfined`. Their other values
+(`runtime/default`, `localhost/<profile>`) stay allowed: before Kubernetes 1.30 the
+annotation is the only way to pick an AppArmor profile.
+`podSecurityContext` / `securityContext` can be changed (for example, a different
+non-root uid) but the render fails if the result runs as root (uid, gid or `fsGroup` 0,
+supplemental group 0, or no `runAsGroup` at either level, which leaves a uid the image
+has no passwd entry for in gid 0), allows privilege escalation or privileged mode, makes
+the root filesystem writable, adds capabilities, drops fewer than `ALL`, unmasks `/proc`
+(`procMount: Unmasked`), sets a seccomp or AppArmor profile to `Unconfined`, or has no
+`RuntimeDefault`/`Localhost` seccomp profile at either level (the kubelet's default is
+`Unconfined` unless it runs with `seccompDefault: true`). Both levels are checked, since a container's `securityContext` overrides
+the pod's.
+
+**Name length.** The full name (`fullnameOverride`, else
+`<release>-<nameOverride or decdn-node>`, or just the release name when it already
+contains that name) must be 52 characters or fewer: each StatefulSet pod gets a
+`controller-revision-hash` label of `<name>-<hash>`, at most 63 characters, so with a
+longer name the StatefulSet cannot create its pod.
 
 **Other render-time checks.** Every top-level `config` entry must be a table; a `null`
 inside a list element is refused (omit the key instead); and whole numbers of 2^53 or more
@@ -255,9 +272,40 @@ fill from the backend), and the daemon defaults `cache.relay_foreign_namespaces`
 blob already in its cache
 ([ADR 002 § Retrieval by namespace](https://github.com/decdn/decdn/blob/main/adr/002-content-addressing.md#retrieval-by-namespace),
 [ADR 037](https://github.com/decdn/decdn/blob/main/adr/037-regional-proxy-warming.md#warming-is-a-relay-edge-mechanism)).
-An `fs` origin reads a path inside the pod, so the content must be on the data PVC (under
-`/var/lib/decdn`); the chart mounts no other volume. CI renders the multi-origin form
-(`ci/ci-origins.yaml`: http, fs and s3) and checks its keys against the upstream schema.
+An `fs` origin reads its content from `origin.volume`, any one Kubernetes volume source
+without a `name` (a PVC, NFS, CSI, …). The chart mounts it read-only at `/srv/decdn-origin`
+in the daemon container only, the path the Compose `origin` profile uses (with
+`origin.subPath`, only that subdirectory of the volume is mounted there):
+
+```yaml
+origin:
+  volume:
+    persistentVolumeClaim:
+      claimName: my-namespace-content   # provisioned by you, e.g. ReadOnlyMany or NFS-backed
+config:
+  cache:
+    origin:
+      kind: fs
+      path: /srv/decdn-origin
+```
+
+Every fs origin's `path` must be `/srv/decdn-origin` or a directory under it. The render
+fails on an fs origin without a `path` or without `origin.volume`, on an `origin.volume`
+that no fs origin reads, and on `origin.subPath` without `origin.volume`.
+
+The chart also sets `readOnly: true` on the volume source itself wherever the source
+has the field (`persistentVolumeClaim`, `csi`, the block and cloud-disk sources, and
+`nfs`, `cephfs`, `glusterfs`, `quobyte`). For a PVC or a CSI or disk volume, that flag,
+not the mount's, is what stops the kubelet applying the pod's `fsGroup` ownership, which
+would recursively re-group and re-mode your content; for a network share it mounts the
+export read-only. `hostPath`, `emptyDir`, `image` and `ephemeral` are passed through
+(nothing there is re-owned in place), and any other source fails the render. So the
+files must already be readable by the pod's uid or `fsGroup` (1000 by default). A
+`hostPath` source works, but it ties the node to one Kubernetes node and hands the pod a
+host directory, so prefer a PVC, NFS or CSI volume. The content stays off the data PVC,
+so the node cannot write to it, and a snapshot of the data volume (which holds the node
+identity) does not carry it. CI renders the multi-origin form (`ci/ci-origins.yaml`:
+http, fs and s3) and checks its keys against the upstream schema.
 
 Configuring a backend does not make the node an origin on-chain: the namespace's publisher
 seats the node's operator with `OriginAssignment.addOrigin`
@@ -270,13 +318,45 @@ with `decdn_cache_origin_kind` (or `decdn_cache_origins`) set, deployed by
 ## Network
 
 - **QUIC** (`quic.port`, default 4433/udp) is the only public port.
-  - `service.type: LoadBalancer` (the default) gives the node a stable public UDP
-    address, and `externalTrafficPolicy: Local` preserves client source IPs for
-    per-source rate limiting.
+  - `service.type: LoadBalancer` (the default) gives the node a public UDP address,
+    and `externalTrafficPolicy: Local` preserves client source IPs for per-source
+    rate limiting. `service.loadBalancerIP` sets the Service field Kubernetes has
+    deprecated since 1.24; many providers want an annotation in `service.annotations`
+    instead, so check yours.
   - For bare-metal-style nodes, set `quic.hostPort.enabled: true` and
     `service.enabled: false`.
-  - Without direct reachability, the node still works through iroh relays, at a latency
-    cost.
+- **The node cannot see its public address.** On a pod network with private addresses,
+  its default route's source address is the pod IP, and the address iroh observes
+  through a relay is the cluster's egress (SNAT) address, not the load balancer's. So
+  its pkarr record does not reliably carry the address the chart exposes, and at
+  bring-up it logs that it is behind NAT and sets `decdn_node_public_address` to 0:
+  both are expected. Peers that read the registry learn a forwarded address from the
+  node's on-chain `multiaddrs`
+  ([ADR 019 § NAT and Multiaddr Handling](https://github.com/decdn/decdn/blob/main/adr/019-node-onboarding.md#nat-and-multiaddr-handling),
+  [ADR 001 § Node Discovery](https://github.com/decdn/decdn/blob/main/adr/001-network.md#node-discovery-registry)),
+  which you register off-cluster with the same keystore. Pass
+  `--multiaddr /ip4/<address>/udp/<port>/quic-v1` (repeatable; `/ip6/` for IPv6) to
+  `decdn setup` or `decdn node register`: without it they register the public address
+  of the machine they run on, if it has one, which is not the node's. On a registered
+  node, `decdn node update-multiaddrs --multiaddr …` replaces the whole set; the node
+  must be active, and a governance-set cooldown (at most a day) runs from registration
+  and from each update, so get the address right the first time (`decdn setup
+  --dry-run` shows it). The address and port are:
+  - `LoadBalancer`: the load balancer's IP and `quic.port` (the install notes print
+    the command that reads it; `helm get notes` shows them again). A load balancer
+    that reports only a hostname needs its static IPs: a multiaddr is `/ip4` or `/ip6`
+    only.
+  - `NodePort`: the public IP of the Kubernetes node the pod runs on and the
+    `nodePort`. With the default `externalTrafficPolicy: Local`, no other node forwards
+    it, so pin the pod with `nodeSelector`; with `Cluster`, any node's IP works, at
+    the cost of the client source IP.
+  - `hostPort`: the public IP of the Kubernetes node the pod runs on and
+    `quic.hostPort.port` (pin the pod with `nodeSelector` so it stays true).
+
+  Registration helps only dialers that read the registry. Without a registered
+  address, and for a client that resolves nodes only through pkarr/DNS, inbound
+  reaches the node by hole-punching or an iroh relay, at a latency cost
+  (`decdn_inbound_connections_relayed_total` counts relayed inbound).
 - **Metrics** bind `0.0.0.0` inside the pod rather than loopback, which the Ansible role
   requires. That is how kubelet probes and Prometheus reach `/metrics`. Metrics are
   exposed only by a ClusterIP Service, and the NetworkPolicy admits TCP to that port only
@@ -349,6 +429,33 @@ metrics:
 - **SIGTERM runs a graceful drain.** `terminationGracePeriodSeconds` defaults to 300, the
   role's `TimeoutStopSec`. Killing a pod mid-drain loses paid deliveries, so do not
   force-delete it.
+- **A config the daemon rejects recovers without a manual delete.** Every `node.toml`
+  section rejects unknown keys, so a typo in `config` crash-loops the pod. The
+  StatefulSet uses `podManagementPolicy: Parallel`, so a fixed `helm upgrade` (or a
+  `helm rollback`) replaces the crash-looping pod. Under the `OrderedReady` default the
+  controller would wait for that pod to become Ready first, and you would have to
+  delete it by hand.
+- **`persistence.size` is fixed at install.** It lives in the StatefulSet's
+  `volumeClaimTemplates`, which Kubernetes does not let an upgrade change, so a new value
+  fails `helm upgrade`. To grow the data volume (the StorageClass must have
+  `allowVolumeExpansion: true`), resize the claim, recreate the StatefulSet object
+  without touching the pod, then set `persistence.size: 40Gi` in your values file
+  (not with `--set`, or the next upgrade without it reverts the size and fails) and
+  upgrade:
+
+  ```bash
+  kubectl -n decdn patch pvc data-decdn-node-1-0 \
+    -p '{"spec":{"resources":{"requests":{"storage":"40Gi"}}}}'
+  kubectl -n decdn delete statefulset decdn-node-1 --cascade=orphan
+  helm upgrade decdn-node-1 charts/decdn-node -n decdn -f values-node-1.yaml
+  ```
+
+  The pod keeps running throughout; the upgraded StatefulSet adopts it. A CSI driver
+  that expands only offline grows the filesystem once the pod is deleted and recreated
+  (`kubectl -n decdn delete pod decdn-node-1-0`; the StatefulSet recreates it). The
+  same orphan-and-upgrade step applies to an install made from this repo's `main`
+  before `podManagementPolicy` and `serviceName` changed (both are immutable too); the
+  adopted pod restarts once if the pod template changed.
 - **Config changes roll the pod** through the ConfigMap checksum. Secret changes do not:
   after rotating the keystore or RPC URL, run
   `kubectl rollout restart statefulset/<release>`. The daemon's partial
@@ -361,7 +468,12 @@ metrics:
 The node serves paid traffic only after it is staked and registered (ADR 019 Phase 2).
 That is a manual operator step, as it is for the Ansible path. Run `decdn setup`, which
 supports `--dry-run`, from your workstation against the same keystore you put in the
-Secret.
+Secret. Pass the node's public QUIC address with `--multiaddr` (see [Network](#network)):
+from inside the pod the node cannot see it, and without the flag `decdn setup` registers
+the public address of the machine it runs on, if it has one, which is not the node's.
+It takes `--mbps` and `--region` too, and, like every on-chain command, reads the RPC
+endpoint from `--rpc-url` or its config's `blockchain.rpc_url`, never `DECDN_RPC_URL`
+([Running on-chain commands](https://github.com/decdn/devops/blob/main/docs/lifecycle.md#running-on-chain-commands)).
 
 ## Development
 

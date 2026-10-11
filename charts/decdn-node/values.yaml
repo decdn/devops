@@ -19,6 +19,7 @@ image:
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
+# The full name these yield must be 52 characters or fewer (README "Name length").
 nameOverride: ""
 fullnameOverride: ""
 
@@ -57,6 +58,9 @@ secrets:
     passthroughKeys: []
 
 # --- Public QUIC (the one public hole) --------------------------------------
+# The node cannot see the public address this exposes (it sees the pod IP): register
+# it on-chain as a multiaddr, or peers reach it only by hole-punching and relays
+# (README "Network").
 quic:
   port: 4433
   # Bind udp/<port> directly on the k8s node as well. Pair with
@@ -73,6 +77,8 @@ service:
   # Only applied to LoadBalancer/NodePort.
   externalTrafficPolicy: Local
   nodePort: null
+  # spec.loadBalancerIP, deprecated by Kubernetes since 1.24 and ignored by some
+  # providers: prefer the provider's annotation (service.annotations) where it has one.
   loadBalancerIP: ""
   loadBalancerSourceRanges: []
   annotations: {}
@@ -132,11 +138,30 @@ networkPolicy:
 # --- Storage ----------------------------------------------------------------
 # Holds the node identity and the cache. Size it above
 # config.cache.cache_size_mb + cache.disk_headroom_mb (daemon default 8192 MiB).
+# Fixed at install: an upgrade cannot change it (README "Probes and lifecycle" has
+# the resize steps).
 persistence:
   size: 20Gi
   storageClass: ""
   accessModes: [ReadWriteOnce]
   annotations: {}
+
+# --- Origin content (an fs origin only) --------------------------------------
+# An fs origin (kind: fs in config.cache.origin or .origins) reads its content from
+# this volume, mounted read-only at /srv/decdn-origin in the daemon container (the
+# path Compose uses); every fs origin path must be /srv/decdn-origin or under it.
+# Any Kubernetes volume source, without `name`, e.g.
+#   volume: {persistentVolumeClaim: {claimName: my-namespace-content}}
+#   volume: {nfs: {server: nfs.example.internal, path: /exports/content}}
+# The chart forces readOnly on the source too wherever it has the field (PVC,
+# CSI, disk and network-share sources), so the kubelet does not re-group a PVC or
+# CSI volume for fsGroup: the files must already be readable by the pod's uid or
+# fsGroup. hostPath, emptyDir, image and ephemeral pass through; any other source
+# fails the render (README "Origins"). hostPath works, but ties the node to one
+# host: prefer a PVC, NFS or CSI source.
+origin:
+  volume: {}
+  subPath: ""
 
 # --- node.toml ----------------------------------------------------------------
 # Mirrors node.toml section-for-section (upstream decdn
@@ -208,9 +233,11 @@ livenessProbe:
   failureThreshold: 6
 
 # Overridable (e.g. a different non-root uid), but the render fails if the merged
-# result runs as root, allows privilege escalation or privileged mode, has a
-# writable root filesystem, adds capabilities, drops fewer than ALL, or uses an
-# Unconfined seccomp profile.
+# result runs as root (uid, gid or fsGroup 0, a supplemental group 0, or no
+# runAsGroup at either level), allows privilege escalation or privileged mode, has
+# a writable root filesystem, adds capabilities, drops fewer than ALL, unmasks
+# /proc, uses an Unconfined seccomp or AppArmor profile at either the pod or the
+# container level, or has no RuntimeDefault/Localhost seccomp profile at all.
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 1000

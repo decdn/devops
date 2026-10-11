@@ -195,7 +195,11 @@ The Ansible role leaves `rpc_url` out of `node.toml` on purpose (it may embed an
 key), and on Compose `config init` wrote the public endpoint there. On Compose, run
 them as `sudo compose/decdn-compose cli node bond …`: it hands the CLI a `node.toml`
 whose `rpc_url` reads `DECDN_RPC_URL` from `decdn.env`, so the URL never reaches a
-command line. Elsewhere, pass it explicitly. This helper runs the CLI as `decdn` with
+command line. On Kubernetes, run them off-cluster against the keystore in the node's
+Secret: the chart's install notes print the `--multiaddr` flags for the address it
+exposes, which the node cannot see from inside the pod
+([chart README, On-chain onboarding](https://github.com/decdn/devops/blob/main/charts/decdn-node/README.md#on-chain-onboarding)).
+Elsewhere, pass it explicitly. This helper runs the CLI as `decdn` with
 the unit's own environment file and hands the URL over as `--rpc-url`:
 
 ```bash

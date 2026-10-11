@@ -6,14 +6,16 @@ Names and labels
 {{- end }}
 
 {{- define "decdn-node.fullname" -}}
+{{- /* No trunc: validatePod caps the result at 52 characters, and reports the
+     real length. */}}
 {{- if .Values.fullnameOverride }}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- .Values.fullnameOverride | trimSuffix "-" }}
 {{- else }}
 {{- $name := default .Chart.Name .Values.nameOverride }}
 {{- if contains $name .Release.Name }}
-{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- .Release.Name | trimSuffix "-" }}
 {{- else }}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- printf "%s-%s" .Release.Name $name | trimSuffix "-" }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -32,6 +34,16 @@ helm.sh/chart: {{ include "decdn-node.chart" . }}
 {{ include "decdn-node.selectorLabels" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{- /* Service names are DNS labels (63 characters at most); the fullname's
+     52-character cap (validatePod) leaves room for either suffix. */}}
+{{- define "decdn-node.metricsServiceName" -}}
+{{- printf "%s-metrics" (include "decdn-node.fullname" .) }}
+{{- end }}
+
+{{- define "decdn-node.headlessServiceName" -}}
+{{- printf "%s-headless" (include "decdn-node.fullname" .) }}
 {{- end }}
 
 {{- define "decdn-node.serviceAccountName" -}}
@@ -64,6 +76,33 @@ fsGroup bits, and upstream refuses a data_dir with any group/world permission.
 {{- define "decdn-node.configFile" -}}/etc/decdn/node.toml{{- end }}
 {{- /* In-memory (emptyDir medium: Memory): the keystore password, off the PVC. */}}
 {{- define "decdn-node.secretsDir" -}}/run/decdn{{- end }}
+{{- /* Read-only, from origin.volume: an fs origin's content (Compose's path too). */}}
+{{- define "decdn-node.originDir" -}}/srv/decdn-origin{{- end }}
+
+{{/* The volume sources origin.volume may use. Those with a `readOnly` field get it
+forced on: for a PVC (any plugin), CSI, or a block/disk source the kubelet reads
+the source's flag, not the mount's, to skip applying the pod's fsGroup ownership
+(a recursive chgrp and group mode bits on the publisher's content); for nfs,
+cephfs, glusterfs or quobyte it mounts the export read-only. The rest hold
+nothing fsGroup re-owns in place (hostPath is never re-owned; emptyDir, image and
+ephemeral start fresh). Any other source fails the render (decdn-node.config). */}}
+{{- define "decdn-node.originReadOnlySources" -}}
+persistentVolumeClaim csi nfs iscsi rbd cephfs fc glusterfs quobyte gcePersistentDisk awsElasticBlockStore azureDisk azureFile cinder flexVolume portworxVolume scaleIO storageos
+{{- end }}
+{{- define "decdn-node.originOtherSources" -}}
+hostPath emptyDir image ephemeral
+{{- end }}
+
+{{/* origin.volume's source, with readOnly forced on where the source has it. */}}
+{{- define "decdn-node.originVolume" -}}
+{{- $v := deepCopy (default (dict) (get (default (dict) .Values.origin) "volume")) }}
+{{- range $src := splitList " " (include "decdn-node.originReadOnlySources" .) }}
+{{- if kindIs "map" (get $v $src) }}
+{{- $_ := set (get $v $src) "readOnly" true }}
+{{- end }}
+{{- end }}
+{{- toYaml $v }}
+{{- end }}
 
 {{/* ---------------------------------------------------------------------------
 Required Secret references (the chart never creates a Secret).
@@ -85,16 +124,28 @@ Required Secret references (the chart never creates a Secret).
 {{/* ---------------------------------------------------------------------------
 Pod-level overrides that would silently break a chart invariant. Fail loud rather
 than let a values override win:
+- a full name over 52 characters (the StatefulSet could create no pod);
 - podLabels re-setting a chart label (the selector labels would detach the pod
   from the StatefulSet and Services);
-- podAnnotations re-setting checksum/config (config changes would stop rolling);
+- podAnnotations re-setting checksum/config (config changes would stop rolling),
+  or setting a legacy AppArmor/seccomp annotation to `unconfined`, which would
+  bypass the profile checks below (the annotation is the only way to pick an
+  AppArmor profile before Kubernetes 1.30, so its other values stay allowed);
 - a (pod)securityContext that drops the non-root / no-privilege /
-  read-only-rootfs / all-capabilities-dropped hardening (compared as strings: `get`
+  read-only-rootfs / all-capabilities-dropped / confined (seccomp, AppArmor,
+  masked /proc) hardening, at either level (compared as strings: `get`
   yields "" for a missing key, which `eq` cannot compare with a bool). Helm merges overrides
   into the defaults, so these must hold on the merged values, and a `null` that
-  removes one of them fails too.
+  removes one of them fails too: no seccomp profile at either level means
+  Unconfined (the kubelet's default unless it runs with seccompDefault), and no
+  runAsGroup means gid 0 for a uid the
+  image has no passwd entry for.
 --------------------------------------------------------------------------- */}}
 {{- define "decdn-node.validatePod" -}}
+{{- $fullname := include "decdn-node.fullname" . }}
+{{- if gt (len $fullname) 52 }}
+{{- fail (printf "the full name %q is %d characters; a StatefulSet's pods need 52 or fewer (Kubernetes labels each pod with <name>-<revision hash>, 63 characters at most): use a shorter release name, nameOverride or fullnameOverride" $fullname (len $fullname)) }}
+{{- end }}
 {{- $chartLabels := include "decdn-node.labels" . | fromYaml }}
 {{- range $k, $_ := default (dict) .Values.podLabels }}
 {{- if hasKey $chartLabels $k }}
@@ -104,19 +155,48 @@ than let a values override win:
 {{- if hasKey (default (dict) .Values.podAnnotations) "checksum/config" }}
 {{- fail "podAnnotations.checksum/config is set by the chart (it rolls the pod on config changes) and must not be overridden" }}
 {{- end }}
+{{- range $k, $v := default (dict) .Values.podAnnotations }}
+{{- range $legacy := list "container.apparmor.security.beta.kubernetes.io/" "seccomp.security.alpha.kubernetes.io/" "container.seccomp.security.alpha.kubernetes.io/" }}
+{{- if and (hasPrefix $legacy $k) (eq (lower (trim (toString $v))) "unconfined") }}
+{{- fail (printf "podAnnotations.%s=unconfined is refused: an unconfined AppArmor/seccomp profile would bypass the chart's checks (runtime/default and localhost/<profile> are allowed)" $k) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- $psc := default (dict) .Values.podSecurityContext }}
 {{- if not (eq (toString (get $psc "runAsNonRoot")) "true") }}
 {{- fail "podSecurityContext.runAsNonRoot must be true" }}
 {{- end }}
-{{- range $f := list "runAsUser" "runAsGroup" }}
+{{- range $f := list "runAsUser" "runAsGroup" "fsGroup" }}
 {{- if and (hasKey $psc $f) (eq (int (get $psc $f)) 0) }}
 {{- fail (printf "podSecurityContext.%s must not be 0 (root)" $f) }}
 {{- end }}
 {{- end }}
-{{- if eq (dig "seccompProfile" "type" "" $psc) "Unconfined" }}
-{{- fail "podSecurityContext.seccompProfile.type must not be Unconfined" }}
+{{- range (default (list) (get $psc "supplementalGroups")) }}
+{{- if eq (int .) 0 }}
+{{- fail "podSecurityContext.supplementalGroups must not contain 0 (root)" }}
+{{- end }}
 {{- end }}
 {{- $sc := default (dict) .Values.securityContext }}
+{{- /* A container-level profile overrides the pod's, so both levels are checked.
+     `dig <key> nil` is nil for a missing key and a null alike. */}}
+{{- range $ctxName, $ctx := dict "podSecurityContext" $psc "securityContext" $sc }}
+{{- range $p := list "seccompProfile" "appArmorProfile" }}
+{{- $prof := dig $p nil $ctx }}
+{{- if not (or (kindIs "invalid" $prof) (kindIs "map" $prof)) }}
+{{- fail (printf "%s.%s must be a map with a `type`, got %s" $ctxName $p (kindOf $prof)) }}
+{{- end }}
+{{- if eq (toString (dig $p "type" "" $ctx)) "Unconfined" }}
+{{- fail (printf "%s.%s.type must not be Unconfined" $ctxName $p) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $seccomp := default (toString (dig "seccompProfile" "type" "" $psc)) (toString (dig "seccompProfile" "type" "" $sc)) }}
+{{- if not (has $seccomp (list "RuntimeDefault" "Localhost")) }}
+{{- fail "seccompProfile.type must be RuntimeDefault or Localhost (securityContext, else podSecurityContext): with no profile the container runs Unconfined" }}
+{{- end }}
+{{- if and (kindIs "invalid" (dig "runAsGroup" nil $sc)) (kindIs "invalid" (dig "runAsGroup" nil $psc)) }}
+{{- fail "runAsGroup must be set (podSecurityContext or securityContext): a uid the image has no passwd entry for would otherwise run with gid 0" }}
+{{- end }}
 {{- if not (eq (toString (get $sc "allowPrivilegeEscalation")) "false") }}
 {{- fail "securityContext.allowPrivilegeEscalation must be false" }}
 {{- end }}
@@ -128,6 +208,12 @@ than let a values override win:
 {{- end }}
 {{- if or (eq (toString (get $sc "runAsNonRoot")) "false") (and (hasKey $sc "runAsUser") (eq (int (get $sc "runAsUser")) 0)) }}
 {{- fail "securityContext must not run as root (runAsNonRoot=false or runAsUser=0)" }}
+{{- end }}
+{{- if and (hasKey $sc "runAsGroup") (eq (int (get $sc "runAsGroup")) 0) }}
+{{- fail "securityContext.runAsGroup must not be 0 (root)" }}
+{{- end }}
+{{- if eq (toString (get $sc "procMount")) "Unmasked" }}
+{{- fail "securityContext.procMount must not be Unmasked" }}
 {{- end }}
 {{- $caps := default (dict) (get $sc "capabilities") }}
 {{- if not (has "ALL" (default (list) (get $caps "drop"))) }}
@@ -202,6 +288,30 @@ Arg: dict "cfg" <map> "root" <$>
 {{- $_ := set $cfg $section $table }}
 {{- end }}
 
+{{- /* Upstream's validate_port_layout (decdn crates/common/src/config/mod.rs):
+     QUIC, metrics and admin ports pairwise distinct, so fail before the pod
+     crash-loops. QUIC (UDP) could share a number with a TCP port without a bind
+     clash, but the daemon refuses it as a typo; metrics and admin (both TCP) would
+     clash outright. admin_port defaults to 9191; 0 disables the admin RPC. */}}
+{{- $ports := list (list "quic.port" (int $root.Values.quic.port)) (list "metrics.port" (int $root.Values.metrics.port)) }}
+{{- $adminRaw := dig "admin_port" 9191 $cfg.observability }}
+{{- /* Upstream types it Option<u16>: anything else crash-loops the daemon. (`or`
+     short-circuits, so floor never sees a non-number.) */}}
+{{- if or (not (has (kindOf $adminRaw) (list "float64" "int64" "int"))) (ne (float64 $adminRaw) (floor $adminRaw)) (lt (float64 $adminRaw) 0.0) (gt (float64 $adminRaw) 65535.0) }}
+{{- fail (printf "config.observability.admin_port must be a whole number from 0 to 65535 (0 disables the admin RPC), got %s %q" (kindOf $adminRaw) (toString $adminRaw)) }}
+{{- end }}
+{{- $admin := int $adminRaw }}
+{{- if ne $admin 0 }}
+{{- $ports = append $ports (list "config.observability.admin_port" $admin) }}
+{{- end }}
+{{- range $i, $a := $ports }}
+{{- range $j, $b := $ports }}
+{{- if and (lt $i $j) (eq (index $a 1) (index $b 1)) }}
+{{- fail (printf "%s and %s are both %d: the daemon refuses a shared port number" (index $a 0) (index $b 0) (index $a 1)) }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{- $cache := $cfg.cache }}
 {{- /* cache always exists: the managed cache_dir was just set on it */}}
 {{- $hasOrigin := not (empty (get $cache "origin")) }}
@@ -211,6 +321,42 @@ Arg: dict "cfg" <map> "root" <$>
 {{- end }}
 {{- if and $hasOrigin $hasOrigins }}
 {{- fail "config.cache.origin and config.cache.origins are mutually exclusive" }}
+{{- end }}
+{{- /* An fs origin reads origin.volume, mounted read-only at originDir: its path
+     must lie there, and the volume must exist and be used. */}}
+{{- $originDir := include "decdn-node.originDir" $root }}
+{{- $originValues := default (dict) $root.Values.origin }}
+{{- $originVolume := get $originValues "volume" }}
+{{- if and (get $originValues "subPath") (not $originVolume) }}
+{{- fail "origin.subPath is set without origin.volume: it selects a directory of that volume" }}
+{{- end }}
+{{- $roSources := splitList " " (include "decdn-node.originReadOnlySources" $root) }}
+{{- $otherSources := splitList " " (include "decdn-node.originOtherSources" $root) }}
+{{- range $src, $_ := default (dict) $originVolume }}
+{{- if not (or (has $src $roSources) (has $src $otherSources)) }}
+{{- fail (printf "origin.volume.%s is not supported: use a source the chart can force read-only (%s) or one of %s" $src (join ", " $roSources) (join ", " $otherSources)) }}
+{{- end }}
+{{- end }}
+{{- $origins := ternary (list (get $cache "origin")) (default (list) (get $cache "origins")) $hasOrigin }}
+{{- $fsOrigins := 0 }}
+{{- range $origins }}
+{{- if and (kindIs "map" .) (eq (toString (get . "kind")) "fs") }}
+{{- $fsOrigins = add1 $fsOrigins }}
+{{- if kindIs "invalid" (dig "path" nil .) }}
+{{- fail (printf "config.cache: an fs origin needs a path, %s or a directory under it" $originDir) }}
+{{- end }}
+{{- $path := toString (get . "path") }}
+{{- $underMount := or (eq $path $originDir) (hasPrefix (printf "%s/" $originDir) $path) }}
+{{- if or (not $underMount) (regexMatch "(^|/)\\.\\.(/|$)" $path) }}
+{{- fail (printf "config.cache: an fs origin's path must be %s or a directory under it, where origin.volume is mounted (got %q)" $originDir $path) }}
+{{- end }}
+{{- if not $originVolume }}
+{{- fail (printf "config.cache: an fs origin needs origin.volume, the volume holding its content (mounted read-only at %s)" $originDir) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if and $originVolume (eq $fsOrigins 0) }}
+{{- fail "origin.volume is set, but no config.cache origin has kind fs: remove it, or add the fs origin that reads it" }}
 {{- end }}
 {{- /* Ported from the decdn_node role (0f58d03): a node with no origin can only
      fill a miss from other nodes, so pull-through defaults on; with an origin, off. */}}
