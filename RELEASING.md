@@ -236,11 +236,14 @@ sha256sum --check SHA256SUMS
 
 Every chart release after 0.1.0 also carries SLSA build-provenance attestations, for the
 pushed chart and for the `.tgz` attached to the GitHub Release. They name the commit and
-the workflow run that built it:
+the workflow run that built it. `--signer-workflow` alone accepts that workflow run from
+any branch or tag, so `--source-ref` pins the release tag, as the cosign identity does:
 
 ```bash
 gh attestation verify oci://ghcr.io/decdn/charts/decdn-node:X.Y.Z \
-  --repo decdn/devops --signer-workflow decdn/devops/.github/workflows/release-chart.yml
+  --repo decdn/devops --signer-workflow decdn/devops/.github/workflows/release-chart.yml \
+  --source-ref refs/tags/decdn-node-X.Y.Z
 gh attestation verify decdn-node-X.Y.Z.tgz \
-  --repo decdn/devops --signer-workflow decdn/devops/.github/workflows/release-chart.yml
+  --repo decdn/devops --signer-workflow decdn/devops/.github/workflows/release-chart.yml \
+  --source-ref refs/tags/decdn-node-X.Y.Z
 ```

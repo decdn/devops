@@ -166,7 +166,8 @@ helm install decdn-node-1 oci://ghcr.io/decdn/charts/decdn-node --version 0.1.0 
   -n decdn -f values-node-1.yaml
 ```
 
-Published charts are signed with cosign and carry build-provenance attestations;
+Published charts are signed with cosign, and every release after 0.1.0 also carries
+build-provenance attestations;
 [RELEASING.md](https://github.com/decdn/devops/blob/main/RELEASING.md#verifying-a-release)
 shows how to verify one.
 
