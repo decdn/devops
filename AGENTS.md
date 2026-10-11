@@ -120,7 +120,7 @@ monitoring/             # Grafana dashboards + Prometheus alert rules (maintaine
   sponsord/             # sponsord's (+ promtool unit tests), Ansible/Compose only
   iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible and Compose
 docs/                   # cross-path operator docs: node-operators.md + publishers.md (the front doors), requirements.md, lifecycle.md
-scripts/                # upstream-mirror generators, the compose Alloy config generator (render-compose-alloy.sh), the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh), ansible/Makefile's LIMIT preflight (limit-guard.sh)
+scripts/                # upstream-mirror generators, the compose Alloy config generator (render-compose-alloy.sh), the decdn bump (open-decdn-bump.sh, bump_decdn.py), the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh), ansible/Makefile's LIMIT preflight (limit-guard.sh)
 ```
 
 **Generated mirrors of upstream — regenerate, never hand-edit:**
@@ -152,7 +152,9 @@ example, `appVersion` and the chart's `artifacthub.io/images` tag, and that both
 vendored KEYS hold the keys SECURITY.md publishes; the weekly `upstream-drift` job checks the digests and the mirrors against
 the releases and flags a newer upstream tag. The `--version` check compares the pin in
 `release` mode only (exactly, on `<binary> <version>`). Bump everything together with
-the checklists in `roles/decdn_node/README.md` and `roles/sponsord/README.md`. Both upstream repos are public and also publish their
+the checklists in `roles/decdn_node/README.md` and `roles/sponsord/README.md`;
+`scripts/open-decdn-bump.sh` opens the decdn bump's PR (decdn's `publish-crates.sh`
+runs it after each release). Both upstream repos are public and also publish their
 binaries as crates (`decdn-node`, `decdn-cli`, `sponsord`, `sponsord-onramp`); the
 roles do not install from crates.io (no maintainer signature).
 

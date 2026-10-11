@@ -3,7 +3,7 @@
 # exercises: the ansible/ Makefile's scoping guards, the molecule driver's guards
 # and locks (scripts/molecule.sh), the release gate and scripts/release.sh, the
 # lint-compose and lint-cloud-init invariants (negative cases), compose/decdn-compose's
-# unit tests, the firewall holes
+# and scripts/bump_decdn.py's unit tests, the firewall holes
 # playbooks/group_vars/ derives per host, ci.yml's helm path filter, and — with
 # UPSTREAM=<decdn checkout> — the upstream-mirror generators' exit codes.
 # `make test-scripts` runs it; CI's `scripts` job does too. Needs make, docker
@@ -1171,6 +1171,11 @@ variant "alloy uid default"        "alloy: unset uid/gid"                       
 expect 0 "decdn-compose unit tests pass" \
   env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$repo/compose/tests" -p 'test_*.py'
 expect 2 "decdn-compose refuses an unknown command" "$repo/compose/decdn-compose" deploy
+
+# --- scripts/bump_decdn.py: the decdn bump's file rewrites, on copies of the pin files --
+expect 0 "bump_decdn unit tests pass" \
+  env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$repo/scripts/tests" -p 'test_*.py'
+expect 2 "open-decdn-bump refuses an unknown argument" "$repo/scripts/open-decdn-bump.sh" --execute
 
 # --- lint-cloud-init negatives: each broken variant must be rejected -------------------
 # Skipped without cloud-init on PATH, except in CI (which installs it), so a broken
