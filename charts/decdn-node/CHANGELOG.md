@@ -58,17 +58,21 @@ Initial chart (pre-1.0; the values shape may still change).
 
 - `origin.volume` (+ `origin.subPath`): an fs origin's content, from any one
   Kubernetes volume source, mounted read-only at `/srv/decdn-origin` (the Compose
-  path) in the daemon container only. An fs origin's `path` must lie there; the
-  render fails on an fs origin without the volume and on a volume no fs origin
-  reads. Before, the content had to sit on the data PVC beside the node identity,
-  writable by the daemon.
+  path) in the daemon container only, with `readOnly` also forced on the source (a
+  PVC, CSI, NFS, …), so the kubelet does not re-group it for `fsGroup`. An fs
+  origin's `path` must lie there; the render fails on an fs origin without a path
+  or the volume, on a volume no fs origin reads, and on `origin.subPath` without
+  a volume. Before, the content had to sit on the data PVC beside the node
+  identity, writable by the daemon.
 
 - A headless governing Service (`<fullname>-headless`, no ports) for the StatefulSet,
-  which pointed at the metrics Service. The metrics and headless Service names are cut
-  to 63 characters; a long `fullnameOverride` made the metrics Service name invalid.
+  whose `serviceName` pointed at the metrics Service.
 - A render-time port-layout check, as upstream's: `quic.port`, `metrics.port` and
-  `config.observability.admin_port` (9191 unless set; 0 disables it) must differ, or
-  the daemon refuses to start.
+  `config.observability.admin_port` (9191 unless set; 0 disables it; a number) must
+  differ, or the daemon refuses to start.
+- A render-time cap of 52 characters on the full name: a StatefulSet's pods carry a
+  `<name>-<revision hash>` label of at most 63 characters, so a longer name created
+  no pod (and made the metrics Service name invalid).
 
 ### Changed
 
@@ -87,11 +91,15 @@ Initial chart (pre-1.0; the values shape may still change).
   file is `decdn-node-image-digest.txt`. The config schema is unchanged.
 
 - README and install notes: the node cannot see the public address the chart
-  exposes (a pod sees its pod IP, and iroh observes the Kubernetes node's outbound
-  address, not the load balancer's), so peers learn it only from the node's on-chain
-  `multiaddrs`. The notes print the `decdn node update-multiaddrs --multiaddr …`
-  command for the LoadBalancer, NodePort or hostPort address, and warn when hostPort
-  and a public Service are both enabled. The README no longer says a LoadBalancer
+  exposes (a pod sees its pod IP, and iroh observes the cluster's egress address,
+  not the load balancer's), so registry readers learn it only from the node's
+  on-chain `multiaddrs`. The notes print `decdn setup --multiaddr …` (not yet
+  registered) and `decdn node update-multiaddrs --multiaddr …` (registered) for the
+  LoadBalancer, NodePort or hostPort address, name the pod's own Kubernetes node
+  where `externalTrafficPolicy: Local` or hostPort requires it, say when no public
+  address is exposed, and warn when hostPort and a public Service are both enabled.
+  Without `--multiaddr`, `decdn setup` registers the public address of the machine
+  it runs on, which is not the node's. The README no longer says a LoadBalancer
   alone gives the node a stable public address.
 
 - The StatefulSet uses `podManagementPolicy: Parallel`. With `OrderedReady`, a
@@ -99,8 +107,9 @@ Initial chart (pre-1.0; the values shape may still change).
   `helm upgrade` or `helm rollback` never replaced, until it was deleted by hand.
 
 - README: `persistence.size` is fixed at install (an upgrade cannot change the
-  StatefulSet's `volumeClaimTemplates`), with the steps to grow the data volume; and
-  `decdn setup` needs `--multiaddr` for the node's public address.
+  StatefulSet's `volumeClaimTemplates`), with the steps to grow the data volume; the
+  same orphan-and-upgrade step moves an install from `main` onto this chart's
+  immutable `podManagementPolicy` and `serviceName`.
 
 ### Fixed
 
@@ -121,5 +130,7 @@ Initial chart (pre-1.0; the values shape may still change).
 - The pod-hardening render check covers the container level too. A container
   `securityContext.seccompProfile` of `Unconfined` used to render, although the
   values and README said the render fails; it now fails, as do an `Unconfined`
-  `appArmorProfile` at either level, a container `runAsGroup: 0`, a supplemental
-  group 0 and `procMount: Unmasked`.
+  `appArmorProfile` at either level, a container `runAsGroup: 0`, `fsGroup: 0`, a
+  supplemental group 0, `procMount: Unmasked`, a seccomp profile removed at both
+  levels (the kubelet then runs Unconfined), a `runAsGroup` removed at both levels,
+  and the legacy AppArmor/seccomp pod annotations, which Kubernetes still honours.

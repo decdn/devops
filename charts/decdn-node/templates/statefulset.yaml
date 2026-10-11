@@ -1,5 +1,6 @@
 {{- include "decdn-node.validateSecrets" . }}
 {{- include "decdn-node.validatePod" . }}
+{{- $origin := default (dict) .Values.origin }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -16,8 +17,8 @@ spec:
   # Parallel, not OrderedReady: with OrderedReady the controller waits for an
   # unready pod before acting, so a config that crash-loops the pod (an unknown
   # key, deny_unknown_fields upstream) stays stuck after the fix is rolled out
-  # until someone deletes the pod (the docs' "forced rollback"). With one
-  # replica nothing else changes. Immutable after install.
+  # until someone deletes the pod (Kubernetes docs, StatefulSet § Forced
+  # rollback). With one replica nothing else changes. Immutable after install.
   podManagementPolicy: Parallel
   updateStrategy:
     type: RollingUpdate
@@ -165,12 +166,12 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
-            {{- if .Values.origin.volume }}
+            {{- if $origin.volume }}
             # An fs origin's content: read-only, and never in `prepare`.
             - name: origin
               mountPath: {{ include "decdn-node.originDir" . }}
               readOnly: true
-              {{- with .Values.origin.subPath }}
+              {{- with $origin.subPath }}
               subPath: {{ . | quote }}
               {{- end }}
             {{- end }}
@@ -197,9 +198,9 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 64Mi
-        {{- with .Values.origin.volume }}
+        {{- if $origin.volume }}
         - name: origin
-          {{- toYaml . | nindent 10 }}
+          {{- include "decdn-node.originVolume" . | nindent 10 }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

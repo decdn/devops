@@ -152,8 +152,10 @@ persistence:
 # Any Kubernetes volume source, without `name`, e.g.
 #   volume: {persistentVolumeClaim: {claimName: my-namespace-content}}
 #   volume: {nfs: {server: nfs.example.internal, path: /exports/content}}
-# The files must be readable by the pod's uid or fsGroup. hostPath works, but ties
-# the node to one host: prefer a PVC, NFS or CSI source.
+# The chart forces readOnly on the source too (PVC, CSI, NFS, …), so the kubelet
+# does not re-group it for fsGroup: the files must already be readable by the
+# pod's uid or fsGroup. hostPath works, but ties the node to one host: prefer a
+# PVC, NFS or CSI source.
 origin:
   volume: {}
   subPath: ""
@@ -228,10 +230,11 @@ livenessProbe:
   failureThreshold: 6
 
 # Overridable (e.g. a different non-root uid), but the render fails if the merged
-# result runs as root (uid or gid 0, or a supplemental group 0), allows privilege
-# escalation or privileged mode, has a writable root filesystem, adds
-# capabilities, drops fewer than ALL, unmasks /proc, or uses an Unconfined seccomp
-# or AppArmor profile at either the pod or the container level.
+# result runs as root (uid, gid or fsGroup 0, a supplemental group 0, or no
+# runAsGroup at either level), allows privilege escalation or privileged mode, has
+# a writable root filesystem, adds capabilities, drops fewer than ALL, unmasks
+# /proc, uses an Unconfined seccomp or AppArmor profile at either the pod or the
+# container level, or has no RuntimeDefault/Localhost seccomp profile at all.
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 1000

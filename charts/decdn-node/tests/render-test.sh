@@ -412,7 +412,8 @@ hsvc = one("Service", "headless")
 check(hsvc is not None and spec["serviceName"] == hsvc["metadata"]["name"], "serviceName must name the headless Service")
 check(hsvc is not None and hsvc["spec"].get("clusterIP") == "None" and not hsvc["spec"].get("ports"),
       "governing Service must be headless with no ports")
-check(all(len(d["metadata"]["name"]) <= 63 for d in docs if d["kind"] == "Service"), "Service name over 63 characters")
+check(all(d["spec"]["selector"] == spec["selector"]["matchLabels"] for d in docs if d["kind"] == "Service"),
+      "a Service selector does not match the pod")
 check(msvc["spec"]["type"] == "ClusterIP", "metrics Service not ClusterIP")
 check([(p["port"], p["protocol"]) for p in msvc["spec"]["ports"]] == [(metrics_port, "TCP")], "metrics Service ports")
 qsvc = one("Service", "quic")
@@ -483,7 +484,7 @@ else:
                and d["metadata"]["labels"].get("app.kubernetes.io/component") == "dashboard"],
           "dashboard ConfigMaps rendered while disabled")
 if name == "ci-origins.yaml":
-    check(ports["quic"].get("hostPort") == 5000, "hostPort")
+    check(ports["quic"].get("hostPort") == 5001 and ports["quic"]["containerPort"] == quic_port, "hostPort")
     check(qsvc["spec"]["ports"][0].get("nodePort") == 30443, "nodePort")
     check(len(tcp_rules) == 0, "metrics ingress rule rendered with empty from")
     check([o["kind"] for o in cfg["cache"]["origins"]] == ["http", "fs", "s3"], "origins count/order")
@@ -493,15 +494,18 @@ if name == "ci-origins.yaml":
     check([i["key"] for i in vols["keys"]["secret"]["items"]] == ["ks", "ns", "pw"], "custom key names")
     check(pod["serviceAccountName"] == "decdn-sa" and one("ServiceAccount") is None, "external ServiceAccount")
     # The fs origin's content: read-only, in the daemon only, never in `prepare`.
-    check(vols.get("origin") == {"name": "origin", "persistentVolumeClaim": {"claimName": "decdn-origin-content"}},
-          "origin volume")
+    # readOnly on the source too: the kubelet skips fsGroup ownership only for that.
+    check(vols.get("origin") == {"name": "origin",
+                                 "persistentVolumeClaim": {"claimName": "decdn-origin-content", "readOnly": True}},
+          "origin volume (read-only source)")
     check([m for m in main["volumeMounts"] if m["name"] == "origin"]
           == [{"name": "origin", "mountPath": "/srv/decdn-origin", "readOnly": True, "subPath": "published"}],
           "origin mount (read-only at /srv/decdn-origin)")
     check(not any(m["name"] == "origin" for m in init["volumeMounts"]), "origin volume mounted in prepare")
     check(cfg["cache"]["origins"][1]["path"] == "/srv/decdn-origin/mirror", "fs origin path")
 else:
-    check("origin" not in vols, "origin volume rendered without origin.volume")
+    check("origin" not in vols and not any(m["name"] == "origin" for m in main["volumeMounts"]),
+          "origin volume or mount rendered without origin.volume")
 
 if errors:
     print("\n".join(f"  {e}" for e in errors), file=sys.stderr)
@@ -561,11 +565,17 @@ expect_fail "fs origin without volume"     template 'an fs origin needs origin.v
 expect_fail "fs origin outside the mount"  template "fs origin's path must be /srv/decdn-origin" --set-json 'origin.volume={"emptyDir":{}}' --set config.cache.origin.kind=fs --set config.cache.origin.path=/var/lib/decdn/origin
 expect_fail "fs origin path escapes"       template "fs origin's path must be /srv/decdn-origin" --set-json 'origin.volume={"emptyDir":{}}' --set-json 'config.cache.origins=[{"kind":"fs","path":"/srv/decdn-origin/../etc"}]'
 expect_fail "fs origin path prefix only"   template "fs origin's path must be /srv/decdn-origin" --set-json 'origin.volume={"emptyDir":{}}' --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin-x
+expect_fail "second fs origin outside"     template 'must be /srv/decdn-origin.*got "/var/x"'    --set-json 'origin.volume={"emptyDir":{}}' --set-json 'config.cache.origins=[{"kind":"fs","path":"/srv/decdn-origin/a"},{"kind":"fs","path":"/var/x"}]'
+expect_fail "fs origin path ends in .."    template "fs origin's path must be /srv/decdn-origin" --set-json 'origin.volume={"emptyDir":{}}' --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin/..
+expect_fail "fs origin without a path"     template 'an fs origin needs a path'                  --set-json 'origin.volume={"emptyDir":{}}' --set-json 'config.cache.origins=[{"kind":"http","url":"https://x.invalid/"},{"kind":"fs","path":null}]'
+expect_fail "origin.subPath, no volume"    template 'origin.subPath is set without origin.volume' --set origin.subPath=published
+expect_fail "admin_port not a number"      template 'admin_port must be a number'                --set-json 'config.observability.admin_port="0"'
+expect_fail "full name over 52"            template 'is 53 characters'                           --set fullnameOverride="$(printf 'n%.0s' $(seq 1 53))"
 expect_fail "origin.volume, no fs origin"  template 'origin.volume is set, but no config.cache origin has kind fs' --set-json 'origin.volume={"emptyDir":{}}'
 expect_fail "origin.volume, two sources"   schema   '/origin/volume'                             --set-json 'origin.volume={"emptyDir":{},"nfs":{"server":"x","path":"/"}}'
 expect_fail "origin.volume with a name"    schema   '/origin/volume'                             --set-json 'origin.volume={"name":"x"}'
 expect_fail "origin.subPath escapes"       schema   '/origin/subPath'                            --set origin.subPath=../data
-expect_fail "null inside a list element"   template 'null inside a list element'                 --set-json 'config.cache.origins=[{"kind":"fs","path":null}]'
+expect_fail "null inside a list element"   template 'null inside a list element'                 --set-json 'config.cache.origins=[{"kind":"http","url":null}]'
 expect_fail "policy off, not acknowledged" template 'allowUnrestrictedMetrics'                   --set networkPolicy.allowUnrestrictedMetrics=false
 expect_fail "podLabels overrides selector" template 'podLabels.app.kubernetes.io/instance is set by the chart' --set-json 'podLabels={"app.kubernetes.io/instance":"x"}'
 expect_fail "podAnnotations checksum"      template 'podAnnotations.checksum/config is set by the chart' --set-json 'podAnnotations={"checksum/config":"pinned"}'
@@ -574,11 +584,18 @@ expect_fail "runAsNonRoot removed"         template 'runAsNonRoot must be true' 
 expect_fail "runAsUser 0"                  template 'runAsUser must not be 0'                    --set podSecurityContext.runAsUser=0
 expect_fail "container runAsUser 0"        template 'must not run as root'                       --set securityContext.runAsUser=0
 expect_fail "seccomp Unconfined"           template 'podSecurityContext.seccompProfile.type must not be Unconfined' --set podSecurityContext.seccompProfile.type=Unconfined
-expect_fail "container seccomp Unconfined" template 'securityContext.seccompProfile.type must not be Unconfined' --set securityContext.seccompProfile.type=Unconfined
+expect_fail "container seccomp Unconfined" template ': securityContext\.seccompProfile\.type must not be Unconfined' --set securityContext.seccompProfile.type=Unconfined
 expect_fail "AppArmor Unconfined"          template 'podSecurityContext.appArmorProfile.type must not be Unconfined' --set podSecurityContext.appArmorProfile.type=Unconfined
-expect_fail "container AppArmor Unconfined" template 'securityContext.appArmorProfile.type must not be Unconfined' --set securityContext.appArmorProfile.type=Unconfined
-expect_fail "container runAsGroup 0"       template 'securityContext.runAsGroup must not be 0'   --set securityContext.runAsGroup=0
+expect_fail "container AppArmor Unconfined" template ': securityContext\.appArmorProfile\.type must not be Unconfined' --set securityContext.appArmorProfile.type=Unconfined
+expect_fail "container runAsGroup 0"       template ': securityContext\.runAsGroup must not be 0'   --set securityContext.runAsGroup=0
 expect_fail "supplemental group 0"         template 'supplementalGroups must not contain 0'      --set-json 'podSecurityContext.supplementalGroups=[1000,0]'
+expect_fail "pod runAsGroup 0"             template 'podSecurityContext.runAsGroup must not be 0' --set podSecurityContext.runAsGroup=0
+expect_fail "fsGroup 0"                    template 'podSecurityContext.fsGroup must not be 0'    --set podSecurityContext.fsGroup=0
+expect_fail "runAsGroup removed"           template 'runAsGroup must be set'                     --set podSecurityContext.runAsUser=2000 --set podSecurityContext.runAsGroup=null
+expect_fail "seccomp profile removed"      template 'seccompProfile.type must be RuntimeDefault or Localhost' --set podSecurityContext.seccompProfile=null
+expect_fail "seccomp profile not a map"    template 'securityContext.seccompProfile must be a map' --set-json 'securityContext.seccompProfile="Unconfined"'
+expect_fail "legacy AppArmor annotation"   template 'container.apparmor.security.beta.kubernetes.io/decdn-node is refused' --set-json 'podAnnotations={"container.apparmor.security.beta.kubernetes.io/decdn-node":"unconfined"}'
+expect_fail "legacy seccomp annotation"    template 'seccomp.security.alpha.kubernetes.io/pod is refused' --set-json 'podAnnotations={"seccomp.security.alpha.kubernetes.io/pod":"unconfined"}'
 expect_fail "procMount Unmasked"           template 'procMount must not be Unmasked'             --set securityContext.procMount=Unmasked
 expect_fail "privilege escalation"         template 'allowPrivilegeEscalation must be false'     --set securityContext.allowPrivilegeEscalation=true
 expect_fail "privileged"                   template 'privileged must not be true'                --set securityContext.privileged=true
@@ -590,18 +607,68 @@ expect_fail "non-string rule label"        schema   '/metrics/prometheusRule/rul
 expect_fail "invalid dashboard label key"  schema   '/metrics/grafanaDashboards/label'           --set 'metrics.grafanaDashboards.label=not a label'
 expect_fail "unknown monitoring knob"      schema   "additional propert(y|ies) 'rules'"          --set metrics.prometheusRule.rules=x
 
+# --- edge cases that must RENDER ---------------------------------------------------
+expect_render() { # <description> <helm args...>
+  local desc="$1"; shift
+  helm template t "$chart" -f "$base" "$@" >/dev/null 2>"$work/render.err" \
+    || { cat "$work/render.err" >&2; fail "render should have passed: $desc"; }
+  pass "renders: $desc"
+}
+expect_render "admin_port 0 frees 9191"        --set config.observability.admin_port=0 --set metrics.port=9191
+expect_render "fs origin at the mount root"    --set-json 'origin.volume={"emptyDir":{}}' --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin
+expect_render "fs origin, trailing slash"      --set-json 'origin.volume={"emptyDir":{}}' --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin/
+expect_render "two fs origins, one volume"     --set-json 'origin.volume={"emptyDir":{}}' --set-json 'config.cache.origins=[{"kind":"fs","path":"/srv/decdn-origin/a"},{"kind":"fs","path":"/srv/decdn-origin/b"}]'
+expect_render "fs origin dir named ..x"        --set-json 'origin.volume={"emptyDir":{}}' --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin/..x
+expect_render "container-level seccomp only"   --set podSecurityContext.seccompProfile=null --set securityContext.seccompProfile.type=Localhost --set securityContext.seccompProfile.localhostProfile=decdn.json
+expect_render "container-level runAsGroup only" --set podSecurityContext.runAsGroup=null --set securityContext.runAsGroup=3000
+expect_render "origin: null"                   --set origin=null
+
 # Long release names: every rendered object keeps a unique name. The dashboard
 # ConfigMaps used to truncate to 63 characters and collide.
-long="$(printf 'n%.0s' $(seq 1 63))"
+long="$(printf 'n%.0s' $(seq 1 52))"
 helm template t "$chart" -f "$chart/ci/ci-values.yaml" --set fullnameOverride="$long" \
   | yq -N '.kind + "/" + .metadata.name' | grep -v '^null' | sort | uniq -d > "$work/dupes"
-[ ! -s "$work/dupes" ] || { cat "$work/dupes" >&2; fail "duplicate object names with a 63-character fullname"; }
-pass "unique object names with a 63-character fullname"
-# Service names are DNS labels: 63 characters, whatever the fullname.
+[ ! -s "$work/dupes" ] || { cat "$work/dupes" >&2; fail "duplicate object names with a 52-character fullname (the cap)"; }
+pass "unique object names with a 52-character fullname (the cap)"
+# Service names are DNS labels: 63 characters, with the longest fullname allowed.
 helm template t "$chart" -f "$chart/ci/ci-values.yaml" --set fullnameOverride="$long" \
   | yq -N 'select(.kind == "Service") | .metadata.name' | awk 'length > 63' > "$work/long-svc"
-[ ! -s "$work/long-svc" ] || { cat "$work/long-svc" >&2; fail "Service name over 63 characters with a 63-character fullname"; }
-pass "Service names fit 63 characters with a 63-character fullname"
+[ ! -s "$work/long-svc" ] || { cat "$work/long-svc" >&2; fail "Service name over 63 characters with a 52-character fullname (the cap)"; }
+pass "Service names fit 63 characters with a 52-character fullname (the cap)"
+
+# Install notes: `helm template` executes NOTES.txt but prints none of it, so read
+# them from a client-side dry-run install (no cluster needed). Captured, then
+# grepped: an early `grep -q` exit in a pipe would SIGPIPE helm under pipefail.
+notes_of() { helm install t "$chart" --dry-run=client "$@" 2>/dev/null | sed -n '/^NOTES:/,$p'; }
+has() { grep -qF -- "$1" <<<"$n"; }
+n="$(notes_of -f "$chart/ci/ci-values.yaml")" || fail "notes render (ci-values)"
+# $LB_IP is literal: the notes print it for the operator's shell to expand.
+# shellcheck disable=SC2016
+has 'decdn setup --multiaddr "/ip4/$LB_IP/udp/4433/quic-v1"' || fail "notes: LoadBalancer setup command"
+# shellcheck disable=SC2016
+has 'decdn node update-multiaddrs --multiaddr "/ip4/$LB_IP/udp/4433/quic-v1"' || fail "notes: LoadBalancer update command"
+has "LB_IP=\$(kubectl" || fail "notes: LB_IP lookup"
+has 'registers the public address of the' || fail "notes: setup without --multiaddr"
+n="$(notes_of -f "$chart/ci/ci-origins.yaml")" || fail "notes render (ci-origins)"
+has "--multiaddr \"/ip4/<public IP of the pod's k8s node>/udp/30443/quic-v1\" --multiaddr \"/ip4/<public IP of the pod's k8s node>/udp/5001/quic-v1\"" \
+  || fail "notes: NodePort (Local) and hostPort multiaddrs"
+has 'no other node' || fail "notes: NodePort under externalTrafficPolicy Local"
+has 'WARNING: quic.hostPort and the public NodePort Service' || fail "notes: hostPort + Service warning"
+n="$(notes_of -f "$chart/ci/ci-origins.yaml" --set service.nodePort=null --set service.externalTrafficPolicy=Cluster)" \
+  || fail "notes render (NodePort, Cluster)"
+if ! { has "/ip4/<any k8s node's public IP>/udp/\$NODE_PORT/quic-v1" && has "NODE_PORT=\$(kubectl"; }; then
+  fail "notes: NodePort without nodePort, externalTrafficPolicy Cluster"
+fi
+n="$(notes_of -f "$base" --set service.enabled=false --set quic.hostPort.enabled=true --set quic.hostPort.port=5001)" \
+  || fail "notes render (hostPort only)"
+has '/udp/5001/quic-v1"' || fail "notes: hostPort multiaddr must use quic.hostPort.port"
+! grep -qE 'WARNING|LB_IP|NODE_PORT' <<<"$n" || fail "notes: hostPort-only node told about a Service"
+n="$(notes_of -f "$base")" || fail "notes render (ClusterIP)"
+has 'No public QUIC address' || fail "notes: ClusterIP-only node not told it has no public address"
+! has 'update-multiaddrs' || fail "notes: multiaddr command for a ClusterIP-only node"
+n="$(notes_of -f "$base" --set config.observability.admin_port=0 --set metrics.port=9191)" || fail "notes render (admin off)"
+if ! { has 'admin RPC is disabled' && ! has 'port-forward'; }; then fail "notes: admin_port 0"; fi
+pass "install notes: multiaddrs per exposure, hostPort warning, no-address note, admin RPC"
 
 # Dashboards enabled with none in files/monitoring/ must fail the render, not render nothing.
 nodash="$work/nodash"

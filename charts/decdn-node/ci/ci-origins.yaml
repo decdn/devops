@@ -31,7 +31,8 @@ quic:
   port: 5000
   hostPort:
     enabled: true
-    port: 5000
+    # Not quic.port: a swapped port anywhere must show.
+    port: 5001
 metrics:
   port: 9100
 networkPolicy:
