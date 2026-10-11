@@ -75,8 +75,9 @@ sudoedit /etc/decdn/decdn.env                         # DECDN_RPC_URL=https://â€
 sudo compose/decdn-compose up                         # preflight, then docker compose up -d
 sudo compose/decdn-compose health
 sudo compose/decdn-compose cli whoami                 # the node's wallet: fund it before setup
-sudo compose/decdn-compose cli setup --mbps 100 --region DE --dry-run
-sudo compose/decdn-compose cli setup --mbps 100 --region DE   # stake and register (ADR 019 Phase 2)
+MA=/ip4/<public-ip>/udp/4433/quic-v1                  # behind 1:1 NAT too; dual-stack: add --multiaddr /ip6/â€¦
+sudo compose/decdn-compose cli setup --mbps 100 --region DE --multiaddr "$MA" --dry-run
+sudo compose/decdn-compose cli setup --mbps 100 --region DE --multiaddr "$MA"   # stake and register (ADR 019 Phase 2)
 ```
 
 Compose installs the node, not the host around it: firewall, SSH and patching stay

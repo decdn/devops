@@ -111,10 +111,14 @@ release's signed digest file; [Operate](#operate) says how to take a newer one.
    described in
    [`roles/decdn_node/README.md` § On-chain onboarding](../ansible/roles/decdn_node/README.md#on-chain-onboarding).
    Find the node's wallet with `sudo compose/decdn-compose cli whoami` and fund it, then
-   run `sudo compose/decdn-compose cli setup --mbps 100 --region DE --dry-run`, and
-   again without `--dry-run` (`--mbps` and `--region` are required). `node.toml` still
-   names the public RPC `config init` wrote, so `cli` hands the CLI a copy whose `rpc_url` reads your
-   endpoint from `decdn.env` (`"${DECDN_RPC_URL}"`, which the config loader
+   run `sudo compose/decdn-compose cli setup --mbps 100 --region DE --multiaddr
+   /ip4/<public-ip>/udp/4433/quic-v1 --dry-run`, and again without `--dry-run`
+   (`--mbps` and `--region` are required). Pass the public address even on a cloud VM
+   behind 1:1 NAT: left out, `setup` registers only a public address on the default
+   route, so such a host registers none. On a dual-stack host, add
+   `--multiaddr /ip6/<public-ipv6>/udp/4433/quic-v1` as well. `node.toml` still
+   names the public RPC `config init` wrote, so `cli` hands the CLI a copy whose
+   `rpc_url` reads your endpoint from `decdn.env` (`"${DECDN_RPC_URL}"`, which the config loader
    expands): it never appears on a command line, in a sudo log or in shell history.
    The node serves paid traffic only after that.
 
