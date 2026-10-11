@@ -52,5 +52,5 @@ checkout's `Cargo.lock`. It does run the build as an unprivileged user, never ro
 
 Published Helm charts (`oci://ghcr.io/decdn/charts/decdn-node`) are signed with a
 keyless cosign signature from this repo's chart release workflow, and carry
-build-provenance attestations from it (from the release after 0.1.0); see
+build-provenance attestations from it (every release after 0.1.0); see
 [RELEASING.md § Verifying a release](RELEASING.md#verifying-a-release).

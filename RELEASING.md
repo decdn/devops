@@ -6,7 +6,7 @@ The repo publishes three artifacts, each on its own version and released by its 
 |----------|-----|----------|--------------|---------|
 | `decdn.node` Ansible collection (node operators) | `node-collection-vX.Y.Z` | [`release-collection.yml`](.github/workflows/release-collection.yml) | [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/) | `ansible-galaxy collection install decdn.node:==X.Y.Z` |
 | `decdn.publisher` Ansible collection (publishers) | `publisher-collection-vX.Y.Z` | [`release-collection.yml`](.github/workflows/release-collection.yml) | [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/) | `ansible-galaxy collection install decdn.publisher:==X.Y.Z` |
-| `decdn-node` Helm chart | `decdn-node-X.Y.Z` | [`release-chart.yml`](.github/workflows/release-chart.yml) | `oci://ghcr.io/decdn/charts`, signed with cosign (keyless), with build-provenance attestations | `helm install <release> oci://ghcr.io/decdn/charts/decdn-node --version X.Y.Z` |
+| `decdn-node` Helm chart | `decdn-node-X.Y.Z` | [`release-chart.yml`](.github/workflows/release-chart.yml) | `oci://ghcr.io/decdn/charts`, signed with cosign (keyless), with build-provenance attestations after 0.1.0 | `helm install <release> oci://ghcr.io/decdn/charts/decdn-node --version X.Y.Z` |
 
 Release an artifact when it has changes; the others are not touched. Their versions are
 independent. The one dependency is Galaxy's: `decdn.publisher` requires `decdn.node`
@@ -134,10 +134,10 @@ version instead, so until then, changes are logged there by hand. After that, no
 `[Unreleased]` section is kept: the script refuses one, because every later section is
 generated.
 
-The chart's tag shape (`decdn-node-`) and workflow file name (`release-chart.yml`) are
-part of its cosign certificate identity, and the file name is its attestations' signer
-workflow (see [Verifying a release](#verifying-a-release)): never change either once a
-chart is published.
+The chart's workflow file name (`release-chart.yml`) and tag shape (`decdn-node-X.Y.Z`)
+are both part of its cosign certificate identity and of its attestations' signer
+workflow and source ref (see [Verifying a release](#verifying-a-release)): never change
+either once a chart is published.
 
 ## First release only
 
@@ -192,12 +192,14 @@ Re-run only the failed `publish` job, never the whole workflow: `publish` reuses
 artifact `build` checksummed, while a fresh `build` repackages the chart, which need
 not reproduce the same bytes.
 
-**Chart** (`release-chart.yml`: chart push and signature, then the build-provenance
-attestations, then the Artifact Hub metadata, then the Release). The pushes are
+**Chart** (`release-chart.yml`: the package's attestation, then the chart push and
+signature, then the pushed chart's attestation, then a check that verifies all three
+as a user would, then the Artifact Hub metadata, then the Release). The pushes are
 repeatable: re-pushing the same package moves the version tag to the same digest, a
-re-run attestation is one more for the same digest, and `oras push` moves the
-`artifacthub.io` tag. The Release is not: if `gh release create` made the Release and then failed (an
-asset upload, say), a re-run fails on the existing Release. Finish it by hand with
+re-run adds one more signature and one more attestation for the same digest, and
+`oras push` moves the `artifacthub.io` tag. The Release is not: if `gh release create`
+made the Release and then failed (an asset upload, say), a re-run fails on the existing
+Release. Finish it by hand with
 `gh release upload decdn-node-X.Y.Z --repo decdn/devops <missing assets>` from the
 `release-decdn-node-X.Y.Z` workflow artifact.
 
@@ -220,14 +222,16 @@ gh release create publisher-collection-vX.Y.Z --repo decdn/devops --title "decdn
 
 ## Verifying a release
 
-The chart's signature needs **cosign v3** or later. The release workflow signs with
-cosign v3, which stores the signature as a Sigstore bundle attached to the chart as an
-OCI referrer; cosign v2 does not look there and reports `no signatures found`.
+The release workflow signs the chart with cosign v3, which stores the signature as a
+Sigstore bundle attached to the chart as an OCI referrer. Verify it with cosign v3, or
+with cosign v2.6 or later and `--new-bundle-format=true`; without that flag, cosign v2
+does not look there and reports `no signatures found`.
 
 ```bash
-# The chart's signature: keyless, tied to this repo's chart release workflow and tags.
+# The chart's signature: keyless, tied to this repo's chart release workflow and the
+# release's own tag.
 cosign verify ghcr.io/decdn/charts/decdn-node:X.Y.Z \
-  --certificate-identity-regexp '^https://github\.com/decdn/devops/\.github/workflows/release-chart\.yml@refs/tags/decdn-node-[0-9]+\.[0-9]+\.[0-9]+$' \
+  --certificate-identity https://github.com/decdn/devops/.github/workflows/release-chart.yml@refs/tags/decdn-node-X.Y.Z \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 # The files attached to the GitHub Release.
@@ -235,9 +239,14 @@ sha256sum --check SHA256SUMS
 ```
 
 Every chart release after 0.1.0 also carries SLSA build-provenance attestations, for the
-pushed chart and for the `.tgz` attached to the GitHub Release. They name the commit and
-the workflow run that built it. `--signer-workflow` alone accepts that workflow run from
-any branch or tag, so `--source-ref` pins the release tag, as the cosign identity does:
+pushed chart and for the `.tgz` attached to the GitHub Release
+(`gh release download decdn-node-X.Y.Z --repo decdn/devops`; `helm pull` gives the same
+file). They name the commit and the workflow run that built it, and carry the same
+signer identity as the signature, so on those releases `cosign verify` may list the
+attestation too: the signature is the entry of type
+`https://sigstore.dev/cosign/sign/v1`. `gh attestation verify` needs a logged-in `gh`.
+`--signer-workflow` alone accepts that workflow run from any branch or tag, so
+`--source-ref` pins the release tag, as the cosign identity above does:
 
 ```bash
 gh attestation verify oci://ghcr.io/decdn/charts/decdn-node:X.Y.Z \
@@ -247,3 +256,6 @@ gh attestation verify decdn-node-X.Y.Z.tgz \
   --repo decdn/devops --signer-workflow decdn/devops/.github/workflows/release-chart.yml \
   --source-ref refs/tags/decdn-node-X.Y.Z
 ```
+
+The pushed chart's attestation is also attached to it on ghcr.io: add
+`--bundle-from-oci` to the first command to read that copy instead of GitHub's.

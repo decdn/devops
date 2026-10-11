@@ -161,8 +161,8 @@ config:
 # From a checkout of this repo:
 helm install decdn-node-1 charts/decdn-node -n decdn -f values-node-1.yaml
 
-# From the OCI registry, once the first release is published (RELEASING.md):
-helm install decdn-node-1 oci://ghcr.io/decdn/charts/decdn-node --version 0.1.0 \
+# From the OCI registry, at a released version (CHANGELOG.md):
+helm install decdn-node-1 oci://ghcr.io/decdn/charts/decdn-node --version X.Y.Z \
   -n decdn -f values-node-1.yaml
 ```
 
