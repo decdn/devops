@@ -91,6 +91,10 @@ Initial chart (pre-1.0; the values shape may still change).
   config the daemon rejects (an unknown key) left a crash-looping pod that a fixed
   `helm upgrade` or `helm rollback` never replaced, until it was deleted by hand.
 
+- README: `persistence.size` is fixed at install (an upgrade cannot change the
+  StatefulSet's `volumeClaimTemplates`), with the steps to grow the data volume; and
+  `decdn setup` needs `--multiaddr` for the node's public address.
+
 ### Fixed
 
 - Delivery dashboard: recency seed failures get their own stat panel, which reads the

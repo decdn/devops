@@ -399,6 +399,20 @@ metrics:
   `helm rollback`) replaces the crash-looping pod. Under the `OrderedReady` default the
   controller would wait for that pod to become Ready first, and you would have to
   delete it by hand.
+- **`persistence.size` is fixed at install.** It lives in the StatefulSet's
+  `volumeClaimTemplates`, which Kubernetes does not let an upgrade change, so a new value
+  fails `helm upgrade`. To grow the data volume (the StorageClass must have
+  `allowVolumeExpansion: true`), resize the claim, recreate the StatefulSet object
+  without touching the pod, then upgrade with the new size:
+
+  ```bash
+  kubectl -n decdn patch pvc data-decdn-node-1-0 \
+    -p '{"spec":{"resources":{"requests":{"storage":"40Gi"}}}}'
+  kubectl -n decdn delete statefulset decdn-node-1 --cascade=orphan
+  helm upgrade decdn-node-1 … --set persistence.size=40Gi
+  ```
+
+  The pod keeps running throughout; the upgraded StatefulSet adopts it.
 - **Config changes roll the pod** through the ConfigMap checksum. Secret changes do not:
   after rotating the keystore or RPC URL, run
   `kubectl rollout restart statefulset/<release>`. The daemon's partial
@@ -411,7 +425,9 @@ metrics:
 The node serves paid traffic only after it is staked and registered (ADR 019 Phase 2).
 That is a manual operator step, as it is for the Ansible path. Run `decdn setup`, which
 supports `--dry-run`, from your workstation against the same keystore you put in the
-Secret.
+Secret. Pass the node's public QUIC address with `--multiaddr` (see [Network](#network)):
+from inside the pod the node cannot see it, and without it `decdn setup` registers no
+address.
 
 ## Development
 

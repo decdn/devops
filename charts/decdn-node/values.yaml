@@ -135,6 +135,8 @@ networkPolicy:
 # --- Storage ----------------------------------------------------------------
 # Holds the node identity and the cache. Size it above
 # config.cache.cache_size_mb + cache.disk_headroom_mb (daemon default 8192 MiB).
+# Fixed at install: an upgrade cannot change it (README "Probes and lifecycle" has
+# the resize steps).
 persistence:
   size: 20Gi
   storageClass: ""
