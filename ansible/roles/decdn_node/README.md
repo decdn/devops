@@ -696,8 +696,18 @@ and drop its line from `/etc/cron.deny` and `/etc/at.deny`.
 
 ## Bumping the decdn release
 
-The repo pins one decdn/decdn release everywhere. When upstream cuts a new one (the
-weekly `upstream-drift` workflow fails on it), move every pin in one change:
+The repo pins one decdn/decdn release everywhere, and a new one moves every pin in
+one change. `scripts/open-decdn-bump.sh [vX.Y.Z]` opens that PR: decdn's
+`publish-crates.sh` runs it at the end of each decdn release, and a maintainer runs it
+by hand from a decdn/devops clone (with no tag, it takes decdn's latest release).
+It does steps 1 to 6 and the changelog entries in a worktree at `origin/main`, takes
+the digests from the release's assets once their signatures verify against
+`files/decdn-release-KEYS.asc`, and lists in the PR body what is left: the prose of
+step 7, the chart check against the real binary in step 5, any schema-key or KEYS
+change, and any generator that failed. `--dry-run` prints the diff and the PR body
+instead. The weekly `upstream-drift` workflow fails while no bump has landed.
+
+The steps:
 
 1. `decdn_node_version` in `defaults/main.yml`.
 2. The generated mirrors, from a decdn checkout at the new tag:
@@ -724,7 +734,9 @@ weekly `upstream-drift` workflow fails on it), move every pin in one change:
    `build`, which the changelogs leave out; RELEASING.md); also a `[Unreleased]`
    entry in each of `ansible/galaxy/node/CHANGELOG.md`,
    `ansible/galaxy/publisher/CHANGELOG.md` (the onramp's decdn pin) and
-   `charts/decdn-node/CHANGELOG.md` whose artifact is not released yet.
+   `charts/decdn-node/CHANGELOG.md` whose artifact is not released yet. The
+   collections each keep one such entry, which a later bump rewrites
+   (`scripts/bump_decdn.py`).
 
 `make test-scripts` fails while the role, the onramp pins (role and Compose
 example), the chart's `appVersion` and its `artifacthub.io/images` image, or the KEYS

@@ -203,11 +203,10 @@ Initial packaging of the deCDN node roles as a distributable collection
   operator runs (`baseline`, `decdn_node`, `grafana_alloy`); `sponsord`,
   `sponsord_onramp`, `iroh_relay` and `iroh_dns_server` move to `decdn.publisher`,
   which depends on this collection.
-- `decdn_node`: `decdn_node_version` defaults to `0.0.1`, the first decdn/decdn
-  release, so `release` mode installs without a version in inventory. `make
-  test-scripts` checks it agrees with the onramp's decdn pin, the Compose example
-  and the chart's `appVersion`; the weekly `upstream-drift` job checks the pins
-  against the releases themselves.
+- `decdn_node`: `release` mode installs without a version in inventory:
+  `decdn_node_version` has a default. `make test-scripts` checks it agrees with the
+  onramp's decdn pin, the Compose example and the chart's `appVersion`; the weekly
+  `upstream-drift` job checks the pins against the releases themselves.
 - `decdn_node`: the release `--version` check is an exact match on the binary's
   `<name> <version>` line, as sponsord's is (it was a substring match, so a `0.0.1`
   pin accepted `0.0.10`).
@@ -219,16 +218,15 @@ Initial packaging of the deCDN node roles as a distributable collection
   which adds Alper Gundogdu's key (E27B 9A2D 2519 1E8E C90B F8AE 57E2 823C 16CC
   D376) beside Ant Somers'. It now holds the same keys as sponsord's copy;
   `make test-scripts` checks that they match.
-- The generated mirrors (`vars/main/networks.yml`, `schema-keys.txt`) are
-  regenerated from decdn/decdn v0.0.1 (no value changed), and
-  `scripts/sync-network-profiles.py` reads the pinned tag by default instead of
-  `origin/main`. The weekly `upstream-drift` job checks the mirrors against that
-  tag, the onramp's `SHA256SUMS` digests and the Compose image digests against the
-  pinned releases, and fails when either upstream repo has a newer `vX.Y.Z` tag.
-- `decdn_node`: `decdn_node_version` defaults to `0.0.2`, decdn/decdn v0.0.2 (was
-  `0.0.1`). Its config schema and contract addresses are unchanged, so the
-  generated mirrors (`vars/main/networks.yml`, `schema-keys.txt`) move only their
-  source commit.
+- The generated mirrors (`vars/main/networks.yml`, `schema-keys.txt`) come from
+  the decdn/decdn tag `decdn_node_version` pins: `scripts/sync-network-profiles.py`
+  reads that tag by default instead of `origin/main`. The weekly `upstream-drift`
+  job checks the mirrors against that tag, the onramp's `SHA256SUMS` digests and
+  the Compose image digests against the pinned releases, and fails when either
+  upstream repo has a newer `vX.Y.Z` tag.
+- `decdn_node`: `decdn_node_version` defaults to `0.0.2`, decdn/decdn v0.0.2. The
+  generated mirrors (`vars/main/networks.yml`, `schema-keys.txt`) are
+  regenerated from that tag.
 
 - **Breaking:** `decdn_node_install_method`, `sponsord_install_method` and
   `sponsord_onramp_install_method` now default to `release` (was `manual`). An
