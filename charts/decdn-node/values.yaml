@@ -76,6 +76,8 @@ service:
   # Only applied to LoadBalancer/NodePort.
   externalTrafficPolicy: Local
   nodePort: null
+  # spec.loadBalancerIP, deprecated by Kubernetes since 1.24 and ignored by some
+  # providers: prefer the provider's annotation (service.annotations) where it has one.
   loadBalancerIP: ""
   loadBalancerSourceRanges: []
   annotations: {}

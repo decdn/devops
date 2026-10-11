@@ -1,0 +1,14 @@
+---
+# The StatefulSet's governing Service: headless, no ports, so it publishes only the
+# pod's DNS record and opens nothing (the public and metrics Services are separate).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "decdn-node.headlessServiceName" . }}
+  labels:
+    {{- include "decdn-node.labels" . | nindent 4 }}
+    app.kubernetes.io/component: headless
+spec:
+  clusterIP: None
+  selector:
+    {{- include "decdn-node.selectorLabels" . | nindent 4 }}

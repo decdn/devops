@@ -408,6 +408,11 @@ for probe in ("startupProbe", "readinessProbe", "livenessProbe"):
     check(main[probe]["httpGet"]["port"] == "metrics", f"{probe} port")
 
 msvc = one("Service", "metrics")
+hsvc = one("Service", "headless")
+check(hsvc is not None and spec["serviceName"] == hsvc["metadata"]["name"], "serviceName must name the headless Service")
+check(hsvc is not None and hsvc["spec"].get("clusterIP") == "None" and not hsvc["spec"].get("ports"),
+      "governing Service must be headless with no ports")
+check(all(len(d["metadata"]["name"]) <= 63 for d in docs if d["kind"] == "Service"), "Service name over 63 characters")
 check(msvc["spec"]["type"] == "ClusterIP", "metrics Service not ClusterIP")
 check([(p["port"], p["protocol"]) for p in msvc["spec"]["ports"]] == [(metrics_port, "TCP")], "metrics Service ports")
 qsvc = one("Service", "quic")
@@ -547,6 +552,9 @@ expect_fail "password key in config"       template 'aws_password: secret-bearin
 expect_fail "replicas knob"                schema   "additional propert(y|ies) 'replicas'"       --set replicas=2
 expect_fail "bad service type"             schema   '/service/type'                              --set service.type=ExternalName
 expect_fail "origin + origins"             template 'mutually exclusive'                         --set config.cache.origin.kind=fs --set config.cache.origin.path=/o --set 'config.cache.origins[0].kind=fs'
+expect_fail "quic.port == metrics.port"    template 'quic.port and metrics.port are both 9090'   --set quic.port=9090
+expect_fail "metrics.port == admin_port"   template 'metrics.port and config.observability.admin_port are both 9191' --set metrics.port=9191
+expect_fail "admin_port == quic.port"      template 'quic.port and config.observability.admin_port are both 4433' --set config.observability.admin_port=4433
 expect_fail "max_blob > cache_size"        template 'max_blob_size_mb must be <='                --set config.cache.max_blob_size_mb=20000
 expect_fail "integer beyond 2^53"          template 'too large to render exactly'                --set-json 'config.payment.credit_max=18446744073709551615'
 expect_fail "fs origin without volume"     template 'an fs origin needs origin.volume'           --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin
@@ -589,6 +597,11 @@ helm template t "$chart" -f "$chart/ci/ci-values.yaml" --set fullnameOverride="$
   | yq -N '.kind + "/" + .metadata.name' | grep -v '^null' | sort | uniq -d > "$work/dupes"
 [ ! -s "$work/dupes" ] || { cat "$work/dupes" >&2; fail "duplicate object names with a 63-character fullname"; }
 pass "unique object names with a 63-character fullname"
+# Service names are DNS labels: 63 characters, whatever the fullname.
+helm template t "$chart" -f "$chart/ci/ci-values.yaml" --set fullnameOverride="$long" \
+  | yq -N 'select(.kind == "Service") | .metadata.name' | awk 'length > 63' > "$work/long-svc"
+[ ! -s "$work/long-svc" ] || { cat "$work/long-svc" >&2; fail "Service name over 63 characters with a 63-character fullname"; }
+pass "Service names fit 63 characters with a 63-character fullname"
 
 # Dashboards enabled with none in files/monitoring/ must fail the render, not render nothing.
 nodash="$work/nodash"

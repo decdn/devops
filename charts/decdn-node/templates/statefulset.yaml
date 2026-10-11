@@ -11,7 +11,8 @@ spec:
   # One release = one node identity. Never scale this: two pods would share one
   # keystore and node.secret (a double-signing / slashing hazard).
   replicas: 1
-  serviceName: {{ include "decdn-node.fullname" . }}-metrics
+  # The headless governing Service: per-pod DNS only, no ports. Immutable after install.
+  serviceName: {{ include "decdn-node.headlessServiceName" . }}
   # Parallel, not OrderedReady: with OrderedReady the controller waits for an
   # unready pod before acting, so a config that crash-loops the pod (an unknown
   # key, deny_unknown_fields upstream) stays stuck after the fix is rolled out

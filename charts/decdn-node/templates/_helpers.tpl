@@ -34,6 +34,16 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
+{{- /* Service names are DNS labels (63 characters at most), so the fullname is cut
+     to fit its suffix. */}}
+{{- define "decdn-node.metricsServiceName" -}}
+{{- printf "%s-metrics" (include "decdn-node.fullname" . | trunc 55 | trimSuffix "-") }}
+{{- end }}
+
+{{- define "decdn-node.headlessServiceName" -}}
+{{- printf "%s-headless" (include "decdn-node.fullname" . | trunc 54 | trimSuffix "-") }}
+{{- end }}
+
 {{- define "decdn-node.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
 {{- default (include "decdn-node.fullname" .) .Values.serviceAccount.name }}
@@ -219,6 +229,23 @@ Arg: dict "cfg" <map> "root" <$>
 {{- end }}
 {{- $_ := set $table $key (index . 2) }}
 {{- $_ := set $cfg $section $table }}
+{{- end }}
+
+{{- /* Upstream's validate_port_layout (decdn crates/common/src/config/mod.rs):
+     QUIC, metrics and admin ports pairwise distinct. A UDP and a TCP port could
+     share a number, but the daemon refuses it as a typo, so fail before the pod
+     crash-loops. admin_port defaults to 9191; 0 disables the admin RPC. */}}
+{{- $ports := list (list "quic.port" (int $root.Values.quic.port)) (list "metrics.port" (int $root.Values.metrics.port)) }}
+{{- $admin := int (dig "admin_port" 9191 $cfg.observability) }}
+{{- if ne $admin 0 }}
+{{- $ports = append $ports (list "config.observability.admin_port" $admin) }}
+{{- end }}
+{{- range $i, $a := $ports }}
+{{- range $j, $b := $ports }}
+{{- if and (lt $i $j) (eq (index $a 1) (index $b 1)) }}
+{{- fail (printf "%s and %s are both %d: the daemon refuses a shared port number" (index $a 0) (index $b 0) (index $a 1)) }}
+{{- end }}
+{{- end }}
 {{- end }}
 
 {{- $cache := $cfg.cache }}

@@ -63,6 +63,13 @@ Initial chart (pre-1.0; the values shape may still change).
   reads. Before, the content had to sit on the data PVC beside the node identity,
   writable by the daemon.
 
+- A headless governing Service (`<fullname>-headless`, no ports) for the StatefulSet,
+  which pointed at the metrics Service. The metrics and headless Service names are cut
+  to 63 characters; a long `fullnameOverride` made the metrics Service name invalid.
+- A render-time port-layout check, as upstream's: `quic.port`, `metrics.port` and
+  `config.observability.admin_port` (9191 unless set; 0 disables it) must differ, or
+  the daemon refuses to start.
+
 ### Changed
 
 - The README links into the rest of the repo are absolute GitHub URLs, so they work

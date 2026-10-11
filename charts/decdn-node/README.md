@@ -38,6 +38,7 @@ image carries the `decdn` CLI since v0.0.2, but the chart does not call it).
 | `ConfigMap` | The rendered `node.toml`. Its checksum rolls the pod on any change. |
 | `Service` (quic) | Public UDP. The type is `LoadBalancer`, `NodePort` or `ClusterIP`, with `externalTrafficPolicy: Local`. |
 | `Service` (metrics) | ClusterIP only, never public. |
+| `Service` (headless) | The StatefulSet's governing Service: no ports, only the pod's DNS record. |
 | `NetworkPolicy` | Ingress allows QUIC from anywhere and metrics only from `metrics.networkPolicy.from`. Egress is open unless `networkPolicy.egress` is set. |
 | `ServiceMonitor` | Optional (`metrics.serviceMonitor.enabled`). Adds the `job`, `region`, `deployment_environment` and `instance` target labels the dashboards and alerts in `files/monitoring/` select on. |
 | `PrometheusRule` | Optional (`metrics.prometheusRule.enabled`). The deCDN reference alert rules (`files/monitoring/`). |
@@ -296,7 +297,9 @@ with `decdn_cache_origin_kind` (or `decdn_cache_origins`) set, deployed by
 - **QUIC** (`quic.port`, default 4433/udp) is the only public port.
   - `service.type: LoadBalancer` (the default) gives the node a public UDP address,
     and `externalTrafficPolicy: Local` preserves client source IPs for per-source
-    rate limiting.
+    rate limiting. `service.loadBalancerIP` sets the Service field Kubernetes has
+    deprecated since 1.24; many providers want an annotation in `service.annotations`
+    instead, so check yours.
   - For bare-metal-style nodes, set `quic.hostPort.enabled: true` and
     `service.enabled: false`.
 - **The node cannot see its public address.** Inside a pod, its default route's source
