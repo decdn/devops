@@ -39,7 +39,7 @@ for the secrets of every group the host is in.
 > and the Ansible path's `source` mode builds whatever its git ref points at (and
 > takes many minutes on first boot), so the lint refuses both. The release is the
 > one the roles pin at `DEVOPS_REF` (decdn/decdn `v0.0.3` today, decdn/sponsord
-> `v0.0.2` for the sponsor); set `decdn_node_version` in the user-data to pin
+> `v0.0.3` for the sponsor); set `decdn_node_version` in the user-data to pin
 > another. `decdn_node_release_base` points the download at a mirror that serves
 > `v<version>/{decdn-node,decdn}-<version>-<target>.tar.gz`, `SHA256SUMS` and
 > `SHA256SUMS.asc`; the signature is still checked against deCDN's release keys.

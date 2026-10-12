@@ -20,7 +20,7 @@ gate, installers, behind a TLS reverse proxy), is the
 
 - **Installs the binary.**
   - `release` (the default) downloads `sponsord-<version>-<triple>.tar.gz` from the
-    `v<version>` release of `decdn/sponsord` (`sponsord_version`, default `0.0.2`;
+    `v<version>` release of `decdn/sponsord` (`sponsord_version`, default `0.0.3`;
     one tag releases the whole workspace) and verifies it against the GPG-signed
     `SHA256SUMS`, using `files/sponsord-release-KEYS.asc`, a copy of upstream's
     `KEYS`. `sponsord_release_base` points it at a mirror.
@@ -32,7 +32,7 @@ gate, installers, behind a TLS reverse proxy), is the
     build environment for every new commit, a `<repo>@<commit>` stamp so an
     unchanged commit is not rebuilt, and a root-side install that refuses
     symlinks. `sponsord_version` is not checked in this mode; set the ref to a
-    release tag (`v0.0.2`) to build exactly that release. The build user, its home and the toolchain are
+    release tag (`v0.0.3`) to build exactly that release. The build user, its home and the toolchain are
     shared with the other roles on the host. cargo also fetches upstream's
     `decdn/decdn` git dependencies, pinned by `Cargo.lock`.
   - `manual` copies a binary built on the control machine, from a `decdn/sponsord`
@@ -127,7 +127,7 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | `sponsord_source_repo` / `sponsord_source_ref` | `decdn/sponsord` on GitHub / `""` | `source` only. The ref is required: a tag, branch or SHA. |
 | `sponsord_source_build_jobs` | `""` | `source` only: `CARGO_BUILD_JOBS` (`""` = one per CPU). |
 | `sponsord_manual_bin_src` / `sponsord_release_target_dir` | `""` | `manual` only. Set one. |
-| `sponsord_version` | `0.0.2` | `release` mode: the `decdn/sponsord` release (tag `v0.0.2`). Equal to `sponsord_onramp_version`. |
+| `sponsord_version` | `0.0.3` | `release` mode: the `decdn/sponsord` release (tag `v0.0.3`). Equal to `sponsord_onramp_version`. |
 | `sponsord_network` | `""` | Network profile: `arbitrum-sepolia` supplies chain id and PaymentPool. |
 | `sponsord_chain_id`, `sponsord_payment_pool_address` | from profile | Explicit values win over the profile. |
 | `sponsord_pool_id` | `""` | **Required.** 0x + 64 hex. `""` only on the wallet-creation run. |

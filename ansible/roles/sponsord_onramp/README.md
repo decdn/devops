@@ -23,7 +23,7 @@ is unreachable.
 - **Installs the binary**, exactly as the `sponsord` role does:
   - `release` (the default) downloads `sponsord-onramp-<version>-<triple>.tar.gz`
     from the `v<version>` release of `decdn/sponsord` (`sponsord_onramp_version`,
-    default `0.0.2`, the same release as the daemon's) and verifies it against the
+    default `0.0.3`, the same release as the daemon's) and verifies it against the
     GPG-signed `SHA256SUMS`, with the KEYS file vendored in the `sponsord` role.
     `sponsord_onramp_release_base` points it at a mirror.
   - `source` builds `sponsord_onramp_source_ref` of `sponsord_onramp_source_repo`
@@ -118,7 +118,7 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | `sponsord_onramp_source_repo` / `_source_ref` | `decdn/sponsord` on GitHub / `""` | `source` only. The ref is required: a tag, branch or SHA. |
 | `sponsord_onramp_source_build_jobs` | `""` | `source` only: `CARGO_BUILD_JOBS` (`""` = one per CPU). |
 | `sponsord_onramp_manual_bin_src` / `_release_target_dir` | `""` / `sponsord_release_target_dir` | `manual` only. |
-| `sponsord_onramp_version` | `0.0.2` | `release` mode: the `decdn/sponsord` release (tag `v0.0.2`). Keep it equal to `sponsord_version`: overriding one does not move the other. |
+| `sponsord_onramp_version` | `0.0.3` | `release` mode: the `decdn/sponsord` release (tag `v0.0.3`). Keep it equal to `sponsord_version`: overriding one does not move the other. |
 | `sponsord_onramp_network` | `sponsord_network` | Supplies CapacityBond and SlashJudge. Must match the daemon's network. |
 | `sponsord_onramp_capacity_bond_address`, `_slash_judge_address` | from profile | Explicit values win. SlashJudge may be `""`. |
 | `sponsord_onramp_rpc_url` | `""` | **Required. Public**: served to every user. No credentials, query or API key. |

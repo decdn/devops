@@ -142,7 +142,7 @@ lint-alloy` validates and runs it.
 
 **Pinned upstream releases.** One decdn/decdn release (`decdn_node_version`, today
 `0.0.3`) and one decdn/sponsord release (`sponsord_version` = `sponsord_onramp_version`,
-today `0.0.2`; decdn/sponsord tags its whole workspace `vX.Y.Z`, there are no per-crate
+today `0.0.3`; decdn/sponsord tags its whole workspace `vX.Y.Z`, there are no per-crate
 tags) are pinned across every path: the role defaults, the onramp's installer pin
 (`sponsord_onramp_decdn_release` + `_decdn_sums_sha256`, copied into
 `compose/sponsord-onramp.env.example`), `compose/.env.example`'s image digests, the
@@ -292,7 +292,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   imported by `publisher.yml`) targets its own `sponsord_hosts` group, standalone or
   co-located with a node.
   - **Install:** a GPG-verified `v*` decdn/sponsord release by default
-    (`sponsord_version`, `0.0.2`), a host-side `source` build, or a manual binary.
+    (`sponsord_version`, `0.0.3`), a host-side `source` build, or a manual binary.
     The `--version` backstop checks the version in `release` mode only (the version
     has a default, so other modes would fail against it), as in the other two roles.
   - **Unit:** `DynamicUser`; the API token (generated on the host, never replaced),
