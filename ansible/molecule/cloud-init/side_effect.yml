@@ -84,7 +84,10 @@
     - name: Record an older lock as the installed one
       ansible.builtin.copy:
         dest: "{{ collections_dir }}/.decdn-bootstrap-lock.yml"
-        content: "collections: []\n"
+        content: |
+          collections:
+            - name: molecule.stale
+              version: "1.0.0"
         owner: root
         group: root
         mode: "0644"
