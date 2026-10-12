@@ -141,7 +141,7 @@ test-scripts` fails while the committed file differs from a fresh render, and `m
 lint-alloy` validates and runs it.
 
 **Pinned upstream releases.** One decdn/decdn release (`decdn_node_version`, today
-`0.0.2`) and one decdn/sponsord release (`sponsord_version` = `sponsord_onramp_version`,
+`0.0.3`) and one decdn/sponsord release (`sponsord_version` = `sponsord_onramp_version`,
 today `0.0.2`; decdn/sponsord tags its whole workspace `vX.Y.Z`, there are no per-crate
 tags) are pinned across every path: the role defaults, the onramp's installer pins
 (`sponsord_onramp_{decdn,cli}_release` + `_sums_sha256`, copied into
@@ -195,7 +195,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   the publisher's step). **The public deCDN node**
   (baseline + `decdn-node`), installed by `decdn_node_install_method`:
   `release` (the default) — a pinned GitHub release tarball verified against the
-  release's GPG-signed `SHA256SUMS` (`decdn_node_version`, default `0.0.2`); `source` — a git ref (any tag/branch/SHA) cloned and `cargo build`-ed **on the
+  release's GPG-signed `SHA256SUMS` (`decdn_node_version`, default `0.0.3`); `source` — a git ref (any tag/branch/SHA) cloned and `cargo build`-ed **on the
   node** as the unprivileged `decdn-build` user, sha256-pinned rustup, a `<repo>@<commit>`
   stamp (`tasks/source.yml`, copied into both sponsord roles, which share the user,
   home and toolchain). **No build can poison a later one:** root owns the home, the
