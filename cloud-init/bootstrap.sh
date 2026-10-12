@@ -9,7 +9,8 @@
 # operator's cache node (user-data-node.yaml), a publisher's host (user-data-publisher.yaml:
 # an origin node, sponsord and its onramp) or any mix, by the inventory's groups:
 #   1. Install the pinned ansible-core into a venv, with hashes enforced
-#      (requirements.txt), and the pinned Galaxy collections (collections.lock.yml).
+#      (requirements.txt), and the pinned Galaxy collections (collections.lock.yml),
+#      only when the lock differs from the last complete install's.
 #   2. Syntax-check site.yml. Check that the inventory puts localhost in decdn_nodes or
 #      sponsord_hosts, in decdn_nodes whenever it is in decdn_origin_nodes, and in
 #      sponsord_hosts whenever it is in sponsord_onramp_hosts. Without that membership
@@ -127,9 +128,21 @@ export PATH="$VENV/bin:$PATH"
 # hosts (ansible/Makefile sets the same).
 export ANSIBLE_INVENTORY_UNPARSED_FAILED=True
 
-# --force: a re-run after a ref bump must replace a collection that the new lock pins at
-# a different version. Without it, ansible-galaxy keeps any installed version.
-ansible-galaxy collection install --force -p collections -r "$repo/cloud-init/collections.lock.yml"
+# The collections are reinstalled only when collections.lock.yml differs from the copy
+# recorded after the last complete install, so a re-run at the same lock never reaches
+# Galaxy. The tree is removed first: a collection the new lock pins at another version
+# is replaced, one it no longer lists does not linger, and an interrupted install (no
+# copy recorded) starts over.
+readonly COLLECTIONS_LOCK=$repo/cloud-init/collections.lock.yml
+readonly INSTALLED_LOCK=collections/.decdn-bootstrap-lock.yml
+if cmp -s "$COLLECTIONS_LOCK" "$INSTALLED_LOCK"; then
+  echo "decdn-bootstrap: the collections already match collections.lock.yml"
+else
+  rm -rf collections
+  ansible-galaxy collection install -p collections -r "$COLLECTIONS_LOCK"
+  cp "$COLLECTIONS_LOCK" "$INSTALLED_LOCK.tmp"
+  mv -f "$INSTALLED_LOCK.tmp" "$INSTALLED_LOCK"
+fi
 
 # --- 2. Checks before touching the host ----------------------------------------
 ansible-playbook -i "$INVENTORY" playbooks/site.yml --syntax-check
