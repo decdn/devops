@@ -1,7 +1,8 @@
 ---
 # What converge + idempotence + verify cannot prove:
 #   1. A new commit on the tracked branch is rebuilt, reinstalled, stamped, and the
-#      daemon is restarted onto it.
+#      daemon is restarted onto it, from a toolchain left as a 027 umask installs
+#      it (the role reopens it to the build user).
 #   2. A missing installed binary is rebuilt even though the stamp matches.
 #   3. A binary the daemon was never restarted onto (a run that installed it and
 #      failed before its handler ran) is restarted onto by the next run.
@@ -21,6 +22,13 @@
       ansible.builtin.systemd_service:
         name: decdn-node
       register: _unit_before
+
+    # The modes a 027 umask (the baseline's DevSec login.defs) gives a root install;
+    # cargo then fails to exec in the build sandbox unless the role reopens them.
+    - name: Close the toolchain to the build user
+      ansible.builtin.command:
+        argv: [chmod, -R, "g-w,o-rwx", /var/lib/decdn-build/toolchain]
+      changed_when: true
 
     - name: Commit FIXTURE_REV 2 to the fixture's main branch
       ansible.builtin.shell:
