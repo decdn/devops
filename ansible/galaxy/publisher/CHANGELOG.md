@@ -228,7 +228,7 @@ role describe a change shared with that collection.
   `origin/main`. The weekly `upstream-drift` job checks the mirrors against that
   tag, the onramp's `SHA256SUMS` digests and the Compose image digests against the
   pinned releases, and fails when either upstream repo has a newer `vX.Y.Z` tag.
-- `sponsord_onramp`: the installers' decdn pin defaults to decdn/decdn `v0.0.2`
+- `sponsord_onramp`: the installers' decdn pin defaults to decdn/decdn `v0.0.3`
   and that release's `SHA256SUMS` digest, following the `decdn_node` role's
   `decdn_node_version`.
 - `sponsord`: the restart-inputs comparison is now the only thing that restarts the
