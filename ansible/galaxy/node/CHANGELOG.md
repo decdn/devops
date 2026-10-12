@@ -224,7 +224,7 @@ Initial packaging of the deCDN node roles as a distributable collection
   job checks the mirrors against that tag, the onramp's `SHA256SUMS` digests and
   the Compose image digests against the pinned releases, and fails when either
   upstream repo has a newer `vX.Y.Z` tag.
-- `decdn_node`: `decdn_node_version` defaults to `0.0.2`, decdn/decdn v0.0.2. The
+- `decdn_node`: `decdn_node_version` defaults to `0.0.3`, decdn/decdn v0.0.3. The
   generated mirrors (`vars/main/networks.yml`, `schema-keys.txt`) are
   regenerated from that tag.
 
