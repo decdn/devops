@@ -39,7 +39,7 @@ for the secrets of every group the host is in.
 > and the Ansible path's `source` mode builds whatever its git ref points at (and
 > takes many minutes on first boot), so the lint refuses both. The release is the
 > one the roles pin at `DEVOPS_REF` (decdn/decdn `v0.0.3` today, decdn/sponsord
-> `v0.0.2` for the sponsor); set `decdn_node_version` in the user-data to pin
+> `v0.0.3` for the sponsor); set `decdn_node_version` in the user-data to pin
 > another. `decdn_node_release_base` points the download at a mirror that serves
 > `v<version>/{decdn-node,decdn}-<version>-<target>.tar.gz`, `SHA256SUMS` and
 > `SHA256SUMS.asc`; the signature is still checked against deCDN's release keys.
@@ -214,9 +214,9 @@ Until then it serves its bytes as a cache does.
    - create the treasury wallet, open its pool (`decdn pool open`, which prints the
      pool id) and fund it;
    - create a Cloudflare Turnstile widget for your domain;
-   - check the `decdn` and `decdn-sponsored` releases the installers install: the
-     roles' pins at `DEVOPS_REF` unless you set all four `sponsord_onramp_*_release`
-     / `_sums_sha256` values.
+   - check the `decdn` release the installers install: the role's pin at
+     `DEVOPS_REF` unless you set both `sponsord_onramp_decdn_release` and
+     `sponsord_onramp_decdn_sums_sha256`.
 2. **Fill in the user-data.** Replace every `CHANGE_ME`: `DEVOPS_REF`,
    `baseline_sudo_users` and `decdn_region` (as for a node), the origin backend
    (`decdn_cache_origin_url` for an http store; or `decdn_cache_origin_kind: s3` with

@@ -101,8 +101,6 @@ provisioner:
         sponsord_onramp_brand_name: 'deCDN "molecule" $$HOME'
         sponsord_onramp_decdn_release: v0.1.0
         sponsord_onramp_decdn_sums_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
-        sponsord_onramp_cli_release: v0.1.0
-        sponsord_onramp_cli_sums_sha256: "2222222222222222222222222222222222222222222222222222222222222222"
         sponsord_onramp_fund_rate_per_min: 0
         sponsord_onramp_readiness_retries: 10
         sponsord_onramp_readiness_delay: 1

@@ -142,9 +142,9 @@ lint-alloy` validates and runs it.
 
 **Pinned upstream releases.** One decdn/decdn release (`decdn_node_version`, today
 `0.0.3`) and one decdn/sponsord release (`sponsord_version` = `sponsord_onramp_version`,
-today `0.0.2`; decdn/sponsord tags its whole workspace `vX.Y.Z`, there are no per-crate
-tags) are pinned across every path: the role defaults, the onramp's installer pins
-(`sponsord_onramp_{decdn,cli}_release` + `_sums_sha256`, copied into
+today `0.0.3`; decdn/sponsord tags its whole workspace `vX.Y.Z`, there are no per-crate
+tags) are pinned across every path: the role defaults, the onramp's installer pin
+(`sponsord_onramp_decdn_release` + `_decdn_sums_sha256`, copied into
 `compose/sponsord-onramp.env.example`), `compose/.env.example`'s image digests, the
 chart's `appVersion` and the generated mirrors. cloud-init takes the role defaults at
 `DEVOPS_REF`. `make test-scripts` checks the pins agree with each other, the Compose
@@ -292,7 +292,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   imported by `publisher.yml`) targets its own `sponsord_hosts` group, standalone or
   co-located with a node.
   - **Install:** a GPG-verified `v*` decdn/sponsord release by default
-    (`sponsord_version`, `0.0.2`), a host-side `source` build, or a manual binary.
+    (`sponsord_version`, `0.0.3`), a host-side `source` build, or a manual binary.
     The `--version` backstop checks the version in `release` mode only (the version
     has a default, so other modes would fail against it), as in the other two roles.
   - **Unit:** `DynamicUser`; the API token (generated on the host, never replaced),
@@ -332,7 +332,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
     origin node), release mode only; see the `cloud-init/` bullet below.
 
 - **`ansible/roles/sponsord_onramp`** — `sponsord-onramp`, sponsord's public side (the
-  Turnstile gate, the installers, the `decdn-sponsored` CLI API), as a second play of
+  Turnstile gate, the installers, the capability API they poll), as a second play of
   `playbooks/sponsord.yml` on `sponsord_onramp_hosts` (which must also be in
   `sponsord_hosts`: it reads the daemon's `/etc/sponsord/api-token` and calls it on
   loopback). The playbook's first play enforces that membership (tested by

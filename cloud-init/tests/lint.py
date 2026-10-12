@@ -214,10 +214,9 @@ def values_of(node, key):
     return found
 
 
-# The onramp's installer pins: a tag and its SHA256SUMS digest per release, which only
-# make sense together (the role defaults pin all four).
-ONRAMP_PINS = ("sponsord_onramp_decdn_release", "sponsord_onramp_decdn_sums_sha256",
-               "sponsord_onramp_cli_release", "sponsord_onramp_cli_sums_sha256")
+# The onramp's installer pin: the decdn release tag and its SHA256SUMS digest, which
+# only make sense together (the role defaults pin both).
+ONRAMP_PINS = ("sponsord_onramp_decdn_release", "sponsord_onramp_decdn_sums_sha256")
 
 
 def walk_strings(node, path=""):
@@ -400,7 +399,7 @@ def check_inventory(inventory):
                       "equal (one decdn/sponsord release ships both)")
         pins = [k for k in ONRAMP_PINS if values_of(inventory, k)]
         if pins and len(pins) != len(ONRAMP_PINS):
-            violation(f"inventory: set all of {', '.join(ONRAMP_PINS)} or none (a release tag without its "
+            violation(f"inventory: set both {' and '.join(ONRAMP_PINS)} or neither (a release tag without its "
                       f"SHA256SUMS digest fails every installer); set: {', '.join(pins)}")
     # Ansible applies one baseline_sudo_users list, the one from the highest-precedence
     # place that sets it, not the union. So it may be set once, and that list is checked.

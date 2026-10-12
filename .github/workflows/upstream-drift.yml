@@ -8,7 +8,7 @@ name: Upstream drift
 #     roles/sponsord{,_onramp}/vars/main/, and ansible/molecule/schema/files/
 #     schema-keys.txt (the node.toml key inventory). They describe the binary a
 #     default deploy installs, so they are generated from the tag, not from main;
-#   - the hand-copied release facts: the onramp's SHA256SUMS digests (role defaults)
+#   - the hand-copied release facts: the onramp's decdn SHA256SUMS digest (role defaults)
 #     and the Compose image digests (compose/.env.example), against the pinned
 #     releases' assets;
 #   - that each repo's newest vX.Y.Z tag is still the pin.
@@ -45,10 +45,7 @@ jobs:
           pin() { sed -nE "s/^$2: *\"?([^\" #]*)\"?.*/\\1/p" "ansible/roles/$1/defaults/main.yml"; }
           decdn="$(pin decdn_node decdn_node_version)"
           sponsord="$(pin sponsord sponsord_version)"
-          {
-            echo "decdn_sums=$(pin sponsord_onramp sponsord_onramp_decdn_sums_sha256)"
-            echo "cli_sums=$(pin sponsord_onramp sponsord_onramp_cli_sums_sha256)"
-          } >> "$GITHUB_OUTPUT"
+          echo "decdn_sums=$(pin sponsord_onramp sponsord_onramp_decdn_sums_sha256)" >> "$GITHUB_OUTPUT"
           if [ -z "$decdn" ] || [ -z "$sponsord" ]; then
             echo "::error::a role has no pinned version"
             exit 1
@@ -72,7 +69,6 @@ jobs:
           DECDN_PIN: v${{ steps.pins.outputs.decdn }}
           SPONSORD_PIN: v${{ steps.pins.outputs.sponsord }}
           DECDN_SUMS: ${{ steps.pins.outputs.decdn_sums }}
-          CLI_SUMS: ${{ steps.pins.outputs.cli_sums }}
         run: |
           rc=0
           check() {
@@ -146,7 +142,6 @@ jobs:
           check "decdn/decdn release" release_check decdn/decdn "$DECDN_PIN"
           check "decdn/sponsord release" release_check decdn/sponsord "$SPONSORD_PIN"
           check "onramp decdn SHA256SUMS digest" sums_check decdn/decdn "$DECDN_PIN" "$DECDN_SUMS"
-          check "onramp CLI SHA256SUMS digest" sums_check decdn/sponsord "$SPONSORD_PIN" "$CLI_SUMS"
           check "Compose decdn-node digest" digest_check decdn/decdn "$DECDN_PIN" DECDN_IMAGE_DIGEST \
             decdn-node-image-digest.txt
           check "Compose sponsord digest" digest_check decdn/sponsord "$SPONSORD_PIN" SPONSORD_IMAGE_DIGEST \

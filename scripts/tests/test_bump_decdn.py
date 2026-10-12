@@ -90,7 +90,8 @@ class Rewrite(Fixture):
         onramp = self.text(bd.ONRAMP_DEFAULTS)
         self.assertEqual(bd.pinned(self.root), "9.8.7")
         self.assertIn("sponsord_onramp_decdn_release: v9.8.7 ", onramp)
-        self.assertIn("decdn/decdn v9.8.7 and decdn/sponsord", onramp)
+        self.assertIn("Default: decdn/decdn v9.8.7.", onramp)
+        self.assertIn("defaults to: decdn/decdn v9.8.7.", self.text(bd.ONRAMP_ENV))
         self.assertIn(f"ONRAMP_DECDN_SUMS_SHA256={SUMS}\n", self.text(bd.ONRAMP_ENV))
         self.assertIn(f"# decdn/decdn v9.8.7\nDECDN_IMAGE_DIGEST={DIGEST}\n", self.text(bd.COMPOSE_ENV))
         self.assertIn(f"e.g. for v9.8.7\n  # {DIGEST}\n", self.text(bd.CHART_VALUES))
@@ -107,12 +108,12 @@ class Rewrite(Fixture):
             with self.subTest(rel=rel):
                 self.assertEqual(self.text(rel), self.original[rel])
 
-    def test_leaves_the_sponsord_pins(self) -> None:
+    def test_leaves_the_sponsord_pin(self) -> None:
         onramp = self.text(bd.ONRAMP_DEFAULTS)
-        cli = bd.scalar(onramp, "sponsord_onramp_cli_release", bd.ONRAMP_DEFAULTS)
+        sponsord = bd.scalar(onramp, "sponsord_onramp_version", bd.ONRAMP_DEFAULTS)
         bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
-        self.assertEqual(bd.scalar(self.text(bd.ONRAMP_DEFAULTS), "sponsord_onramp_cli_release",
-                                   bd.ONRAMP_DEFAULTS), cli)
+        self.assertEqual(bd.scalar(self.text(bd.ONRAMP_DEFAULTS), "sponsord_onramp_version",
+                                   bd.ONRAMP_DEFAULTS), sponsord)
 
     def test_leaves_the_changelogs(self) -> None:
         for rel in bd.CHANGELOGS:

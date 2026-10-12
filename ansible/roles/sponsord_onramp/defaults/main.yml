@@ -1,8 +1,8 @@
 ---
 # sponsord_onramp role defaults. sponsord-onramp is the public side of the deCDN
 # onboarding sponsor: the gate page people pass (Cloudflare Turnstile), the
-# decdn.sh / decdn.ps1 installers, and the API the decdn-sponsored CLI polls. It
-# holds no wallet. It calls the sponsord daemon on the same host with the daemon's
+# decdn.sh / decdn.ps1 installers, and the API the installers poll for their
+# capability. It holds no wallet. It calls the sponsord daemon on the same host with the daemon's
 # API token, so a host in sponsord_onramp_hosts must also be in sponsord_hosts.
 #
 # The onramp listens on loopback. Caddy, installed by this role unless you turn it
@@ -12,7 +12,7 @@
 # --- Install method -----------------------------------------------------------
 # "release" (default): download the pinned v<version> GitHub Release tarball and
 #   verify it against the GPG-signed SHA256SUMS. decdn/sponsord releases its whole
-#   workspace (sponsord, sponsord-onramp, decdn-sponsored) from one vX.Y.Z tag.
+#   workspace (sponsord, sponsord-onramp) from one vX.Y.Z tag.
 # "source": clone sponsord_onramp_source_repo at sponsord_onramp_source_ref on the host and
 #   `cargo build -p sponsord-onramp` there as an unprivileged build user (see "Build from
 #   source" below).
@@ -50,7 +50,7 @@ decdn_rustup_sha256:
 # --- Release to install ("release" mode) ----------------------------------------
 # The decdn/sponsord release (tag v<version>) this repo pins, the
 # same one as the sponsord role's sponsord_version.
-sponsord_onramp_version: "0.0.2"          # asserted non-empty in "release" mode
+sponsord_onramp_version: "0.0.3"         # asserted non-empty in "release" mode
 # Derived from the host's gathered architecture (vars/main/arch.yml).
 sponsord_onramp_target: "{{ _sponsord_onramp_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
 sponsord_onramp_release_base: "https://github.com/decdn/sponsord/releases/download"
@@ -74,8 +74,8 @@ sponsord_onramp_capacity_bond_address: "{{ _sponsord_onramp_profile.get('capacit
 sponsord_onramp_slash_judge_address: "{{ _sponsord_onramp_profile.get('slash_judge_address', '') }}"
 
 # REQUIRED. The JSON-RPC endpoint users' decdn reads the chain through. NOT a
-# secret, and it must not hold one: the onramp publishes it to every user
-# (GET /v1/profile) and bakes it into the installers. Use a public endpoint, never
+# secret, and it must not hold one: the onramp bakes it into the installers every
+# user downloads. Use a public endpoint, never
 # the keyed URL the daemon uses (sponsord_rpc_url).
 sponsord_onramp_rpc_url: ""
 
@@ -135,18 +135,13 @@ sponsord_onramp_brand_name: ""            # [deCDN] name on the gate page
 # (placeholders: upstream docs/operator.md). "" = the built-in page.
 sponsord_onramp_gate_template_src: ""
 
-# --- Releases the installers install -------------------------------------------
-# A tag and the SHA-256 of that release's SHA256SUMS file (`sha256sum SHA256SUMS`
-# after verifying its .asc). decdn-sponsored ships in the decdn/sponsord workspace
-# release, whose notes print its pair under "Onramp pin" (upstream RELEASING.md).
-# Defaults: decdn/decdn v0.0.3 and decdn/sponsord v0.0.2. Override a tag together with
+# --- Release the installers install --------------------------------------------
+# The decdn/decdn release the installers download `decdn` from: a tag and the
+# SHA-256 of that release's SHA256SUMS file (`sha256sum SHA256SUMS` after
+# verifying its .asc). Default: decdn/decdn v0.0.3. Override the tag together with
 # its digest: preflight refuses a pair where only one half moved.
 sponsord_onramp_decdn_release: v0.0.3     # decdn/decdn tag
 sponsord_onramp_decdn_sums_sha256: 59debaf73eee9a45ac5ec3cf34886ba60233bc848f5aee8d23b0c920afa4cd59
-sponsord_onramp_cli_release: v0.0.2       # decdn/sponsord tag
-sponsord_onramp_cli_sums_sha256: f6f8cbaf127277aefb27044ac595f1f8a4743126b58831ba6e36d0a3922b1597
-# Oldest decdn-sponsored accepted; older CLIs are told to re-run the installer.
-sponsord_onramp_min_cli_version: ""
 sponsord_onramp_releases_base: ""         # [https://github.com/decdn]
 
 # --- Limits ("" = the onramp's own default, shown in brackets) -----------------
