@@ -1329,7 +1329,7 @@ if command -v cloud-init >/dev/null; then
   expect 0 "lint-cloud-init accepts the publisher template as an origin alone" \
     make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-origin-alone.yaml"
   ci_variant "one sponsord version moved" 'set sponsord_version and sponsord_onramp_version together' 's/^(\s*)sponsord_onramp_install_method: release$/&\n\1sponsord_onramp_version: "0.0.9"/' "$sponsorud"
-  ci_variant "an onramp pin without its digest" 'set all of sponsord_onramp_decdn_release' 's/^(\s*)sponsord_onramp_install_method: release$/&\n\1sponsord_onramp_cli_release: v0.0.9/' "$sponsorud"
+  ci_variant "an onramp pin without its digest" 'set both sponsord_onramp_decdn_release' 's/^(\s*)sponsord_onramp_install_method: release$/&\n\1sponsord_onramp_decdn_release: v0.0.9/' "$sponsorud"
   ci_variant "onramp nested under children" 'sponsord_hosts may hold only hosts and vars, not' '/^      sponsord_onramp_hosts:$/,/^$/{s/^      /          /}; s/^          sponsord_onramp_hosts:$/        children:\n&/' "$sponsorud"
   ci_variant "query in the onramp RPC URL" 'sponsord_onramp_rpc_url must be a public http(s) URL' 's#^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME"$#\1sponsord_onramp_rpc_url: "https://rpc.example/?api_key=x"#' "$sponsorud"
   ci_variant "fragment in the onramp RPC URL" 'sponsord_onramp_rpc_url must be a public http(s) URL' 's#^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME"$#\1sponsord_onramp_rpc_url: "https://rpc.example/rpc\#k"#' "$sponsorud"
@@ -1528,12 +1528,9 @@ for p in "decdn_node decdn_node_version" "sponsord sponsord_version" "sponsord_o
 done
 [ "$(pin sponsord sponsord_version)" = "$(pin sponsord_onramp sponsord_onramp_version)" ] \
   || fail "sponsord_version and sponsord_onramp_version differ (one decdn/sponsord release ships both)"
-[ "$(pin sponsord_onramp sponsord_onramp_cli_release)" = "v$(pin sponsord sponsord_version)" ] \
-  || fail "sponsord_onramp_cli_release is not v<sponsord_version>"
 [ "$(pin sponsord_onramp sponsord_onramp_decdn_release)" = "v$(pin decdn_node decdn_node_version)" ] \
   || fail "sponsord_onramp_decdn_release is not v<decdn_node_version>"
-for k in DECDN_RELEASE:decdn_release DECDN_SUMS_SHA256:decdn_sums_sha256 \
-         CLI_RELEASE:cli_release CLI_SUMS_SHA256:cli_sums_sha256; do
+for k in DECDN_RELEASE:decdn_release DECDN_SUMS_SHA256:decdn_sums_sha256; do
   [ "$(envpin "ONRAMP_${k%%:*}")" = "$(pin sponsord_onramp "sponsord_onramp_${k#*:}")" ] \
     || fail "compose/sponsord-onramp.env.example ONRAMP_${k%%:*} differs from sponsord_onramp_${k#*:}"
 done

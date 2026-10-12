@@ -175,9 +175,9 @@ def rewrite(root: Path, version: str, sums: str, digest: str) -> list[str]:
     edits = [
         (NODE_DEFAULTS, r'^(decdn_node_version: *")[^"]*(")', rf"\g<1>{version}\g<2>"),
         (ONRAMP_DEFAULTS, rf"^(sponsord_onramp_decdn_release: *)v{SEMVER}", rf"\g<1>v{version}"),
-        (ONRAMP_DEFAULTS, rf"(decdn/decdn )v{SEMVER}( and decdn/sponsord)", rf"\g<1>v{version}\g<2>"),
+        (ONRAMP_DEFAULTS, rf"(Default: decdn/decdn )v{SEMVER}(\.)", rf"\g<1>v{version}\g<2>"),
         (ONRAMP_ENV, rf"^ONRAMP_DECDN_RELEASE=v{SEMVER}$", f"ONRAMP_DECDN_RELEASE=v{version}"),
-        (ONRAMP_ENV, rf"(decdn/decdn )v{SEMVER}( and decdn/sponsord)", rf"\g<1>v{version}\g<2>"),
+        (ONRAMP_ENV, rf"(defaults to: decdn/decdn )v{SEMVER}(\.)", rf"\g<1>v{version}\g<2>"),
         (COMPOSE_ENV, rf"^# decdn/decdn v{SEMVER}(\nDECDN_IMAGE_DIGEST=)", rf"# decdn/decdn v{version}\g<1>"),
         (CHART_VALUES, rf"(e\.g\. for )v{SEMVER}(\n *# *sha256:)", rf"\g<1>v{version}\g<2>"),
         (CHART, r'^(appVersion: *")[^"]*(")', rf"\g<1>{version}\g<2>"),

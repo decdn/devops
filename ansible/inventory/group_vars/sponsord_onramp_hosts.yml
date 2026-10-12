@@ -32,11 +32,8 @@
 # PUBLIC: served to every user. A keyless endpoint, never sponsord_rpc_url.
 # sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc
 # sponsord_onramp_turnstile_sitekey: "0x…"
-# The releases the installers install default to the role's pins (decdn/decdn
-# v0.0.3, decdn/sponsord v0.0.2), each with the SHA-256 of its SHA256SUMS. To serve
-# others, set all four (a decdn/sponsord release's notes print the CLI pair):
+# The decdn release the installers install defaults to the role's pin (decdn/decdn
+# v0.0.3), with the SHA-256 of its SHA256SUMS. To serve another, set both:
 # sponsord_onramp_decdn_release: v0.0.3
 # sponsord_onramp_decdn_sums_sha256: "…"
-# sponsord_onramp_cli_release: v0.0.2
-# sponsord_onramp_cli_sums_sha256: "…"
 # CapacityBond and SlashJudge come from sponsord_network (group_vars/sponsord_hosts.yml).

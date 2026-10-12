@@ -136,16 +136,12 @@ write_files:
           # It is served to every user, so never the keyed URL sponsord uses.
           sponsord_onramp_rpc_url: "CHANGE_ME"
           sponsord_onramp_turnstile_sitekey: "CHANGE_ME"   # MUST-EDIT: the widget's public sitekey
-          # The releases the installers install default to the role's pins at DEVOPS_REF
-          # (sponsord_onramp_decdn_release / _cli_release, each with the SHA-256 of that
-          # release's SHA256SUMS). decdn/sponsord's release notes print the CLI pin
-          # (its vX.Y.Z tag and digest, under "Onramp pin"); decdn/decdn's do not, so
-          # take `sha256sum SHA256SUMS` once its SHA256SUMS.asc verifies. Override all
-          # four together, e.g.:
+          # The decdn release the installers install defaults to the role's pin at
+          # DEVOPS_REF (sponsord_onramp_decdn_release, with the SHA-256 of that release's
+          # SHA256SUMS: take `sha256sum SHA256SUMS` once its SHA256SUMS.asc verifies).
+          # Override both together, e.g.:
           # sponsord_onramp_decdn_release: "v0.0.3"
           # sponsord_onramp_decdn_sums_sha256: "<64 lowercase hex>"
-          # sponsord_onramp_cli_release: "v0.0.2"
-          # sponsord_onramp_cli_sums_sha256: "<64 lowercase hex>"
 
   # What an interactive login prints while the bootstrap is unfinished. It is written
   # here, not by the bootstrap, so that it is in place even if stage 1 fails.

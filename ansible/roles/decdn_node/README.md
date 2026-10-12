@@ -738,7 +738,7 @@ The steps:
    collections each keep one such entry, which a later bump rewrites
    (`scripts/bump_decdn.py`).
 
-`make test-scripts` fails while the role, the onramp pins (role and Compose
+`make test-scripts` fails while the role, the onramp's decdn pin (role and Compose
 example), the chart's `appVersion` and its `artifacthub.io/images` image, or the KEYS
 and SECURITY.md disagree; the weekly `upstream-drift` job checks the digests against
 the release. A decdn/sponsord release is bumped the same way

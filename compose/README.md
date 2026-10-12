@@ -201,7 +201,7 @@ origin only once the namespace's publisher seats its operator with
 `sponsord` holds the treasury wallet: it signs capped spending capabilities for new
 users and keeps the treasury's PaymentPool pool topped up. `sponsord-onramp` is its
 public side: the Turnstile gate, the `decdn.sh` / `decdn.ps1` installers and the API
-the `decdn-sponsored` CLI polls. The onramp calls the daemon on loopback with the
+the installers poll for their capability. The onramp calls the daemon on loopback with the
 daemon's own API token, so the two run on the same host (the `onramp` profile starts
 both). The [`sponsord`](../ansible/roles/sponsord/README.md) and
 [`sponsord_onramp`](../ansible/roles/sponsord_onramp/README.md) role READMEs explain

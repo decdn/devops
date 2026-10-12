@@ -234,31 +234,26 @@ export it, so watch the address yourself.
 
 ## Bumping the sponsord release
 
-decdn/sponsord releases `sponsord`, `sponsord-onramp` and `decdn-sponsored` from one
-`vX.Y.Z` tag. When upstream cuts a new one (the weekly `upstream-drift` workflow
-fails on it), move every pin in one change:
+decdn/sponsord releases `sponsord` and `sponsord-onramp` from one `vX.Y.Z` tag.
+When upstream cuts a new one (the weekly `upstream-drift` workflow fails on it),
+move every pin in one change:
 
 1. `sponsord_version` here and `sponsord_onramp_version` in
    `roles/sponsord_onramp/defaults/main.yml`, to the same version.
-2. The onramp's CLI pin, `sponsord_onramp_cli_release` (`v<version>`) and
-   `sponsord_onramp_cli_sums_sha256`, from the "Onramp pin" block of the release
-   notes, in `roles/sponsord_onramp/defaults/main.yml` and
-   `compose/sponsord-onramp.env.example`.
-3. `SPONSORD_IMAGE_DIGEST` and `SPONSORD_ONRAMP_IMAGE_DIGEST` in
+2. `SPONSORD_IMAGE_DIGEST` and `SPONSORD_ONRAMP_IMAGE_DIGEST` in
    `compose/.env.example`, from the release's signed `sponsord-image-digest.txt`
    and `sponsord-onramp-image-digest.txt`.
-4. `files/sponsord-release-KEYS.asc`, if upstream's `KEYS` changed (and the
+3. `files/sponsord-release-KEYS.asc`, if upstream's `KEYS` changed (and the
    decdn_node copy, and `SECURITY.md`'s fingerprints).
-5. Re-check the env var names the Compose file and the role render against the new
+4. Re-check the env var names the Compose file and the role render against the new
    `crates/*/src/config.rs` (AGENTS.md, `compose/`).
-6. The prose that names the version: `git grep -n '<old version>'` outside the
+5. The prose that names the version: `git grep -n '<old version>'` outside the
    changelogs. The changelog entry is the PR title (`feat`, `fix` or `chore`, not `ci` or
    `build`, which the changelogs leave out; RELEASING.md); before the `decdn.publisher`
    collection's first release, also a `[Unreleased]` entry in
    `ansible/galaxy/publisher/CHANGELOG.md`.
 
-`make test-scripts` fails while the two versions or the CLI pins (role and Compose
-example) disagree; the weekly `upstream-drift` job checks the digests against the
+`make test-scripts` fails while the two versions disagree; the weekly `upstream-drift` job checks the digests against the
 release. A
 decdn/decdn release is bumped the same way
 ([decdn_node's README](../decdn_node/README.md#bumping-the-decdn-release)).

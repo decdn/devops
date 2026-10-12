@@ -309,7 +309,7 @@ a dedicated host or a node host listed in both groups. Then run
 
 Setup and variables: [`roles/sponsord/README.md`](roles/sponsord/README.md).
 
-Its public side, `sponsord-onramp` (the Turnstile gate, the installers, the CLI API),
+Its public side, `sponsord-onramp` (the Turnstile gate, the installers, the capability API),
 is the fifth role, `sponsord_onramp`. List the sponsord host in `sponsord_onramp_hosts`
 as well; `make deploy-sponsord` runs it after the daemon.
 
