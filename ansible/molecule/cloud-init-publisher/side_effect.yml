@@ -162,6 +162,9 @@
           - partial.stdout is search('Cloudflare Turnstile secret')
           - partial.stdout is not search('treasury wallet')
           - partial.stdout is not search('RPC endpoint')
+          # The lock is the one the first boot installed, so the re-run skips Galaxy.
+          - partial.stdout is search('the collections already match collections.lock.yml')
+          - partial.stdout is not search('Starting galaxy collection install')
           - partial_bin.results | selectattr('stat.exists') | list | length == 0
         fail_msg: >-
           rc={{ partial.rc }} state={{ bootstrap_state.content | b64decode | trim }}

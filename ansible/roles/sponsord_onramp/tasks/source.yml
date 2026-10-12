@@ -194,9 +194,14 @@
             group: root
             mode: "0700"
 
+        # umask 022: root's login umask (027 under the baseline's DevSec hardening)
+        # would leave the toolchain unreadable to the build user.
         - name: Run rustup-init
           ansible.builtin.command:
             argv:
+              - /bin/sh
+              - -c
+              - umask 022 && exec "$0" "$@"
               - "{{ decdn_build_home }}/toolchain/rustup-init"
               - -y
               - --no-modify-path
@@ -293,7 +298,8 @@
         - name: Install the commit's toolchain (as root)
           ansible.builtin.command:
             argv: >-
-              {{ [decdn_build_home ~ '/toolchain/cargo/bin/rustup', 'toolchain', 'install',
+              {{ ['/bin/sh', '-c', 'umask 022 && exec "$0" "$@"',
+                  decdn_build_home ~ '/toolchain/cargo/bin/rustup', 'toolchain', 'install',
                   sponsord_onramp_toolchain.channel, '--profile', sponsord_onramp_toolchain.profile, '--no-self-update']
                  + (sponsord_onramp_toolchain.components | map('regex_replace', '^', '--component=') | list) }}
           environment: "{{ sponsord_onramp_toolchain_env }}"
@@ -302,6 +308,38 @@
           register: sponsord_onramp_toolchain_install
           changed_when: >-
             'unchanged' not in (sponsord_onramp_toolchain_install.stdout ~ sponsord_onramp_toolchain_install.stderr)
+
+        # Repairs a toolchain an earlier run installed under a 027 umask. Root owns
+        # every path here; chmod -R does not follow symlinks.
+        - name: Find toolchain paths the build user cannot read
+          ansible.builtin.command:
+            argv:
+              - find
+              - "{{ decdn_build_home }}/toolchain"
+              - "!"
+              - -type
+              - l
+              - (
+              - "!"
+              - -perm
+              - -o+r
+              - -o
+              - -type
+              - d
+              - "!"
+              - -perm
+              - -o+x
+              - )
+              - -print
+              - -quit
+          register: sponsord_onramp_toolchain_closed
+          changed_when: false
+
+        - name: Open the toolchain to the build user (read and traverse, no write)
+          ansible.builtin.command:
+            argv: [chmod, -R, "go+rX,go-w", "{{ decdn_build_home }}/toolchain"]
+          when: sponsord_onramp_toolchain_closed.stdout | length > 0
+          changed_when: true
 
         # Into root's own work directory (the build user cannot write it), then
         # handed over read-only.

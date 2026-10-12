@@ -477,7 +477,8 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   SHA is verified after checkout) and execs `cloud-init/bootstrap.sh`, which:
   - installs ansible-core from the hash-locked `requirements.txt` into a venv (two pins
     split by Python marker: 2.19 for Debian 12's 3.11, 2.21 for 3.12 and later);
-  - installs the exact collections from `collections.lock.yml`;
+  - installs the exact collections from `collections.lock.yml`, skipped while the lock
+    matches the last complete install's (`ansible/collections/.decdn-bootstrap-lock.yml`);
   - runs `site.yml` (which imports `node.yml` and `publisher.yml`) against localhost. The inventory
     must put localhost in `decdn_nodes` and/or `sponsord_hosts` (and in
     `decdn_nodes` whenever it is in `decdn_origin_nodes`, in `sponsord_hosts` whenever
