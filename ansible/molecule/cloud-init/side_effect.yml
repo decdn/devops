@@ -6,12 +6,16 @@
 #      most: a branch is unpinned code run as root.
 #   2. Then the real thing: move DEVOPS_REF to a tag on a newer commit (the upgrade
 #      path), write the RPC endpoint to a 0600 file on the host, and re-run. The value
-#      is a placeholder; the stub daemon never dials it.
+#      is a placeholder; the stub daemon never dials it. The collections stand as an
+#      older lock left them (another recorded lock, a collection it listed), so the
+#      re-run must replace the whole tree.
 - name: Side effect — refusals, then the secret and a re-run at a tag
   hosts: all
   become: true
   vars:
     env_file: /etc/decdn-bootstrap/bootstrap.env
+    collections_dir: /opt/decdn-devops/ansible/collections
+    stale_collection: "{{ collections_dir }}/ansible_collections/molecule/stale"
     refusals:
       - name: a branch name
         content: "DEVOPS_REPO=file:///srv/devops-src\nDEVOPS_REF=molecule\n"
@@ -77,6 +81,30 @@
         group: root
         mode: "0600"
 
+    - name: Record an older lock as the installed one
+      ansible.builtin.copy:
+        dest: "{{ collections_dir }}/.decdn-bootstrap-lock.yml"
+        content: "collections: []\n"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Create a collection only the older lock listed
+      ansible.builtin.file:
+        path: "{{ stale_collection }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Give it a manifest
+      ansible.builtin.copy:
+        dest: "{{ stale_collection }}/MANIFEST.json"
+        content: '{"collection_info": {"namespace": "molecule", "name": "stale", "version": "1.0.0"}}'
+        owner: root
+        group: root
+        mode: "0644"
+
     - name: Re-run the bootstrap
       ansible.builtin.command:
         cmd: /usr/local/sbin/decdn-bootstrap
@@ -88,3 +116,30 @@
       ansible.builtin.fail:
         msg: "{{ rerun.stdout_lines[-60:] + rerun.stderr_lines }}"
       when: rerun.rc != 0
+
+    - name: Read the installed lock after the re-run
+      ansible.builtin.slurp:
+        src: "{{ collections_dir }}/.decdn-bootstrap-lock.yml"
+      register: installed_lock
+
+    - name: Read the checkout's lock
+      ansible.builtin.slurp:
+        src: /opt/decdn-devops/cloud-init/collections.lock.yml
+      register: checkout_lock
+
+    - name: Stat the collection only the older lock listed
+      ansible.builtin.stat:
+        path: "{{ stale_collection }}"
+      register: stale
+
+    # verify.yml checks the reinstalled tree is exactly collections.lock.yml.
+    - name: Assert the re-run replaced the collections and recorded the new lock
+      ansible.builtin.assert:
+        that:
+          - rerun.stdout is search('Starting galaxy collection install')
+          - not stale.stat.exists
+          - installed_lock.content == checkout_lock.content
+        fail_msg: >-
+          stale collection left={{ stale.stat.exists }};
+          recorded lock={{ installed_lock.content | b64decode | to_json }};
+          output={{ rerun.stdout_lines[-30:] | to_json }}

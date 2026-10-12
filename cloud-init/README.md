@@ -62,7 +62,9 @@ for the secrets of every group the host is in.
    - ansible-core into `/opt/decdn-bootstrap/venv`, from
      [`requirements.txt`](requirements.txt) with pip's hash checking on;
    - the Galaxy collections at the exact versions in
-     [`collections.lock.yml`](collections.lock.yml).
+     [`collections.lock.yml`](collections.lock.yml). A re-run skips this while the lock
+     matches the one the last complete install used, so it reaches Galaxy only after a
+     ref bump that changed the lock, or an interrupted install.
 
    It then syntax-checks the playbook. It also checks that the inventory puts localhost
    in `decdn_nodes` or `sponsord_hosts` (and in `decdn_nodes` whenever it is in
