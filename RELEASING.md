@@ -10,8 +10,8 @@ The repo publishes three artifacts, each on its own version and released by its 
 
 Release an artifact when it has changes; the others are not touched. Their versions are
 independent. The one dependency is Galaxy's: `decdn.publisher` requires `decdn.node`
-(its playbooks run `decdn.node`'s baseline, Alloy and origin nodes), so the publisher
-collection's first release comes after the node collection's. `scripts/release.sh`
+(its playbooks run `decdn.node`'s baseline, Alloy and origin nodes), so a publisher
+release that raises its `decdn.node` floor comes after that node release. `scripts/release.sh`
 refuses any publisher release whose `decdn.node: ">=X.Y.Z"` no `node-collection-v*`
 tag on origin satisfies yet. A tag is not a Galaxy upload, so the publish job also
 asks Galaxy, before uploading a `decdn.publisher`, for a `decdn.node` that satisfies
@@ -26,8 +26,8 @@ Each workflow's `build` job runs on every matching tag push. It gates the tag
 (`scripts/check-release-version.sh`), re-runs that artifact's checks (`make
 galaxy-check-node`, `make galaxy-check-publisher` or `make lint-helm`), packages it,
 and uploads it with a `SHA256SUMS` as a workflow artifact. The `publish` job pushes it to Galaxy or ghcr.io and creates the GitHub
-Release, but **only** when the repository variable `PUBLISH_ENABLED` is `true`. Until
-then, a tag push is a dry run. So is a manual *Run workflow* (`workflow_dispatch`) with an
+Release, but **only** when the repository variable `PUBLISH_ENABLED` is `true`, as it
+is now; set it to anything else and a tag push is a dry run. So is a manual *Run workflow* (`workflow_dispatch`) with an
 existing tag. Before a tag exists, the rehearsal is `scripts/release.sh`'s dry run and the
 artifact's make target (below). The repo's *Latest* release is the highest `decdn.node`
 version, the node operator's collection: a node collection release is marked Latest only
@@ -114,7 +114,7 @@ change lands in several, run the script once for each.
 **Prerequisites.**
 
 - [git-cliff](https://git-cliff.org) 2.9 or later, for `require_conventional`
-  (`cargo install git-cliff`; CI tests with 2.14.1). The first release does not use it.
+  (`cargo install git-cliff`; CI tests with 2.14.1).
 - Git configured to sign, with `user.signingkey` set explicitly. The script signs a
   throwaway commit object first, so a key that cannot sign fails before the checks.
 - A clean `main` equal to `origin/main`, and no local tag of the artifact above
@@ -126,13 +126,13 @@ change lands in several, run the script once for each.
   as the squash commit's subject (*Settings → General → Pull Requests*, and the `main`
   ruleset's allowed merge methods), and `pr-title` a required status check.
 
-**The first release** of each artifact starts from the `0.0.0` placeholder in its
-manifest and names its level: `scripts/release.sh chart minor --execute` cuts `0.1.0`.
-Without a tag, git-cliff would render the whole history, so the first release does not
-use it. It renames the changelog's hand-written `## [Unreleased]` section to the dated
-version instead, so until then, changes are logged there by hand. After that, no
-`[Unreleased]` section is kept: the script refuses one, because every later section is
-generated.
+**A first release.** All three artifacts are past theirs. A new artifact starts from
+the `0.0.0` placeholder in its manifest and names its level:
+`scripts/release.sh <artifact> minor --execute` cuts `0.1.0`. Without a tag, git-cliff
+would render the whole history, so the first release does not use it. It renames the
+changelog's hand-written `## [Unreleased]` section to the dated version instead, so
+until then, changes are logged there by hand. After that, no `[Unreleased]` section is
+kept: the script refuses one, because every later section is generated.
 
 The chart's workflow file name (`release-chart.yml`) and tag shape (`decdn-node-X.Y.Z`)
 are both part of its cosign certificate identity and of its attestations' signer
@@ -140,6 +140,10 @@ workflow and source ref (see [Verifying a release](#verifying-a-release)): never
 either once a chart is published.
 
 ## First release only
+
+Done for all three artifacts: the Galaxy namespace and key, the `release` environment,
+`PUBLISH_ENABLED`, the public GHCR package and the Artifact Hub listing with its
+`repositoryID`. Kept for a new artifact, or to rebuild the setup.
 
 Before the first publish:
 

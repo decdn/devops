@@ -1,8 +1,9 @@
 # ansible — deCDN deployment
 
 Declarative Ansible project for deploying deCDN nodes, one or a fleet, over a
-hardened host baseline. The roles also ship as two Galaxy collections: `decdn.node`
-(what a node operator runs) and `decdn.publisher` (what a publisher runs beside its
+hardened host baseline. The roles also ship as two collections on Ansible Galaxy:
+[`decdn.node`](https://galaxy.ansible.com/ui/repo/published/decdn/node/) (what a node operator runs) and
+[`decdn.publisher`](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/) (what a publisher runs beside its
 origin nodes).
 
 | Playbook | Purpose | Make target |
@@ -513,8 +514,9 @@ the RPC URL when it is not provisioned on the host instead). Highlights:
 
 ## Packaging as Galaxy collections (`decdn.node`, `decdn.publisher`)
 
-The seven roles are also packaged as two distributable collections, for operators who
-bring their own playbooks:
+The seven roles are also packaged as two collections, published on Ansible Galaxy, for
+operators who bring their own playbooks (`ansible-galaxy collection install
+decdn.node` or `decdn.publisher`):
 
 | Collection | Roles | For |
 |---|---|---|
@@ -542,5 +544,4 @@ each collection on its own version (the Helm chart is released separately), cut 
 `main` by `scripts/release.sh`: see [RELEASING.md](../RELEASING.md). Each
 `galaxy/<collection>/CHANGELOG.md` section is generated at release from the
 conventional commit subjects that touched that collection's roles, its overlay or
-`galaxy/build.sh`, so give the PR a title that reads as a changelog entry. Until a
-collection's first release, also log the change under its `[Unreleased]` by hand.
+`galaxy/build.sh`, so give the PR a title that reads as a changelog entry.

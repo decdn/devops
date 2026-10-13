@@ -158,13 +158,18 @@ config:
 ```
 
 ```bash
-# From a checkout of this repo:
-helm install decdn-node-1 charts/decdn-node -n decdn -f values-node-1.yaml
-
-# From the OCI registry, at a released version (CHANGELOG.md):
+# From the OCI registry, at a released version:
 helm install decdn-node-1 oci://ghcr.io/decdn/charts/decdn-node --version X.Y.Z \
   -n decdn -f values-node-1.yaml
+
+# Changes not released yet, from a checkout of this repo:
+helm install decdn-node-1 charts/decdn-node -n decdn -f values-node-1.yaml
 ```
+
+The chart is listed on
+[Artifact Hub](https://artifacthub.io/packages/helm/decdn-node/decdn-node), and each
+version's changes are in its
+[CHANGELOG](https://github.com/decdn/devops/blob/main/charts/decdn-node/CHANGELOG.md).
 
 Published charts are signed with cosign, and every release after 0.1.0 also carries
 build-provenance attestations;
