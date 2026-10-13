@@ -249,9 +249,7 @@ move every pin in one change:
    `crates/*/src/config.rs` (AGENTS.md, `compose/`).
 5. The prose that names the version: `git grep -n '<old version>'` outside the
    changelogs. The changelog entry is the PR title (`feat`, `fix` or `chore`, not `ci` or
-   `build`, which the changelogs leave out; RELEASING.md); before the `decdn.publisher`
-   collection's first release, also a `[Unreleased]` entry in
-   `ansible/galaxy/publisher/CHANGELOG.md`.
+   `build`, which the changelogs leave out; RELEASING.md).
 
 `make test-scripts` fails while the two versions disagree; the weekly `upstream-drift` job checks the digests against the
 release. A
