@@ -13,7 +13,7 @@
 # `origin` credentials and opens the PR with your `gh` login: a PR opened that
 # way runs CI, which one opened by Actions' GITHUB_TOKEN would not.
 #
-# The bump does checklist steps 1 to 6 and the collections' changelog entries.
+# The bump does checklist steps 1 to 6.
 # Release facts (the SHA256SUMS digest, the decdn-node image digest) come from
 # the release's assets once their signatures verify against the vendored
 # decdn-release-KEYS.asc; the generated mirrors and KEYS come from a clone of the
@@ -225,8 +225,6 @@ if ! cmp -s "$UPSTREAM/KEYS" "$KEYS"; then
   need "decdn's \`KEYS\` changed and is copied to \`$KEYS\`: update the sponsord copy
   (\`ansible/roles/sponsord/files/sponsord-release-KEYS.asc\`) and SECURITY.md's fingerprints."
 fi
-
-bump changelog "$VERSION" >/dev/null || die "could not add the changelog entries; no PR opened"
 
 # Step 7 is a reviewer's: decdn/sponsord pins carry version numbers too, so a
 # bare old version is not always decdn's. The list holds the old version as a

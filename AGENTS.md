@@ -738,10 +738,12 @@ artifact's tag (`cliff.toml`), and pushes a signed `chore(release)` commit and t
 no release PR. The repo squash-merges with the PR title as the subject, so the PR title
 is the changelog entry (`pr-title.yml` checks it is conventional); release.sh refuses a
 commit that touched the artifact and that git-cliff cannot parse as conventional, unless
-`--allow-unconventional`. Until an artifact's first release, its manifest stays at
-the `0.0.0` placeholder and its changelog changes are logged by hand under
-`[Unreleased]`, which becomes the first release's section; after it, do not edit the
-changelogs by hand.
+`--allow-unconventional`. Every artifact is released and publishing is on
+(`PUBLISH_ENABLED` is `true`): `decdn.node` and `decdn.publisher` are on Galaxy, the
+chart on `oci://ghcr.io/decdn/charts` and Artifact Hub. So every changelog section is
+generated: never edit the changelogs by hand or add an `[Unreleased]` section (release.sh
+refuses one). release.sh's `0.0.0`-placeholder path is only for a new artifact's first
+release.
 
 **CI.** `ci.yml` is the blocking gate: `pre-commit`, `scripts` and `actionlint` on every PR, the
 Ansible, chart, compose and cloud-init jobs path-filtered, KICS on the first three (KICS has

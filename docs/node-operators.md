@@ -21,11 +21,12 @@ loopback, and the chain's contract addresses taken from upstream's deployment ma
 | **Docker Compose** (one Docker host), recommended | [`compose/README.md`](../compose/README.md) | `decdn-compose init node` |
 | **Ansible** (VMs, bare metal, a fleet) | [`ansible/README.md`](../ansible/README.md) | `inventory/hosts-node.yml.example`, `make deploy-node` (`playbooks/node.yml`) |
 | **cloud-init** (one VM, no control machine) | [`cloud-init/README.md`](../cloud-init/README.md) | `cloud-init/user-data-node.yaml` |
-| **Helm** (Kubernetes, one release per node) | [`charts/decdn-node/README.md`](../charts/decdn-node/README.md) | the chart, with no `config.cache.origin` |
+| **Helm** (Kubernetes, one release per node) | [`charts/decdn-node/README.md`](../charts/decdn-node/README.md) | `oci://ghcr.io/decdn/charts/decdn-node`, with no `config.cache.origin` |
 
 [`requirements.md`](requirements.md) has the hardware, network and platform requirements,
-and compares the paths. The Galaxy collection for your own playbooks is
-[`decdn.node`](../ansible/galaxy/node/README.md).
+and compares the paths. For your own playbooks, the roles are the
+[`decdn.node`](../ansible/galaxy/node/README.md) collection on
+[Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/) (`ansible-galaxy collection install decdn.node`).
 
 A node without an origin backend fills a miss by pulling from other nodes
 (`node_to_node_pull_through_enabled`). The Ansible role and the chart turn that on for

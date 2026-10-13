@@ -9,7 +9,6 @@ Subcommands:
     rewrite <version> --sums-sha256 <hex> --image-digest sha256:<hex>
                         move every hand-copied pin (checklist steps 1, 3, 4 and 5 of
                         ansible/roles/decdn_node/README.md, "Bumping the decdn release")
-    changelog <version> add the bump entry under each collection's [Unreleased]
 
 The generated mirrors (step 2) and the vendored KEYS (step 6) are open-decdn-bump.sh's:
 they come from a checkout of the tag, not from this repo. Prose that names a version
@@ -45,25 +44,6 @@ ONRAMP_ENV = "compose/sponsord-onramp.env.example"
 COMPOSE_ENV = "compose/.env.example"
 CHART = "charts/decdn-node/Chart.yaml"
 CHART_VALUES = "charts/decdn-node/values.yaml"
-
-# Collection changelogs that get a bump entry while they hold an [Unreleased] section
-# (until each collection's first release; release.sh generates every later section).
-# The marker starts the entry, so a later bump replaces an earlier one; no other entry
-# may start with it.
-CHANGELOGS = {
-    "ansible/galaxy/node/CHANGELOG.md": (
-        "- `decdn_node`: `decdn_node_version` defaults to",
-        "- `decdn_node`: `decdn_node_version` defaults to `{v}`, decdn/decdn v{v}. The\n"
-        "  generated mirrors (`vars/main/networks.yml`, `schema-keys.txt`) are\n"
-        "  regenerated from that tag.\n",
-    ),
-    "ansible/galaxy/publisher/CHANGELOG.md": (
-        "- `sponsord_onramp`: the installers' decdn pin defaults to",
-        "- `sponsord_onramp`: the installers' decdn pin defaults to decdn/decdn `v{v}`\n"
-        "  and that release's `SHA256SUMS` digest, following the `decdn_node` role's\n"
-        "  `decdn_node_version`.\n",
-    ),
-}
 
 
 class ShapeError(Exception):
@@ -222,45 +202,6 @@ def verify(root: Path, version: str, sums: str, digest: str) -> None:
         raise ShapeError(f"{CHART_VALUES}: the example digest for v{version} is {example}, expected [{digest!r}]")
 
 
-def changelog(root: Path, version: str) -> list[str]:
-    """Write the bump entry under [Unreleased]: in place of an earlier one, else first
-    under ### Changed."""
-    if not VERSION.match(version):
-        raise ShapeError(f"{version} is not X.Y.Z")
-    changed = []
-    for rel, (marker, entry) in CHANGELOGS.items():
-        lines = read(root, rel).splitlines(keepends=True)
-        try:
-            start = lines.index("## [Unreleased]\n")
-        except ValueError:
-            # Released: release.sh writes every section from the PR titles.
-            print(f"bump_decdn: {rel} has no [Unreleased] section; no entry written", file=sys.stderr)
-            continue
-        end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
-        earlier = [i for i in range(start, end) if lines[i].startswith(marker)]
-        if len(earlier) > 1:
-            raise ShapeError(f"{rel}: {len(earlier)} [Unreleased] entries start {marker!r}, expected at most 1")
-        if earlier:
-            # An earlier bump's entry: its bullet and the indented lines that continue it.
-            at = earlier[0]
-            stop = at + 1
-            while stop < end and lines[stop].startswith("  "):
-                stop += 1
-            del lines[at:stop]
-        else:
-            changed_at = next((i for i in range(start, end) if lines[i] == "### Changed\n"), None)
-            if changed_at is None:
-                raise ShapeError(f"{rel}: [Unreleased] has no ### Changed")
-            # First bullet of ### Changed: after the heading and its blank line.
-            at = changed_at + 1
-            while at < end and lines[at].strip() == "":
-                at += 1
-        lines[at:at] = [entry.format(v=version)]
-        (root / rel).write_text("".join(lines))
-        changed.append(rel)
-    return changed
-
-
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", type=Path, default=Path.cwd(), help="devops checkout (default: the current directory)")
@@ -271,7 +212,6 @@ def main() -> None:
     rw.add_argument("version")
     rw.add_argument("--sums-sha256", required=True)
     rw.add_argument("--image-digest", required=True)
-    sub.add_parser("changelog").add_argument("version")
     args = ap.parse_args()
 
     try:
@@ -281,9 +221,6 @@ def main() -> None:
             print(compare(args.root, args.tag))
         elif args.cmd == "rewrite":
             for rel in rewrite(args.root, args.version, args.sums_sha256, args.image_digest):
-                print(f"wrote {rel}")
-        elif args.cmd == "changelog":
-            for rel in changelog(args.root, args.version):
                 print(f"wrote {rel}")
     except ShapeError as e:
         print(f"bump_decdn: {e}", file=sys.stderr)

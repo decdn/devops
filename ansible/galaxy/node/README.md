@@ -25,17 +25,7 @@ collection, which depends on this one.
 
 ## Install
 
-> **Not on Galaxy yet.** The first release (`node-collection-v0.1.0`) has not been
-> cut; see [RELEASING.md](https://github.com/decdn/devops/blob/main/RELEASING.md).
-> Until then, build and install it from a checkout:
->
-> ```bash
-> git clone https://github.com/decdn/devops && cd devops/ansible
-> make build-node
-> ansible-galaxy collection install build/decdn-node-*.tar.gz
-> ```
-
-Once published:
+From [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/):
 
 ```bash
 ansible-galaxy collection install decdn.node
@@ -47,6 +37,20 @@ Or pin it in a `requirements.yml`:
 collections:
   - name: decdn.node
     version: ">=0.1.0"
+```
+
+Each release is listed in the
+[CHANGELOG](https://github.com/decdn/devops/blob/main/ansible/galaxy/node/CHANGELOG.md)
+and as a `node-collection-vX.Y.Z`
+[GitHub Release](https://github.com/decdn/devops/releases) with the tarball and its
+`SHA256SUMS`. To run changes not released yet, build it from a checkout. The build
+carries the last release's version until the next one, so `--force` replaces an
+installed release:
+
+```bash
+git clone https://github.com/decdn/devops && cd devops/ansible
+make build-node
+ansible-galaxy collection install --force build/decdn-node-*.tar.gz
 ```
 
 ## Usage
