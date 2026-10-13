@@ -100,7 +100,7 @@ is unreachable.
 4. **Point DNS** for the domain (A/AAAA) at the host, so Caddy can get a
    certificate.
 5. **The `decdn` release the installers install** defaults to the one this repo
-   pins: the decdn/decdn `v0.0.3` tag and the SHA-256 of that release's
+   pins: the decdn/decdn `v0.0.4` tag and the SHA-256 of that release's
    `SHA256SUMS`. To serve another, set the tag together with its digest: the role
    refuses a pair where one half keeps its default.
 6. **Set inventory** (`group_vars/sponsord_onramp_hosts.yml`): the domain, the
@@ -132,7 +132,7 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | `sponsord_onramp_turnstile_sitekey` | `""` | **Required.** |
 | `sponsord_onramp_turnstile_secret` | `""` | **Sensitive.** Leave empty to provision `turnstile-secret` on the host. |
 | `sponsord_onramp_turnstile_secret_overwrite_host_file` | `false` | Confirm that the inventory secret may replace a file the role did not write. |
-| `sponsord_onramp_decdn_release`, `_decdn_sums_sha256` | `v0.0.3`, its digest | A decdn/decdn `vX.Y.Z` tag and 64 lowercase hex. The default follows the `decdn_node` role's pin; a host override of `decdn_node_version` does not move it. |
+| `sponsord_onramp_decdn_release`, `_decdn_sums_sha256` | `v0.0.4`, its digest | A decdn/decdn `vX.Y.Z` tag and 64 lowercase hex. The default follows the `decdn_node` role's pin; a host override of `decdn_node_version` does not move it. |
 | `sponsord_onramp_brand_name`, `_gate_template_src` | `""` | The gate page's name, or your own HTML page (a control-machine file). |
 | `sponsord_onramp_spending_cap_micro_usdc`, `_ttl_secs` | `""` | Requested per capability. `""` takes the daemon's maximum; more than it fails the deploy. |
 | `sponsord_onramp_fund_rate_per_min`, `_poll_rate_per_min` | `""` | Per-address rate limits (upstream 10 and 120; `0` turns one off). |
