@@ -13,8 +13,8 @@ image:
   tag: ""
   # sha256:... — takes precedence over tag when set. Prefer it: a tag can be moved.
   # Take it from the release's signed decdn-node-image-digest.txt (v0.0.1:
-  # image-digest.txt), e.g. for v0.0.3
-  # sha256:dd76b5d755913be645435f0d71327cf1813ddb5ed7a780ee014573441e48d804
+  # image-digest.txt), e.g. for v0.0.4
+  # sha256:7c303b6105a1b419c0f7e3ef57d8ad3ba23d07cccba0d42332699fd409133f0a
   digest: ""
   pullPolicy: IfNotPresent
 
