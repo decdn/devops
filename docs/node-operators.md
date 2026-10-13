@@ -24,9 +24,12 @@ loopback, and the chain's contract addresses taken from upstream's deployment ma
 | **Helm** (Kubernetes, one release per node) | [`charts/decdn-node/README.md`](../charts/decdn-node/README.md) | `oci://ghcr.io/decdn/charts/decdn-node`, with no `config.cache.origin` |
 
 [`requirements.md`](requirements.md) has the hardware, network and platform requirements,
-and compares the paths. For your own playbooks, the roles are the
+and compares the paths. The roles and the node playbooks are also the
 [`decdn.node`](../ansible/galaxy/node/README.md) collection on
-[Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/) (`ansible-galaxy collection install decdn.node`).
+[Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/) (`ansible-galaxy collection install decdn.node`):
+with only an inventory of your own, `ansible-playbook -i inventory/hosts.yml decdn.node.node`
+deploys what `make deploy-node` does, firewall hole included; or call the roles from
+your own playbooks.
 
 A node without an origin backend fills a miss by pulling from other nodes
 (`node_to_node_pull_through_enabled`). The Ansible role and the chart turn that on for

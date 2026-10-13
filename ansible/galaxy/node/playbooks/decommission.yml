@@ -1,0 +1,52 @@
+---
+# decdn.node's decommission: stop the node and remove its unit, then tear down the
+# opt-in Grafana Alloy agent. Keeps the identity and keys (the node's keystore
+# withdraws the bond) and does NOT touch the chain; the role's last task prints what
+# is left to do. One typed confirmation per run (the sorted host list).
+#   ansible-playbook -i inventory/hosts.yml decdn.node.decommission -l <host>
+# On a host that also runs a publisher service (sponsord, a relay, a DNS server), use
+# decdn.publisher.decommission: this one would tear down the Alloy agent they share.
+# The node plays of ansible/playbooks/decommission.yml, which decdn.publisher ships
+# whole (with sponsord, its onramp, iroh relays and DNS servers);
+# tests/scripts-test.sh keeps the plays equal. Take a backup first
+# (decdn.node.backup). See docs/lifecycle.md.
+
+# Before anything stops: the host cap, against every host this run decommissions.
+- name: Check the hosts before anything stops
+  hosts: decdn_nodes
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Refuse to decommission more hosts than allowed at once
+      ansible.builtin.assert:
+        that:
+          - decdn_decommission_max_hosts | default(1) | int > 0
+          - ansible_play_hosts_all | length <= decdn_decommission_max_hosts | default(1) | int
+        fail_msg: >-
+          This run decommissions {{ ansible_play_hosts_all | length }} hosts
+          ({{ ansible_play_hosts_all | sort | join(', ') }}), more than
+          decdn_decommission_max_hosts ({{ decdn_decommission_max_hosts | default(1) }}).
+          Scope it with LIMIT (-l), or raise decdn_decommission_max_hosts deliberately.
+        quiet: true
+
+- name: Decommission deCDN nodes
+  hosts: decdn_nodes
+  become: true
+  tasks:
+    - name: Stop and remove the node service
+      ansible.builtin.include_role:
+        name: decdn_node
+        tasks_from: decommission
+
+# grafana_alloy's disabled path removes only an installation this role wrote (it
+# checks the managed-by marker in the unit), so this is a no-op on a host that never
+# enabled Grafana Cloud or runs a foreign Alloy.
+- name: Tear down the Grafana Alloy agent
+  hosts: decdn_nodes
+  become: true
+  tasks:
+    - name: Tear down the Grafana Alloy agent this repo installed
+      ansible.builtin.include_role:
+        name: grafana_alloy
+      vars:
+        decdn_grafana_cloud_enabled: false

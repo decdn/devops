@@ -1,0 +1,50 @@
+---
+# Build decdn.node from this checkout and install it where molecule.yml's
+# ANSIBLE_COLLECTIONS_PATH looks first, replacing an earlier run's. The build goes to
+# the ephemeral dir, never ansible/build/, which `make galaxy-check` owns.
+- name: Build and install the decdn.node collection
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    _ephemeral: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+    _project: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+  tasks:
+    - name: Build the collection
+      ansible.builtin.command:
+        cmd: "{{ _project }}/galaxy/build.sh node"
+      environment:
+        DECDN_GALAXY_BUILD_DIR: "{{ _ephemeral }}/build"
+      changed_when: true
+
+    - name: Find the built tarball
+      ansible.builtin.find:
+        paths: "{{ _ephemeral }}/build"
+        patterns: ["decdn-node-*.tar.gz"]
+      register: _tarball
+      failed_when: _tarball.matched != 1
+
+    # --no-deps: its dependencies are vendored (make deps), second on the path.
+    - name: Install it
+      ansible.builtin.command:
+        argv:
+          - ansible-galaxy
+          - collection
+          - install
+          - --no-deps
+          - --force
+          - -p
+          - "{{ _ephemeral }}/collections"
+          - "{{ _tarball.files[0].path }}"
+      changed_when: true
+
+    - name: Create the empty roles path
+      ansible.builtin.file:
+        path: "{{ _ephemeral }}/no-roles"
+        state: directory
+        mode: "0755"
+
+# The placeholder identity, age and its throwaway key pair, as lifecycle stages them.
+- name: Stage the identity and the backup key
+  ansible.builtin.import_playbook: ../lifecycle/prepare.yml

@@ -1,0 +1,20 @@
+---
+# decdn.node's backup: each node's identity (default) or full state, encrypted on
+# the host to decdn_backup_age_recipients (public keys, required).
+#   ansible-playbook -i inventory/hosts.yml decdn.node.backup -l <host> [-e decdn_backup_scope=full]
+# The node play of ansible/playbooks/backup.yml, which decdn.publisher ships whole
+# (with sponsord's credentials); tests/scripts-test.sh keeps the two plays equal. See
+# roles/decdn_node/tasks/backup.yml for what is archived and docs/lifecycle.md for
+# restore and host migration.
+- name: Back up deCDN nodes
+  hosts: decdn_nodes
+  become: true
+  # One host at a time: a "full" backup stops the node for the copy, and a fleet
+  # should never lose every node at once.
+  serial: 1
+  gather_facts: false
+  tasks:
+    - name: Back up this node
+      ansible.builtin.include_role:
+        name: decdn_node
+        tasks_from: backup

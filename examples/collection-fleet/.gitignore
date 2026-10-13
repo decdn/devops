@@ -1,0 +1,12 @@
+# Installed by `ansible-galaxy collection install -r requirements.yml -p collections`.
+/collections/
+# Secrets (decdn_rpc_url, grafana_alloy_api_token, …): never commit them. Any
+# secret.* (Ansible loads .yml, .yaml and .json alike), but the copied
+# secret.*.example templates.
+inventory/host_vars/*/secret.*
+!inventory/host_vars/*/secret.*.example
+inventory/group_vars/*/secret.*
+!inventory/group_vars/*/secret.*.example
+# Identity and sponsord backups fetched by decdn.node.backup / decdn.publisher.backup
+# (encrypted, but they belong with the operator, not in git).
+/backups/

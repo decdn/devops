@@ -221,6 +221,126 @@ roles_dir="$(cd "$repo/ansible/roles" && printf '%s\n' */ | tr -d / | LC_ALL=C s
 pass "every role under ansible/roles ships in exactly one Galaxy collection"
 expect 2 "galaxy/build.sh rejects an unknown collection" "$repo/ansible/galaxy/build.sh" all
 expect 2 "galaxy/build.sh rejects no collection" "$repo/ansible/galaxy/build.sh"
+expect 2 "galaxy/check-playbooks.sh rejects an unknown collection" "$repo/ansible/galaxy/check-playbooks.sh" all
+
+# --- Galaxy collections: the shipped playbooks -----------------------------------------
+# galaxy/<collection>/playbooks.txt lists what build.sh ships from ansible/playbooks/; a
+# playbook in neither list would never reach a Galaxy consumer.
+listed_pbs="$(cat "$repo"/ansible/galaxy/{node,publisher}/playbooks.txt | grep -vE '^[[:space:]]*(#|$)' | LC_ALL=C sort -u)"
+pbs_dir="$(cd "$repo/ansible/playbooks" && printf '%s\n' *.yml | LC_ALL=C sort)"
+[[ "$(comm -13 <(echo "$listed_pbs") <(echo "$pbs_dir") | xargs)" == "" ]] \
+  || fail "playbooks no collection ships (add them to a galaxy/*/playbooks.txt): $(comm -13 <(echo "$listed_pbs") <(echo "$pbs_dir") | xargs)"
+pass "every playbook under ansible/playbooks ships in a Galaxy collection"
+# stage-playbooks.py on a copy of ansible/{galaxy,playbooks} (it finds them, and the
+# roles it checks tasks_from against, from its own path).
+sp="$work/stage-playbooks"
+stage_copy() {
+  rm -rf "$sp" && mkdir -p "$sp/ansible"
+  cp -R "$repo/ansible/galaxy" "$repo/ansible/playbooks" "$sp/ansible/"
+  ln -s "$repo/ansible/roles" "$sp/ansible/roles"
+}
+stage_run() { python3 "$sp/ansible/galaxy/stage-playbooks.py" "$1" "$sp/out-$1"; }
+# <path under ansible/> <sed expression>: a fresh copy with that one change, which must
+# change something.
+stage_break() {
+  stage_copy
+  cp "$sp/ansible/$1" "$work/stage-orig"
+  sed -i "$2" "$sp/ansible/$1"
+  ! cmp -s "$work/stage-orig" "$sp/ansible/$1" || fail "stage_break: '$2' changed nothing in $1"
+}
+# <description> <collection> <message, fixed string>: refused (exit 1) for that reason;
+# an uncaught exception exits 1 too, so the message is what proves it.
+stage_refuses() {
+  expect 1 "stage-playbooks.py refuses $1" stage_run "$2"
+  grep -qF -- "$3" "$work/out" || { cat "$work/out" >&2; fail "stage-playbooks.py refused $1 for another reason"; }
+}
+stage_copy
+for c in node publisher; do
+  expect 0 "stage-playbooks.py stages decdn.$c" stage_run "$c"
+  [[ -f "$sp/out-$c/playbooks/group_vars/all.yml" ]] || fail "stage-playbooks.py did not stage decdn.$c's group_vars/"
+  # Strip the qualifier from role:/name: values and each staged playbook is its source.
+  for pb in "$sp/out-$c/playbooks/"*.yml; do
+    src="$repo/ansible/galaxy/$c/playbooks/${pb##*/}"
+    [[ -f "$src" ]] || src="$repo/ansible/playbooks/${pb##*/}"
+    diff <(sed -E "s/^([[:space:]]*(- )?(role|name): [\"']?)decdn\.(node|publisher)\./\1/" "$pb") "$src" >/dev/null \
+      || fail "stage-playbooks.py changed more than role names in decdn.$c's ${pb##*/}"
+  done
+done
+if ! grep -q '^    - role: decdn.node.baseline$' "$sp/out-publisher/playbooks/sponsord.yml" \
+   || ! grep -q '^        name: decdn.publisher.sponsord$' "$sp/out-publisher/playbooks/backup.yml"; then
+  fail "stage-playbooks.py did not qualify roles: items and include_role names"
+fi
+pass "stage-playbooks.py qualifies role: and include_role names, stages group_vars/ and changes nothing else"
+expect 2 "stage-playbooks.py rejects an unknown collection" python3 "$sp/ansible/galaxy/stage-playbooks.py" relay "$sp/out"
+# Quoted names and the ansible.legacy prefix are qualified, not passed through.
+stage_break playbooks/decommission.yml 's/^        name: grafana_alloy$/        name: "grafana_alloy"/'
+expect 0 "stage-playbooks.py takes a quoted include_role name" stage_run publisher
+grep -q '^        name: "decdn.node.grafana_alloy"$' "$sp/out-publisher/playbooks/decommission.yml" \
+  || fail "stage-playbooks.py left a quoted include_role name unqualified"
+stage_break playbooks/decommission.yml 's/^      ansible.builtin.include_role:$/      ansible.legacy.include_role:/'
+expect 0 "stage-playbooks.py takes ansible.legacy.include_role" stage_run publisher
+! grep -qE '^        name: [a-z_]+$' "$sp/out-publisher/playbooks/decommission.yml" \
+  || fail "stage-playbooks.py left an ansible.legacy.include_role name unqualified"
+stage_break playbooks/node.yml "s/^    - role: baseline$/    - role: 'baseline'/"
+expect 0 "stage-playbooks.py takes a quoted roles item" stage_run node
+grep -q "^    - role: 'decdn.node.baseline'$" "$sp/out-node/playbooks/node.yml" \
+  || fail "stage-playbooks.py left a quoted roles item unqualified"
+pass "stage-playbooks.py qualifies quoted names and ansible.legacy.include_role"
+stage_break playbooks/sponsord.yml 's/^    - role: sponsord$/    - role: sponsordd/'
+stage_refuses "a role no collection ships" publisher "role sponsordd is not one decdn.publisher can resolve"
+stage_break playbooks/node.yml 's/^    - role: decdn_node$/    - role: decdn.publisher.decdn_node/'
+stage_refuses "an FQCN in the wrong collection" node "role decdn.publisher.decdn_node is not one decdn.node can resolve"
+stage_break galaxy/publisher/playbooks.txt '/^iroh_relay.yml$/d'
+stage_refuses "an import_playbook it does not ship" publisher "imports iroh_relay.yml"
+stage_break playbooks/backup.yml 's/^      ansible.builtin.include_role:$/      ansible.builtin.include_role: {name: decdn_node, tasks_from: backup}/'
+stage_refuses "a flow-style include_role" publisher "as a block mapping"
+stage_break playbooks/decommission.yml 's/^        name: grafana_alloy$/        name: "{{ r }}"/'
+stage_refuses "a templated include_role name" publisher "write the role's name as a bare name"
+stage_break playbooks/backup.yml 's/^        name: decdn_node$/        role_name: decdn_node/'
+stage_refuses "an include_role without a name" publisher "without a name: key"
+stage_break playbooks/backup.yml 's/^        tasks_from: backup$/        tasks_from: bakup/'
+stage_refuses "a tasks_from the role lacks" publisher "has no tasks_from bakup"
+stage_break playbooks/node.yml 's/^    - role: baseline$/    - baseline/'
+stage_refuses "a bare roles item" node "write a roles item as"
+stage_break playbooks/node.yml 's/^    - role: baseline$/    - { role: baseline }/'
+stage_refuses "a flow-style roles item" node "write a roles item as"
+stage_break playbooks/node.yml 's/^    - role: baseline$/    - name: baseline/'
+stage_refuses "a name: roles item" node "write a roles item as"
+stage_break playbooks/node.yml 's/^  roles:$/  roles: [baseline]/'
+stage_refuses "an inline roles list" node "block sequence"
+stage_break galaxy/node/playbooks.txt '/^node.yml$/d'
+stage_refuses "an empty playbooks.txt" node "lists nothing"
+stage_copy; rm -r "$sp/ansible/playbooks/group_vars"
+stage_refuses "a missing group_vars/" node "group_vars is missing"
+# decdn.node ships node-scoped backup.yml and decommission.yml (its overlay
+# playbooks/): each play must be the fleet-wide play of the same name, but for its
+# hosts and the sponsord top-up check, and every fleet play on decdn_nodes must be
+# there. Play names reach yq through the environment, never the expression.
+if command -v yq >/dev/null; then
+  norm='del(.hosts) | (.tasks // []) |= map(select(.name != "Refuse while sponsord holds a pool top-up"))'
+  for pb in backup.yml decommission.yml; do
+    node_pb="$repo/ansible/galaxy/node/playbooks/$pb" fleet_pb="$repo/ansible/playbooks/$pb"
+    node_plays="$(yq '.[].name' "$node_pb")"
+    [[ -n "$node_plays" ]] || fail "galaxy/node/playbooks/$pb has no named play"
+    while IFS= read -r play; do
+      mine="$(PLAY="$play" yq -o=json -I0 ".[] | select(.name == strenv(PLAY)) | $norm" "$node_pb")"
+      theirs="$(PLAY="$play" yq -o=json -I0 ".[] | select(.name == strenv(PLAY)) | $norm" "$fleet_pb")"
+      [[ -n "$mine" && "$mine" == "$theirs" ]] \
+        || fail "galaxy/node/playbooks/$pb: play \"$play\" differs from playbooks/$pb's (beyond hosts and the sponsord check)"
+    done <<<"$node_plays"
+    while IFS= read -r play; do
+      grep -qxF -- "$play" <<<"$node_plays" \
+        || fail "galaxy/node/playbooks/$pb lacks playbooks/$pb's decdn_nodes play \"$play\""
+    done < <(yq '.[] | select([.hosts] | flatten | map(split(":")) | flatten | any_c(. == "decdn_nodes")) | .name' "$fleet_pb")
+    [[ "$(yq '[.[] | select([.hosts] | flatten | any_c(. != "decdn_nodes"))] | length' "$node_pb")" == 0 ]] \
+      || fail "galaxy/node/playbooks/$pb: a play targets more than decdn_nodes"
+  done
+  pass "decdn.node's backup.yml and decommission.yml are exactly the fleet-wide node plays"
+elif [[ -n ${CI:-} ]]; then
+  fail "yq is not on PATH in CI; the node lifecycle playbook check would be skipped"
+else
+  skipped+=("node lifecycle playbook check (needs yq)")
+fi
 
 # --- release gate ----------------------------------------------------------------------
 gate="$repo/scripts/check-release-version.sh"
@@ -642,7 +762,7 @@ fi
 # --- scripts/release.sh: version, changelog section, signed commit and tag -------------
 # On a fixture repo with a bare origin: small manifests and changelogs at the 0.0.0
 # placeholder, the real scripts, cliff.toml, galaxy/build.sh and each collection's
-# roles.txt, and an ephemeral ssh signing key. The host's git config is kept out (GIT_CONFIG_GLOBAL). The
+# roles.txt and playbooks.txt, and an ephemeral ssh signing key. The host's git config is kept out (GIT_CONFIG_GLOBAL). The
 # make checks are stubs that log their target to $RS_MAKE_LOG and fail while
 # $RS_MAKE_FAIL exists; most cases skip them with --no-verify.
 if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
@@ -703,7 +823,7 @@ if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
   printf 'galaxy-check-%%:\n\t@echo galaxy-check-$* >> "$$RS_MAKE_LOG"; test ! -e "$$RS_MAKE_FAIL"\n' > "$rs/ansible/Makefile"
   printf 'apiVersion: v2\nname: decdn-node\nversion: 0.0.0\nappVersion: "0.0.1"\n' > "$chart/Chart.yaml"
   for c in node publisher; do
-    cp "$repo/ansible/galaxy/$c/roles.txt" "$rs/ansible/galaxy/$c/"
+    cp "$repo/ansible/galaxy/$c/roles.txt" "$repo/ansible/galaxy/$c/playbooks.txt" "$rs/ansible/galaxy/$c/"
     printf 'namespace: decdn\nname: %s\nversion: 0.0.0                      # a comment\n' "$c" > "$rs/ansible/galaxy/$c/galaxy.yml"
   done
   printf 'dependencies:\n  decdn.node: ">=0.0.2"\n' >> "$rs/ansible/galaxy/publisher/galaxy.yml"
@@ -961,13 +1081,27 @@ if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
   rscommit ansible/galaxy/build.sh "fix(galaxy): a build fix"
   expect 0 "release.sh counts galaxy/build.sh for the node collection" rsrel node-collection
   rssaid "after a build.sh fix" "+- **galaxy**: A build fix"
+  # Playbooks count for each collection that lists them in its playbooks.txt, and
+  # their group_vars/ for both: node.yml ships in both, sponsord.yml in publisher only.
+  rscommit ansible/playbooks/node.yml "fix(playbooks): a node play fix"
+  rscommit ansible/playbooks/sponsord.yml "fix(playbooks): a sponsord play fix"
+  rscommit ansible/playbooks/group_vars/all.yml "fix(playbooks): a firewall hole fix"
+  rscommit ansible/galaxy/stage-playbooks.py "fix(galaxy): a staging fix"
+  expect 0 "release.sh counts the node collection's playbooks" rsrel node-collection
+  rssaid "after a stage-playbooks.py fix" "+- **galaxy**: A staging fix"
+  rssaid "after a node.yml fix" "+- **playbooks**: A node play fix"
+  rssaid "after a group_vars fix" "+- **playbooks**: A firewall hole fix"
+  ! grep -qF "A sponsord play fix" "$work/out" || fail "release.sh counted sponsord.yml, which decdn.node does not ship"
   echo unshipped >> "$rs/ansible/galaxy/publisher/roles.txt"
   rsgit commit -qam "build: ship the unshipped role"; rspush
   expect 0 "release.sh reads the collection's roles from its roles.txt" rsrel publisher-collection
   rssaid "with a role added to roles.txt" "+- **unshipped**: Not in a roles.txt"
+  rssaid "after a sponsord.yml fix" "+- **playbooks**: A sponsord play fix"
+  rssaid "after a node.yml fix, for publisher" "+- **playbooks**: A node play fix"
+  rssaid "after a group_vars fix, for publisher" "+- **playbooks**: A firewall hole fix"
   rssaid "with a feature at 0.0.x" "publisher-collection-v0.0.1 -> publisher-collection-v0.1.0"
   ! grep -qF "Ship the unshipped role" "$work/out" || fail "release.sh's collection section lists a build commit"
-  pass "release.sh releases each collection on its own tags, roles.txt and overlay, publisher after node"
+  pass "release.sh releases each collection on its own tags, roles.txt, playbooks.txt and overlay, publisher after node"
   unset GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM RS_MAKE_LOG RS_MAKE_FAIL
 elif [[ -n ${CI:-} ]]; then
   fail "git-cliff or ssh-keygen is not on PATH in CI; the release.sh tests would be skipped"
@@ -1492,7 +1626,16 @@ done
 cmp -s "$repo/ansible/roles/decdn_node/files/install-build-output.py" \
        "$repo/ansible/roles/sponsord/files/install-build-output.py" \
   || fail "decdn_node and sponsord files/install-build-output.py differ"
-pass "source-build and decommission defaults, and the installer, identical across roles"
+# decdn_backup_local_dir and sponsord_backup_local_dir: one expression (backups/ beside
+# the repo's playbooks/, or beside the project's ansible.cfg from a collection), the
+# key's own name aside. Only decdn_node's runs in a molecule scenario.
+backup_dir_default() { # <defaults file> <key>
+  awk -v k="$2" '$0 ~ "^" k ":" {on = 1; next} on && /^  / {print; next} on {exit}' "$1" | sed "s/$2/KEY/g"
+}
+want="$(backup_dir_default "$repo/ansible/roles/decdn_node/defaults/main.yml" decdn_backup_local_dir)"
+[[ -n "$want" && "$(backup_dir_default "$repo/ansible/roles/sponsord/defaults/main.yml" sponsord_backup_local_dir)" == "$want" ]] \
+  || fail "sponsord_backup_local_dir's default differs from decdn_backup_local_dir's"
+pass "source-build and decommission defaults, the backup directory and the installer, identical across roles"
 # iroh_relay and iroh_dns_server have no source build (and their own per-triple
 # sha256 pins), so only their decommission keys are compared.
 decom_keys() { grep -E '^decdn_decommission_(max_hosts|prompt_seconds):' "$1" || true; }

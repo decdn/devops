@@ -15,8 +15,8 @@
   pre_tasks:
     # The firewall hole, backup, decommission, the relay allowlist and Alloy's node
     # scrape all follow decdn_nodes, so an origin outside it would lose them. The role
-    # checks no group name, so the decdn.node collection does not impose this repo's
-    # groups on others. tests/scripts-test.sh runs these tasks by the play's name.
+    # checks no group name, so a playbook of your own that runs it is not held to this
+    # repo's groups. tests/scripts-test.sh runs these tasks by the play's name.
     - name: Require the origin in decdn_nodes too
       ansible.builtin.assert:
         that:

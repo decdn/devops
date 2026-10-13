@@ -263,8 +263,9 @@ molecule-list:
 	@$(molecule_env) ../scripts/molecule.sh list
 
 # --- Galaxy collections (decdn.node, decdn.publisher) -------------------------
-# Stage each collection's roles (galaxy/<collection>/roles.txt) into a clean collection
-# tree and build the artifact under build/: decdn.node is what a node operator runs
+# Stage each collection's roles (galaxy/<collection>/roles.txt) and playbooks
+# (galaxy/<collection>/playbooks.txt) into a clean collection tree and build the
+# artifact under build/: decdn.node is what a node operator runs
 # (baseline + decdn_node + grafana_alloy), decdn.publisher what a publisher runs beside
 # its origins (sponsord + sponsord_onramp + iroh_relay + iroh_dns_server). See
 # galaxy/*/README.md. Publishing runs from a node-collection-vX.Y.Z or
@@ -281,7 +282,13 @@ build-node build-publisher: build-%:
 # pipeline exit (set -o pipefail catches a crash / "No module named …" that prints
 # no error keyword) AND the importer's explicit success line (it can log content
 # errors while still exiting 0). Warnings are kept in build/importer-<collection>.log.
+# Then galaxy/check-playbooks.sh installs the artifact and checks its playbooks as a
+# consumer runs them (syntax by FQCN, the firewall holes their group_vars/ give),
+# which the importer's ansible-lint, seeing one collection outside any collections
+# path, cannot. decdn.publisher installs with the decdn.node it depends on.
 galaxy-check: galaxy-check-node galaxy-check-publisher
+
+galaxy-check-publisher: build-node
 
 galaxy-check-node galaxy-check-publisher: galaxy-check-%: build-%
 	@set -o pipefail; \
@@ -291,3 +298,4 @@ galaxy-check-node galaxy-check-publisher: galaxy-check-%: build-%
 	     || ! grep -q "Importer processing completed successfully" build/importer-$*.log; then \
 	    echo "FAIL: galaxy-importer reported errors or did not complete (see build/importer-$*.log)"; exit 1; \
 	  fi
+	./galaxy/check-playbooks.sh $*

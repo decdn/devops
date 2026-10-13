@@ -7,6 +7,8 @@
 # task prints what is left to do. One typed confirmation, in the first play that
 # reaches a host, names every service it covers there.
 #   make decommission LIMIT=<host>          # LIMIT is required; asks for typed confirmation
+#   ansible-playbook -i inventory/hosts.yml decdn.publisher.decommission -l <host>   # from the
+#     collection, where nothing requires -l: the host cap below still applies
 # Take a backup first (make backup). See docs/lifecycle.md.
 
 # Before anything stops, over every host this run decommissions:
@@ -30,7 +32,7 @@
           This run decommissions {{ ansible_play_hosts_all | length }} hosts
           ({{ ansible_play_hosts_all | sort | join(', ') }}), more than
           decdn_decommission_max_hosts ({{ decdn_decommission_max_hosts | default(1) }}).
-          Scope it with LIMIT, or raise decdn_decommission_max_hosts deliberately.
+          Scope it with LIMIT (-l), or raise decdn_decommission_max_hosts deliberately.
         quiet: true
 
     - name: Refuse while sponsord holds a pool top-up

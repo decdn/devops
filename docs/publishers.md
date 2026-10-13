@@ -29,11 +29,14 @@ should read [`node-operators.md`](node-operators.md) instead.
 Only the origin is required. With Ansible, start from
 `ansible/inventory/hosts-publisher.yml.example`; `make deploy-publisher`
 (`playbooks/publisher.yml`) deploys all four in that order, and each has its own target
-(`deploy-origin`, `deploy-sponsord`, `deploy-relay`, `deploy-dns`). The roles also ship as
-the [`decdn.publisher`](../ansible/galaxy/publisher/README.md) collection on
+(`deploy-origin`, `deploy-sponsord`, `deploy-relay`, `deploy-dns`). The roles and these
+playbooks also ship as the [`decdn.publisher`](../ansible/galaxy/publisher/README.md) collection on
 [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/) (`ansible-galaxy collection install decdn.publisher`),
 which depends on [`decdn.node`](../ansible/galaxy/node/README.md) for the baseline,
-observability and the origin node itself.
+observability and the origin node itself: with only an inventory of your own,
+`ansible-playbook -i inventory/hosts.yml decdn.publisher.publisher` (or `decdn.publisher.origin`,
+`.sponsord`, `.iroh_relay`, `.iroh_dns_server`) deploys what the make targets do,
+firewall holes and placement checks included.
 
 ## Origin nodes
 

@@ -203,7 +203,21 @@ sponsord_backup_age_recipients: "{{ decdn_backup_age_recipients | default([]) }}
 sponsord_backup_include_env: false     # also archive secret.env (the RPC URL, maybe an API key)
 sponsord_backup_dir: /var/backups/sponsord   # on the host, root 0700
 sponsord_backup_fetch: true            # copy the ENCRYPTED archive (kilobytes) to the control machine
-sponsord_backup_local_dir: "{{ playbook_dir }}/../backups"   # control machine; git-ignored in this repo
+# On the control machine: backups/ beside this repo's playbooks/ (git-ignored here).
+# From a Galaxy collection's playbook, playbook_dir is inside the installed
+# collection, which an upgrade replaces, so it is backups/ beside the project's
+# ansible.cfg instead; with no project ansible.cfg (none, ~/.ansible.cfg or
+# /etc/ansible's), a run that fetches fails and asks for this variable.
+# decdn_backup_local_dir and sponsord_backup_local_dir share this expression
+# (make test-scripts checks).
+sponsord_backup_local_dir: >-
+  {{ ((playbook_dir ~ '/..') if playbook_dir is not search('/ansible_collections/')
+      else (ansible_config_file | dirname)
+        if (ansible_config_file | default('', true) | basename) == 'ansible.cfg'
+           and (ansible_config_file | dirname) != '/etc/ansible'
+      else undef(hint='sponsord_backup_local_dir: a collection playbook run without a project'
+                      ~ ' ansible.cfg has no project directory to fetch backups to; set it'))
+     ~ '/backups' }}
 #
 # Shared with decdn_node (and identical there, `make test-scripts` checks): one typed
 # confirmation covers every service on the host. A non-interactive run sets

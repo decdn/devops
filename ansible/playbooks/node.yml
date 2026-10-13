@@ -2,7 +2,8 @@
 # NODE OPERATORS: hardened, public deCDN cache nodes.
 #   decdn_nodes (minus decdn_origin_nodes): baseline -> grafana_alloy (opt-in, off by
 #   default) -> decdn-node
-# Standalone entry point (`make deploy-node`), also imported by site.yml. The node
+# Standalone entry point (`make deploy-node`; from the Galaxy collections,
+# `ansible-playbook decdn.node.node`), also imported by site.yml. The node
 # listens on public QUIC udp/4433; metrics + admin RPC stay loopback. On-chain stake +
 # registration (ADR 019 Phase 2) is an operator action, not automated here — see
 # roles/decdn_node/README.md.

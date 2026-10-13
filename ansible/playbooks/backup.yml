@@ -3,6 +3,7 @@
 # sponsord host's credentials (the treasury keystore and password, the API token,
 # the onramp's Turnstile secret).
 #   make backup LIMIT=<host> ANSIBLE_ARGS='-e decdn_backup_scope=full'
+#   ansible-playbook -i inventory/hosts.yml decdn.publisher.backup -l <host>   # from the collection
 # decdn_backup_age_recipients (public keys) is required; set it in group_vars
 # (sponsord_backup_age_recipients defaults to it). See roles/decdn_node/tasks/backup.yml
 # and roles/sponsord/tasks/backup.yml for what is archived and docs/lifecycle.md for

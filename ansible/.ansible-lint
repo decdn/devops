@@ -18,6 +18,13 @@ skip_list:
 exclude_paths:
   - build/
   - galaxy/
+  # Imports the decdn.node collection's playbooks by FQCN, which exist only once the
+  # scenario's prepare has built and installed the collection, so ansible-lint's
+  # syntax check cannot load it. Of the playbooks it imports, node.yml is linted
+  # here; the node-only backup.yml and decommission.yml live under the excluded
+  # galaxy/, linted by galaxy-importer in the build and kept equal to playbooks/'s
+  # node plays by make test-scripts.
+  - molecule/collection/converge.yml
 
 # Task files a molecule scenario includes (ansible-lint would otherwise read them as
 # playbooks, and a `tasks/` directory would make the scenario look like a role).

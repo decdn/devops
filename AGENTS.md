@@ -120,6 +120,7 @@ monitoring/             # Grafana dashboards + Prometheus alert rules (maintaine
   sponsord/             # sponsord's (+ promtool unit tests), Ansible/Compose only
   iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible and Compose
 docs/                   # cross-path operator docs: node-operators.md + publishers.md (the front doors), requirements.md, lifecycle.md
+examples/collection-fleet/  # a consumer project for the Galaxy collections: requirements.yml, ansible.cfg, .gitignore (the inventory comes from ansible/inventory/'s examples)
 scripts/                # upstream-mirror generators, the compose Alloy config generator (render-compose-alloy.sh), the decdn bump (open-decdn-bump.sh, bump_decdn.py), the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh), ansible/Makefile's LIMIT preflight (limit-guard.sh)
 ```
 
@@ -718,9 +719,21 @@ which depends on `decdn.node`). Each overlay lives in `ansible/galaxy/<collectio
 `make test-scripts` checks every role ships in exactly one), and is staged into a clean
 collection tree by `galaxy/build.sh <collection>` — there is **no** `galaxy.yml` at the
 `ansible/` root (that would make ansible-lint treat the deploy project as a collection).
-A new role goes in one `roles.txt`. Build/validate from `ansible/` with `make build` /
+A new role goes in one `roles.txt`. **The playbooks ship too**, so a consumer needs only
+an inventory (`ansible-playbook decdn.publisher.site`): `playbooks.txt` lists what each
+collection takes from `ansible/playbooks/` (a new playbook goes in at least one; every
+`import_playbook` target in the same one, so a run never mixes two releases'
+`group_vars/`), `playbooks/group_vars/` ships beside them (a collection playbook loads
+it as this project does, same precedence), and `galaxy/stage-playbooks.py` rewrites
+role references to FQCNs at staging only: never qualify them, or add `collections:`, in
+`ansible/playbooks/`, where an installed collection would then shadow `roles/`.
+`decdn.node`'s node-only `backup.yml`/`decommission.yml` are a second source in
+`galaxy/node/playbooks/`, kept equal to the fleet-wide node plays by `make
+test-scripts`: change both. Build/validate from `ansible/` with `make build` /
 `make galaxy-check` (both; `-node`/`-publisher` suffixes for one; the root's
-`galaxy-build`/`galaxy-check` run both). **Publishing** is per artifact, each on
+`galaxy-build`/`galaxy-check` run both; each check also installs the tarball and runs
+`galaxy/check-playbooks.sh`: every playbook's syntax by FQCN and, through a probe
+collection playbook, the firewall holes its `group_vars/` give). **Publishing** is per artifact, each on
 its own version: `release-collection.yml` on a `node-collection-vX.Y.Z` or
 `publisher-collection-vX.Y.Z` tag (the repo's Latest follows `decdn.node`; release.sh
 refuses a publisher release until a node tag satisfies its `decdn.node` constraint), `release-chart.yml` on a

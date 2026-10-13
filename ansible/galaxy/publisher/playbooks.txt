@@ -1,0 +1,12 @@
+# Playbooks galaxy/build.sh ships in decdn.publisher, from ansible/playbooks/ (with
+# its group_vars/). Every import_playbook target must be listed here too: a run
+# never leaves the collection, so it never mixes two releases' group_vars/.
+site.yml
+node.yml
+publisher.yml
+origin.yml
+sponsord.yml
+iroh_relay.yml
+iroh_dns_server.yml
+backup.yml
+decommission.yml
