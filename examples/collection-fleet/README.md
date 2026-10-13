@@ -37,16 +37,19 @@ repository you commit it.
 ## Run
 
 ```bash
-ansible-playbook decdn.node.node -l <host> -u root          # first converge only; swap root for your image's bootstrap user
-ansible-playbook decdn.node.node --check --diff -l <host>   # dry run
-ansible-playbook decdn.node.node -l <host>                  # cache nodes
-ansible-playbook decdn.publisher.site -l <host>             # everything the inventory gives the host
-ansible-playbook decdn.publisher.backup -l <host>           # fetched to backups/, beside ansible.cfg
-ansible-playbook decdn.publisher.decommission -l <host>     # asks you to type the host; keeps the keys
+ansible-playbook decdn.publisher.site -l <host> --tags baseline -u root   # a fresh host's first run; swap root for your image's bootstrap user
+ansible-playbook decdn.publisher.site -l <host> --check --diff            # dry run
+ansible-playbook decdn.publisher.site -l <host>                           # everything the inventory gives the host
+ansible-playbook decdn.publisher.backup -l <host>                         # fetched to backups/, beside ansible.cfg
+ansible-playbook decdn.publisher.decommission -l <host>                   # asks you to type the host; keeps the keys
 ```
 
-Installed `decdn.node` alone? Back up and decommission with `decdn.node.backup` and
-`decdn.node.decommission`.
+`decdn.publisher.site` runs whichever playbooks the host's groups call for: a cache
+node, an origin, sponsord, a relay or a DNS server. The first run is baseline only: it
+creates your admin account and turns root login off, after which a relay's full run
+can read the nodes' IDs over SSH as that account. Installed `decdn.node` alone, for
+cache nodes? Use `decdn.node.node`, `decdn.node.backup` and `decdn.node.decommission`
+in their place.
 
 ### From `make` to `ansible-playbook`
 
