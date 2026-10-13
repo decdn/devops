@@ -28,9 +28,8 @@ Fill in `inventory/hosts.yml` and its `group_vars/` and `host_vars/` (each file 
 what it needs; [`ansible/README.md`](../../ansible/README.md) has the variables and the
 on-host secrets). Rename `host_vars/decdn-node-1/` (and `origin-1/`) to your hosts, and
 keep secrets in the git-ignored `host_vars/<host>/secret.yml` (copied from its
-`secret.yml.example`). The copied files name this repository's make targets; here,
-`make deploy-node LIMIT=<host>` is `ansible-playbook decdn.node.node -l <host>`, and
-`ANSIBLE_ARGS='…'` are plain `ansible-playbook` options.
+`secret.yml.example`). The copied files name this repository's make targets:
+[From `make` to `ansible-playbook`](#from-make-to-ansible-playbook) translates them.
 
 ## Run
 
@@ -42,6 +41,28 @@ ansible-playbook decdn.publisher.site                       # everything in the 
 ansible-playbook decdn.node.backup -l <host>                # fetched to backups/, beside ansible.cfg
 ansible-playbook decdn.node.decommission -l <host>          # decdn.publisher.decommission on a host with publisher services
 ```
+
+### From `make` to `ansible-playbook`
+
+The docs elsewhere use this repository's make targets. Here, each is one
+`ansible-playbook` command, run from this directory (`ansible.cfg` points at
+`inventory/hosts.yml`, so no `-i`):
+
+| In `decdn/devops/ansible/` | Here |
+|----------------------------|------|
+| `make check-node LIMIT=<host>` | `ansible-playbook decdn.node.node -l <host> --check --diff` |
+| `make deploy-node LIMIT=<host>` | `ansible-playbook decdn.node.node -l <host>` |
+| `make deploy LIMIT=<host>` | `ansible-playbook decdn.publisher.site -l <host>` |
+| `make deploy-publisher LIMIT=<host>` | `ansible-playbook decdn.publisher.publisher -l <host>` |
+| `make deploy-origin LIMIT=<host>` | `ansible-playbook decdn.publisher.origin -l <host>` |
+| `make deploy-sponsord LIMIT=<host>` | `ansible-playbook decdn.publisher.sponsord -l <host>` |
+| `make deploy-relay LIMIT=<host>` | `ansible-playbook decdn.publisher.iroh_relay -l <host>` |
+| `make deploy-dns LIMIT=<host>` | `ansible-playbook decdn.publisher.iroh_dns_server -l <host>` |
+| `make backup LIMIT=<host>` | `ansible-playbook decdn.node.backup -l <host>` (`decdn.publisher.backup` also covers sponsord) |
+| `make decommission LIMIT=<host>` | `ansible-playbook decdn.node.decommission -l <host>` (`decdn.publisher.decommission` on a host with publisher services) |
+| `ANSIBLE_ARGS='-u root -e x=y'` | `-u root -e x=y`, plain options |
+
+Any `check` target is the same command with `--check --diff`.
 
 The collection READMEs list every playbook and what it runs. Unlike this repository's
 Makefile, nothing here refuses a run without `-l`: scope deploys and every
