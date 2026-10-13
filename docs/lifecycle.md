@@ -4,6 +4,22 @@ Day-2 procedures for a running deCDN node, and for sponsord in
 [its own section](#sponsord-the-onboarding-sponsor). The Ansible targets run from
 `ansible/`; the manual commands work for any deploy path.
 
+Deploying from the Galaxy collections instead of a clone? Each `make` target below is
+an `ansible-playbook` command run from your inventory project:
+
+```bash
+ansible-playbook decdn.publisher.backup -l <host>         # make backup: nodes, and sponsord's credentials
+ansible-playbook decdn.publisher.decommission -l <host>   # make decommission: every service on the host
+ansible-playbook decdn.node.backup -l <host>              # with decdn.node alone: a node's backup
+ansible-playbook decdn.node.decommission -l <host>        # with decdn.node alone: a host that runs only a node
+```
+
+`ANSIBLE_ARGS='…'` become plain options (`-e decdn_backup_scope=full`). Backups land in
+`backups/` beside your `ansible.cfg`, not `ansible/backups/`. Relays and DNS servers
+have nothing to back up. The Makefile's checks do not apply, so always pass `-l`:
+[From `make` to `ansible-playbook`](../examples/collection-fleet/README.md#from-make-to-ansible-playbook)
+lists them and maps every target.
+
 ## What makes a node *that* node
 
 | File | What it is | Lose it and… |

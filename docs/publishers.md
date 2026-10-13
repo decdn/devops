@@ -21,22 +21,53 @@ should read [`node-operators.md`](node-operators.md) instead.
 
 | Service | What it is | Ansible group and playbook | Other paths |
 |---------|------------|----------------------------|-------------|
-| **Origin node** | `decdn-node` with an origin backend (S3/R2/B2/MinIO, NFS or local disk, or an HTTP store): the canonical source of your namespace's content | `decdn_origin_nodes`, a child of `decdn_nodes`; `playbooks/origin.yml` | cloud-init `user-data-publisher.yaml`; Compose `origin` profile; the Helm chart with `config.cache.origin` (an `fs` origin also needs `origin.volume`) |
-| **sponsord** + **sponsord-onramp** | Pays for your users' downloads: the treasury wallet that owns a PaymentPool and signs capped capabilities for clients ([ADR 003 § Capability delegation](https://github.com/decdn/decdn/blob/main/adr/003-payments.md#capability-delegation)), and its public gate (Turnstile, installers) behind Caddy | `sponsord_hosts`, `sponsord_onramp_hosts`; `playbooks/sponsord.yml` | cloud-init `user-data-publisher.yaml`; Compose `sponsord`, `onramp`, `caddy` profiles |
-| **iroh relay** | NAT-traversal fallback for peers that cannot hole-punch. Relays are operational infrastructure, not an incentivized role ([Architecture § Trust Assumptions](https://github.com/decdn/decdn/blob/main/adr/architecture.md#trust-assumptions)) | `iroh_relay_hosts`; `playbooks/iroh_relay.yml` | Compose `relay` profile |
-| **iroh DNS server** | The pkarr relay and DNS server nodes publish and resolve their address records through, in place of n0's ([ADR 001 § Node Discovery](https://github.com/decdn/decdn/blob/main/adr/001-network.md#node-discovery-registry)) | `iroh_dns_server_hosts`; `playbooks/iroh_dns_server.yml` | Compose `dns` profile |
+| **Origin node** | `decdn-node` with an origin backend (S3/R2/B2/MinIO, NFS or local disk, or an HTTP store): the canonical source of your namespace's content | `decdn_origin_nodes`, a child of `decdn_nodes`; `decdn.publisher.origin` | cloud-init `user-data-publisher.yaml`; Compose `origin` profile; the Helm chart with `config.cache.origin` (an `fs` origin also needs `origin.volume`) |
+| **sponsord** + **sponsord-onramp** | Pays for your users' downloads: the treasury wallet that owns a PaymentPool and signs capped capabilities for clients ([ADR 003 § Capability delegation](https://github.com/decdn/decdn/blob/main/adr/003-payments.md#capability-delegation)), and its public gate (Turnstile, installers) behind Caddy | `sponsord_hosts`, `sponsord_onramp_hosts`; `decdn.publisher.sponsord` | cloud-init `user-data-publisher.yaml`; Compose `sponsord`, `onramp`, `caddy` profiles |
+| **iroh relay** | NAT-traversal fallback for peers that cannot hole-punch. Relays are operational infrastructure, not an incentivized role ([Architecture § Trust Assumptions](https://github.com/decdn/decdn/blob/main/adr/architecture.md#trust-assumptions)) | `iroh_relay_hosts`; `decdn.publisher.iroh_relay` | Compose `relay` profile |
+| **iroh DNS server** | The pkarr relay and DNS server nodes publish and resolve their address records through, in place of n0's ([ADR 001 § Node Discovery](https://github.com/decdn/decdn/blob/main/adr/001-network.md#node-discovery-registry)) | `iroh_dns_server_hosts`; `decdn.publisher.iroh_dns_server` | Compose `dns` profile |
 
-Only the origin is required. With Ansible, start from
-`ansible/inventory/hosts-publisher.yml.example`; `make deploy-publisher`
-(`playbooks/publisher.yml`) deploys all four in that order, and each has its own target
-(`deploy-origin`, `deploy-sponsord`, `deploy-relay`, `deploy-dns`). The roles and these
-playbooks also ship as the [`decdn.publisher`](../ansible/galaxy/publisher/README.md) collection on
-[Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/) (`ansible-galaxy collection install decdn.publisher`),
-which depends on [`decdn.node`](../ansible/galaxy/node/README.md) for the baseline,
-observability and the origin node itself: with only an inventory of your own,
-`ansible-playbook -i inventory/hosts.yml decdn.publisher.publisher` (or `decdn.publisher.origin`,
-`.sponsord`, `.iroh_relay`, `.iroh_dns_server`) deploys what the make targets do,
-firewall holes and placement checks included.
+Only the origin is required.
+
+### Deploy with Ansible from Galaxy
+
+The roles and playbooks are the [`decdn.publisher`](../ansible/galaxy/publisher/README.md)
+collection on [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/),
+which pulls in [`decdn.node`](../ansible/galaxy/node/README.md) for the baseline,
+observability and the origin node itself. You run them from a private repository that
+holds only your inventory. Set it up once with the
+[root README's quickstart](../README.md#quickstart-ansible-from-galaxy), with two
+changes:
+
+- Start `inventory/hosts.yml` from `hosts-publisher.yml.example`. Only the origin
+  (`origin-1`) is live in it: uncomment the groups you run (sponsord and its onramp,
+  iroh relays, the DNS server).
+- Edit `host_vars/origin-1/` rather than `decdn-node-1/`: `decdn_region`, the origin
+  backend, and `decdn_node_generate_keystore: true` if the node should make its wallet.
+
+Then:
+
+```bash
+ansible-playbook decdn.publisher.publisher -l <host> --tags baseline -u root   # a fresh host's first run (or -u ubuntu, …)
+ansible-playbook decdn.publisher.publisher -l <host> --check --diff            # dry run
+ansible-playbook decdn.publisher.publisher -l <host>                           # every service the inventory gives the host
+ansible-playbook decdn.publisher.origin -l <host>             # or one service: an origin node
+ansible-playbook decdn.publisher.sponsord -l <host>           #   sponsord and its onramp
+ansible-playbook decdn.publisher.iroh_relay -l <host>         #   an iroh relay
+ansible-playbook decdn.publisher.iroh_dns_server -l <host>    #   the iroh DNS server
+ansible-playbook decdn.publisher.backup -l <host>             # node identity and sponsord credentials (relays and DNS servers hold nothing to back up)
+ansible-playbook decdn.publisher.decommission -l <host>       # asks you to type the host; removes every service on it, keeps the keys
+```
+
+The first run is baseline only (`--tags baseline`): it creates your admin account and
+turns root login off. That matters for a relay, whose full run logs into every node in
+the inventory to read its ID and would try those nodes as root too. Drop `-l` to cover
+every host in the inventory. The playbooks open each service's firewall holes and refuse
+a host in the wrong groups. From a clone of this repository, the same runs are
+`make deploy-publisher`, `deploy-origin`, `deploy-sponsord`, `deploy-relay` and
+`deploy-dns` in `ansible/`;
+[From `make` to `ansible-playbook`](../examples/collection-fleet/README.md#from-make-to-ansible-playbook)
+maps every target and lists what the Makefile checks that a plain `ansible-playbook`
+run does not.
 
 ## Origin nodes
 
@@ -50,8 +81,8 @@ same hardening, port and day-2 tooling as a cache node. Three things differ:
   S3 keys go in `/etc/decdn/decdn.env` on the host (or in `decdn_extra_env` in a
   git-ignored `secret.yml`, beside `decdn_rpc_url`), never in tracked inventory or
   user-data.
-  `playbooks/origin.yml` refuses a `decdn_origin_nodes` host without a backend, or one
-  outside `decdn_nodes`.
+  The origin playbook (`decdn.publisher.origin`) refuses a `decdn_origin_nodes` host
+  without a backend, or one outside `decdn_nodes`.
 - **What it serves.** With a backend, the node fills misses from it rather than from
   other nodes. By default it serves only what its own backend holds and declines
   everything else, even a blob already in its cache (`relay_foreign_namespaces`,

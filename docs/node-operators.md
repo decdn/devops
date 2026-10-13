@@ -19,17 +19,12 @@ loopback, and the chain's contract addresses taken from upstream's deployment ma
 | Path | Start here | Entry point |
 |------|------------|-------------|
 | **Docker Compose** (one Docker host), recommended | [`compose/README.md`](../compose/README.md) | `decdn-compose init node` |
-| **Ansible** (VMs, bare metal, a fleet) | [`ansible/README.md`](../ansible/README.md) | `inventory/hosts-node.yml.example`, `make deploy-node` (`playbooks/node.yml`) |
+| **Ansible** (VMs, bare metal, a fleet) | [below](#deploy-with-ansible-from-galaxy), [`ansible/README.md`](../ansible/README.md) | `ansible/inventory/hosts-node.yml.example`, `ansible-playbook decdn.node.node` (or `make deploy-node` from a clone) |
 | **cloud-init** (one VM, no control machine) | [`cloud-init/README.md`](../cloud-init/README.md) | `cloud-init/user-data-node.yaml` |
 | **Helm** (Kubernetes, one release per node) | [`charts/decdn-node/README.md`](../charts/decdn-node/README.md) | `oci://ghcr.io/decdn/charts/decdn-node`, with no `config.cache.origin` |
 
 [`requirements.md`](requirements.md) has the hardware, network and platform requirements,
-and compares the paths. The roles and the node playbooks are also the
-[`decdn.node`](../ansible/galaxy/node/README.md) collection on
-[Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/) (`ansible-galaxy collection install decdn.node`):
-with only an inventory of your own, `ansible-playbook -i inventory/hosts.yml decdn.node.node`
-deploys what `make deploy-node` does, firewall hole included; or call the roles from
-your own playbooks.
+and compares the paths.
 
 A node without an origin backend fills a miss by pulling from other nodes
 (`node_to_node_pull_through_enabled`). The Ansible role and the chart turn that on for
@@ -39,6 +34,32 @@ from the node's own PaymentPool (the node-to-node tier of
 fronts USDC for its misses. `buyer_working_deposit_micro_usdc` is not a cap: it is the
 deposit the pool opens with and the balance every top-up refills it to, so keep the
 node's wallet funded for as long as it pulls.
+
+## Deploy with Ansible from Galaxy
+
+The roles and the node playbooks are the
+[`decdn.node`](../ansible/galaxy/node/README.md) collection on
+[Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/), so you run
+them from a private repository that holds only your inventory. Set it up once with the
+[root README's quickstart](../README.md#quickstart-ansible-from-galaxy) (it clones this
+repository only to copy [`examples/collection-fleet/`](../examples/collection-fleet/README.md)
+and the inventory templates), then:
+
+```bash
+ansible-playbook decdn.node.node -l <host> -u root        # a fresh host's first run (or -u ubuntu, …)
+ansible-playbook decdn.node.node -l <host> --check --diff # dry run
+ansible-playbook decdn.node.node -l <host>                # deploy or update
+ansible-playbook decdn.node.backup -l <host>              # encrypted identity backup, to backups/
+ansible-playbook decdn.node.decommission -l <host>        # asks you to type the host; removes the node, keeps its keys
+```
+
+Without `-l`, a dry run, deploy or backup covers every cache node in the inventory;
+decommission refuses more than `decdn_decommission_max_hosts` hosts (default 1). A
+backup needs your public key in `decdn_backup_age_recipients`
+([`lifecycle.md`](lifecycle.md#backup-make-backup)). Every `make` target in the docs,
+and what the Makefile checks that a plain `ansible-playbook` run does not:
+[From `make` to `ansible-playbook`](../examples/collection-fleet/README.md#from-make-to-ansible-playbook).
+You can also call the roles from your own playbooks.
 
 ## Before it earns
 

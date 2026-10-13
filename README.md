@@ -24,7 +24,7 @@ Four ways to deploy the node, cache or origin:
 | Path | For | Start here |
 |------|-----|------------|
 | **Docker Compose** (`compose/`), recommended | One host that already runs Docker. The quickest start, [below](#quickstart-docker-compose). Profiles for a cache node or an origin, the onboarding sponsor (`sponsord` + its onramp), an iroh relay, an iroh DNS server and Grafana Alloy, driven by the `decdn-compose` wrapper (set-up, preflight, guarded restarts). | [`compose/README.md`](compose/README.md) |
-| **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published on Ansible Galaxy as the [`decdn.node`](https://galaxy.ansible.com/ui/repo/published/decdn/node/) and [`decdn.publisher`](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/) collections, roles and playbooks, so a fleet needs only an inventory of its own ([`examples/collection-fleet/`](examples/collection-fleet/README.md)). | [`ansible/README.md`](ansible/README.md) |
+| **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published on Ansible Galaxy as the [`decdn.node`](https://galaxy.ansible.com/ui/repo/published/decdn/node/) and [`decdn.publisher`](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/) collections, roles and playbooks, so a fleet needs only an inventory of its own: the [quickstart below](#quickstart-ansible-from-galaxy). | [`ansible/README.md`](ansible/README.md) |
 | **cloud-init** (`cloud-init/`) | One VM, no control machine: paste the user-data into your provider's "create server" form. It runs the Ansible playbook on the host itself, hardening included. One template per kind of operator: a cache node, or a publisher's origin with the onboarding sponsor (`sponsord` + its onramp). | [`cloud-init/README.md`](cloud-init/README.md) |
 | **Helm** (`charts/decdn-node/`) | Kubernetes, one release per node, cache or origin. Published to `oci://ghcr.io/decdn/charts/decdn-node`, signed, and listed on [Artifact Hub](https://artifacthub.io/packages/helm/decdn-node/decdn-node). | [`charts/decdn-node/README.md`](charts/decdn-node/README.md) |
 
@@ -86,8 +86,47 @@ sudo compose/decdn-compose cli setup --mbps 100 --region DE --multiaddr "$MA"   
 Compose installs the node, not the host around it: firewall, SSH and patching stay
 yours. The full flow (origins, the sponsor, relays, DNS, Alloy, upgrades) is in
 [`compose/README.md`](compose/README.md). For a fleet, or a host you want hardened from
-scratch, use [Ansible](ansible/README.md) (or [cloud-init](cloud-init/README.md) for
+scratch, use [Ansible](#quickstart-ansible-from-galaxy) (or [cloud-init](cloud-init/README.md) for
 one VM); on Kubernetes, the [Helm chart](charts/decdn-node/README.md).
+
+## Quickstart (Ansible, from Galaxy)
+
+From your workstation (ansible-core ≥ 2.15, e.g. `pipx install ansible-core`) with an
+SSH key in `~/.ssh/`, and a fresh Debian or Ubuntu host. The collections bring the roles
+and playbooks; you clone this repository once, only to copy the example project and
+inventory templates into a private repository of your own:
+
+```bash
+git clone --depth 1 https://github.com/decdn/devops.git
+cp -R devops/examples/collection-fleet my-fleet && cd my-fleet     # make this your private repo
+ansible-galaxy collection install -r requirements.yml -p collections
+mkdir inventory && cp ../devops/ansible/inventory/hosts-node.yml.example inventory/hosts.yml
+cp -R ../devops/ansible/inventory/{group_vars,host_vars} inventory/
+cp inventory/host_vars/decdn-node-1/secret.yml.example inventory/host_vars/decdn-node-1/secret.yml
+$EDITOR inventory/hosts.yml                          # ansible_host: the node's IP
+$EDITOR inventory/host_vars/decdn-node-1/main.yml    # decdn_region; add decdn_node_generate_keystore: true (the node makes its wallet)
+$EDITOR inventory/host_vars/decdn-node-1/secret.yml  # decdn_rpc_url (git-ignored)
+```
+
+Then deploy. The first run connects as root, or as your image's sudo user (`-u ubuntu`
+on Ubuntu cloud images): it creates an admin account named after your local `$USER`,
+keyed with your `~/.ssh/id_*` key, and then turns root and password login off. Every
+later run connects as that account, so drop `-u`:
+
+```bash
+ssh root@<node-ip> true                                   # accept the host key once (or ubuntu@…)
+ansible-playbook decdn.node.node -l decdn-node-1 -u root  # first run only
+ansible-playbook decdn.node.node -l decdn-node-1 --check --diff   # later changes: dry run,
+ansible-playbook decdn.node.node -l decdn-node-1                  # then apply
+```
+
+The play opens udp/4433 in the host firewall; open it in your provider's security
+group too. Then fund the node's wallet and stake and register it with `decdn setup`
+([`docs/lifecycle.md` § Running on-chain commands](docs/lifecycle.md#running-on-chain-commands)).
+Publishers start from `hosts-publisher.yml.example`, uncomment the groups they run and
+deploy with `decdn.publisher.publisher` ([`docs/publishers.md`](docs/publishers.md)). Backups, decommission and every other
+`make` target in the docs:
+[From `make` to `ansible-playbook`](examples/collection-fleet/README.md#from-make-to-ansible-playbook).
 
 ## Security model
 
