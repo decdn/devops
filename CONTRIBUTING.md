@@ -12,9 +12,7 @@ the subjects into the collections' and the chart's changelogs at release (see
 [RELEASING.md](RELEASING.md)). Write a title an operator can read as a changelog entry;
 the `pr-title.yml` workflow refuses a title that is not conventional, with a lowercase
 type, one of `feat` `fix` `perf` `refactor` `docs` `chore` `revert` `security` `ci`
-`test` `style` `build`. Until an
-artifact's first release, also add an entry under `[Unreleased]` in its changelog by
-hand: that section becomes the first release's notes.
+`test` `style` `build`. Never edit a changelog by hand: every section is generated.
 
 ## One-time setup
 

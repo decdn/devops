@@ -30,9 +30,10 @@ Only the origin is required. With Ansible, start from
 `ansible/inventory/hosts-publisher.yml.example`; `make deploy-publisher`
 (`playbooks/publisher.yml`) deploys all four in that order, and each has its own target
 (`deploy-origin`, `deploy-sponsord`, `deploy-relay`, `deploy-dns`). The roles also ship as
-the [`decdn.publisher`](../ansible/galaxy/publisher/README.md) Galaxy collection, which
-depends on [`decdn.node`](../ansible/galaxy/node/README.md) for the baseline, observability
-and the origin node itself.
+the [`decdn.publisher`](../ansible/galaxy/publisher/README.md) collection on
+[Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/) (`ansible-galaxy collection install decdn.publisher`),
+which depends on [`decdn.node`](../ansible/galaxy/node/README.md) for the baseline,
+observability and the origin node itself.
 
 ## Origin nodes
 

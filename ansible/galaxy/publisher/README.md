@@ -28,21 +28,8 @@ repository — four roles and nothing else:
 
 ## Install
 
-> **Not on Galaxy yet.** The first release (`publisher-collection-v0.1.0`) has not
-> been cut, and it follows `decdn.node`'s; see
-> [RELEASING.md](https://github.com/decdn/devops/blob/main/RELEASING.md). Until then,
-> build and install both from a checkout. A checkout's builds are both `0.0.0`, below
-> the `decdn.node >=0.1.0` this collection declares, so install the node collection
-> first (which pulls its own dependencies) and this one without dependency resolution:
->
-> ```bash
-> git clone https://github.com/decdn/devops && cd devops/ansible
-> make build
-> ansible-galaxy collection install build/decdn-node-*.tar.gz
-> ansible-galaxy collection install --no-deps build/decdn-publisher-*.tar.gz
-> ```
-
-Once published:
+From [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/),
+which also installs `decdn.node`:
 
 ```bash
 ansible-galaxy collection install decdn.publisher
@@ -54,6 +41,20 @@ Or pin it in a `requirements.yml`:
 collections:
   - name: decdn.publisher
     version: ">=0.1.0"
+```
+
+Each release is listed in the
+[CHANGELOG](https://github.com/decdn/devops/blob/main/ansible/galaxy/publisher/CHANGELOG.md)
+and as a `publisher-collection-vX.Y.Z`
+[GitHub Release](https://github.com/decdn/devops/releases) with the tarball and its
+`SHA256SUMS`. To run changes not released yet, build both collections from a checkout
+and install the node collection first:
+
+```bash
+git clone https://github.com/decdn/devops && cd devops/ansible
+make build
+ansible-galaxy collection install build/decdn-node-*.tar.gz
+ansible-galaxy collection install build/decdn-publisher-*.tar.gz
 ```
 
 ## Usage

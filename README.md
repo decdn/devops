@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/decdn/devops/actions/workflows/ci.yml/badge.svg)](https://github.com/decdn/devops/actions/workflows/ci.yml)
 [![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/decdn-node)](https://artifacthub.io/packages/search?repo=decdn-node)
+[![decdn.node on Galaxy](https://img.shields.io/ansible/collection/v/decdn/node?label=decdn.node)](https://galaxy.ansible.com/ui/repo/published/decdn/node/)
+[![decdn.publisher on Galaxy](https://img.shields.io/ansible/collection/v/decdn/publisher?label=decdn.publisher)](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/)
 [![Ansible](https://img.shields.io/badge/Ansible-%E2%89%A5%202.15-1A1918?logo=ansible&logoColor=white)](https://docs.ansible.com/)
 [![ansible-lint: production](https://img.shields.io/badge/ansible--lint-production-blue)](https://ansible.readthedocs.io/projects/lint/)
 [![IaC scan: KICS](https://img.shields.io/badge/IaC%20scan-KICS-7B61FF)](https://kics.io/)
@@ -22,9 +24,9 @@ Four ways to deploy the node, cache or origin:
 | Path | For | Start here |
 |------|-----|------------|
 | **Docker Compose** (`compose/`), recommended | One host that already runs Docker. The quickest start, [below](#quickstart-docker-compose). Profiles for a cache node or an origin, the onboarding sponsor (`sponsord` + its onramp), an iroh relay, an iroh DNS server and Grafana Alloy, driven by the `decdn-compose` wrapper (set-up, preflight, guarded restarts). | [`compose/README.md`](compose/README.md) |
-| **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published as the `decdn.node` and `decdn.publisher` Galaxy collections. | [`ansible/README.md`](ansible/README.md) |
+| **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published on Ansible Galaxy as the [`decdn.node`](https://galaxy.ansible.com/ui/repo/published/decdn/node/) and [`decdn.publisher`](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/) collections. | [`ansible/README.md`](ansible/README.md) |
 | **cloud-init** (`cloud-init/`) | One VM, no control machine: paste the user-data into your provider's "create server" form. It runs the Ansible playbook on the host itself, hardening included. One template per kind of operator: a cache node, or a publisher's origin with the onboarding sponsor (`sponsord` + its onramp). | [`cloud-init/README.md`](cloud-init/README.md) |
-| **Helm** (`charts/decdn-node/`) | Kubernetes, one release per node, cache or origin. | [`charts/decdn-node/README.md`](charts/decdn-node/README.md) |
+| **Helm** (`charts/decdn-node/`) | Kubernetes, one release per node, cache or origin. Published to `oci://ghcr.io/decdn/charts/decdn-node`, signed, and listed on [Artifact Hub](https://artifacthub.io/packages/helm/decdn-node/decdn-node). | [`charts/decdn-node/README.md`](charts/decdn-node/README.md) |
 
 The iroh relay and DNS server a publisher may run deploy with Ansible or Compose.
 
