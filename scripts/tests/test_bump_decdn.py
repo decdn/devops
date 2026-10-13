@@ -9,9 +9,7 @@ files, so a reshaped pin file fails here before it fails a bump.
 
 from __future__ import annotations
 
-import contextlib
 import importlib.util
-import io
 import shutil
 import subprocess
 import sys
@@ -34,7 +32,12 @@ FILES = [
     bd.CHART,
     bd.CHART_VALUES,
     "ansible/molecule/validation-sponsord/converge.yml",
-    *bd.CHANGELOGS,
+]
+# rewrite never touches these: release.sh writes them.
+CHANGELOGS = [
+    "ansible/galaxy/node/CHANGELOG.md",
+    "ansible/galaxy/publisher/CHANGELOG.md",
+    "charts/decdn-node/CHANGELOG.md",
 ]
 SUMS = "a" * 64
 DIGEST = "sha256:" + "b" * 64
@@ -44,7 +47,7 @@ class Fixture(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
-        for rel in FILES:
+        for rel in FILES + CHANGELOGS:
             (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REPO / rel, self.root / rel)
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
@@ -116,12 +119,14 @@ class Rewrite(Fixture):
                                    bd.ONRAMP_DEFAULTS), sponsord)
 
     def test_leaves_the_changelogs(self) -> None:
-        for rel in bd.CHANGELOGS:
-            self.write(rel, self.text(rel) + f"\n{self.sums}\n")
+        image = self.digest.removeprefix("sha256:")
+        for rel in CHANGELOGS:
+            self.write(rel, self.text(rel) + f"\n{self.sums}\n{image}\n")
         subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
         bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
-        for rel in bd.CHANGELOGS:
+        for rel in CHANGELOGS:
             self.assertIn(self.sums, self.text(rel))
+            self.assertIn(image, self.text(rel))
 
     def test_refuses_a_reshaped_file(self) -> None:
         self.write(bd.COMPOSE_ENV, self.text(bd.COMPOSE_ENV).replace(f"# decdn/decdn v{self.version}\n", ""))
@@ -178,68 +183,6 @@ class Rewrite(Fixture):
         subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
         with self.assertRaisesRegex(bd.ShapeError, "notes.txt: not UTF-8"):
             bd.rewrite(self.root, "1.2.3", "e" * 64, DIGEST)
-
-
-class Changelog(Fixture):
-    def unreleased_entries(self, rel: str) -> list[str]:
-        marker = bd.CHANGELOGS[rel][0]
-        return [line for line in self.text(rel).splitlines() if line.startswith(marker)]
-
-    def test_replaces_the_entry_in_place(self) -> None:
-        bd.changelog(self.root, "9.8.7")
-        for rel in bd.CHANGELOGS:
-            with self.subTest(rel=rel):
-                entries = self.unreleased_entries(rel)
-                self.assertEqual(len(entries), 1)
-                self.assertIn("9.8.7", entries[0])
-                # Only the entry moved.
-                old = self.original[rel].splitlines()
-                new = self.text(rel).splitlines()
-                self.assertEqual(len(old), len(new))
-                self.assertEqual(sum(a != b for a, b in zip(old, new)), 1)
-
-    def test_current_version_is_a_no_op(self) -> None:
-        bd.changelog(self.root, self.version)
-        for rel in bd.CHANGELOGS:
-            self.assertEqual(self.text(rel), self.original[rel])
-
-    def test_inserts_first_under_changed(self) -> None:
-        rel = "ansible/galaxy/node/CHANGELOG.md"
-        marker = bd.CHANGELOGS[rel][0]
-        lines = self.text(rel).splitlines(keepends=True)
-        at = next(i for i, line in enumerate(lines) if line.startswith(marker))
-        while lines[at + 1].startswith("  "):
-            del lines[at + 1]
-        del lines[at]
-        self.write(rel, "".join(lines))
-        bd.changelog(self.root, "9.8.7")
-        text = self.text(rel)
-        self.assertIn("### Changed\n\n" + bd.CHANGELOGS[rel][1].format(v="9.8.7"), text)
-
-    def test_refuses_an_unreleased_without_changed(self) -> None:
-        rel = "ansible/galaxy/node/CHANGELOG.md"
-        marker = bd.CHANGELOGS[rel][0]
-        lines = [line for line in self.text(rel).splitlines(keepends=True)
-                 if line != "### Changed\n" and not line.startswith(marker)]
-        self.write(rel, "".join(lines))
-        with self.assertRaisesRegex(bd.ShapeError, "no ### Changed"):
-            bd.changelog(self.root, "9.8.7")
-
-    def test_refuses_two_entries(self) -> None:
-        rel = "ansible/galaxy/publisher/CHANGELOG.md"
-        entry = bd.CHANGELOGS[rel][1].format(v="0.0.0")
-        self.write(rel, self.text(rel).replace("### Changed\n\n", "### Changed\n\n" + entry, 1))
-        with self.assertRaisesRegex(bd.ShapeError, "2 \\[Unreleased\\] entries"):
-            bd.changelog(self.root, "9.8.7")
-
-    def test_skips_a_released_collection(self) -> None:
-        rel = "ansible/galaxy/node/CHANGELOG.md"
-        released = self.text(rel).replace("## [Unreleased]\n", "## [0.1.0] — 2026-01-01\n")
-        self.write(rel, released)
-        with contextlib.redirect_stderr(io.StringIO()) as err:
-            self.assertNotIn(rel, bd.changelog(self.root, "9.8.7"))
-        self.assertIn(f"{rel} has no [Unreleased] section", err.getvalue())
-        self.assertEqual(self.text(rel), released)
 
 
 class Cli(Fixture):

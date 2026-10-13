@@ -700,7 +700,7 @@ The repo pins one decdn/decdn release everywhere, and a new one moves every pin 
 one change. `scripts/open-decdn-bump.sh [vX.Y.Z]` opens that PR: decdn's
 `publish-crates.sh` runs it at the end of each decdn release, and a maintainer runs it
 by hand from a decdn/devops clone (with no tag, it takes decdn's latest release).
-It does steps 1 to 6 and the changelog entries in a worktree at `origin/main`, takes
+It does steps 1 to 6 in a worktree at `origin/main`, takes
 the digests from the release's assets once their signatures verify against
 `files/decdn-release-KEYS.asc`, and lists in the PR body what is left: the prose of
 step 7, the chart check against the real binary in step 5, any schema-key or KEYS
@@ -731,12 +731,7 @@ The steps:
    copy, and `SECURITY.md`'s fingerprints).
 7. The prose that names the version: `git grep -n '<old version>'` outside the
    changelogs. The changelog entry is the PR title (`feat`, `fix` or `chore`, not `ci` or
-   `build`, which the changelogs leave out; RELEASING.md); also a `[Unreleased]`
-   entry in each of `ansible/galaxy/node/CHANGELOG.md`,
-   `ansible/galaxy/publisher/CHANGELOG.md` (the onramp's decdn pin) and
-   `charts/decdn-node/CHANGELOG.md` whose artifact is not released yet. The
-   collections each keep one such entry, which a later bump rewrites
-   (`scripts/bump_decdn.py`).
+   `build`, which the changelogs leave out; RELEASING.md).
 
 `make test-scripts` fails while the role, the onramp's decdn pin (role and Compose
 example), the chart's `appVersion` and its `artifacthub.io/images` image, or the KEYS
