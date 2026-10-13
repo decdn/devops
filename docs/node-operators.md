@@ -19,7 +19,7 @@ loopback, and the chain's contract addresses taken from upstream's deployment ma
 | Path | Start here | Entry point |
 |------|------------|-------------|
 | **Docker Compose** (one Docker host), recommended | [`compose/README.md`](../compose/README.md) | `decdn-compose init node` |
-| **Ansible** (VMs, bare metal, a fleet) | [below](#deploy-with-ansible-from-galaxy), [`ansible/README.md`](../ansible/README.md) | `inventory/hosts-node.yml.example`, `ansible-playbook decdn.node.node` (or `make deploy-node` from a clone) |
+| **Ansible** (VMs, bare metal, a fleet) | [below](#deploy-with-ansible-from-galaxy), [`ansible/README.md`](../ansible/README.md) | `ansible/inventory/hosts-node.yml.example`, `ansible-playbook decdn.node.node` (or `make deploy-node` from a clone) |
 | **cloud-init** (one VM, no control machine) | [`cloud-init/README.md`](../cloud-init/README.md) | `cloud-init/user-data-node.yaml` |
 | **Helm** (Kubernetes, one release per node) | [`charts/decdn-node/README.md`](../charts/decdn-node/README.md) | `oci://ghcr.io/decdn/charts/decdn-node`, with no `config.cache.origin` |
 
@@ -39,23 +39,25 @@ node's wallet funded for as long as it pulls.
 
 The roles and the node playbooks are the
 [`decdn.node`](../ansible/galaxy/node/README.md) collection on
-[Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/), so you need
-no clone of this repository to run them, only an inventory. Set one up once, as in the
-[root README's quickstart](../README.md#quickstart-ansible-from-galaxy) (copy
-[`examples/collection-fleet/`](../examples/collection-fleet/README.md), install the
-collections, fill in `inventory/`), then:
+[Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/), so you run
+them from a private repository that holds only your inventory. Set it up once with the
+[root README's quickstart](../README.md#quickstart-ansible-from-galaxy) (it clones this
+repository only to copy [`examples/collection-fleet/`](../examples/collection-fleet/README.md)
+and the inventory templates), then:
 
 ```bash
-ansible-playbook decdn.node.node -l <host> -u root        # a fresh host's first run
+ansible-playbook decdn.node.node -l <host> -u root        # a fresh host's first run (or -u ubuntu, …)
 ansible-playbook decdn.node.node -l <host> --check --diff # dry run
 ansible-playbook decdn.node.node -l <host>                # deploy or update
 ansible-playbook decdn.node.backup -l <host>              # encrypted identity backup, to backups/
-ansible-playbook decdn.node.decommission -l <host>        # stop and remove the node, keep its keys
+ansible-playbook decdn.node.decommission -l <host>        # asks you to type the host; removes the node, keeps its keys
 ```
 
-Drop `-l` to run on every node in the inventory (decommission refuses more than one
-host). A backup needs your public key in `decdn_backup_age_recipients`
-([`lifecycle.md`](lifecycle.md#backup-make-backup)). The docs' `make` targets each have an `ansible-playbook` form:
+Without `-l`, a dry run, deploy or backup covers every cache node in the inventory;
+decommission refuses more than `decdn_decommission_max_hosts` hosts (default 1). A
+backup needs your public key in `decdn_backup_age_recipients`
+([`lifecycle.md`](lifecycle.md#backup-make-backup)). Every `make` target in the docs,
+and what the Makefile checks that a plain `ansible-playbook` run does not:
 [From `make` to `ansible-playbook`](../examples/collection-fleet/README.md#from-make-to-ansible-playbook).
 You can also call the roles from your own playbooks.
 

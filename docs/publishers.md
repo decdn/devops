@@ -33,29 +33,41 @@ Only the origin is required.
 The roles and playbooks are the [`decdn.publisher`](../ansible/galaxy/publisher/README.md)
 collection on [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/),
 which pulls in [`decdn.node`](../ansible/galaxy/node/README.md) for the baseline,
-observability and the origin node itself. You need no clone of this repository to run
-them, only an inventory. Set one up once, as in the
-[root README's quickstart](../README.md#quickstart-ansible-from-galaxy), but start
-`inventory/hosts.yml` from `hosts-publisher.yml.example` and delete the groups you do not
-run. Then:
+observability and the origin node itself. You run them from a private repository that
+holds only your inventory. Set it up once with the
+[root README's quickstart](../README.md#quickstart-ansible-from-galaxy), with two
+changes:
+
+- Start `inventory/hosts.yml` from `hosts-publisher.yml.example`. Only the origin
+  (`origin-1`) is live in it: uncomment the groups you run (sponsord and its onramp,
+  iroh relays, the DNS server).
+- Edit `host_vars/origin-1/` rather than `decdn-node-1/`: `decdn_region`, the origin
+  backend, and `decdn_node_generate_keystore: true` if the node should make its wallet.
+
+Then:
 
 ```bash
-ansible-playbook decdn.publisher.publisher -l <host> -u root        # a fresh host's first run
-ansible-playbook decdn.publisher.publisher --check --diff           # dry run, every publisher host
-ansible-playbook decdn.publisher.publisher                          # all four services, in the table's order
-ansible-playbook decdn.publisher.origin -l <host>                   # or one service: origin nodes
-ansible-playbook decdn.publisher.sponsord -l <host>                 #   sponsord and its onramp
-ansible-playbook decdn.publisher.iroh_relay -l <host>               #   iroh relays
-ansible-playbook decdn.publisher.iroh_dns_server -l <host>          #   the iroh DNS server
-ansible-playbook decdn.publisher.backup -l <host>                   # node identity and sponsord credentials
-ansible-playbook decdn.publisher.decommission -l <host>             # every service on the host; keeps the keys
+ansible-playbook decdn.publisher.publisher -l <host> --tags baseline -u root   # a fresh host's first run (or -u ubuntu, …)
+ansible-playbook decdn.publisher.publisher -l <host> --check --diff            # dry run
+ansible-playbook decdn.publisher.publisher -l <host>                           # every service the inventory gives the host
+ansible-playbook decdn.publisher.origin -l <host>             # or one service: an origin node
+ansible-playbook decdn.publisher.sponsord -l <host>           #   sponsord and its onramp
+ansible-playbook decdn.publisher.iroh_relay -l <host>         #   an iroh relay
+ansible-playbook decdn.publisher.iroh_dns_server -l <host>    #   the iroh DNS server
+ansible-playbook decdn.publisher.backup -l <host>             # node identity and sponsord credentials (relays and DNS servers hold nothing to back up)
+ansible-playbook decdn.publisher.decommission -l <host>       # asks you to type the host; removes every service on it, keeps the keys
 ```
 
-The playbooks open each service's firewall holes and refuse a host in the wrong
-groups. From a clone of this repository, the same runs are `make deploy-publisher`,
-`deploy-origin`, `deploy-sponsord`, `deploy-relay` and `deploy-dns` in `ansible/`:
+The first run is baseline only (`--tags baseline`): it creates your admin account and
+turns root login off. That matters for a relay, whose full run logs into every node in
+the inventory to read its ID and would try those nodes as root too. Drop `-l` to cover
+every host in the inventory. The playbooks open each service's firewall holes and refuse
+a host in the wrong groups. From a clone of this repository, the same runs are
+`make deploy-publisher`, `deploy-origin`, `deploy-sponsord`, `deploy-relay` and
+`deploy-dns` in `ansible/`;
 [From `make` to `ansible-playbook`](../examples/collection-fleet/README.md#from-make-to-ansible-playbook)
-maps every target.
+maps every target and lists what the Makefile checks that a plain `ansible-playbook`
+run does not.
 
 ## Origin nodes
 
@@ -69,8 +81,8 @@ same hardening, port and day-2 tooling as a cache node. Three things differ:
   S3 keys go in `/etc/decdn/decdn.env` on the host (or in `decdn_extra_env` in a
   git-ignored `secret.yml`, beside `decdn_rpc_url`), never in tracked inventory or
   user-data.
-  `playbooks/origin.yml` refuses a `decdn_origin_nodes` host without a backend, or one
-  outside `decdn_nodes`.
+  The origin playbook (`decdn.publisher.origin`) refuses a `decdn_origin_nodes` host
+  without a backend, or one outside `decdn_nodes`.
 - **What it serves.** With a backend, the node fills misses from it rather than from
   other nodes. By default it serves only what its own backend holds and declines
   everything else, even a blob already in its cache (`relay_foreign_namespaces`,

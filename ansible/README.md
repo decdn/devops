@@ -4,8 +4,8 @@ Declarative Ansible project for deploying deCDN nodes, one or a fleet, over a
 hardened host baseline. The roles and these playbooks also ship as two collections on
 Ansible Galaxy: [`decdn.node`](https://galaxy.ansible.com/ui/repo/published/decdn/node/) (what a node operator runs) and
 [`decdn.publisher`](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/) (what a publisher runs beside its
-origin nodes), so a fleet can run from an inventory and the collections alone, with no
-clone of this repository: start from the
+origin nodes), so a fleet can run from a private repository that holds only its
+inventory, with the collections in place of this project: start from the
 [root README's quickstart](../README.md#quickstart-ansible-from-galaxy), and translate the
 `make` targets below with
 [From `make` to `ansible-playbook`](../examples/collection-fleet/README.md#from-make-to-ansible-playbook)
