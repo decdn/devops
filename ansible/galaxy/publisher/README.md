@@ -48,13 +48,14 @@ Each release is listed in the
 and as a `publisher-collection-vX.Y.Z`
 [GitHub Release](https://github.com/decdn/devops/releases) with the tarball and its
 `SHA256SUMS`. To run changes not released yet, build both collections from a checkout
-and install the node collection first:
+and install the node collection first. The builds carry the last releases' versions
+until the next ones, so `--force` replaces installed releases:
 
 ```bash
 git clone https://github.com/decdn/devops && cd devops/ansible
 make build
-ansible-galaxy collection install build/decdn-node-*.tar.gz
-ansible-galaxy collection install build/decdn-publisher-*.tar.gz
+ansible-galaxy collection install --force build/decdn-node-*.tar.gz
+ansible-galaxy collection install --force build/decdn-publisher-*.tar.gz
 ```
 
 ## Usage

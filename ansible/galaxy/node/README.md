@@ -43,12 +43,14 @@ Each release is listed in the
 [CHANGELOG](https://github.com/decdn/devops/blob/main/ansible/galaxy/node/CHANGELOG.md)
 and as a `node-collection-vX.Y.Z`
 [GitHub Release](https://github.com/decdn/devops/releases) with the tarball and its
-`SHA256SUMS`. To run changes not released yet, build it from a checkout:
+`SHA256SUMS`. To run changes not released yet, build it from a checkout. The build
+carries the last release's version until the next one, so `--force` replaces an
+installed release:
 
 ```bash
 git clone https://github.com/decdn/devops && cd devops/ansible
 make build-node
-ansible-galaxy collection install build/decdn-node-*.tar.gz
+ansible-galaxy collection install --force build/decdn-node-*.tar.gz
 ```
 
 ## Usage
