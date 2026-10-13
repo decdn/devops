@@ -138,10 +138,10 @@ sponsord_onramp_gate_template_src: ""
 # --- Release the installers install --------------------------------------------
 # The decdn/decdn release the installers download `decdn` from: a tag and the
 # SHA-256 of that release's SHA256SUMS file (`sha256sum SHA256SUMS` after
-# verifying its .asc). Default: decdn/decdn v0.0.3. Override the tag together with
+# verifying its .asc). Default: decdn/decdn v0.0.4. Override the tag together with
 # its digest: preflight refuses a pair where only one half moved.
-sponsord_onramp_decdn_release: v0.0.3     # decdn/decdn tag
-sponsord_onramp_decdn_sums_sha256: 59debaf73eee9a45ac5ec3cf34886ba60233bc848f5aee8d23b0c920afa4cd59
+sponsord_onramp_decdn_release: v0.0.4     # decdn/decdn tag
+sponsord_onramp_decdn_sums_sha256: bc295285109e2189331e57d9cb51d214113cba332bd08a2777866a7a1cec2951
 sponsord_onramp_releases_base: ""         # [https://github.com/decdn]
 
 # --- Limits ("" = the onramp's own default, shown in brackets) -----------------

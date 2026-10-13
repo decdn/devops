@@ -60,7 +60,7 @@ What it does **not** do:
 - **UDP reachability.** Either a load balancer that supports UDP Services, or
   `quic.hostPort.enabled` on nodes with a public IP.
 - **An image.** By default the chart runs `ghcr.io/decdn/decdn-node:<appVersion>`
-  (today `0.0.3`, the decdn/decdn release the chart is synced against). Pin
+  (today `0.0.4`, the decdn/decdn release the chart is synced against). Pin
   `image.digest` instead in production: take it from the release's
   `decdn-node-image-digest.txt` (`image-digest.txt` in v0.0.1), after checking its
   `.asc` against the keys in
