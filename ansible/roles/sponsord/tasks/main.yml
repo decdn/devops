@@ -23,7 +23,7 @@
       - sponsord_version | length > 0
     fail_msg: >-
       sponsord_install_method "release" (the default) requires sponsord_version (e.g.
-      "0.0.3") naming a v<version> release of decdn/sponsord (or of the mirror in
+      "0.0.4") naming a v<version> release of decdn/sponsord (or of the mirror in
       sponsord_release_base). To run something unreleased, set
       sponsord_install_method "source" with a sponsord_source_ref to build on the
       host, or use "manual" to copy a binary built on the control machine.

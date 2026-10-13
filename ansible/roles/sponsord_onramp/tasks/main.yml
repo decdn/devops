@@ -26,7 +26,7 @@
       - sponsord_onramp_version | length > 0
     fail_msg: >-
       sponsord_onramp_install_method "release" (the default) requires
-      sponsord_onramp_version (e.g. "0.0.3") naming a v<version> release of
+      sponsord_onramp_version (e.g. "0.0.4") naming a v<version> release of
       decdn/sponsord (or of the mirror in sponsord_onramp_release_base). To run
       something unreleased, set sponsord_onramp_install_method "source" with a
       sponsord_onramp_source_ref to build on the host, or use "manual" to copy a

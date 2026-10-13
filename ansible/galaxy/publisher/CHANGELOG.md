@@ -128,7 +128,7 @@ role describe a change shared with that collection.
   host (the token gate and `/healthz` fail without the daemon) and reads the daemon's own
   `/etc/sponsord/api-token`.
   - Install: the `v<version>` decdn/sponsord release (`release`, the default;
-    `sponsord_onramp_version` is pinned to `0.0.3`, the same release as sponsord's)
+    `sponsord_onramp_version` is pinned to `0.0.4`, the same release as sponsord's)
     verified against its GPG-signed `SHA256SUMS` with the keys vendored in the
     `sponsord` role, a host-side `source` build, or a local binary (`manual`;
     `sponsord_onramp_release_target_dir` follows `sponsord_release_target_dir`).
@@ -161,7 +161,7 @@ role describe a change shared with that collection.
 
 - `sponsord` role: deploys the deCDN onboarding sponsor (decdn/sponsord) on its own
   host or beside a node. It installs the `v<version>` decdn/sponsord release
-  (`release`, the default; `sponsord_version` is pinned to `0.0.3`; decdn/sponsord
+  (`release`, the default; `sponsord_version` is pinned to `0.0.4`; decdn/sponsord
   tags its whole workspace once, so a mirror in `sponsord_release_base` serves
   `v<version>/sponsord-<version>-<target>.tar.gz`) verified against its GPG-signed
   `SHA256SUMS`, a host-side `source` build, or a local binary (`manual`). The unit uses `DynamicUser`, and the
