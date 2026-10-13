@@ -5,13 +5,15 @@
 #   galaxy/build.sh publisher   decdn.publisher: what a publisher runs beside its origins
 #
 # Only the roles listed in galaxy/<collection>/roles.txt ship, with that directory's
-# overlay (galaxy.yml, README.md, CHANGELOG.md, meta/). All deploy machinery
-# (inventory, Makefile, ansible.cfg) is excluded BY CONSTRUCTION — it is simply
+# overlay (galaxy.yml, README.md, CHANGELOG.md, meta/), and the playbooks its
+# playbooks.txt lists with their group_vars/ (galaxy/stage-playbooks.py). All deploy
+# machinery (inventory, Makefile, ansible.cfg) is excluded BY CONSTRUCTION — it is simply
 # never copied into the staging tree. This keeps the artifact clean and leaves the
 # internal project untouched (no galaxy.yml at the project root, so ansible-lint
 # and ansible still see a plain project).
 #
-# Output: ansible/build/decdn-<collection>-<version>.tar.gz
+# Output: ansible/build/decdn-<collection>-<version>.tar.gz, or under
+# $DECDN_GALAXY_BUILD_DIR (molecule/collection builds into its ephemeral dir).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # ansible/galaxy
@@ -27,7 +29,7 @@ overlay="$here/$collection"
 mapfile -t roles < <(grep -vE '^[[:space:]]*(#|$)' "$overlay/roles.txt")
 ((${#roles[@]} > 0)) || { echo "build.sh: $overlay/roles.txt lists no role" >&2; exit 1; }
 
-build_dir="$ansible_dir/build"
+build_dir="${DECDN_GALAXY_BUILD_DIR:-$ansible_dir/build}"
 stage="$build_dir/ansible_collections/decdn/$collection"
 
 echo "staging decdn.$collection -> $stage"
@@ -42,6 +44,10 @@ for role in "${roles[@]}"; do
   [[ -d "$ansible_dir/roles/$role" ]] || { echo "build.sh: roles.txt names $role, which is not under roles/" >&2; exit 1; }
   cp -R "$ansible_dir/roles/$role" "$stage/roles/$role"
 done
+
+# The playbooks in playbooks.txt (+ their group_vars/ and the overlay's playbooks/),
+# role references rewritten to FQCNs and checked.
+python3 "$here/stage-playbooks.py" "$collection" "$stage"
 
 # Collection overlay + license (the artifact must be self-contained).
 cp "$overlay/galaxy.yml" "$stage/galaxy.yml"

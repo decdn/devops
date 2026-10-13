@@ -1,0 +1,5 @@
+# Playbooks galaxy/build.sh ships in decdn.node, from ansible/playbooks/ (with its
+# group_vars/), beside the overlay playbooks/ in this directory (the node-scoped
+# backup.yml and decommission.yml). Role references are rewritten to FQCNs at
+# staging (galaxy/stage-playbooks.py).
+node.yml

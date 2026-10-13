@@ -7,7 +7,8 @@ An origin is a `decdn-node` with an origin backend, deployed with
 [`decdn.node`](https://github.com/decdn/devops/tree/main/ansible/galaxy/node)'s
 `decdn_node` role; this collection holds the publisher's other services. It is part of
 the public, reusable slice of the [`decdn/devops`](https://github.com/decdn/devops)
-repository — four roles and nothing else:
+repository: four roles, and the playbooks that deploy a whole publisher fleet with
+them and `decdn.node`'s (see [Usage](#usage)):
 
 | Role | Purpose |
 |------|---------|
@@ -23,8 +24,8 @@ repository — four roles and nothing else:
   sudo user. Facts must be gathered (each role derives its release target from the
   host architecture).
 - Collection dependencies (installed automatically with this collection):
-  `decdn.node (>=0.1.0)`, for the host baseline, observability and the origin nodes.
-  None of this collection's roles calls into it: the playbooks that run them do.
+  `decdn.node (>=0.2.0)`, for the host baseline, observability and the origin and
+  cache nodes. None of this collection's roles calls into it: its playbooks do.
 
 ## Install
 
@@ -40,7 +41,7 @@ Or pin it in a `requirements.yml`:
 ```yaml
 collections:
   - name: decdn.publisher
-    version: ">=0.1.0"
+    version: ">=0.2.0"     # the first release with the playbooks
 ```
 
 Each release is listed in the
@@ -60,8 +61,69 @@ ansible-galaxy collection install --force build/decdn-publisher-*.tar.gz
 
 ## Usage
 
-A minimal sponsor playbook — `decdn.node`'s baseline first (so the admin key lands
-before SSH hardening), then the daemon, then its public onramp:
+### The shipped playbooks
+
+The collection ships the playbooks `decdn/devops` deploys its own fleets with
+([`ansible/playbooks/`](https://github.com/decdn/devops/tree/main/ansible/playbooks)),
+roles qualified. Each play targets an inventory group and matches nothing unless the
+inventory defines it, so `site` deploys whatever the inventory holds:
+
+| Playbook | Runs |
+|----------|------|
+| `decdn.publisher.site` | `node`, then `publisher`: everything in the inventory |
+| `decdn.publisher.publisher` | `origin`, `sponsord`, `iroh_relay`, `iroh_dns_server`, in that order |
+| `decdn.publisher.node` | cache nodes: `decdn_nodes` outside `decdn_origin_nodes` (the same playbook as `decdn.node.node`) |
+| `decdn.publisher.origin` | origin nodes: `decdn_origin_nodes`, a child group of `decdn_nodes`; refuses one without an origin backend |
+| `decdn.publisher.sponsord` | `sponsord_hosts`, then the onramp on `sponsord_onramp_hosts` (which must be `sponsord_hosts` too) |
+| `decdn.publisher.iroh_relay` | `iroh_relay_hosts`, one at a time; in allowlist mode (the default) it first reads every node's endpoint ID for the allowlist |
+| `decdn.publisher.iroh_dns_server` | `iroh_dns_server_hosts`, one at a time |
+| `decdn.publisher.backup` | encrypted backups of the nodes' identities (or full state) and sponsord's credentials |
+| `decdn.publisher.decommission` | stops and removes every service on the run's hosts (the onramp's Caddy is stopped and disabled, not removed), then the Alloy agent, after one typed confirmation of the hosts; keeps the keys, never touches the chain |
+
+```bash
+ansible-galaxy collection install -r requirements.yml
+ansible-playbook -i inventory/hosts.yml decdn.publisher.site --check --diff
+ansible-playbook -i inventory/hosts.yml decdn.publisher.site
+ansible-playbook -i inventory/hosts.yml decdn.publisher.decommission -l <host>
+```
+
+Start the inventory from
+[`hosts-publisher.yml.example`](https://github.com/decdn/devops/blob/main/ansible/inventory/hosts-publisher.yml.example)
+and the `group_vars/` and `host_vars/` beside it. Beyond the roles, the playbooks
+bring:
+
+- **the firewall holes**, from the groups a host is in: the node's udp/4433, Caddy's
+  tcp/80 + tcp/443 on an onramp host, the relay's tcp/80 + tcp/443 + udp/7842 and the
+  DNS server's tcp/443 + udp/53 + tcp/53, one list per host whatever the play, so a
+  co-located host renders one firewall. They and the Grafana Alloy per-daemon toggles
+  live in the playbooks' own `group_vars/`, which ship beside them;
+- **the placement checks** the roles leave out: an origin must be a `decdn_nodes` host
+  too and have an origin backend, an onramp a `sponsord_hosts` one, a relay may not
+  share a host with an onramp (both want tcp/80 and tcp/443), and a DNS server with
+  neither (all want tcp/443);
+- **the lifecycle guards**: `decommission` refuses more hosts than
+  `decdn_decommission_max_hosts` (default 1) and refuses while sponsord holds an
+  unconfirmed pool top-up.
+
+- **Overrides.** The playbooks' `group_vars/<group>.yml` set `baseline_extra_inbound`,
+  and playbook group vars beat every inventory group var: change it per host, in
+  `host_vars` (or with `-e`). The Alloy toggles come from their `group_vars/all.yml`,
+  which beats the inventory's `group_vars/all.yml` and group vars written inline in
+  `hosts.yml`, but not its `group_vars/<group>.yml` or `host_vars`, where you can
+  override them. Importing a shipped playbook from one of your own changes none of
+  this: its plays read the collection's `group_vars/`, not those beside your playbook.
+- **Backups.** `decdn.publisher.backup` fetches the nodes' identity archives and
+  sponsord's credentials to `backups/` beside your project's `ansible.cfg` (never into
+  the installed collection). Without a project `ansible.cfg`, set
+  `decdn_backup_local_dir` and `sponsord_backup_local_dir`.
+- **Scope.** The repository's Makefile guards (a `LIMIT` preflight, a required `LIMIT`
+  for decommission) do not ship: scope a run with `-l` yourself.
+
+### Your own playbook
+
+To compose the roles yourself, a minimal sponsor playbook — `decdn.node`'s baseline
+first (so the admin key lands before SSH hardening), then the daemon, then its public
+onramp:
 
 ```yaml
 - name: Provision sponsord and its onramp
@@ -93,8 +155,8 @@ before SSH hardening), then the daemon, then its public onramp:
       # git-ignored secret.yml).
 ```
 
-This repository's own playbooks enforce three placement rules that the roles do not
-check, so a playbook of your own must keep them: `sponsord_onramp` runs on a
+Of the shipped playbooks' placement checks, three concern this collection's roles,
+which do not check them, so a playbook of your own must keep them: `sponsord_onramp` runs on a
 `sponsord` host (it reads the daemon's API token and calls it on loopback); an iroh
 relay does not share a host with the onramp (both want tcp/80 and tcp/443); an iroh
 DNS server shares a host with neither (all want tcp/443). The relay and DNS server
@@ -110,7 +172,7 @@ day-2 ops:
 
 Backends bind `127.0.0.1`. `sponsord` has no public listener. `sponsord_onramp`
 listens on loopback too: Caddy is its public side, so a host that runs it opens
-tcp/80 and tcp/443 for Caddy in `baseline_extra_inbound` (this repo's playbooks
+tcp/80 and tcp/443 for Caddy in `baseline_extra_inbound` (the shipped playbooks
 derive that from `sponsord_onramp_hosts`; from your own playbook, add them yourself).
 `iroh_relay` is public by design and terminates its own TLS: it binds tcp/80, tcp/443
 and udp/7842 on every address (its metrics stay on loopback), so a relay host opens

@@ -1,10 +1,11 @@
 # ansible — deCDN deployment
 
 Declarative Ansible project for deploying deCDN nodes, one or a fleet, over a
-hardened host baseline. The roles also ship as two collections on Ansible Galaxy:
-[`decdn.node`](https://galaxy.ansible.com/ui/repo/published/decdn/node/) (what a node operator runs) and
+hardened host baseline. The roles and these playbooks also ship as two collections on
+Ansible Galaxy: [`decdn.node`](https://galaxy.ansible.com/ui/repo/published/decdn/node/) (what a node operator runs) and
 [`decdn.publisher`](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/) (what a publisher runs beside its
-origin nodes).
+origin nodes), so a fleet can run from an inventory and the collections alone (see
+[Packaging as Galaxy collections](#packaging-as-galaxy-collections-decdnnode-decdnpublisher)).
 
 | Playbook | Purpose | Make target |
 |----------|---------|-------------|
@@ -514,26 +515,42 @@ the RPC URL when it is not provisioned on the host instead). Highlights:
 
 ## Packaging as Galaxy collections (`decdn.node`, `decdn.publisher`)
 
-The seven roles are also packaged as two collections, published on Ansible Galaxy, for
-operators who bring their own playbooks (`ansible-galaxy collection install
-decdn.node` or `decdn.publisher`):
+The seven roles and the playbooks are also packaged as two collections, published on
+Ansible Galaxy (`ansible-galaxy collection install decdn.node` or `decdn.publisher`),
+for operators who run a fleet from an inventory and the collections alone
+(`ansible-playbook -i inventory/hosts.yml decdn.publisher.site`) or bring their own playbooks:
 
-| Collection | Roles | For |
-|---|---|---|
-| **`decdn.node`** | `baseline`, `decdn_node`, `grafana_alloy` | node operators, and a publisher's origin nodes |
-| **`decdn.publisher`** | `sponsord`, `sponsord_onramp`, `iroh_relay`, `iroh_dns_server` | publishers; depends on `decdn.node` |
+| Collection | Roles | Playbooks | For |
+|---|---|---|---|
+| **`decdn.node`** | `baseline`, `decdn_node`, `grafana_alloy` | `node`, and node-only `backup` and `decommission` | node operators |
+| **`decdn.publisher`** | `sponsord`, `sponsord_onramp`, `iroh_relay`, `iroh_dns_server` | every playbook here (`site`, `node`, `publisher`, `origin`, `sponsord`, `iroh_relay`, `iroh_dns_server`, `backup`, `decommission`) | publishers; depends on `decdn.node` |
 
 Each collection's overlay lives in [`galaxy/<collection>/`](galaxy/) (`galaxy.yml`, the
-collection `README.md`/`CHANGELOG.md`, `meta/runtime.yml`, and `roles.txt`, the one
-list of the roles it ships). It is deliberately **not** a `galaxy.yml` at the project
-root: `galaxy/build.sh <collection>` stages only that collection's roles into a clean
+collection `README.md`/`CHANGELOG.md`, `meta/runtime.yml`, `roles.txt` and
+`playbooks.txt`, the lists of the roles and playbooks it ships, and for `decdn.node`
+a `playbooks/` holding its node-only `backup.yml` and `decommission.yml`). It is
+deliberately **not** a `galaxy.yml` at the project root: `galaxy/build.sh <collection>`
+stages only that collection's roles and playbooks into a clean
 `ansible_collections/decdn/<collection>/` tree and builds the artifact, so this project
 stays a plain Ansible project (the `make deploy`/`lint` flow is unchanged). Every role
-under `roles/` ships in exactly one collection (`make test-scripts` checks).
+under `roles/` ships in exactly one collection, and every playbook under `playbooks/` in
+at least one (`make test-scripts` checks).
+
+The playbooks ship as they are here, with `playbooks/group_vars/` beside them: a
+collection playbook loads the `group_vars/` next to it as this project does, with the
+same precedence, so the firewall holes and Alloy toggles come along unchanged.
+`galaxy/stage-playbooks.py` qualifies their role references (`role: baseline` →
+`decdn.node.baseline`) at staging; the playbooks here stay unqualified, so an
+installed collection can never stand in for `roles/` on a deploy. Every playbook a
+collection imports must ship in it too, so a run never leaves the collection and never
+mixes two releases' `group_vars/`: that is why `decdn.publisher` carries its own
+`node.yml`. `decdn.node`'s `backup.yml` and `decommission.yml` are the node plays of
+the fleet-wide ones (`make test-scripts` keeps them equal).
 
 ```bash
 make build          # stage + build -> build/decdn-{node,publisher}-<version>.tar.gz
-make galaxy-check   # build + validate both with galaxy-importer (the checks Galaxy runs)
+make galaxy-check   # build + validate both: galaxy-importer (the checks Galaxy runs), then
+                    # galaxy/check-playbooks.sh (the playbooks by FQCN, their firewall holes)
 make build-node     # or galaxy-check-node, build-publisher, galaxy-check-publisher: one
 ```
 
@@ -543,5 +560,6 @@ change. Publishing happens from a `node-collection-vX.Y.Z` or
 each collection on its own version (the Helm chart is released separately), cut on
 `main` by `scripts/release.sh`: see [RELEASING.md](../RELEASING.md). Each
 `galaxy/<collection>/CHANGELOG.md` section is generated at release from the
-conventional commit subjects that touched that collection's roles, its overlay or
-`galaxy/build.sh`, so give the PR a title that reads as a changelog entry.
+conventional commit subjects that touched that collection's roles, its playbooks
+(with `playbooks/group_vars/`), its overlay, `galaxy/build.sh` or
+`galaxy/stage-playbooks.py`, so give the PR a title that reads as a changelog entry.

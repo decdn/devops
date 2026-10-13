@@ -1,0 +1,15 @@
+---
+# The deCDN collections from Ansible Galaxy. Install into ./collections (ansible.cfg
+# reads it from there):
+#   ansible-galaxy collection install -r requirements.yml -p collections
+# 0.2.0 is the first release of each that ships the playbooks. Pin exact versions
+# (==X.Y.Z) once the fleet runs, and bump them deliberately, reading each
+# CHANGELOG: https://github.com/decdn/devops/tree/main/ansible/galaxy
+collections:
+  # Node operators: cache nodes only. Delete decdn.publisher below.
+  - name: decdn.node
+    version: ">=0.2.0"
+  # Publishers: origin nodes, sponsord and its onramp, iroh relays and DNS servers
+  # (and cache nodes). Depends on decdn.node.
+  - name: decdn.publisher
+    version: ">=0.2.0"

@@ -479,7 +479,21 @@ decdn_backup_dir: /var/backups/decdn   # on the host, root 0700
 # (kilobytes); off for full ones, because fetch under become reads the whole file
 # into memory on both ends. The report prints a streaming `ssh … sudo cat` instead.
 decdn_backup_fetch: "{{ decdn_backup_scope == 'identity' }}"
-decdn_backup_local_dir: "{{ playbook_dir }}/../backups"   # control machine; git-ignored in this repo
+# On the control machine: backups/ beside this repo's playbooks/ (git-ignored here).
+# From a Galaxy collection's playbook, playbook_dir is inside the installed
+# collection, which an upgrade replaces, so it is backups/ beside the project's
+# ansible.cfg instead; with no project ansible.cfg (none, ~/.ansible.cfg or
+# /etc/ansible's), a run that fetches fails and asks for this variable.
+# decdn_backup_local_dir and sponsord_backup_local_dir share this expression
+# (make test-scripts checks).
+decdn_backup_local_dir: >-
+  {{ ((playbook_dir ~ '/..') if playbook_dir is not search('/ansible_collections/')
+      else (ansible_config_file | dirname)
+        if (ansible_config_file | default('', true) | basename) == 'ansible.cfg'
+           and (ansible_config_file | dirname) != '/etc/ansible'
+      else undef(hint='decdn_backup_local_dir: a collection playbook run without a project'
+                      ~ ' ansible.cfg has no project directory to fetch backups to; set it'))
+     ~ '/backups' }}
 #
 # Decommission refuses to touch more hosts than this in one run. Its typed
 # confirmation is interactive; a non-interactive run sets decdn_decommission_confirm

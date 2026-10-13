@@ -24,7 +24,7 @@ Four ways to deploy the node, cache or origin:
 | Path | For | Start here |
 |------|-----|------------|
 | **Docker Compose** (`compose/`), recommended | One host that already runs Docker. The quickest start, [below](#quickstart-docker-compose). Profiles for a cache node or an origin, the onboarding sponsor (`sponsord` + its onramp), an iroh relay, an iroh DNS server and Grafana Alloy, driven by the `decdn-compose` wrapper (set-up, preflight, guarded restarts). | [`compose/README.md`](compose/README.md) |
-| **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published on Ansible Galaxy as the [`decdn.node`](https://galaxy.ansible.com/ui/repo/published/decdn/node/) and [`decdn.publisher`](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/) collections. | [`ansible/README.md`](ansible/README.md) |
+| **Ansible** (`ansible/`) | VMs and bare metal, one node or a fleet. Hardens the host too (firewall, SSH, patching). Also published on Ansible Galaxy as the [`decdn.node`](https://galaxy.ansible.com/ui/repo/published/decdn/node/) and [`decdn.publisher`](https://galaxy.ansible.com/ui/repo/published/decdn/publisher/) collections, roles and playbooks, so a fleet needs only an inventory of its own ([`examples/collection-fleet/`](examples/collection-fleet/README.md)). | [`ansible/README.md`](ansible/README.md) |
 | **cloud-init** (`cloud-init/`) | One VM, no control machine: paste the user-data into your provider's "create server" form. It runs the Ansible playbook on the host itself, hardening included. One template per kind of operator: a cache node, or a publisher's origin with the onboarding sponsor (`sponsord` + its onramp). | [`cloud-init/README.md`](cloud-init/README.md) |
 | **Helm** (`charts/decdn-node/`) | Kubernetes, one release per node, cache or origin. Published to `oci://ghcr.io/decdn/charts/decdn-node`, signed, and listed on [Artifact Hub](https://artifacthub.io/packages/helm/decdn-node/decdn-node). | [`charts/decdn-node/README.md`](charts/decdn-node/README.md) |
 
@@ -131,6 +131,7 @@ This is the canonical statement; the per-path READMEs add only what is specific 
 | [`charts/decdn-node/`](charts/decdn-node/README.md) | The Helm chart; it renders the node's dashboards and alert rules from `monitoring/`. |
 | [`monitoring/`](monitoring/README.md) | The deCDN Grafana dashboards and Prometheus alert rules, for the node (`decdn-node/`, every deploy path), sponsord (`sponsord/`, Ansible and Compose) and the iroh relay (`iroh-relay/`, Ansible and Compose). |
 | [`docs/`](docs/requirements.md) | Cross-path operator docs: the two front doors ([node operators](docs/node-operators.md), [publishers](docs/publishers.md)), requirements, lifecycle. |
+| [`examples/collection-fleet/`](examples/collection-fleet/README.md) | A starting point for a private repository that deploys from the Galaxy collections alone, with only its own inventory. |
 | `scripts/` | Generators for the upstream mirrors (network profiles) and Compose's Alloy config (`render-compose-alloy.sh`), and the release gate. |
 | `Makefile` | Lint, test and security targets; CI runs the same ones. `make help` lists them. |
 | `.github/workflows/` | CI (`ci.yml`, `molecule.yml`), releases (`release-collection.yml`, `release-chart.yml`), the weekly upstream drift check. |

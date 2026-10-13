@@ -14,9 +14,10 @@
 # Without --execute it is a dry run: it prints the new tag and the diff it would
 # commit, and changes no file. The level defaults to `auto`, the bump git-cliff
 # derives (cliff.toml) from the conventional commits since the artifact's last tag
-# that touched what it ships: the roles in its galaxy/<collection>/roles.txt, that
-# overlay, galaxy/build.sh and LICENSE for a collection; the chart and
-# monitoring/decdn-node/ for the chart.
+# that touched what it ships: the roles in its galaxy/<collection>/roles.txt, the
+# playbooks in its playbooks.txt with ansible/playbooks/group_vars/, that overlay,
+# galaxy/build.sh, galaxy/stage-playbooks.py and LICENSE for a collection; the chart
+# and monitoring/decdn-node/ for the chart.
 # Before 1.0, a feature (or, from 0.1 on, a breaking change) bumps the minor and any
 # other commit kept in the changelog bumps the patch. The section is git-cliff's
 # rendering of those commits, under a `## [X.Y.Z] — YYYY-MM-DD` heading. A commit there
@@ -74,15 +75,23 @@ case "$artifact" in
     changelog="$overlay/CHANGELOG.md"
     workflow="release-collection.yml"
     check=(make -C ansible "galaxy-check-$collection")
-    # What `galaxy/build.sh <collection>` ships: the roles in its roles.txt, its
-    # overlay, and LICENSE; build.sh itself too. The role list is the one build.sh
-    # reads, so a role added there is counted here too.
+    # What `galaxy/build.sh <collection>` ships: the roles in its roles.txt, the
+    # playbooks in its playbooks.txt with their group_vars/, its overlay (the overlay
+    # playbooks/ included), and LICENSE; build.sh and stage-playbooks.py themselves
+    # too. The lists are the ones build.sh reads, so an entry added there is counted
+    # here too.
     [[ -f "$overlay/roles.txt" ]] || die "$overlay/roles.txt is missing"
+    [[ -f "$overlay/playbooks.txt" ]] || die "$overlay/playbooks.txt is missing"
     roles=()
     while IFS= read -r role; do roles+=("$role"); done < <(grep -vE '^[[:space:]]*(#|$)' "$overlay/roles.txt")
     ((${#roles[@]} > 0)) || die "$overlay/roles.txt lists no role"
-    paths=("$overlay/**" 'ansible/galaxy/build.sh' 'LICENSE')
+    paths=("$overlay/**" 'ansible/galaxy/build.sh' 'ansible/galaxy/stage-playbooks.py'
+      'ansible/playbooks/group_vars/**' 'LICENSE')
     for role in "${roles[@]}"; do paths+=("ansible/roles/$role/**"); done
+    playbooks=()
+    while IFS= read -r pb; do playbooks+=("$pb"); done < <(grep -vE '^[[:space:]]*(#|$)' "$overlay/playbooks.txt")
+    ((${#playbooks[@]} > 0)) || die "$overlay/playbooks.txt lists no playbook"
+    for pb in "${playbooks[@]}"; do paths+=("ansible/playbooks/$pb"); done
     ;;
   chart)
     prefix="decdn-node-"

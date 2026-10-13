@@ -3,7 +3,8 @@
 Deploy and harden a **public [deCDN](https://decdn.org) node**: what a **node
 operator** runs, and the origin nodes a **publisher** runs. This collection is part of
 the public, reusable slice of the [`decdn/devops`](https://github.com/decdn/devops)
-repository — three roles and nothing else. A publisher's other services (the
+repository: three roles, and the playbooks that deploy, back up and decommission
+nodes with them (see [Usage](#usage)). A publisher's other services (the
 `sponsord` sponsor and its onramp, an iroh relay, an iroh DNS server) are the
 [`decdn.publisher`](https://github.com/decdn/devops/tree/main/ansible/galaxy/publisher)
 collection, which depends on this one.
@@ -36,7 +37,7 @@ Or pin it in a `requirements.yml`:
 ```yaml
 collections:
   - name: decdn.node
-    version: ">=0.1.0"
+    version: ">=0.2.0"     # the first release with the playbooks
 ```
 
 Each release is listed in the
@@ -55,8 +56,53 @@ ansible-galaxy collection install --force build/decdn-node-*.tar.gz
 
 ## Usage
 
-A minimal node playbook — baseline first (so the admin key lands before SSH
-hardening), then the node:
+### The shipped playbooks
+
+The collection ships the node playbooks `decdn/devops` deploys its own fleets with
+([`ansible/playbooks/`](https://github.com/decdn/devops/tree/main/ansible/playbooks)),
+roles qualified:
+
+| Playbook | Runs |
+|----------|------|
+| `decdn.node.node` | `decdn_nodes` outside `decdn_origin_nodes`: baseline, then Grafana Alloy (opt-in, off by default), then the node |
+| `decdn.node.backup` | an encrypted backup of each node's identity (or, with `-e decdn_backup_scope=full`, its state), one node at a time |
+| `decdn.node.decommission` | stops the node and removes its unit, then the Alloy agent, after one typed confirmation of the run's hosts; keeps the keys, never touches the chain |
+
+```bash
+ansible-galaxy collection install -r requirements.yml
+ansible-playbook -i inventory/hosts.yml decdn.node.node --check --diff
+ansible-playbook -i inventory/hosts.yml decdn.node.node
+ansible-playbook -i inventory/hosts.yml decdn.node.decommission -l <host>
+```
+
+Start the inventory from
+[`hosts-node.yml.example`](https://github.com/decdn/devops/blob/main/ansible/inventory/hosts-node.yml.example)
+and the `group_vars/` and `host_vars/` beside it. The playbooks open the node's QUIC
+port in the baseline firewall themselves (`baseline_extra_inbound`, from their own
+`group_vars/`, which ship beside them), and `decommission` refuses more hosts than
+`decdn_decommission_max_hosts` (default 1).
+
+- **Overrides.** The playbooks' `group_vars/decdn_nodes.yml` sets
+  `baseline_extra_inbound`, and playbook group vars beat every inventory group var:
+  change it per host, in `host_vars` (or with `-e`). The Alloy toggles come from their
+  `group_vars/all.yml`, which beats the inventory's `group_vars/all.yml` and group vars
+  written inline in `hosts.yml` but not its `group_vars/<group>.yml` or `host_vars`.
+  Importing a shipped playbook from one of your own changes none of this: its plays
+  read the collection's `group_vars/`, not those beside your playbook.
+- **Backups.** `decdn.node.backup` fetches each identity archive to `backups/` beside
+  your project's `ansible.cfg` (never into the installed collection). Without a
+  project `ansible.cfg`, set `decdn_backup_local_dir`.
+- **Scope.** The repository's Makefile guards (a `LIMIT` preflight, a required `LIMIT`
+  for decommission) do not ship: scope a run with `-l` yourself.
+- **Publisher hosts.** A publisher's origin nodes, sponsord, relays and DNS servers
+  are `decdn.publisher`'s playbooks. Decommission a host that also runs one of them
+  with `decdn.publisher.decommission`: `decdn.node.decommission` would tear down the
+  Alloy agent they share and leave them running.
+
+### Your own playbook
+
+To compose the roles yourself, a minimal node playbook — baseline first (so the admin
+key lands before SSH hardening), then the node:
 
 ```yaml
 - name: Provision a hardened deCDN node

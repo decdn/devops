@@ -1,0 +1,63 @@
+---
+- name: Verify the node ran, was backed up and was decommissioned from the collection
+  hosts: all
+  become: true
+  vars:
+    _ephemeral: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+  tasks:
+    - name: Find the archives on the host
+      ansible.builtin.find:
+        paths: /var/backups/decdn
+        patterns: ["*.tar.age"]
+      register: _archives
+
+    - name: Require the identity archive on the host
+      ansible.builtin.assert:
+        that:
+          - _archives.matched == 1
+        fail_msg: "decdn.node.backup left {{ _archives.matched }} archives on the host, not 1."
+
+    # decdn_backup_local_dir's default for a collection playbook: backups/ beside the
+    # ansible.cfg in use, which is molecule's, in the ephemeral dir (ANSIBLE_CONFIG).
+    - name: Find the fetched copy beside ansible.cfg
+      ansible.builtin.find:
+        paths: "{{ _ephemeral }}/backups/{{ inventory_hostname }}"
+        patterns: ["*.tar.age"]
+      register: _fetched
+      delegate_to: localhost
+      become: false
+
+    - name: Find any copy inside the installed collection
+      ansible.builtin.find:
+        paths: "{{ _ephemeral }}/collections/ansible_collections/decdn/node"
+        patterns: ["*.tar.age"]
+        recurse: true
+      register: _in_collection
+      delegate_to: localhost
+      become: false
+
+    - name: Require the fetched copy beside ansible.cfg and none in the collection
+      ansible.builtin.assert:
+        that:
+          - _fetched.matched == 1
+          - _in_collection.matched == 0
+        fail_msg: >-
+          Fetched {{ _fetched.matched }} archive(s) to {{ _ephemeral }}/backups and
+          {{ _in_collection.matched }} into the installed collection.
+
+    - name: Read the unit and the identity
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/systemd/system/decdn-node.service
+        - /var/lib/decdn/node.secret
+        - /var/lib/decdn/keystore.json
+      register: _paths
+
+    - name: Require the unit removed and the identity kept
+      ansible.builtin.assert:
+        that:
+          - not _paths.results[0].stat.exists
+          - _paths.results[1].stat.exists
+          - _paths.results[2].stat.exists
+        fail_msg: decdn.node.decommission did not remove the unit, or did not keep the identity.

@@ -1,0 +1,62 @@
+---
+# decdn.node as a Galaxy consumer runs it. prepare builds the collection from this
+# checkout (galaxy/build.sh, into the scenario's ephemeral dir) and installs it;
+# converge then runs its shipped playbooks by FQCN against the stub daemon:
+#   decdn.node.node -> decdn.node.backup (identity, fetched) -> decdn.node.decommission
+# ANSIBLE_ROLES_PATH is an empty directory, so every role, the lifecycle playbooks'
+# runtime include_role calls included, must resolve from the installed collection:
+# the part galaxy/check-playbooks.sh's syntax check cannot reach. baseline is skipped
+# by its tag (real-host-only, see default/molecule.yml).
+# verify.yml checks the fetched backup landed in backups/ beside the ansible.cfg in use
+# (never inside the installed collection) and that decommission removed the unit but
+# kept the identity.
+#
+# No idempotence step: backups and decommission are one-shot, as in lifecycle.
+driver:
+  name: docker
+platforms:
+  - name: decdn-node-collection
+    # Same digest-pinned image as default (repo convention). Re-resolve together.
+    image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    groups:
+      - decdn_nodes
+provisioner:
+  name: ansible
+  env:
+    # Empty (prepare creates it): no role may come from ansible/roles.
+    ANSIBLE_ROLES_PATH: "${MOLECULE_EPHEMERAL_DIRECTORY}/no-roles"
+    # The collection prepare installs, then the vendored dependencies (make deps).
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_EPHEMERAL_DIRECTORY}/collections:${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # See default/molecule.yml for why pipelining is on.
+    ANSIBLE_PIPELINING: "true"
+  options:
+    skip-tags: baseline
+  inventory:
+    host_vars:
+      # Inventory, not play vars: the shipped playbooks are the plays.
+      decdn-node-collection:
+        decdn_node_install_method: manual
+        decdn_node_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/default/files/decdn-node-stub"
+        decdn_cli_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/default/files/decdn-node-stub"
+        decdn_rpc_url: "https://rpc.example.invalid/"
+        decdn_region: "US"
+        decdn_network: arbitrum-sepolia
+        # decommission's typed confirmation, given non-interactively.
+        decdn_decommission_confirm: decdn-node-collection
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    # Leading destroy: see default/molecule.yml.
+    - destroy
+    - create
+    - prepare
+    - converge
+    - verify
+    - destroy

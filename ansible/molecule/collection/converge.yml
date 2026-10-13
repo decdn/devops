@@ -1,0 +1,26 @@
+---
+# The shipped playbooks by FQCN, in a consumer's order. Their plays read the
+# collection's playbooks/group_vars/, not anything here.
+- name: Provision the node
+  ansible.builtin.import_playbook: decdn.node.node
+
+- name: Encrypt the backups to the throwaway age key
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read the backup recipient's public key
+      ansible.builtin.command:
+        cmd: age-keygen -y /root/molecule-age.key
+      register: _molecule_age_pub
+      changed_when: false
+
+    - name: Set the recipient
+      ansible.builtin.set_fact:
+        decdn_backup_age_recipients: ["{{ _molecule_age_pub.stdout | trim }}"]
+
+- name: Identity backup
+  ansible.builtin.import_playbook: decdn.node.backup
+
+- name: Decommission
+  ansible.builtin.import_playbook: decdn.node.decommission

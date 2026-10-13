@@ -199,5 +199,5 @@ molecule-serial:     ## same selection, one scenario at a time (readable output 
 galaxy-build:        ## stage + build the decdn.node and decdn.publisher Galaxy collection artifacts
 	$(MAKE) -C ansible build
 
-galaxy-check:        ## build + validate both collections (galaxy-importer)
+galaxy-check:        ## build + validate both collections (galaxy-importer, shipped playbooks by FQCN)
 	$(MAKE) -C ansible galaxy-check

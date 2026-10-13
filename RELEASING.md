@@ -55,9 +55,11 @@ would commit, and changes no file. The script:
 
 1. **Refuses unconventional commits.** It looks at the commits since the artifact's
    last tag that touched what it ships: for a collection, the roles its
-   `ansible/galaxy/<collection>/roles.txt` lists (the list `galaxy/build.sh` reads), that
-   overlay, `ansible/galaxy/build.sh` and `LICENSE`; for the chart, `charts/decdn-node/`
-   and `monitoring/decdn-node/`.
+   `ansible/galaxy/<collection>/roles.txt` lists and the playbooks its `playbooks.txt`
+   lists (the lists `galaxy/build.sh` and `galaxy/stage-playbooks.py` read) with
+   `ansible/playbooks/group_vars/`, that overlay, `ansible/galaxy/build.sh`,
+   `ansible/galaxy/stage-playbooks.py` and `LICENSE`; for the chart,
+   `charts/decdn-node/` and `monitoring/decdn-node/`.
    git-cliff drops a commit it cannot parse as a Conventional Commit, from the
    changelog and from the bump, and only logs a count. That covers an unconventional
    subject, but also an empty scope (`feat(): …`) and a body right under the subject
