@@ -175,7 +175,7 @@ ignored on the first converge.
    - **`release`** (the default) downloads the `v<decdn_node_version>` tarballs from
      `decdn_node_release_base` and verifies them against the GPG-signed `SHA256SUMS`.
      `decdn_node_version` defaults to the decdn/decdn release this repo pins
-     (`0.0.4`); the sponsord roles pin decdn/sponsord `0.0.3` the same way.
+     (`0.0.4`); the sponsord roles pin decdn/sponsord `0.0.4` the same way.
    - **`source`** clones `decdn_node_source_repo` (default `decdn/decdn` on GitHub) at
      `decdn_node_source_ref` (any tag, branch or SHA) **on the node** and builds it there
      as an unprivileged `decdn-build` user, in a fresh environment per commit, with a
