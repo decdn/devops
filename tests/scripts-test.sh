@@ -1506,6 +1506,32 @@ expect 0 "fetch-decdn-cli resolves a release line to its newest finished release
   fetch_line releases.json "${fxv%.*}" out-line
 grep -qF "decdn ${fxv%.*} resolves to $fxv" "$work/out" || { cat "$work/out" >&2; fail "fetch-decdn-cli did not report the resolved release"; }
 [[ -x "$fx/out-line/decdn" ]] || fail "fetch-decdn-cli wrote no binary for the release line"
+# GITHUB_TOKEN goes to GitHub's API only: an index override (a mirror) must never
+# receive it. A loopback index records the Authorization header of the one request.
+python3 -I - "$fx" <<'PY' &
+import http.server, pathlib, sys
+fx = pathlib.Path(sys.argv[1])
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        (fx / "index-auth.txt").write_text(self.headers.get("Authorization", "none"))
+        body = (fx / "releases.json").read_bytes()
+        self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a): pass
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+(fx / "index-port").write_text(str(s.server_address[1]))
+s.handle_request()
+PY
+for _ in $(seq 50); do [[ -s "$fx/index-port" ]] && break; sleep 0.1; done
+expect 0 "fetch-decdn-cli reads an index override with GITHUB_TOKEN set" \
+  env GITHUB_TOKEN=must-not-leak DECDN_VERSION="${fxv%.*}" \
+    DECDN_RELEASE_INDEX="http://127.0.0.1:$(<"$fx/index-port")/releases.json" \
+    DECDN_RELEASE_BASE="file://$fx/good" DECDN_RELEASE_KEYS="$fx/KEYS.asc" \
+    "$repo/scripts/fetch-decdn-cli.sh" "$fx/out-override"
+wait
+[[ "$(<"$fx/index-auth.txt")" == none ]] \
+  || fail "fetch-decdn-cli sent an Authorization header to an index override: $(<"$fx/index-auth.txt")"
+pass "fetch-decdn-cli keeps GITHUB_TOKEN from an index override"
 for c in "releases.json|9.9|no finished v9.9.N decdn release" "broken.json|${fxv%.*}|is not a JSON release list"; do
   IFS='|' read -r index line msg <<<"$c"
   expect 1 "fetch-decdn-cli refuses the line $line in $index" fetch_line "$index" "$line" "out-$index"

@@ -56,6 +56,11 @@
         src: /etc/sponsord/sponsord-onramp.env
       register: onramp_env
 
+    - name: Read the decdn release the onramp recorded as served
+      ansible.builtin.slurp:
+        src: /usr/local/lib/sponsord-onramp/decdn-release
+      register: onramp_decdn_record
+
     - name: Hash the mirror's decdn v0.0.5 SHA256SUMS
       ansible.builtin.stat:
         path: /srv/mirror/www/releases/decdn/v0.0.5/SHA256SUMS
@@ -105,6 +110,7 @@
           # digest was read from that release's verified SHA256SUMS.
           - onramp_env.content | b64decode is search('(?m)^ONRAMP_DECDN_RELEASE=v0\.0\.5$')
           - onramp_env.content | b64decode is search('(?m)^ONRAMP_DECDN_SUMS_SHA256=' ~ decdn_sums.stat.checksum ~ '$')
+          - onramp_decdn_record.content | b64decode == '0.0.5\n'
         fail_msg: >-
           state={{ bootstrap_state.content | b64decode | trim }} awaiting={{ awaiting.stat.exists }}
           head={{ checkout_head.content | b64decode | trim }} (tag {{ tag_sha.content | b64decode | trim }})

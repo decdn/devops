@@ -13,8 +13,9 @@
 #
 # Check mode fetches and hashes the manifest to report the env file's diff, but
 # does not verify it (gnupg may not be installed yet); the real run does. The release
-# served is recorded on the host, so when GitHub's release list cannot be read the
-# resolver keeps serving it (its SHA256SUMS still comes from the release itself).
+# served is recorded on the host, by either path, so when GitHub's release list cannot
+# be read the resolver keeps serving it (its SHA256SUMS still comes from the release
+# itself), and never a release an exact pin has since moved the installers off.
 - name: Serve an exact decdn release as pinned
   ansible.builtin.set_fact:
     _onramp_decdn_release: "{{ sponsord_onramp_decdn_release }}"
@@ -23,8 +24,6 @@
 
 - name: Resolve the decdn release line the installers use
   when: sponsord_onramp_decdn_sums_sha256 | length == 0
-  vars:
-    _onramp_decdn_record: /usr/local/lib/sponsord-onramp/decdn-release
   block:
     - name: Resolve sponsord_onramp_decdn_release
       ansible.builtin.include_tasks: resolve-release.yml
@@ -32,7 +31,7 @@
         _rr_spec: "{{ sponsord_onramp_decdn_release[1:] }}"
         _rr_index: "{{ sponsord_onramp_decdn_release_index }}"
         _rr_name: sponsord_onramp_decdn_release
-        _rr_stamp: "{{ _onramp_decdn_record }}"
+        _rr_stamp: "{{ _sponsord_onramp_decdn_record }}"
 
     - name: Name the resolved decdn release
       ansible.builtin.set_fact:
@@ -112,22 +111,6 @@
           ansible.builtin.set_fact:
             _onramp_decdn_sums_sha256: "{{ _onramp_decdn_sums_stat.stat.checksum }}"
 
-        - name: Ensure the onramp's state directory exists
-          ansible.builtin.file:
-            path: "{{ _onramp_decdn_record | dirname }}"
-            state: directory
-            owner: root
-            group: root
-            mode: "0755"
-
-        - name: Record the decdn release the installers are served
-          ansible.builtin.copy:
-            dest: "{{ _onramp_decdn_record }}"
-            content: "{{ _rr_version }}\n"
-            owner: root
-            group: root
-            mode: "0644"
-
       always:
         - name: Remove the decdn manifest staging directory
           ansible.builtin.file:
@@ -136,3 +119,19 @@
           check_mode: false
           changed_when: false
           when: _onramp_decdn_stage.path is defined
+
+- name: Ensure the onramp's state directory exists
+  ansible.builtin.file:
+    path: "{{ _sponsord_onramp_decdn_record | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Record the decdn release the installers are served
+  ansible.builtin.copy:
+    dest: "{{ _sponsord_onramp_decdn_record }}"
+    content: "{{ _onramp_decdn_release[1:] }}\n"
+    owner: root
+    group: root
+    mode: "0644"

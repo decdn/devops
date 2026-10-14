@@ -25,8 +25,9 @@
 # A release line (X.Y, as the chart's appVersion is) resolves to its newest
 # finished release as roles/decdn_node/tasks/resolve-release.yml resolves one: the
 # highest vX.Y.N that is not a draft or a prerelease and has a SHA256SUMS.asc
-# asset, from GitHub's release list (sent with GITHUB_TOKEN when it is set, which
-# lifts the unauthenticated rate limit).
+# asset, from GitHub's release list (sent with GITHUB_TOKEN when it is set and the
+# list is GitHub's API, which lifts the unauthenticated rate limit; an override
+# never gets the token).
 #
 # Overrides, for the tests' fixture release: DECDN_VERSION (default: the chart's
 # appVersion; X.Y or X.Y.Z), DECDN_RELEASE_INDEX (default: decdn/decdn's GitHub
@@ -59,8 +60,11 @@ done
 [[ -f "$keys" ]] || die "no release keyring at $keys"
 
 if [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+  # The token goes to GitHub's API only, never to an index override (a mirror).
   auth=()
-  [[ -z "${GITHUB_TOKEN:-}" ]] || auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
+  if [[ -n "${GITHUB_TOKEN:-}" && "$index" == https://api.github.com/* ]]; then
+    auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
+  fi
   releases=$(curl -fsSL --retry 3 -H 'Accept: application/vnd.github+json' "${auth[@]}" "$index") ||
     die "cannot read the decdn release list at $index"
   patch=$(python3 -I -c '

@@ -27,9 +27,11 @@
       - sponsord_onramp_version is match('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)?$')
     fail_msg: >-
       sponsord_onramp_install_method "release" (the default) requires
-      sponsord_onramp_version (e.g. "0.0.1") naming a v<version> release of
-      decdn/sponsord (or of the mirror in sponsord_onramp_release_base). To run
-      something unreleased, set sponsord_onramp_install_method "source" with a
+      sponsord_onramp_version: a release line ("X.Y", the newest vX.Y.N release of
+      decdn/sponsord, looked up in sponsord_onramp_release_index) or an exact version
+      ("X.Y.Z", the vX.Y.Z release), as a quoted string without the "v" (got
+      "{{ sponsord_onramp_version }}"), the same as sponsord_version. Downloads come
+      from sponsord_onramp_release_base. To run something unreleased, set sponsord_onramp_install_method "source" with a
       sponsord_onramp_source_ref to build on the host, or use "manual" to copy a
       binary built on the control machine.
   when: sponsord_onramp_install_method == "release"
