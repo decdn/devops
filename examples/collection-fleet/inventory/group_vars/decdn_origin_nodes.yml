@@ -1,0 +1,25 @@
+---
+# Shared config for a publisher's origin nodes (playbooks/origin.yml, also run by
+# publisher.yml and site.yml). decdn_origin_nodes is a child of decdn_nodes, so
+# group_vars/decdn_nodes.yml applies to origins too, and this file wins over it.
+# Per-origin values live in host_vars/<origin>/main.yml (see host_vars/origin-1/).
+#
+# Every origin needs an origin backend: decdn_cache_origin_kind (http, fs or s3) and
+# that kind's fields, or decdn_cache_origins (an ordered fallback list); origin.yml
+# refuses a host without one. Set it here when every origin reads the same store, in
+# host_vars when they differ. Full list: roles/decdn_node/defaults/main.yml.
+#
+# decdn_cache_origin_kind: s3
+# decdn_cache_origin_s3_bucket: my-namespace-content
+# decdn_cache_origin_s3_region: eu-central-1
+# decdn_cache_origin_s3_endpoint_url: ""   # R2/B2/MinIO; omit for AWS
+# decdn_cache_origin_s3_use_default_chain: true   # keys in /etc/decdn/decdn.env
+
+# --- Origin behaviour ----------------------------------------------------------------
+# With a backend set, two defaults follow: decdn_relay_foreign_namespaces false (the
+# daemon's: the node serves only what its backend holds and declines the rest, even a
+# blob already in its cache; ADR 002 § Retrieval by namespace, ADR 037) and
+# decdn_node_to_node_pull_through_enabled false (the role's: misses fill from the
+# backend). Set either explicitly only to change that.
+# decdn_fs_rescan_interval_sec: 60       # fs backend: how often the root is rescanned
+# decdn_pinned_hashes: []                # blobs (lowercase BLAKE3) never evicted

@@ -76,8 +76,10 @@ ansible-playbook -i inventory/hosts.yml decdn.node.decommission -l <host>
 ```
 
 Start the inventory from
-[`hosts-node.yml.example`](https://github.com/decdn/devops/blob/main/ansible/inventory/hosts-node.yml.example)
-and the `group_vars/` and `host_vars/` beside it. The playbooks open the node's QUIC
+[`hosts-node.yml.example`](https://github.com/decdn/devops/blob/main/examples/collection-fleet/inventory/hosts-node.yml.example)
+and the `group_vars/` and `host_vars/` beside it, in
+[`examples/collection-fleet/`](https://github.com/decdn/devops/tree/main/examples/collection-fleet),
+a ready-made project for these collections. The playbooks open the node's QUIC
 port in the baseline firewall themselves (`baseline_extra_inbound`, from their own
 `group_vars/`, which ship beside them), and `decommission` refuses more hosts than
 `decdn_decommission_max_hosts` (default 1).

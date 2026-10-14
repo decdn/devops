@@ -1,0 +1,35 @@
+---
+# Deployment overrides for the deCDN node.
+#
+# Sane defaults for every knob live in the roles (roles/*/defaults/main.yml) so
+# the roles are self-contained. Set anything here to override per host/group.
+# Secrets are generated ON THE HOST by the roles and never live here.
+
+# --- Admin SSH access: ONE operator list (deploy as yourself by default) -----
+# Admin/operator accounts + their keys are installed BEFORE ssh_hardening disables root
+# + password login. There is no separate admin knob: the runner (this control box's
+# $USER + its ~/.ssh key) is auto-detected and prepended as the head, so the person
+# running the playbook is provisioned without being committed here. Add other admins
+# below; list yourself (same name) to OVERRIDE the auto-detected head with explicit
+# key(s). The baseline role aborts before hardening unless the resolved set has a
+# NON-ROOT account with a key, so you can't lock yourself out.
+# NOTE: under `sudo ansible-playbook`, cron, or CI the $USER/$HOME — and thus the
+# autodetected key — may not be yours; set baseline_sudo_autodetect_runner: false and
+# list admins explicitly here.
+# baseline_sudo_users:
+#   - name: alice
+#     keys:
+#       - "ssh-ed25519 AAAA... alice@laptop"
+#   - name: bot                              # optional per-entry passwordless override
+#     keys: ["ssh-ed25519 AAAA... bot@ci"]
+#     passwordless: false
+baseline_sudo_users: []
+# baseline_sudo_autodetect_runner: true   # false = provision ONLY the explicit list above
+# baseline_sudo_passwordless: true        # default sudo mode: NOPASSWD sudo + locked password
+
+# Optional inbound-SSH source allowlist (CIDRs). Empty = accept from any source.
+ssh_allow_cidrs: []
+
+# --- Common overrides (uncomment to change; see roles/*/defaults for all) ----
+# See roles/decdn_node/defaults/main.yml for the node's tunable knobs, and set
+# per-node config in inventory/host_vars/<name>/main.yml.

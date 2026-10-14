@@ -12,6 +12,10 @@
 !**/.env.example
 # An operator's local Compose override (compose/README.md); decdn-compose includes it
 compose/compose.override.yaml
+# A hosts.yml filled in inside this checkout: real host IPs never belong in this public
+# repo. The fleet example's own .gitignore must not ignore it (a private copy commits
+# it), and this file does not travel with `cp -R examples/collection-fleet`.
+/examples/collection-fleet/inventory/hosts.y*ml
 
 # Private keys & certs (defense-in-depth; real keystores live under /etc on the host)
 **/cert.pem

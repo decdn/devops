@@ -9,30 +9,33 @@ lifecycle guards included), and this repository holds only your inventory.
 | File | What it is |
 |------|------------|
 | `requirements.yml` | the collections, from Ansible Galaxy (delete `decdn.publisher` for cache nodes only) |
-| `ansible.cfg` | this repo's `ansible/ansible.cfg`, minus `roles_path`, failing on an inventory that does not parse |
+| `ansible.cfg` | decdn/devops's `ansible/ansible.cfg`, minus `roles_path`, failing on an inventory that does not parse |
 | `.gitignore` | keeps the installed collections, per-host secrets and backups out of git |
+| `inventory/` | the inventory templates: `hosts-node.yml.example` and `hosts-publisher.yml.example`, with their `group_vars/` and `host_vars/` |
+
+The `inventory/` templates are decdn/devops's `ansible/inventory/` ones, with the hosts
+examples' headers written for this layout (decdn/devops's `make test-scripts` keeps
+everything else identical). Their comments name files by their path in decdn/devops:
+`roles/<role>/…` and `playbooks/…` ship in the collections, under
+`collections/ansible_collections/decdn/{node,publisher}/` once installed.
 
 ## Set up
 
-Copy this directory into a new private repository, then add an inventory, starting
-from this repository's examples:
+Copy this directory into a new private repository, then, in that copy (never in a
+decdn/devops checkout, which is public), start your inventory from the template for
+your role:
 
 ```bash
 ansible-galaxy collection install -r requirements.yml -p collections
-mkdir -p inventory
-cp <devops>/ansible/inventory/hosts-node.yml.example inventory/hosts.yml   # or hosts-publisher.yml.example
-cp -R <devops>/ansible/inventory/group_vars <devops>/ansible/inventory/host_vars inventory/
+cp inventory/hosts-node.yml.example inventory/hosts.yml   # or hosts-publisher.yml.example
 ```
 
 Fill in `inventory/hosts.yml` and its `group_vars/` and `host_vars/` (each file says
 what it needs; [`ansible/README.md`](../../ansible/README.md) has the variables and the
-on-host secrets). In `hosts-publisher.yml.example` only the origin is live: uncomment
-the groups you run. Rename `host_vars/decdn-node-1/` (and `origin-1/`) to your hosts,
-and keep secrets in the git-ignored `host_vars/<host>/secret.yml` (copied from its
-`secret.yml.example`). The copied files are written for this public repository: they
-name its make targets ([From `make` to `ansible-playbook`](#from-make-to-ansible-playbook)
-translates them), and where they say `hosts.yml` is git-ignored, in your private
-repository you commit it.
+on-host secrets), and commit them. In `hosts-publisher.yml.example` only the origin is
+live: uncomment the groups you run. Rename `host_vars/decdn-node-1/` (and `origin-1/`)
+to your hosts, and keep secrets in the git-ignored `host_vars/<host>/secret.yml`
+(copied from its `secret.yml.example`).
 
 ## Run
 

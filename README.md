@@ -93,15 +93,14 @@ one VM); on Kubernetes, the [Helm chart](charts/decdn-node/README.md).
 
 From your workstation (ansible-core ≥ 2.15, e.g. `pipx install ansible-core`) with an
 SSH key in `~/.ssh/`, and a fresh Debian or Ubuntu host. The collections bring the roles
-and playbooks; you clone this repository once, only to copy the example project and
-inventory templates into a private repository of your own:
+and playbooks; you clone this repository once, only to copy the example project (its
+inventory templates included) into a private repository of your own:
 
 ```bash
 git clone --depth 1 https://github.com/decdn/devops.git
 cp -R devops/examples/collection-fleet my-fleet && cd my-fleet     # make this your private repo
 ansible-galaxy collection install -r requirements.yml -p collections
-mkdir inventory && cp ../devops/ansible/inventory/hosts-node.yml.example inventory/hosts.yml
-cp -R ../devops/ansible/inventory/{group_vars,host_vars} inventory/
+cp inventory/hosts-node.yml.example inventory/hosts.yml
 cp inventory/host_vars/decdn-node-1/secret.yml.example inventory/host_vars/decdn-node-1/secret.yml
 $EDITOR inventory/hosts.yml                          # ansible_host: the node's IP
 $EDITOR inventory/host_vars/decdn-node-1/main.yml    # decdn_region; add decdn_node_generate_keystore: true (the node makes its wallet)

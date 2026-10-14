@@ -18,16 +18,16 @@
 # reads every node's ID over SSH, and under -u root it would try the nodes, whose
 # root login baseline has already turned off, as root.
 
-# Origin nodes — provisioned by playbooks/origin.yml (`make deploy-origin`) and by
-# publisher.yml. An origin is a deCDN node with an origin backend: the canonical
+# Origin nodes — provisioned by the origin.yml playbook and by publisher.yml (which
+# site.yml imports). An origin is a deCDN node with an origin backend: the canonical
 # source of its namespace's content. decdn_origin_nodes is a child of decdn_nodes, so
 # an origin gets a node's firewall hole, backup, decommission and observability;
 # origin.yml refuses one outside decdn_nodes or without a backend. The chain
 # recognises it as the origin only once you, the namespace's publisher, seat its
 # operator with OriginAssignment.addOrigin; until then it serves its bytes as a cache
 # does. The backend goes in group_vars/decdn_origin_nodes.yml (shared by every origin)
-# or host_vars/<name>/main.yml (see host_vars/origin-1/), with the region and the
-# rest of the per-origin config.
+# or host_vars/<name>/main.yml (see host_vars/origin-1/), with the region and the rest
+# of the per-origin config.
 decdn_nodes:
   children:
     decdn_origin_nodes:
@@ -40,11 +40,11 @@ decdn_nodes:
         #   ansible_host: REPLACE_WITH_ORIGIN_VPS_IP_OR_DNS
 
 # OPTIONAL: sponsord, the onboarding sponsor (treasury signer + PaymentPool keeper),
-# which pays for your users' downloads — provisioned by playbooks/sponsord.yml (`make
-# deploy-sponsord`) and by publisher.yml. It needs no node: give it its own host, or
-# list an origin host here as well to co-locate them. Its knobs are in
-# group_vars/sponsord_hosts.yml; the treasury keystore and password are provisioned on
-# the host (roles/sponsord/README.md).
+# which pays for your users' downloads — provisioned by the sponsord.yml playbook and
+# by publisher.yml. It needs no node: give it its own host, or list an origin host
+# here as well to co-locate them. Its knobs are in group_vars/sponsord_hosts.yml; the
+# treasury keystore and password are provisioned on the host (the sponsord role's
+# README).
 # sponsord_hosts:
 #   hosts:
 #     sponsord-1:
@@ -54,20 +54,20 @@ decdn_nodes:
 # capability API), behind Caddy on tcp/80 + tcp/443. List a sponsord host
 # again here; it must be in sponsord_hosts too. Its knobs are in
 # group_vars/sponsord_onramp_hosts.yml; the Turnstile secret is provisioned on the
-# host (roles/sponsord_onramp/README.md).
+# host (the sponsord_onramp role's README).
 # sponsord_onramp_hosts:
 #   hosts:
 #     sponsord-1:
 #
 # OPTIONAL: self-hosted iroh relays, the fallback path for peers that cannot
-# hole-punch — provisioned by playbooks/iroh_relay.yml (`make deploy-relay`) and by
-# publisher.yml. Public by design: each terminates its own Let's Encrypt TLS on
+# hole-punch — provisioned by the iroh_relay.yml playbook and by publisher.yml.
+# Public by design: each terminates its own Let's Encrypt TLS on
 # tcp/80 + tcp/443 and serves QUIC address discovery on udp/7842, so it cannot share a
 # host with sponsord-onramp. Deploy at least two before pointing nodes'
 # decdn_relay_urls at them; by default a relay admits only this inventory's nodes
 # (iroh_relay_access: allowlist), so list other operators' node IDs in
 # iroh_relay_allowlist or use everyone. Its knobs are in
-# group_vars/iroh_relay_hosts.yml (roles/iroh_relay/README.md).
+# group_vars/iroh_relay_hosts.yml (the iroh_relay role's README).
 # iroh_relay_hosts:
 #   hosts:
 #     relay-1:
@@ -76,12 +76,12 @@ decdn_nodes:
 #
 # OPTIONAL: a self-hosted iroh DNS server, the pkarr relay nodes publish their
 # address records to and the DNS server peers resolve them through (in place of
-# n0's dns.iroh.link) — provisioned by playbooks/iroh_dns_server.yml (`make
-# deploy-dns`) and by publisher.yml. Public by design: it terminates its own Let's
-# Encrypt TLS on tcp/443 and answers DNS on udp+tcp/53, so it cannot share a host
-# with an iroh relay or sponsord-onramp. The parent zone must delegate its hostname
-# to it (NS + glue). Its knobs are in group_vars/iroh_dns_server_hosts.yml
-# (roles/iroh_dns_server/README.md).
+# n0's dns.iroh.link) — provisioned by the iroh_dns_server.yml playbook and by
+# publisher.yml. Public by design: it terminates its own Let's Encrypt TLS on tcp/443
+# and answers DNS on udp+tcp/53, so it cannot share a host with an iroh relay or
+# sponsord-onramp. The parent zone must delegate its hostname to it (NS + glue). Its
+# knobs are in group_vars/iroh_dns_server_hosts.yml (the iroh_dns_server role's
+# README).
 # iroh_dns_server_hosts:
 #   hosts:
 #     dns-1:

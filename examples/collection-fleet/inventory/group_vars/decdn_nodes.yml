@@ -1,0 +1,42 @@
+---
+# Shared config for public deCDN node hosts, cache nodes (playbooks/node.yml) and a
+# publisher's origins alike (playbooks/origin.yml; group_vars/decdn_origin_nodes.yml
+# wins over this file for them).
+# Per-node values live in host_vars/<node>/: addresses/region/version in main.yml.
+# The sensitive rpc_url is provisioned as /etc/decdn/decdn.env on the host, or (if
+# you would rather the role authored that file) in a git-ignored secret.yml.
+
+# The node's public QUIC firewall hole (udp/4433) is NOT set here. The playbooks set
+# it from their own group_vars/ (all.yml builds it), which ship beside them in
+# decdn/devops and in its Galaxy collections, so it applies to any inventory.
+#
+# Settings every node shares (decdn_network, decdn_node_install_method, …) can move
+# here from host_vars/<node>/main.yml once you run more than one node. host_vars
+# still win for a node that differs.
+
+# --- Binaries (fleet-wide) ------------------------------------------------------
+# With decdn_node_install_method: manual, rather than the two per-host
+# *_manual_bin_src paths in host_vars, point every node at one decdn
+# checkout's target/release dir (cross-compile for aarch64 hosts; the role derives
+# each host's target from its architecture and checks the ELF before shipping):
+#   cargo build --release -p decdn-node -p decdn-cli
+# A host that sets BOTH explicit paths ignores this dir.
+# decdn_release_target_dir: ""      # control-machine path to decdn's target/release
+
+# --- Cache sizing -----------------------------------------------------------------
+# Size to each host's disk and to the largest object you expect to serve; see
+# https://github.com/decdn/devops/blob/main/docs/requirements.md for the disk formula.
+# A node rejects any blob larger than decdn_max_blob_size_mb with BlobTooLarge, and
+# decdn_cache_size_mb must be at least that. Override per host in host_vars when
+# disks differ.
+# decdn_max_blob_size_mb: 1024      # role default
+# decdn_cache_size_mb: 10240        # role default (10 GiB)
+
+# --- Grafana Cloud observability (opt-in) --------------------------------------
+# One mirrored flag drives BOTH roles (grafana_alloy install/config AND the
+# otlp_endpoint injection into node.toml). Uncomment after provisioning the
+# credential file on each host — see roles/grafana_alloy/files/grafana-alloy.env.example:
+#
+# decdn_grafana_cloud_enabled: true
+# grafana_alloy_region: "{{ decdn_region }}"  # override only when needed
+# grafana_alloy_deployment_environment: production
