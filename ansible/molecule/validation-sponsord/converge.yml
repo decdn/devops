@@ -693,7 +693,7 @@
     sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc
     sponsord_onramp_domain: onramp.validation.test
     sponsord_onramp_turnstile_sitekey: 1x00000000000000000000AA
-    sponsord_onramp_decdn_release: v0.1.0
+    sponsord_onramp_decdn_release: v9.9.9
     sponsord_onramp_decdn_sums_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
   tasks:
     # --- sponsord_onramp: each case breaks ONE input over the valid baseline in play
