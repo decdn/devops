@@ -142,7 +142,7 @@ test-scripts` fails while the committed file differs from a fresh render, and `m
 lint-alloy` validates and runs it.
 
 **Pinned upstream releases.** One decdn/decdn release (`decdn_node_version`, today
-`0.0.4`) and one decdn/sponsord release (`sponsord_version` = `sponsord_onramp_version`,
+`0.1.0`) and one decdn/sponsord release (`sponsord_version` = `sponsord_onramp_version`,
 today `0.0.4`; decdn/sponsord tags its whole workspace `vX.Y.Z`, there are no per-crate
 tags) are pinned across every path: the role defaults, the onramp's installer pin
 (`sponsord_onramp_decdn_release` + `_decdn_sums_sha256`, copied into

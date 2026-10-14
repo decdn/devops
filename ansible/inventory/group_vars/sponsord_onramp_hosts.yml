@@ -35,6 +35,6 @@
 # The decdn release the installers install defaults to the role's pin (decdn/decdn
 # v<decdn_node_version>), with the SHA-256 of its SHA256SUMS. To serve another,
 # set both:
-# sponsord_onramp_decdn_release: v0.0.4
+# sponsord_onramp_decdn_release: v0.1.0
 # sponsord_onramp_decdn_sums_sha256: "…"
 # CapacityBond and SlashJudge come from sponsord_network (group_vars/sponsord_hosts.yml).
