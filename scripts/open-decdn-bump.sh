@@ -13,14 +13,16 @@
 # `origin` credentials and opens the PR with your `gh` login: a PR opened that
 # way runs CI, which one opened by Actions' GITHUB_TOKEN would not.
 #
-# The bump does checklist steps 1 to 6.
+# The bump does checklist steps 1 to 7 (bump_decdn.py rewrite moves every pin,
+# the commented examples and AGENTS.md's pinned version; CI's helm job validates
+# the chart against the new release's binary).
 # Release facts (the SHA256SUMS digest, the decdn-node image digest) come from
 # the release's assets once their signatures verify against the vendored
 # decdn-release-KEYS.asc; the generated mirrors and KEYS come from a clone of the
 # tag, whose signature is checked the same way. What needs a human is listed in
-# the PR body: prose naming the old version, a schema-key change (node.toml.j2
-# and the chart's values.config follow it by hand), a KEYS change (the sponsord
-# copy and SECURITY.md follow it), and the chart check against the real binary.
+# the PR body: a schema-key change (node.toml.j2 and the chart's values.config
+# follow it by hand), a KEYS change (the sponsord copy and SECURITY.md follow
+# it), and any generator that failed.
 #
 # Nothing happens when the pin is already at that release or a later one, or
 # when a PR from bump/decdn-<tag> exists in any state: a closed bump PR is never
@@ -32,8 +34,7 @@
 # Exit: 0 done or nothing to do; 1 error (no PR opened unless the output says
 # so), the PR is open but needs work, or (--dry-run) the bump would need work;
 # 2 usage. "Needs work" is the body's "Needs work" list: what the script could
-# not finish. Its "Before merging" checklist (the real-binary chart check, the
-# prose) comes with every bump and does not change the exit code.
+# not finish. A PR with no "Needs work" list and a green CI needs no hand edits.
 set -euo pipefail
 
 DECDN=decdn/decdn
@@ -226,16 +227,6 @@ if ! cmp -s "$UPSTREAM/KEYS" "$KEYS"; then
   (\`ansible/roles/sponsord/files/sponsord-release-KEYS.asc\`) and SECURITY.md's fingerprints."
 fi
 
-# Step 7 is a reviewer's: decdn/sponsord pins carry version numbers too, so a
-# bare old version is not always decdn's. The list holds the old version as a
-# whole word (not inside 127.0.0.1, nor a prefix of 0.0.10), outside the
-# changelogs, the test fixtures and the scripts, whose versions are examples.
-# git grep exits 1 for no match; anything else is an error, not a clean tree.
-rc=0
-prose=$(git grep -nE -e "(^|[^0-9.])${CURRENT//./\\.}([^0-9]|\$)" -- . \
-  ':(exclude,glob)**/CHANGELOG.md' ':(exclude,glob)**/tests/**' ':(exclude)scripts') || rc=$?
-((rc <= 1)) || die "could not search for the old version (git grep exited $rc); no PR opened"
-
 # ---- PR body -------------------------------------------------------------
 
 others=$(gh pr list -R "$DEVOPS" --state open --json number,headRefName \
@@ -255,19 +246,6 @@ BODY="$WORK/body.md"
     printf -- '- %s\n' "${NEEDS[@]}"
     echo
   fi
-  echo "Before merging:"
-  echo
-  echo "- [ ] Validate the chart against the release's binary (CI has none):"
-  echo "      \`DECDN_CLI=<${TAG}'s decdn> make lint-helm\`."
-  if [[ -n "$prose" ]]; then
-    echo "- [ ] Move the prose that still names \`${CURRENT}\` (a decdn/sponsord pin may"
-    echo "      share the number; leave those):"
-    echo
-    echo '  ```'
-    indent <<<"$prose"
-    echo '  ```'
-  fi
-  echo
   echo "After merging, release each artifact the bump touched (RELEASING.md)."
   echo
   if [[ -n "$others" ]]; then
@@ -296,9 +274,10 @@ git commit --quiet --no-verify -F - <<EOF || die "git commit failed; no PR opene
 chore: pin decdn to ${TAG}
 
 Move every decdn/decdn pin from v${CURRENT} to ${TAG} (${UPSTREAM_SHA}):
-the role default, the onramp's installer pin, the Compose image digest and
-the chart's appVersion and Artifact Hub image. The PR body lists what is
-left.
+the role default, the onramp's installer pin, the Compose image digest, the
+chart's appVersion and Artifact Hub image, the inventory and cloud-init
+examples, AGENTS.md's pinned version and the generated mirrors. The PR body
+lists anything left.
 EOF
 # No local branch: the commit is pushed from the detached worktree. Forced,
 # because the branch may be left over from a run that pushed it and opened no

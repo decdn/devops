@@ -20,8 +20,8 @@ gate, installers, behind a TLS reverse proxy), is the
 
 - **Installs the binary.**
   - `release` (the default) downloads `sponsord-<version>-<triple>.tar.gz` from the
-    `v<version>` release of `decdn/sponsord` (`sponsord_version`, default `0.0.4`;
-    one tag releases the whole workspace) and verifies it against the GPG-signed
+    `v<version>` release of `decdn/sponsord` (`sponsord_version`, which defaults to
+    the release this repo pins; one tag releases the whole workspace) and verifies it against the GPG-signed
     `SHA256SUMS`, using `files/sponsord-release-KEYS.asc`, a copy of upstream's
     `KEYS`. `sponsord_release_base` points it at a mirror.
   - `source` clones `sponsord_source_repo` (default `decdn/sponsord` on GitHub) at
@@ -32,8 +32,8 @@ gate, installers, behind a TLS reverse proxy), is the
     build environment for every new commit, a `<repo>@<commit>` stamp so an
     unchanged commit is not rebuilt, and a root-side install that refuses
     symlinks. `sponsord_version` is not checked in this mode; set the ref to a
-    release tag (`v0.0.4`) to build exactly that release. The build user, its home and the toolchain are
-    shared with the other roles on the host. cargo also fetches upstream's
+    release tag (`v<version>`) to build exactly that release. The build user, its
+    home and the toolchain are shared with the other roles on the host. cargo also fetches upstream's
     `decdn/decdn` git dependencies, pinned by `Cargo.lock`.
   - `manual` copies a binary built on the control machine, from a `decdn/sponsord`
     checkout or the published crate (`cargo install --locked sponsord@<version>`,
@@ -127,7 +127,7 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | `sponsord_source_repo` / `sponsord_source_ref` | `decdn/sponsord` on GitHub / `""` | `source` only. The ref is required: a tag, branch or SHA. |
 | `sponsord_source_build_jobs` | `""` | `source` only: `CARGO_BUILD_JOBS` (`""` = one per CPU). |
 | `sponsord_manual_bin_src` / `sponsord_release_target_dir` | `""` | `manual` only. Set one. |
-| `sponsord_version` | `0.0.4` | `release` mode: the `decdn/sponsord` release (tag `v0.0.4`). Equal to `sponsord_onramp_version`. |
+| `sponsord_version` | the pinned release | `release` mode: the `decdn/sponsord` release (tag `v<version>`); see [`defaults/main.yml`](defaults/main.yml). Equal to `sponsord_onramp_version`. |
 | `sponsord_network` | `""` | Network profile: `arbitrum-sepolia` supplies chain id and PaymentPool. |
 | `sponsord_chain_id`, `sponsord_payment_pool_address` | from profile | Explicit values win over the profile. |
 | `sponsord_pool_id` | `""` | **Required.** 0x + 64 hex. `""` only on the wallet-creation run. |
@@ -247,11 +247,14 @@ move every pin in one change:
    decdn_node copy, and `SECURITY.md`'s fingerprints).
 4. Re-check the env var names the Compose file and the role render against the new
    `crates/*/src/config.rs` (AGENTS.md, `compose/`).
-5. The prose that names the version: `git grep -n '<old version>'` outside the
-   changelogs. The changelog entry is the PR title (`feat`, `fix` or `chore`, not `ci` or
+5. The commented examples that name the version (`sponsord_version`,
+   `sponsord_source_ref`, `sponsord_onramp_version` and `sponsord_onramp_source_ref`,
+   in the inventory templates and their `examples/collection-fleet` copies) and
+   AGENTS.md's "Pinned upstream releases". Other docs name the pin, never its
+   number. The changelog entry is the PR title (`feat`, `fix` or `chore`, not `ci` or
    `build`, which the changelogs leave out; RELEASING.md).
 
-`make test-scripts` fails while the two versions disagree; the weekly `upstream-drift` job checks the digests against the
-release. A
+`make test-scripts` fails while the two versions, or AGENTS.md's pinned version,
+disagree; the weekly `upstream-drift` job checks the digests against the release. A
 decdn/decdn release is bumped the same way
 ([decdn_node's README](../decdn_node/README.md#bumping-the-decdn-release)).

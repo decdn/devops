@@ -60,7 +60,7 @@ What it does **not** do:
 - **UDP reachability.** Either a load balancer that supports UDP Services, or
   `quic.hostPort.enabled` on nodes with a public IP.
 - **An image.** By default the chart runs `ghcr.io/decdn/decdn-node:<appVersion>`
-  (today `0.0.4`, the decdn/decdn release the chart is synced against). Pin
+  (the decdn/decdn release the chart is synced against). Pin
   `image.digest` instead in production: take it from the release's
   `decdn-node-image-digest.txt` (`image-digest.txt` in v0.0.1), after checking its
   `.asc` against the keys in
@@ -486,12 +486,18 @@ endpoint from `--rpc-url` or its config's `blockchain.rpc_url`, never `DECDN_RPC
 ```bash
 make lint-helm       # helm lint --strict, positive/negative render tests, kubeconform, schema keys
 make security-helm   # KICS over the rendered manifests (fail on HIGH)
+cli="$(scripts/fetch-decdn-cli.sh /tmp/decdn)" && DECDN_CLI="$cli" make lint-helm
+                     # also run the real `decdn config validate` on each ci/*.yaml render,
+                     # with the decdn release appVersion pins (signature-checked)
 DECDN_CLI=../decdn/target/release/decdn make lint-helm
-                     # also run the real `decdn config validate` on every CI render
+                     # the same, with a local decdn build
 ```
 
-CI has no decdn binary, so it reports `SKIPPED: decdn config validate`. Run the
-`DECDN_CLI` form locally whenever you bump the decdn version or change the renderer.
+CI's `helm` job runs `make lint-helm` with the fetched binary, so every chart PR and
+every decdn bump is validated against the pinned release's. Without `DECDN_CLI`,
+`make lint-helm` reports `SKIPPED: decdn config validate`. Keep the fetch out of a
+prefix assignment (`DECDN_CLI="$(…)" make …`): that drops its exit status, so a
+failed fetch would skip the check rather than fail.
 
 The `ci/*.yaml` values files mirror the three plays of the molecule `schema` scenario:
 every knob with an S3 origin, the multi-origin list, and resolve-only discovery. When you

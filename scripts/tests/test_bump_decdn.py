@@ -10,6 +10,7 @@ files, so a reshaped pin file fails here before it fails a bump.
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,7 @@ FILES = [
     bd.CHART,
     bd.CHART_VALUES,
     "ansible/molecule/validation-sponsord/converge.yml",
+    *dict.fromkeys(rel for rel, _, _ in bd.EXAMPLES),
 ]
 # rewrite never touches these: release.sh writes them.
 CHANGELOGS = [
@@ -41,6 +43,11 @@ CHANGELOGS = [
 ]
 SUMS = "a" * 64
 DIGEST = "sha256:" + "b" * 64
+
+
+def flat(text: str) -> str:
+    """Whitespace runs as single spaces: AGENTS.md's wrapping is not the test's concern."""
+    return " ".join(text.split())
 
 
 class Fixture(unittest.TestCase):
@@ -100,6 +107,15 @@ class Rewrite(Fixture):
         self.assertIn(f"e.g. for v9.8.7\n  # {DIGEST}\n", self.text(bd.CHART_VALUES))
         self.assertIn('appVersion: "9.8.7"', self.text(bd.CHART))
         self.assertIn("image: ghcr.io/decdn/decdn-node:9.8.7\n", self.text(bd.CHART))
+        for tree in ("ansible/inventory", "examples/collection-fleet/inventory"):
+            for host in ("decdn-node-1", "origin-1"):
+                host_vars = self.text(f"{tree}/host_vars/{host}/main.yml")
+                self.assertIn('\n# decdn_node_version: "9.8.7"\n', host_vars)
+                self.assertIn(" decdn_node_source_ref: v9.8.7\n", host_vars)
+            self.assertIn("\n# sponsord_onramp_decdn_release: v9.8.7\n",
+                          self.text(f"{tree}/group_vars/sponsord_onramp_hosts.yml"))
+        self.assertIn('# sponsord_onramp_decdn_release: "v9.8.7"\n', self.text("cloud-init/user-data-publisher.yaml"))
+        self.assertIn("`decdn_node_version`, today `9.8.7`)", flat(self.text("AGENTS.md")))
         # The pin-pair molecule case carries a copy of the digest.
         self.assertIn(SUMS, self.text("ansible/molecule/validation-sponsord/converge.yml"))
         self.assertNotIn(self.sums, self.text("ansible/molecule/validation-sponsord/converge.yml"))
@@ -114,9 +130,25 @@ class Rewrite(Fixture):
     def test_leaves_the_sponsord_pin(self) -> None:
         onramp = self.text(bd.ONRAMP_DEFAULTS)
         sponsord = bd.scalar(onramp, "sponsord_onramp_version", bd.ONRAMP_DEFAULTS)
+        agents = self.text("AGENTS.md")
         bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
         self.assertEqual(bd.scalar(self.text(bd.ONRAMP_DEFAULTS), "sponsord_onramp_version",
                                    bd.ONRAMP_DEFAULTS), sponsord)
+        # AGENTS.md names both pins in one sentence; only decdn's moves.
+        sponsord_today = f"`sponsord_onramp_version`, today `{sponsord}`;"
+        self.assertIn(sponsord_today, flat(agents))
+        self.assertIn(sponsord_today, flat(self.text("AGENTS.md")))
+
+    def test_moves_agents_md_wrapped_either_way(self) -> None:
+        original = self.text("AGENTS.md")
+        for sep in (" ", "\n"):
+            with self.subTest(sep=sep):
+                text, n = re.subn(r"(`decdn_node_version`, today)\s+`", rf"\g<1>{sep}`", original)
+                self.assertEqual(n, 1)
+                self.write("AGENTS.md", text)
+                bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
+                self.assertIn(f"`decdn_node_version`, today{sep}`9.8.7`", self.text("AGENTS.md"))
+                bd.rewrite(self.root, self.version, self.sums, self.digest)
 
     def test_leaves_the_changelogs(self) -> None:
         image = self.digest.removeprefix("sha256:")

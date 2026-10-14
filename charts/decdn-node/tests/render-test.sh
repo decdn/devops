@@ -18,7 +18,8 @@
 #                 Skipped with PROMTOOL.
 #   DECDN_CLI     path to a real `decdn` binary: also run `decdn config validate`
 #                 on every positive render (catches value/type errors the key check
-#                 can't). Skipped, loudly, when unset.
+#                 can't). Skipped, loudly, when unset. CI sets it to the pinned
+#                 release's (scripts/fetch-decdn-cli.sh).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

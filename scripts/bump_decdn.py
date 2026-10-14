@@ -7,13 +7,16 @@ Subcommands:
     pinned              print decdn_node_version
     compare <tag>       print how the pin relates to <tag>: same, ahead or behind
     rewrite <version> --sums-sha256 <hex> --image-digest sha256:<hex>
-                        move every hand-copied pin (checklist steps 1, 3, 4 and 5 of
+                        move every hand-copied pin (checklist steps 1, 3, 4, 5 and 7 of
                         ansible/roles/decdn_node/README.md, "Bumping the decdn release")
 
 The generated mirrors (step 2) and the vendored KEYS (step 6) are open-decdn-bump.sh's:
-they come from a checkout of the tag, not from this repo. Prose that names a version
-(step 7) is a reviewer's: decdn/sponsord carries version numbers too, so no rewrite
-here can tell which pin a bare "0.0.2" names.
+they come from a checkout of the tag, not from this repo. Of the text that names the
+version (steps 3 to 5 and 7), only what is keyed to the pin moves: the comments
+beside the pinned values, the commented examples, keyed by a variable name, and
+AGENTS.md's "Pinned upstream releases". Docs name the pin, never its number:
+decdn/sponsord carries version numbers too, so no rewrite here could tell which pin a
+bare "0.0.2" names.
 
 Every edit is anchored on a pattern that must match exactly once, and the result is
 read back, so a reshaped file fails the command instead of reporting a bump. Files
@@ -44,6 +47,25 @@ ONRAMP_ENV = "compose/sponsord-onramp.env.example"
 COMPOSE_ENV = "compose/.env.example"
 CHART = "charts/decdn-node/Chart.yaml"
 CHART_VALUES = "charts/decdn-node/values.yaml"
+
+# (file, before, after): a version-bearing example, the regex fragments on either side
+# of the bare X.Y.Z. examples/collection-fleet/inventory/'s host_vars and group_vars are
+# byte copies of ansible/inventory/'s (make test-scripts), so both trees move.
+EXAMPLES = [
+    *(
+        (f"{tree}/host_vars/{host}/main.yml", before, after)
+        for tree in ("ansible/inventory", "examples/collection-fleet/inventory")
+        for host in ("decdn-node-1", "origin-1")
+        for before, after in ((r'^# decdn_node_version: *"', '"'), (r"^# +decdn_node_source_ref: *v", "$"))
+    ),
+    *(
+        (f"{tree}/group_vars/sponsord_onramp_hosts.yml", r"^# sponsord_onramp_decdn_release: *v", "$")
+        for tree in ("ansible/inventory", "examples/collection-fleet/inventory")
+    ),
+    ("cloud-init/user-data-publisher.yaml", r'^ *# sponsord_onramp_decdn_release: *"v', '"'),
+    # The one place prose names the pin's number (its line may wrap inside the phrase).
+    ("AGENTS.md", r"`decdn_node_version`, today\s+`", "`"),
+]
 
 
 class ShapeError(Exception):
@@ -162,6 +184,7 @@ def rewrite(root: Path, version: str, sums: str, digest: str) -> list[str]:
         (CHART_VALUES, rf"(e\.g\. for )v{SEMVER}(\n *# *sha256:)", rf"\g<1>v{version}\g<2>"),
         (CHART, r'^(appVersion: *")[^"]*(")', rf"\g<1>{version}\g<2>"),
         (CHART, rf"(image: ghcr\.io/decdn/decdn-node:){SEMVER}$", rf"\g<1>{version}"),
+        *((rel, rf"({before}){SEMVER}({after})", rf"\g<1>{version}\g<2>") for rel, before, after in EXAMPLES),
     ]
     for rel, pattern, repl in edits:
         text = read(root, rel)
@@ -200,6 +223,10 @@ def verify(root: Path, version: str, sums: str, digest: str) -> None:
     example = re.findall(rf"e\.g\. for v{re.escape(version)}\n *# *(sha256:[0-9a-f]{{64}})", read(root, CHART_VALUES))
     if example != [digest]:
         raise ShapeError(f"{CHART_VALUES}: the example digest for v{version} is {example}, expected [{digest!r}]")
+    for rel, before, after in EXAMPLES:
+        found = re.findall(rf"{before}({SEMVER}){after}", read(root, rel), re.M)
+        if found != [version]:
+            raise ShapeError(f"{rel}: /{before}X.Y.Z{after}/ names {found}, expected [{version!r}]")
 
 
 def main() -> None:

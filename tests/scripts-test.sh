@@ -1401,6 +1401,92 @@ expect 0 "bump_decdn unit tests pass" \
   env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$repo/scripts/tests" -p 'test_*.py'
 expect 2 "open-decdn-bump refuses an unknown argument" "$repo/scripts/open-decdn-bump.sh" --execute
 
+# --- scripts/fetch-decdn-cli.sh: CI's chart check verifies the decdn CLI it runs ----
+# A fixture release per case, signed by throwaway keys and served over file://.
+# Each refusal must be the one its case is about (the message), not any exit 1.
+fx="$work/fetch"; mkdir -p "$fx"
+fxv=9.8.7
+case "$(uname -m)" in
+  x86_64) fxt=x86_64-unknown-linux-gnu ;;
+  aarch64) fxt=aarch64-unknown-linux-gnu ;;
+  *) fail "fetch-decdn-cli fixture: unsupported architecture $(uname -m)" ;;
+esac
+fxa="decdn-$fxv-$fxt.tar.gz"
+fxgpg() { gpg --homedir "$fx/$1" --batch --quiet --pinentry-mode loopback --passphrase '' "${@:2}"; }
+# signer: the KEYS key; stranger: outside KEYS; expired: lapsed in 2020; revoked:
+# in its KEYS export with its revocation (gpg writes the certificate at key generation).
+then='--faked-system-time 20200101T000000!'
+for k in signer stranger expired revoked; do
+  mkdir -m 0700 "$fx/$k"
+  if [[ $k == expired ]]; then
+    # shellcheck disable=SC2086 # $then is one option
+    fxgpg "$k" $then --quick-gen-key "$k <$k@example.invalid>" ed25519 sign 1d
+  else
+    fxgpg "$k" --quick-gen-key "$k <$k@example.invalid>" ed25519 sign never
+  fi
+done
+# fxrel <case> [<version the binary reports>]: a release broken as <case> says.
+fxrel() {
+  local d="$fx/$1/v$fxv" sum signer=signer
+  mkdir -p "$d" "$fx/$1.src"
+  printf '#!/bin/sh\necho "decdn %s"\n' "${2:-$fxv}" >"$fx/$1.src/decdn"; chmod 0755 "$fx/$1.src/decdn"
+  tar -czf "$d/$fxa" -C "$fx/$1.src" decdn
+  sum="$(sha256sum "$d/$fxa" | cut -d' ' -f1)"
+  case "$1" in
+    missing) echo "$sum  decdn-node-$fxv-$fxt.tar.gz" ;;
+    twice) printf '%s  %s\n' "$sum" "$fxa" "$sum" "$fxa" ;;
+    *) echo "$sum  $fxa" ;;
+  esac >"$d/SHA256SUMS"
+  case "$1" in stranger | expired | revoked) signer="$1" ;; esac
+  if [[ $1 == expired ]]; then
+    # shellcheck disable=SC2086 # $then is one option
+    fxgpg expired ${then%T*}T010000! --armor --detach-sign -o "$d/SHA256SUMS.asc" "$d/SHA256SUMS"
+  else
+    fxgpg "$signer" --armor --detach-sign -o "$d/SHA256SUMS.asc" "$d/SHA256SUMS"
+  fi
+  # Signed by its own key alongside the KEYS key: gpg exits 2 on the unknown one.
+  if [[ $1 == cosigned ]]; then
+    fxgpg stranger --armor --detach-sign -o "$fx/cosigned.asc" "$d/SHA256SUMS"
+    cat "$fx/cosigned.asc" >>"$d/SHA256SUMS.asc"
+  fi
+  # A different, well-formed archive in place of the signed one: only the sha256 check sees it.
+  if [[ $1 == tampered ]]; then
+    printf '#!/bin/sh\necho "decdn %s"\n# not the release\n' "$fxv" >"$fx/$1.src/decdn"
+    tar -czf "$d/$fxa" -C "$fx/$1.src" decdn
+  fi
+}
+for c in good stranger expired revoked cosigned missing twice tampered; do fxrel "$c"; done
+fxrel mislabelled 1.2.3
+fxgpg revoked --import <(sed 's/^:-----/-----/' "$fx"/revoked/openpgp-revocs.d/*.rev)
+for k in signer expired revoked; do fxgpg "$k" --armor --export >"$fx/KEYS-$k.asc"; done
+cat "$fx/KEYS-signer.asc" >"$fx/KEYS.asc"
+for k in signer stranger expired revoked; do gpgconf --homedir "$fx/$k" --kill gpg-agent; done
+fetch() { # <case> [<version>]: KEYS holds the signer, plus the case's own key for expired/revoked
+  local keys="$fx/KEYS.asc"
+  [[ $1 != expired && $1 != revoked ]] || keys="$fx/KEYS-$1.asc"
+  env DECDN_VERSION="${2:-$fxv}" DECDN_RELEASE_BASE="file://$fx/$1" DECDN_RELEASE_KEYS="$keys" \
+    "$repo/scripts/fetch-decdn-cli.sh" "$fx/out-$1"
+}
+refuses() { # <case> <message> [<version>]: exit 1, with that message, and no binary written
+  expect 1 "fetch-decdn-cli refuses $1: $2" fetch "$1" "${3:-}"
+  grep -qF "$2" "$work/out" || { cat "$work/out" >&2; fail "fetch-decdn-cli ($1): not refused for '$2'"; }
+  [[ ! -e "$fx/out-$1" ]] || fail "fetch-decdn-cli wrote a binary for $1, which it refused"
+}
+out="$(fetch good 2>/dev/null)" || fail "fetch-decdn-cli refused a release signed by a KEYS key"
+[[ "$out" == "$fx/out-good/decdn" && -x "$out" ]] \
+  || fail "fetch-decdn-cli: stdout must be exactly the installed binary's path, got: $out"
+pass "fetch-decdn-cli installs a release signed by a KEYS key and prints only its path"
+refuses stranger    "no good signature from a key in"
+refuses cosigned    "or one gpg rejects (gpg exited 2)"
+refuses expired     "EXPIRED or REVOKED"
+refuses revoked     "EXPIRED or REVOKED"
+refuses missing     "SHA256SUMS has 0 entries for $fxa"
+refuses twice       "SHA256SUMS has 2 entries for $fxa"
+refuses tampered    "$fxa does not match SHA256SUMS"
+refuses mislabelled "the binary reports 'decdn 1.2.3', not 'decdn $fxv'"
+refuses badversion  "the decdn version is '$fxv/../x', not X.Y.Z" "$fxv/../x"
+expect 2 "fetch-decdn-cli refuses a missing destination" "$repo/scripts/fetch-decdn-cli.sh"
+
 # --- lint-cloud-init negatives: each broken variant must be rejected -------------------
 # Skipped without cloud-init on PATH, except in CI (which installs it), so a broken
 # install step cannot quietly drop these cases.
@@ -1770,6 +1856,17 @@ done
 app="$(sed -nE 's/^appVersion: *"?([^" #]*)"?.*/\1/p' "$repo/charts/decdn-node/Chart.yaml")"
 [ "$app" = "$(pin decdn_node decdn_node_version)" ] \
   || fail "charts/decdn-node/Chart.yaml appVersion '$app' is not decdn_node_version"
+# AGENTS.md's "Pinned upstream releases" is the one doc that names the numbers
+# (bump_decdn.py moves decdn's). Joined first: the phrases wrap across lines.
+agents="$(tr '\n' ' ' <"$repo/AGENTS.md")"
+for p in "decdn_node decdn_node_version" "sponsord sponsord_version"; do
+  role="${p% *}" var="${p#* }"
+  named="$(sed -nE "s/.*\*\*Pinned upstream releases\.\*\*.*\`$var\`[^,]*, +today +\`([0-9][0-9.]*)\`.*/\1/p" <<<"$agents")"
+  # Two empty strings agree: a missing number or pin must not.
+  if [ -z "$named" ] || [ "$named" != "$(pin "$role" "$var")" ]; then
+    fail "AGENTS.md \"Pinned upstream releases\" names $var '$named', not its default '$(pin "$role" "$var")'"
+  fi
+done
 # compose.yaml pins n0's iroh images by digest, with the release they are named in
 # the comment above each image line; it must be the release the roles install. The
 # wrapper's DNS_VERSION (the DNS server has no --version; health reads /healthz) too.
@@ -1817,7 +1914,7 @@ want_fprs="$(fprs "$repo/ansible/roles/decdn_node/files/decdn-release-KEYS.asc")
   || fail "the decdn and sponsord release KEYS hold different keys"
 [ "$(sed -nE 's/^Fingerprint: *//p' "$repo/SECURITY.md" | tr -d ' ' | sort)" = "$want_fprs" ] \
   || fail "SECURITY.md's Fingerprint: lines differ from the vendored KEYS"
-pass "release pins agree across roles, Compose (incl. its iroh images), the chart and its artifacthub.io/images; the vendored KEYS match SECURITY.md"
+pass "release pins agree across roles, Compose (incl. its iroh images), the chart and its artifacthub.io/images, and AGENTS.md; the vendored KEYS match SECURITY.md"
 # Compose's Alloy image is the release the grafana_alloy role installs: the comment
 # above its digest names the tag the digest was taken from.
 alloy_tag="$(sed -nE 's|^ *# grafana/alloy v([0-9][0-9.]*), the grafana_alloy role.*|\1|p' "$repo/compose/compose.yaml")"
@@ -1880,12 +1977,14 @@ fi
 
 # The chart renders monitoring/ through a symlink, and lint-helm is what checks the
 # dashboards and rules there (promtool, the sponsord unit tests, uids). A PR that
-# touches only monitoring/ runs it only if ci.yml's helm path filter lists it.
+# touches only monitoring/ runs it only if ci.yml's helm path filter lists it; the
+# same goes for the decdn CLI's fetch script and the KEYS it verifies against.
 if command -v yq >/dev/null; then
+  helm_paths='["charts/**", "monitoring/**", "scripts/fetch-decdn-cli.sh", "ansible/roles/decdn_node/files/decdn-release-KEYS.asc"]'
   yq '.jobs.changes.steps[] | select(.id == "filter") | .with.filters' "$repo/.github/workflows/ci.yml" \
-    | yq -e '.helm | (contains(["charts/**"]) and contains(["monitoring/**"]))' >/dev/null \
-    || fail "ci.yml: the helm path filter must list charts/** and monitoring/**"
-  pass "ci.yml runs lint-helm on charts/** and monitoring/**"
+    | yq -e ".helm | contains($helm_paths)" >/dev/null \
+    || fail "ci.yml: the helm path filter must list $helm_paths"
+  pass "ci.yml runs lint-helm on charts/**, monitoring/**, the decdn CLI fetch script and its KEYS"
 elif [[ -n ${CI:-} ]]; then
   fail "yq is not on PATH in CI; the helm path-filter check would be skipped"
 else
