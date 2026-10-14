@@ -2224,19 +2224,10 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "title": "Voucher and ledger integrity",
+      "title": "Lane and receipt-log writes",
       "type": "timeseries",
-      "description": "A nonce gap means a voucher in the sequence was never seen. Dropped or failed receipt writes are lost audit-log rows, not lost revenue.",
+      "description": "Lane flush failures are background lane-store flushes that failed. Each retries on the next tick, but the frontier a crash would replay keeps growing (DecdnLaneFlushFailures). Dropped or failed receipt writes are lost audit-log rows, not lost revenue.",
       "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_voucher_nonce_gaps_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "voucher nonce gaps"
-        },
         {
           "datasource": {
             "type": "prometheus",
@@ -2831,7 +2822,7 @@
       },
       "title": "Pool-open failures by cause",
       "type": "timeseries",
-      "description": "Sibling counters for the openPool tx. The aggregate decdn_node_pull_pool_open_failures_total on the delivery dashboard is larger: it also counts store and expired-reclaim causes that never reach a transaction.",
+      "description": "Sibling counters for the openPool tx. The aggregate decdn_node_pull_pool_open_failures_total on the delivery dashboard is larger: it also counts store, open-task, capability-signing and lane-seed causes that never reach a transaction. Buyer ledger integrity's lane seed failures are the lane-seed share.",
       "targets": [
         {
           "datasource": {
@@ -2943,7 +2934,7 @@
       },
       "title": "Buyer ledger integrity",
       "type": "timeseries",
-      "description": "A skipped undecodable record is a buyer-pool row silently omitted from an otherwise successful store hydration, counted once per row per load. A lane seed failure is a pull refused because the lane's already-paid watermark could not be read; a sustained rate means this node buys nothing from the affected providers. A pool adoption failure means bootstrap could not tell whether this node already owns a pool, so the first miss may escrow a second deposit; it runs once per process, so read it as a value since start.",
+      "description": "A skipped undecodable record is a buyer-pool row silently omitted from an otherwise successful store hydration, counted once per row per load. A lane seed failure is a pull refused because the lane's already-paid watermark could not be established: getWatermark failed or timed out, the buyer store faulted on a read under the seed lock, the buyer row vanished before or during the seed, or the store could not persist the seed. Each also counts as a pool open failure. A sustained rate means this node buys nothing from the affected providers. A pool adoption failure means bootstrap could not tell whether this node already owns a pool, so the first miss may escrow a second deposit; it runs once per process, so read it as a value since start.",
       "targets": [
         {
           "datasource": {
@@ -3357,7 +3348,7 @@
       },
       "title": "RPC failures by outcome",
       "type": "timeseries",
-      "description": "Failed JSON-RPC requests per second, by outcome. rate_limited: the provider throttled the node (HTTP 429, Retry-After, or a rate-limit error code); raise the plan or lower the poll cadence. transport_error: no usable reply (refused or reset connection, HTTP 5xx, unreadable body). timeout: the request did not resolve before its deadline. rpc_error: any other JSON-RPC error response, such as an eth_getLogs range cap. reverted: the call reverted; this is not a provider fault and is shown for context only.",
+      "description": "Failed JSON-RPC requests per second, by outcome. rate_limited: the provider throttled the node (HTTP 429, Retry-After, or a rate-limit error code); raise the plan or lower the poll cadence. transport_error: no usable reply (refused or reset connection, HTTP 5xx, unreadable body). timeout: the request did not resolve before its deadline. rpc_error: any other JSON-RPC error response. On eth_getLogs that is a provider's transient error (such as \"temporary internal error\"), which the poller retries in place and defers to the next tick after the last retry, or a range cap, which shrinks the window; the eth_getLogs window span panel's retries/s and rejections/s tell them apart. While the watchers keep ticking, a steady rpc_error rate is an unreliable provider the node is absorbing. reverted: the call reverted; this is not a provider fault and is shown for context only.",
       "targets": [
         {
           "datasource": {

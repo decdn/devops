@@ -396,8 +396,13 @@ groups:
       # pushes two increments further apart than that — which resets `for` and
       # means a permanently failing resync never fires. `increase` over 1h always
       # spans several attempts. See adr/appendix-observability.md.
+      #
+      # `>= 2` asks for two failed attempts out of the hour's four: one
+      # transient eth_call error is retried 15m later and is not a failing
+      # repair. `increase` only scales the raw delta up, so one failure reads
+      # about 1.0 and never reaches 2.
       - alert: DecdnCapacityBondRegistryResyncFailing
-        expr: increase(decdn_capacity_bond_registry_resync_failures_total[1h]) > 0
+        expr: increase(decdn_capacity_bond_registry_resync_failures_total[1h]) >= 2
         for: 15m
         labels:
           component: registry
@@ -406,10 +411,10 @@ groups:
           runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#active-staker-set-repair-not-running"
           summary: "Capacity-bond registry re-enumeration failing on {{ $labels.instance }}"
           description: |
-            The repair for a drifted active-staker set is itself failing, so a
-            membership change dropped by a failed nodeIdOf stays dropped. Check
-            the RPC provider's eth_call path; correlate with
-            decdn_staker_set_watcher_resolve_failures_total.
+            The repair for a drifted active-staker set failed at least twice in
+            the last hour, so a membership change dropped by a failed nodeIdOf
+            stays dropped. Check the RPC provider's eth_call path; correlate
+            with decdn_staker_set_watcher_resolve_failures_total.
 
       - alert: DecdnCapacityBondRegistryResyncStale
         # The `> 0` guard covers only the window before bootstrap completes:
@@ -570,7 +575,16 @@ groups:
             "RPC failures by outcome" panel names the cause: rate_limited means
             the provider plan is too small for the node's poll cadence;
             transport_error and timeout mean the provider is unreachable or
-            overloaded; rpc_error usually means an eth_getLogs range cap.
+            overloaded; rpc_error is any other JSON-RPC error response. On
+            eth_getLogs that is a provider's transient error (such as "temporary
+            internal error"), which the poller retries in place
+            (decdn_chain_get_logs_retries_total) and defers to the next tick
+            after the last retry (decdn_chain_get_logs_deferred_total), or a
+            range cap, which shrinks the window
+            (decdn_chain_get_logs_range_rejections_total). Firing while the
+            watchers keep ticking means the node is absorbing an unreliable
+            provider: move to a better provider or plan. Lag that reaches the
+            watchers fires DecdnChainWatcherFlapping or a *WatcherStalled rule.
 
       - alert: DecdnConfigReloadFailed
         expr: increase(decdn_config_reload_failures_total[15m]) > 0
@@ -1019,11 +1033,15 @@ groups:
           component: payments
           severity: warning
         annotations:
-          summary: "Buyer lane watermark reads failing on {{ $labels.instance }}"
+          summary: "Buyer lane seeds refused on {{ $labels.instance }}"
           description: |
-            The node keeps refusing node-to-node pulls because it cannot read
-            a lane's already-paid watermark. It refuses rather than resume
-            the lane from zero, which would strand the lane for good. While
+            The node keeps refusing node-to-node pulls because it cannot
+            establish a lane's already-paid watermark: getWatermark failed or
+            timed out, the buyer store faulted on a read under the seed lock,
+            the buyer row vanished before or during the seed, or the store
+            could not persist the seed. It refuses rather than resume the lane
+            from zero, which would strand the lane for good. Each refusal also
+            counts on decdn_node_pull_pool_open_failures_total. While
             this holds the node buys nothing from the affected providers and
             their misses fall through to origin. Check the RPC provider and
             the buyer store (buyer.redb).
