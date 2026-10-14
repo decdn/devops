@@ -179,7 +179,7 @@ decdn_redeem_max_vouchers_per_tx: ""     # daemon dflt 300; > 0 — gas-bounded 
 decdn_redeem_interval_secs: ""           # daemon dflt 300; range 1..=21600 — redeemer self-tick
 decdn_buyer_working_deposit_micro_usdc: ""  # daemon dflt 10_000_000 (10 USDC); > 0
 # bool; profile-dependent upstream — true for the daemon, false for the `decdn`
-# client (fetch / bundle pull). node.toml is deliberately shared with the CLI, so
+# client (decdn get). node.toml is deliberately shared with the CLI, so
 # pinning it here changes client behaviour too. One-time max USDC approval to PaymentPool.
 decdn_buyer_max_approve: ""
 decdn_pool_min_remaining_deposit_micro_usdc: ""  # daemon dflt 1_000_000 — solvency floor before a pool drains

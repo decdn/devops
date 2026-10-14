@@ -69,7 +69,7 @@ iroh_relay_metrics_port: 9092
 # anyone in every mode):
 #   "allowlist" (default): only the endpoint IDs below. The IDs of the inventory's
 #     deCDN nodes are added by playbooks/iroh_relay.yml (iroh_relay_allowlist_from_inventory).
-#     decdn clients (decdn fetch, onramp users) use a fresh key per fetch and can
+#     decdn clients (decdn get, onramp users) use a fresh key per fetch and can
 #     NEVER be listed, and iroh hole-punches over a connection it already has, so a
 #     client reaches a node homed here only if the node is directly reachable. A
 #     node behind NAT that serves clients needs its relays in "everyone" mode.

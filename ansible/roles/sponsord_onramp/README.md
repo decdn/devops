@@ -7,7 +7,7 @@ the public side of the deCDN onboarding sponsor. It serves:
   their download;
 - the `decdn.sh` / `decdn.ps1` installers, which install `decdn` from a pinned
   release, make a throwaway download key, get the capability through the gate and
-  run `decdn bundle pull` with it;
+  run `decdn get` with it;
 - the API the installers poll for that capability.
 
 It holds no wallet. For each person who passes the gate it asks the
