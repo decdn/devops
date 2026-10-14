@@ -120,7 +120,7 @@ monitoring/             # Grafana dashboards + Prometheus alert rules (maintaine
   sponsord/             # sponsord's (+ promtool unit tests), Ansible/Compose only
   iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible and Compose
 docs/                   # cross-path operator docs: node-operators.md + publishers.md (the front doors), requirements.md, lifecycle.md
-examples/collection-fleet/  # a consumer project for the Galaxy collections: requirements.yml, ansible.cfg, .gitignore, inventory/ (ansible/inventory/'s templates: group_vars/ and host_vars/ identical, the hosts-*.yml.example bodies below their header too; make test-scripts checks, so change both)
+examples/collection-fleet/  # a consumer project for the Galaxy collections: requirements.yml, ansible.cfg, .gitignore, inventory/ (ansible/inventory/'s templates: every tracked file identical but the hosts-*.yml.example headers, which end at the first blank line and hold only comments; make test-scripts checks, and that both parse to the same inventory, so change both. The root .gitignore keeps a hosts.yml filled in there out of this public repo)
 scripts/                # upstream-mirror generators, the compose Alloy config generator (render-compose-alloy.sh), the decdn bump (open-decdn-bump.sh, bump_decdn.py), the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh), ansible/Makefile's LIMIT preflight (limit-guard.sh)
 ```
 

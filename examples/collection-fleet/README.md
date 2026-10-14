@@ -9,17 +9,21 @@ lifecycle guards included), and this repository holds only your inventory.
 | File | What it is |
 |------|------------|
 | `requirements.yml` | the collections, from Ansible Galaxy (delete `decdn.publisher` for cache nodes only) |
-| `ansible.cfg` | this repo's `ansible/ansible.cfg`, minus `roles_path`, failing on an inventory that does not parse |
+| `ansible.cfg` | decdn/devops's `ansible/ansible.cfg`, minus `roles_path`, failing on an inventory that does not parse |
 | `.gitignore` | keeps the installed collections, per-host secrets and backups out of git |
 | `inventory/` | the inventory templates: `hosts-node.yml.example` and `hosts-publisher.yml.example`, with their `group_vars/` and `host_vars/` |
 
-The `inventory/` templates are `ansible/inventory/`'s, with headers written for this
-layout; `make test-scripts` keeps the two copies equal.
+The `inventory/` templates are decdn/devops's `ansible/inventory/` ones, with the hosts
+examples' headers written for this layout (decdn/devops's `make test-scripts` keeps
+everything else identical). Their comments name files by their path in decdn/devops:
+`roles/<role>/…` and `playbooks/…` ship in the collections, under
+`collections/ansible_collections/decdn/{node,publisher}/` once installed.
 
 ## Set up
 
-Copy this directory into a new private repository, then start your inventory from
-the template for your role:
+Copy this directory into a new private repository, then, in that copy (never in a
+decdn/devops checkout, which is public), start your inventory from the template for
+your role:
 
 ```bash
 ansible-galaxy collection install -r requirements.yml -p collections

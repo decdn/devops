@@ -1,7 +1,7 @@
 ---
-# PUBLISHERS: copy to inventory/hosts.yml and fill in your hosts (a node operator
-# starts from hosts-node.yml.example instead), then commit it: this is your private
-# fleet repository, and ansible.cfg reads inventory/hosts.yml.
+# PUBLISHERS: once this directory is your own private repository, copy this to
+# inventory/hosts.yml, fill in your hosts and commit it (ansible.cfg reads it). A node
+# operator starts from hosts-node.yml.example instead.
 #
 # A publisher runs its origin nodes and, optionally, the services around them. Each
 # group below has its own playbook in decdn.publisher; decdn.publisher.publisher runs
@@ -16,16 +16,16 @@
 # relay's full run reads every node's ID over SSH, and under -u root it would try the
 # nodes, whose root login baseline has already turned off, as root.
 
-# Origin nodes — provisioned by the origin.yml playbook and by publisher.yml. An
-# origin is a deCDN node with an origin backend: the canonical source of its
-# namespace's content. decdn_origin_nodes is a child of decdn_nodes, so an origin gets
-# a node's firewall hole, backup, decommission and observability; origin.yml refuses
-# one outside decdn_nodes or without a backend. The chain recognises it as the origin
-# only once you, the namespace's publisher, seat its operator with
-# OriginAssignment.addOrigin; until then it serves its bytes as a cache does. The
-# backend goes in group_vars/decdn_origin_nodes.yml (shared by every origin) or
-# host_vars/<name>/main.yml (see host_vars/origin-1/), with the region and the rest of
-# the per-origin config.
+# Origin nodes — provisioned by the origin.yml playbook and by publisher.yml (which
+# site.yml imports). An origin is a deCDN node with an origin backend: the canonical
+# source of its namespace's content. decdn_origin_nodes is a child of decdn_nodes, so
+# an origin gets a node's firewall hole, backup, decommission and observability;
+# origin.yml refuses one outside decdn_nodes or without a backend. The chain
+# recognises it as the origin only once you, the namespace's publisher, seat its
+# operator with OriginAssignment.addOrigin; until then it serves its bytes as a cache
+# does. The backend goes in group_vars/decdn_origin_nodes.yml (shared by every origin)
+# or host_vars/<name>/main.yml (see host_vars/origin-1/), with the region and the rest
+# of the per-origin config.
 decdn_nodes:
   children:
     decdn_origin_nodes:

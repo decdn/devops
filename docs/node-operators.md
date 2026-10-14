@@ -19,7 +19,7 @@ loopback, and the chain's contract addresses taken from upstream's deployment ma
 | Path | Start here | Entry point |
 |------|------------|-------------|
 | **Docker Compose** (one Docker host), recommended | [`compose/README.md`](../compose/README.md) | `decdn-compose init node` |
-| **Ansible** (VMs, bare metal, a fleet) | [below](#deploy-with-ansible-from-galaxy), [`ansible/README.md`](../ansible/README.md) | `ansible/inventory/hosts-node.yml.example`, `ansible-playbook decdn.node.node` (or `make deploy-node` from a clone) |
+| **Ansible** (VMs, bare metal, a fleet) | [below](#deploy-with-ansible-from-galaxy), [`ansible/README.md`](../ansible/README.md) | `examples/collection-fleet/inventory/hosts-node.yml.example`, `ansible-playbook decdn.node.node` (or `ansible/inventory/hosts-node.yml.example` and `make deploy-node` from a clone) |
 | **cloud-init** (one VM, no control machine) | [`cloud-init/README.md`](../cloud-init/README.md) | `cloud-init/user-data-node.yaml` |
 | **Helm** (Kubernetes, one release per node) | [`charts/decdn-node/README.md`](../charts/decdn-node/README.md) | `oci://ghcr.io/decdn/charts/decdn-node`, with no `config.cache.origin` |
 

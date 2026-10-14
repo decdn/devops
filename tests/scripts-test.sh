@@ -345,23 +345,92 @@ fi
 
 # --- examples/collection-fleet's inventory -------------------------------------------
 # The fleet example ships its own copy of ansible/inventory/'s templates, so a Galaxy
-# user copies one directory. group_vars/ and host_vars/ are the same files; the two
-# hosts examples differ only in their header (the comment block up to the first blank
-# line: make targets here, ansible-playbook there). Tracked files only, so a local
-# secret.yml never counts.
-inventory_files() { git -C "$repo/$1" ls-files group_vars host_vars; }
-diff <(inventory_files ansible/inventory) <(inventory_files examples/collection-fleet/inventory) >"$work/out" \
-  || { cat "$work/out" >&2; fail "examples/collection-fleet/inventory/ and ansible/inventory/ track different group_vars/host_vars files"; }
-while IFS= read -r f; do
-  cmp -s "$repo/ansible/inventory/$f" "$repo/examples/collection-fleet/inventory/$f" \
-    || fail "examples/collection-fleet/inventory/$f differs from ansible/inventory/$f: change both"
-done < <(inventory_files ansible/inventory)
-pass "examples/collection-fleet's group_vars/ and host_vars/ are ansible/inventory/'s"
-for ex in hosts-node.yml.example hosts-publisher.yml.example; do
-  diff <(sed '1,/^$/d' "$repo/ansible/inventory/$ex") <(sed '1,/^$/d' "$repo/examples/collection-fleet/inventory/$ex") >"$work/out" \
-    || { cat "$work/out" >&2; fail "examples/collection-fleet/inventory/$ex: below its header, it differs from ansible/inventory/$ex"; }
-done
-pass "examples/collection-fleet's hosts examples share ansible/inventory/'s body"
+# user copies one directory. fleet_inventory_check <root>: the copy tracks exactly the
+# same files, byte for byte but for the two hosts examples, whose header (every line up
+# to the first blank one, comments only: make targets and a git-ignored hosts.yml in
+# ansible/inventory/, ansible-playbook and a committed one in the fleet) is the one
+# place they differ. Tracked files only, so a local secret.yml never counts. Each git
+# runs on its own line, so a failing one fails the check instead of comparing two
+# empty lists. Then the ignore rules: a secret.* (the fleet's .gitignore) or a filled-in
+# hosts.yml (the root one: this repo is public) never reaches git, and the
+# secret.*.example templates still ship.
+fleet_inventory_check() {
+  local root="$1" inv=ansible/inventory fleet=examples/collection-fleet/inventory
+  local mine theirs f side hdr p rc n=0
+  local -A body
+  mine="$(git -C "$root/$inv" ls-files)" || fail "git ls-files failed in $inv/ (not a git checkout?)"
+  theirs="$(git -C "$root/$fleet" ls-files)" || fail "git ls-files failed in $fleet/ (not a git checkout?)"
+  { grep -qx group_vars/all.yml <<<"$mine" && grep -qx hosts-node.yml.example <<<"$mine"; } \
+    || fail "$inv/: git ls-files lists none of the templates: ${mine:-nothing}"
+  [[ $mine == "$theirs" ]] \
+    || { diff <(echo "$mine") <(echo "$theirs") >&2 || true; fail "$fleet/ and $inv/ track different files: change both"; }
+  while IFS= read -r f; do
+    case $f in
+      hosts-*.yml.example)
+        for side in "$inv" "$fleet"; do
+          hdr="$(sed -n '1,/^$/p' "$root/$side/$f")" || fail "cannot read $side/$f"
+          ! grep -qvE '^(---|#.*)?$' <<<"$hdr" \
+            || fail "$side/$f: its header (up to the first blank line) holds more than comments"
+          body[$side]="$(sed '1,/^$/d' "$root/$side/$f")"
+          [[ -n ${body[$side]} ]] || fail "$side/$f: nothing below its header"
+        done
+        [[ ${body[$inv]} == "${body[$fleet]}" ]] || fail "$fleet/$f: below its header, it differs from $inv/$f: change both"
+        ;;
+      *)
+        cmp "$root/$inv/$f" "$root/$fleet/$f" >/dev/null || fail "$fleet/$f differs from $inv/$f (or is missing): change both"
+        ;;
+    esac
+    n=$((n + 1))
+  done <<<"$mine"
+  for p in host_vars/h/secret.yml host_vars/h/secret.yaml host_vars/h/secret.json group_vars/g/secret.yml hosts.yml hosts.yaml; do
+    git -C "$root" check-ignore -q --no-index "$fleet/$p" || fail "$fleet/$p is not git-ignored"
+  done
+  rc=0; git -C "$root" check-ignore -q --no-index "$fleet/host_vars/h/secret.yml.example" || rc=$?
+  [[ $rc == 1 ]] || fail "$fleet/host_vars/h/secret.yml.example is git-ignored (or git failed, exit $rc): the template would not ship"
+  pass "examples/collection-fleet/inventory/ is ansible/inventory/ but for the hosts examples' headers ($n files), and keeps secrets and hosts.yml out of git"
+}
+fleet_inventory_check "$repo"
+# Negative cases, on a git copy of the files the check reads, rebuilt for each.
+fleet_fixture() {
+  local fx="$work/fleet" f
+  rm -rf "$fx" && mkdir "$fx"
+  while IFS= read -r f; do
+    mkdir -p "$fx/$(dirname "$f")" && cp "$repo/$f" "$fx/$f"
+  done < <(git -C "$repo" ls-files .gitignore ansible/inventory examples/collection-fleet)
+  [[ -f $fx/ansible/inventory/group_vars/all.yml ]] || fail "could not copy the inventory templates into the fleet fixture"
+  git -C "$fx" init -q && git -C "$fx" add -A
+}
+fleet_check_fixture() { (fleet_inventory_check "$work/fleet"); }
+# fleet_refuses <description> <message>: the check fails on the fixture, saying why.
+fleet_refuses() {
+  expect 1 "fleet inventory check refuses $1" fleet_check_fixture
+  grep -qF -- "$2" "$work/out" || { cat "$work/out" >&2; fail "fleet inventory check: $1 failed without \"$2\""; }
+}
+fleet_fixture
+expect 0 "fleet inventory check passes on its fixture" fleet_check_fixture
+fleet_inv="$work/fleet/examples/collection-fleet/inventory" fleet_src="$work/fleet/ansible/inventory"
+fleet_fixture; echo "# drift" >>"$fleet_inv/group_vars/all.yml"
+fleet_refuses "an edited group_vars file" "group_vars/all.yml differs"
+fleet_fixture; echo "x: 1" >"$fleet_inv/notes.yml"; git -C "$work/fleet" add -A
+fleet_refuses "a file tracked on one side only" "track different files"
+fleet_fixture; sed -i '1a all: {vars: {ansible_user: root}}' "$fleet_inv/hosts-node.yml.example"
+fleet_refuses "YAML in a hosts example's header" "holds more than comments"
+fleet_fixture; sed -i '0,/^$/{/^$/d}' "$fleet_src/hosts-publisher.yml.example" "$fleet_inv/hosts-publisher.yml.example"
+fleet_refuses "hosts examples with no blank line after the header" "holds more than comments"
+fleet_fixture; sed -i 's/origin-2:/origin-3:/' "$fleet_inv/hosts-publisher.yml.example"
+fleet_refuses "a hosts example's body edited on one side" "below its header, it differs"
+fleet_fixture; echo "# fleet only" >>"$fleet_inv/hosts-node.yml.example"; sed -i '2s/^# NODE OPERATORS/# NODE OPERATORS!/' "$fleet_inv/hosts-node.yml.example"
+fleet_refuses "a body edit beside a header edit" "below its header, it differs"
+fleet_fixture; rm -rf "$work/fleet/.git"
+fleet_refuses "a tree that is not a git checkout" "git ls-files failed"
+fleet_fixture; sed -i '/^!inventory\/host_vars/d' "$work/fleet/examples/collection-fleet/.gitignore"
+fleet_refuses "a .gitignore that ignores the secret.yml.example templates" "the template would not ship"
+fleet_fixture; sed -i '/^inventory\/host_vars\/\*\/secret\.\*$/d' "$work/fleet/examples/collection-fleet/.gitignore"
+fleet_refuses "a .gitignore that lets a secret.yml through" "host_vars/h/secret.yml is not git-ignored"
+fleet_fixture; sed -i '/collection-fleet\/inventory\/hosts/d' "$work/fleet/.gitignore"
+fleet_refuses "a filled-in hosts.yml git would track" "hosts.yml is not git-ignored"
+fleet_fixture; echo "# header only" | cat - "$fleet_inv/hosts-node.yml.example" >"$work/h" && mv "$work/h" "$fleet_inv/hosts-node.yml.example"
+expect 0 "fleet inventory check allows a header-only edit" fleet_check_fixture
 
 # --- release gate ----------------------------------------------------------------------
 gate="$repo/scripts/check-release-version.sh"
@@ -1827,6 +1896,29 @@ fi
 if command -v ansible >/dev/null; then
   expect 0 "firewall holes resolve per host shape, co-located included" \
     "$repo/ansible/tests/firewall-holes/check.sh"
+  # Both copies of the inventory templates parse, each hosts example with the
+  # group_vars/ and host_vars/ beside it, to the same inventory with its host in it:
+  # the fleet check above compares text, this is what Ansible makes of it. Tracked
+  # files only (a local secret.yml would change the result), from a directory without
+  # ansible.cfg.
+  for ex in hosts-node:decdn-node-1 hosts-publisher:origin-1; do
+    host="${ex#*:}" ex="${ex%%:*}"
+    for side in ansible/inventory examples/collection-fleet/inventory; do
+      d="$work/parse/$side"
+      rm -rf "$d" && mkdir -p "$d"
+      while IFS= read -r f; do
+        mkdir -p "$d/$(dirname "$f")" && cp "$repo/$side/$f" "$d/$f"
+      done < <(git -C "$repo/$side" ls-files group_vars host_vars)
+      cp "$repo/$side/$ex.yml.example" "$d/hosts.yml"
+      (cd "$work" && ANSIBLE_INVENTORY_UNPARSED_FAILED=True ansible-inventory -i "$d/hosts.yml" --list) \
+        >"$d/list.json" 2>"$work/out" || { cat "$work/out" >&2; fail "$side/$ex.yml.example does not parse"; }
+      jq -e --arg h "$host" '._meta.hostvars[$h].decdn_region' "$d/list.json" >/dev/null \
+        || fail "$side/$ex.yml.example: $host has no decdn_region from its host_vars"
+    done
+    [[ "$(jq -S . "$work/parse/ansible/inventory/list.json")" == "$(jq -S . "$work/parse/examples/collection-fleet/inventory/list.json")" ]] \
+      || fail "$ex.yml.example: the fleet copy parses to a different inventory than ansible/inventory/'s"
+  done
+  pass "both copies of hosts-node/hosts-publisher.yml.example parse, to the same inventory"
   # playbooks/sponsord.yml refuses an onramp host outside sponsord_hosts. Its guard
   # play is lifted out with yq and run alone (running the whole playbook would need
   # the roles' collections just to parse), from a directory without ansible.cfg,
