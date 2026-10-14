@@ -1,7 +1,9 @@
 # promtool unit tests for prometheus-alerts.yml beside it, run by the chart's
 # tests/render-test.sh (`make lint-helm`). DecdnNodeDown's absence arm only shows
-# itself on a series that stops, which promtool check cannot catch. The test clock
-# starts at 0. The chart's .helmignore keeps this file out of the package.
+# itself on a series that stops, and DecdnCapacityBondRegistryResyncFailing's
+# threshold only on `increase` extrapolation, neither of which promtool check can
+# catch. The test clock starts at 0. The chart's .helmignore keeps this file out of
+# the package.
 #
 # It does not run in place: render-test.sh copies it into a scratch directory as
 # decdn-node-alerts_test.yml, beside a copy of prometheus-alerts.yml with the
@@ -91,4 +93,30 @@ tests:
           - exp_labels: {job: decdn-node, instance: e, component: node, severity: critical}
       - eval_time: 25h
         alertname: DecdnNodeDown
+        exp_alerts: []
+
+  # Capacity-bond registry resync: attempts are 15m apart. a fails once (15m) and
+  # never fires: one failure reads about 1.0. b fails twice (15m, 30m), so the
+  # expression turns true at 30m and fires after the 15m for. It resolves once the
+  # first failure leaves the 1h window (checked at 1h20m).
+  - interval: 1m
+    input_series:
+      - series: 'decdn_capacity_bond_registry_resync_failures_total{job="decdn-node", instance="a"}'
+        values: '0x14 1x100'
+      - series: 'decdn_capacity_bond_registry_resync_failures_total{job="decdn-node", instance="b"}'
+        values: '0x14 1x14 2x100'
+    alert_rule_test:
+      - eval_time: 44m
+        alertname: DecdnCapacityBondRegistryResyncFailing
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: DecdnCapacityBondRegistryResyncFailing
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: b, component: registry, severity: warning}
+      - eval_time: 1h
+        alertname: DecdnCapacityBondRegistryResyncFailing
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: b, component: registry, severity: warning}
+      - eval_time: 1h20m
+        alertname: DecdnCapacityBondRegistryResyncFailing
         exp_alerts: []
