@@ -121,7 +121,7 @@ monitoring/             # Grafana dashboards + Prometheus alert rules (maintaine
   iroh-relay/           # the relay's (+ promtool unit tests, exported-metrics.txt), Ansible and Compose
 docs/                   # cross-path operator docs: node-operators.md + publishers.md (the front doors), requirements.md, lifecycle.md
 examples/collection-fleet/  # a consumer project for the Galaxy collections: requirements.yml, ansible.cfg, .gitignore, inventory/ (ansible/inventory/'s templates: every tracked file identical but the hosts-*.yml.example headers, which end at the first blank line and hold only comments; make test-scripts checks, and that both parse to the same inventory, so change both. The root .gitignore keeps a hosts.yml filled in there out of this public repo)
-scripts/                # upstream-mirror generators, the compose Alloy config generator (render-compose-alloy.sh), the decdn bump (open-decdn-bump.sh, bump_decdn.py), the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh), ansible/Makefile's LIMIT preflight (limit-guard.sh)
+scripts/                # upstream-mirror generators, the compose Alloy config generator (render-compose-alloy.sh), the decdn bump (open-decdn-bump.sh, bump_decdn.py), the chart check's verified decdn CLI (fetch-decdn-cli.sh), the release script (release.sh, git-cliff: ../cliff.toml) and its gate (+ its Artifact Hub changes generator), the molecule driver (molecule.sh), ansible/Makefile's LIMIT preflight (limit-guard.sh)
 ```
 
 **Generated mirrors of upstream — regenerate, never hand-edit:**
@@ -148,9 +148,13 @@ tags) are pinned across every path: the role defaults, the onramp's installer pi
 (`sponsord_onramp_decdn_release` + `_decdn_sums_sha256`, copied into
 `compose/sponsord-onramp.env.example`), `compose/.env.example`'s image digests, the
 chart's `appVersion` and the generated mirrors. cloud-init takes the role defaults at
-`DEVOPS_REF`. `make test-scripts` checks the pins agree with each other, the Compose
-example, `appVersion` and the chart's `artifacthub.io/images` tag, and that both
-vendored KEYS hold the keys SECURITY.md publishes; the weekly `upstream-drift` job checks the digests and the mirrors against
+`DEVOPS_REF`. Docs name the pin (`decdn_node_version`, `sponsord_version`), never its
+number: besides this paragraph, only the commented examples and the comments beside a
+pinned value name a number, and they move with the pin (`bump_decdn.py` moves decdn's;
+the sponsord checklist lists sponsord's). `make test-scripts` checks the pins agree
+with each other, the Compose example, `appVersion`, the chart's `artifacthub.io/images`
+tag and this paragraph, and that both vendored KEYS hold the keys SECURITY.md
+publishes; the weekly `upstream-drift` job checks the digests and the mirrors against
 the releases and flags a newer upstream tag. The `--version` check compares the pin in
 `release` mode only (exactly, on `<binary> <version>`). Bump everything together with
 the checklists in `roles/decdn_node/README.md` and `roles/sponsord/README.md`;
@@ -196,7 +200,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   the publisher's step). **The public deCDN node**
   (baseline + `decdn-node`), installed by `decdn_node_install_method`:
   `release` (the default) — a pinned GitHub release tarball verified against the
-  release's GPG-signed `SHA256SUMS` (`decdn_node_version`, default `0.0.4`); `source` — a git ref (any tag/branch/SHA) cloned and `cargo build`-ed **on the
+  release's GPG-signed `SHA256SUMS` (`decdn_node_version`); `source` — a git ref (any tag/branch/SHA) cloned and `cargo build`-ed **on the
   node** as the unprivileged `decdn-build` user, sha256-pinned rustup, a `<repo>@<commit>`
   stamp (`tasks/source.yml`, copied into both sponsord roles, which share the user,
   home and toolchain). **No build can poison a later one:** root owns the home, the
@@ -293,7 +297,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   imported by `publisher.yml`) targets its own `sponsord_hosts` group, standalone or
   co-located with a node.
   - **Install:** a GPG-verified `v*` decdn/sponsord release by default
-    (`sponsord_version`, `0.0.4`), a host-side `source` build, or a manual binary.
+    (`sponsord_version`), a host-side `source` build, or a manual binary.
     The `--version` backstop checks the version in `release` mode only (the version
     has a default, so other modes would fail against it), as in the other two roles.
   - **Unit:** `DynamicUser`; the API token (generated on the host, never replaced),
@@ -656,9 +660,11 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   behind a ClusterIP Service + NetworkPolicy. `values.config` mirrors `node.toml`; the
   chart injects the path/port keys and fails on collisions. **The config-schema coupling
   above applies here too:** `make lint-helm` runs the same `check-schema-keys.py` +
-  `schema-keys.txt` on the rendered ConfigMap, so a re-sync covers both paths. Unlike the
-  role, CI has no real-binary `decdn config validate` for the chart — run
-  `DECDN_CLI=… make lint-helm` locally when bumping the decdn version. Optional
+  `schema-keys.txt` on the rendered ConfigMap, so a re-sync covers both paths. CI's
+  `helm` job also runs the real `decdn config validate` on each `ci/*.yaml` render, against the
+  `decdn` of the release `appVersion` pins (`scripts/fetch-decdn-cli.sh`: the role's
+  GPG check against the vendored KEYS), so a decdn bump PR validates the chart against
+  the new release. Optional
   `PrometheusRule` + dashboard ConfigMaps render `files/monitoring/`, the symlink to
   `monitoring/decdn-node/` (never through `tpl`:
   the alert annotations carry Prometheus templates).

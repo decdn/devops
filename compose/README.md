@@ -69,7 +69,7 @@ from: the wrapper always names the project (`decdn`) and refuses to run while th
 shell sets a `COMPOSE_*` variable or one `compose.yaml` reads, which Compose would
 otherwise take over `.env`, so its checks see what Compose runs. `init`
 starts it from `.env.example`, which carries the digests of the releases the Ansible
-roles pin (decdn/decdn v0.0.4, decdn/sponsord v0.0.4), each copied from that
+roles pin (`decdn_node_version` and `sponsord_version`), each copied from that
 release's signed digest file; [Operate](#operate) says how to take a newer one.
 
 ## The node

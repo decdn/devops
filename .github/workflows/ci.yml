@@ -44,11 +44,14 @@ jobs:
               - '.github/workflows/ci.yml'
             # The chart shares the schema-key inventory and checker with molecule,
             # and renders monitoring/decdn-node/ through a symlink; lint-helm also
-            # checks monitoring/sponsord/ and monitoring/iroh-relay/.
+            # checks monitoring/sponsord/ and monitoring/iroh-relay/. The decdn CLI
+            # it validates against is verified with the role's vendored KEYS.
             helm:
               - 'charts/**'
               - 'monitoring/**'
               - 'ansible/molecule/schema/files/**'
+              - 'ansible/roles/decdn_node/files/decdn-release-KEYS.asc'
+              - 'scripts/fetch-decdn-cli.sh'
               - 'Makefile'
               - '.github/workflows/ci.yml'
             # lint-compose and security-compose live in the root Makefile.
@@ -190,8 +193,9 @@ jobs:
           if-no-files-found: ignore
 
   # Helm chart: `helm lint --strict`, positive + negative render tests, kubeconform
-  # and promtool (digest-pinned images) and the upstream schema-key check shared
-  # with molecule — all via `make lint-helm`, the same command developers run locally.
+  # and promtool (digest-pinned images), the upstream schema-key check shared
+  # with molecule and the real `decdn config validate` — all via `make lint-helm`,
+  # the same command developers run locally.
   helm:
     needs: changes
     if: needs.changes.outputs.helm == 'true'
@@ -208,10 +212,13 @@ jobs:
         with:
           python-version: '3.12'
       - name: Chart lint + render tests
-        # yq (mikefarah) and Docker ship on ubuntu-latest. No decdn binary here, so
-        # the real `decdn config validate` step reports SKIPPED; run it locally with
-        # DECDN_CLI=... before bumping the decdn version.
-        run: make lint-helm
+        # yq (mikefarah), curl, gpg and Docker ship on ubuntu-latest. The decdn CLI is the
+        # release the chart pins (appVersion), signature-checked against the vendored
+        # KEYS, so a decdn bump PR validates the chart against the new release.
+        run: |
+          DECDN_CLI="$(scripts/fetch-decdn-cli.sh "$RUNNER_TEMP/decdn")"
+          export DECDN_CLI
+          make lint-helm
 
   # cloud-init path: `cloud-init schema` plus the invariants cloud-init/README.md
   # promises (no secrets, release installs, host-generated node wallet, localhost in

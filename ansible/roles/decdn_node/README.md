@@ -7,12 +7,12 @@ pulls a pinned GitHub Release tarball and verifies it against the GPG-signed
 and `manual` copies locally-built binaries from the Ansible control machine. This
 is the repo's deployment (`playbooks/site.yml`).
 
-**Pinned release.** `decdn_node_version` defaults to `0.0.4`, the decdn/decdn
-release this repo pins; see [Bumping the decdn release](#bumping-the-decdn-release)
+**Pinned release.** `decdn_node_version` defaults to the decdn/decdn release
+this repo pins ([`defaults/main.yml`](defaults/main.yml)); see [Bumping the decdn release](#bumping-the-decdn-release)
 to move it. CI tests the role against stub binaries, not this release.
 
 **Schema tracking.** This role renders `node.toml` against the config schema of
-`decdn/decdn` v0.0.4, the release `decdn_node_version` pins. Upstream marks every config
+the `decdn/decdn` release `decdn_node_version` pins. Upstream marks every config
 section `#[serde(deny_unknown_fields)]` and defines **no** serde aliases, so a key
 this role emits that your binary does not know is a startup crash-loop, not a
 warning. The role runs `decdn config validate` against the installed binary after
@@ -51,7 +51,7 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
      `decdn_verify_release_signature: false` for an air-gapped mirror that strips
      the signature — that takes the tarballs on trust.
 
-     `decdn_node_version` (default `0.0.4`) names the `v<version>` release, which
+     `decdn_node_version` (default: the pinned release) names the `v<version>` release, which
      must be reachable from the target host; override `decdn_node_release_base`
      for a mirror.
    - **`source`** — the role builds the two binaries **on the node** from
@@ -103,7 +103,7 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
        rolling the ref back to the previous commit reinstalls that.
      - `decdn_node_version` is not checked in this mode: the backstop only
        requires the binaries to run. To build exactly a release, set
-       `decdn_node_source_ref` to its tag (`v0.0.4`).
+       `decdn_node_source_ref` to its tag (`v<version>`).
      - The repo URL may not carry a secret: no password, no user on an http(s)
        URL, no query. The upstream repo is public; for a private fork, root does
        the fetch, so give root on the node an ssh deploy key and the git host's key
@@ -700,11 +700,12 @@ The repo pins one decdn/decdn release everywhere, and a new one moves every pin 
 one change. `scripts/open-decdn-bump.sh [vX.Y.Z]` opens that PR: decdn's
 `publish-crates.sh` runs it at the end of each decdn release, and a maintainer runs it
 by hand from a decdn/devops clone (with no tag, it takes decdn's latest release).
-It does steps 1 to 6 in a worktree at `origin/main`, takes
+It does steps 1 to 7 in a worktree at `origin/main`, takes
 the digests from the release's assets once their signatures verify against
-`files/decdn-release-KEYS.asc`, and lists in the PR body what is left: the prose of
-step 7, the chart check against the real binary in step 5, any schema-key or KEYS
-change, and any generator that failed. `--dry-run` prints the diff and the PR body
+`files/decdn-release-KEYS.asc`, and lists in the PR body what is left: any
+schema-key or KEYS change, and any generator that failed. CI's `helm` job validates
+the chart against the new release's binary (step 5), so a bump PR with no "Needs
+work" list and a green CI needs no hand edits. `--dry-run` prints the diff and the PR body
 instead. The weekly `upstream-drift` workflow fails while no bump has landed.
 
 The steps:
@@ -724,17 +725,21 @@ The steps:
    `charts/decdn-node/values.yaml`), from the release's signed
    `decdn-node-image-digest.txt` (`image-digest.txt` in v0.0.1).
 5. `appVersion` in `charts/decdn-node/Chart.yaml` and the image tag in its
-   `artifacthub.io/images` annotation, then validate the chart against
-   the real binary: `DECDN_CLI=<the release's decdn> make lint-helm` (CI has no real
-   binary for the chart).
+   `artifacthub.io/images` annotation. CI's `helm` job then validates the chart
+   against that release's `decdn` (`scripts/fetch-decdn-cli.sh`, the same signature
+   check as this role's).
 6. `files/decdn-release-KEYS.asc`, if upstream's `KEYS` changed (and the sponsord
    copy, and `SECURITY.md`'s fingerprints).
-7. The prose that names the version: `git grep -n '<old version>'` outside the
-   changelogs. The changelog entry is the PR title (`feat`, `fix` or `chore`, not `ci` or
-   `build`, which the changelogs leave out; RELEASING.md).
+7. The commented examples that name the version (`decdn_node_version`,
+   `decdn_node_source_ref` and `sponsord_onramp_decdn_release`, in the inventory
+   templates, their `examples/collection-fleet` copies and
+   `cloud-init/user-data-publisher.yaml`) and AGENTS.md's "Pinned upstream releases".
+   Other docs name the pin, never its number. The changelog entry is the PR title
+   (`feat`, `fix` or `chore`, not `ci` or `build`, which the changelogs leave out;
+   RELEASING.md).
 
 `make test-scripts` fails while the role, the onramp's decdn pin (role and Compose
-example), the chart's `appVersion` and its `artifacthub.io/images` image, or the KEYS
-and SECURITY.md disagree; the weekly `upstream-drift` job checks the digests against
-the release. A decdn/sponsord release is bumped the same way
+example), the chart's `appVersion` and its `artifacthub.io/images` image, AGENTS.md's
+pinned version, or the KEYS and SECURITY.md disagree; the weekly `upstream-drift` job
+checks the digests against the release. A decdn/sponsord release is bumped the same way
 ([sponsord's README](../sponsord/README.md#bumping-the-sponsord-release)).
