@@ -1260,7 +1260,7 @@
       },
       "title": "Peers known",
       "type": "stat",
-      "description": "Entries in this node's address directory: the NodeId → operator address bindings the node-to-node pull leg resolves against. Scoped to nodes that have attempted a pull in the last day (max_over_time, so a restart, which resets the counter, does not blank it) — every metric is registered unconditionally, so a cache-only node exports a permanent 0 that is not a collapsed directory, and only having attempted a pull distinguishes the two (#1231, #2072).",
+      "description": "Entries in this node's address directory: the NodeId → operator address bindings the node-to-node pull leg resolves against. Scoped to nodes whose pull-attempt counter was nonzero at some point in the last day; max_over_time keeps a restart, which resets the counter, from blanking it — every metric is registered unconditionally, so a cache-only node exports a permanent 0 that is not a collapsed directory, and only having attempted a pull distinguishes the two (#1231, #2072).",
       "targets": [
         {
           "datasource": {
