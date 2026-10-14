@@ -52,7 +52,7 @@ decdn_rustup_sha256:
 # The decdn/sponsord release (tag v<version>) this repo pins. Keep it equal to
 # sponsord_onramp_version: both come from one workspace release (README.md,
 # "Bumping the sponsord release"; make test-scripts checks the defaults agree).
-sponsord_version: "0.0.4"         # asserted non-empty in "release" mode
+sponsord_version: "0.1.0"         # asserted non-empty in "release" mode
 # Release target triple, derived from the host's gathered architecture (see
 # vars/main/arch.yml). Set it explicitly only for a play with gather_facts: false.
 sponsord_target: "{{ _sponsord_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"

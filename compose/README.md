@@ -398,7 +398,7 @@ udp/7842 itself, so it cannot share a host with `onramp`, `caddy` or `dns`.
      `decdn whoami` as the node's user) and add each `node id` to `access` in the
      config. `check` refuses an empty list, which would admit nobody. Update every
      relay after adding a node or rotating its key, then `restart iroh-relay`.
-   - **What it costs:** decdn clients (`decdn fetch`, onramp users) use a fresh key
+   - **What it costs:** decdn clients (`decdn get`, onramp users) use a fresh key
      per fetch, so they can never be listed, and iroh hole-punches over a connection
      it already has. A client therefore reaches a node homed on an allowlisted relay
      only if the node is directly reachable. A node behind NAT that serves clients

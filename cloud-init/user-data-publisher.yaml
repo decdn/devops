@@ -140,7 +140,7 @@ write_files:
           # DEVOPS_REF (sponsord_onramp_decdn_release, with the SHA-256 of that release's
           # SHA256SUMS: take `sha256sum SHA256SUMS` once its SHA256SUMS.asc verifies).
           # Override both together, e.g.:
-          # sponsord_onramp_decdn_release: "v0.0.4"
+          # sponsord_onramp_decdn_release: "v0.1.0"
           # sponsord_onramp_decdn_sums_sha256: "<64 lowercase hex>"
 
   # What an interactive login prints while the bootstrap is unfinished. It is written

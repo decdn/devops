@@ -61,7 +61,7 @@ decdn_rustup_sha256:
 # also moves the generated mirrors, the onramp's decdn pin (role default and
 # compose/sponsord-onramp.env.example), the Compose image digest and the chart's
 # appVersion (README.md, "Bumping the decdn release").
-decdn_node_version: "0.0.4"       # asserted non-empty in "release" mode
+decdn_node_version: "0.1.0"       # asserted non-empty in "release" mode
 # Release target triple. Derived from the host's gathered architecture (x86_64 or
 # aarch64, see vars/main/arch.yml), so arm64 hosts (Graviton, Ampere, Hetzner CAX)
 # get the aarch64 tarball with no inventory change. Needs facts: a play with
@@ -179,7 +179,7 @@ decdn_redeem_max_vouchers_per_tx: ""     # daemon dflt 300; > 0 — gas-bounded 
 decdn_redeem_interval_secs: ""           # daemon dflt 300; range 1..=21600 — redeemer self-tick
 decdn_buyer_working_deposit_micro_usdc: ""  # daemon dflt 10_000_000 (10 USDC); > 0
 # bool; profile-dependent upstream — true for the daemon, false for the `decdn`
-# client (fetch / bundle pull). node.toml is deliberately shared with the CLI, so
+# client (decdn get). node.toml is deliberately shared with the CLI, so
 # pinning it here changes client behaviour too. One-time max USDC approval to PaymentPool.
 decdn_buyer_max_approve: ""
 decdn_pool_min_remaining_deposit_micro_usdc: ""  # daemon dflt 1_000_000 — solvency floor before a pool drains

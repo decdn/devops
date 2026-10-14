@@ -693,7 +693,7 @@
     sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc
     sponsord_onramp_domain: onramp.validation.test
     sponsord_onramp_turnstile_sitekey: 1x00000000000000000000AA
-    sponsord_onramp_decdn_release: v0.1.0
+    sponsord_onramp_decdn_release: v9.9.9
     sponsord_onramp_decdn_sums_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
   tasks:
     # --- sponsord_onramp: each case breaks ONE input over the valid baseline in play
@@ -948,7 +948,7 @@
           ansible.builtin.include_role:
             name: sponsord_onramp
           vars:
-            sponsord_onramp_decdn_sums_sha256: bc295285109e2189331e57d9cb51d214113cba332bd08a2777866a7a1cec2951
+            sponsord_onramp_decdn_sums_sha256: c88ad5479f31bb0857db2c0205c54b240cbceb33a96724e4f8a288b6d866ab66
       rescue:
         - name: Record onramp-pin-pair rejection (only if its assert failed)
           ansible.builtin.set_fact:

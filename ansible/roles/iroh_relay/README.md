@@ -122,7 +122,7 @@ decdn_relay_urls:
 Setting `decdn_relay_urls` **replaces** n0's relays; it does not add to them. A node
 whose only relay is down has no fallback for peers it cannot hole-punch. Deploy
 **at least two** relays, preferably in different regions, before switching a fleet
-over. Clients (`decdn fetch`, `decdn probe --relay-url …`) take relays the same way,
+over. Clients (`decdn get`, `decdn probe --relay-url …`) take relays the same way,
 but a relay in the default `allowlist` mode refuses them (see below): point clients
 only at relays in `everyone` or `denylist` mode.
 
@@ -155,7 +155,7 @@ anyone in every mode.
 - **`denylist`:** everyone except `iroh_relay_denylist`.
 - **`everyone`:** no restriction.
 
-**What allowlist mode costs.** decdn clients (`decdn fetch`, `decdn probe`, onramp
+**What allowlist mode costs.** decdn clients (`decdn get`, `decdn probe`, onramp
 users) use a fresh iroh key for every fetch, so they **can never be listed**. iroh
 hole-punches over a connection it already has, and a node behind NAT has no path
 but its relay, so a client reaches a node homed on an allowlisted relay **only if

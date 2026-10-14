@@ -87,7 +87,7 @@ provisioner:
         # Must equal EXPECTED_BRAND in ../sponsord-onramp/files/sponsord-onramp-stub:
         # quotes and a dollar sign prove the env file's quoting ($$ is molecule's escape).
         sponsord_onramp_brand_name: 'deCDN "molecule" $$HOME'
-        sponsord_onramp_decdn_release: v0.1.0
+        sponsord_onramp_decdn_release: v9.9.9
         sponsord_onramp_decdn_sums_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
         sponsord_onramp_fund_rate_per_min: 0
         sponsord_onramp_readiness_retries: 10
