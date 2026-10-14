@@ -68,9 +68,11 @@ onramp's domain. Nothing in it is secret. It is the only place Compose's inputs 
 from: the wrapper always names the project (`decdn`) and refuses to run while the
 shell sets a `COMPOSE_*` variable or one `compose.yaml` reads, which Compose would
 otherwise take over `.env`, so its checks see what Compose runs. `init`
-starts it from `.env.example`, which carries the digests of the releases the Ansible
-roles pin (`decdn_node_version` and `sponsord_version`), each copied from that
-release's signed digest file; [Operate](#operate) says how to take a newer one.
+starts it from `.env.example`, which carries the digests of the newest releases of
+the lines the Ansible roles pin (`decdn_node_version` and `sponsord_version`), each
+copied from that release's signed digest file. Compose pins by digest only, so it
+names one release where the roles follow the line; [Operate](#operate) says how to
+take a newer one.
 
 ## The node
 

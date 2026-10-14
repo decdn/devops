@@ -58,10 +58,11 @@ Two things here are generated from `decdn/decdn`; regenerate, never hand-edit:
 | `ansible/roles/{decdn_node,sponsord,sponsord_onramp}/vars/main/networks.yml` (contract addresses per network) | `scripts/sync-network-profiles.py <decdn-checkout>` |
 | `ansible/molecule/schema/files/schema-keys.txt` (node.toml keys) | `ansible/molecule/schema/files/gen-schema-keys.py <decdn-checkout> > …` |
 
-Both describe the release the roles pin (`decdn_node_version`), so generate them from
-its tag. `scripts/sync-network-profiles.py` reads git at `--ref`, which defaults to
-that tag, whatever the checkout's own branch; `gen-schema-keys.py` reads the
-checkout's working tree, so check out the tag first.
+Both describe the newest release of the line the roles pin (`decdn_node_version`), so
+generate them from its tag. `scripts/sync-network-profiles.py` reads git at `--ref`,
+which defaults to that tag (the checkout's highest `v<line>.N`), whatever the
+checkout's own branch; `gen-schema-keys.py` reads the checkout's working tree, so
+check out the tag first.
 The full bump checklist is in `ansible/roles/decdn_node/README.md`;
 `scripts/open-decdn-bump.sh` does most of it (regenerating both) and opens the PR,
 listing the rest in the PR body.

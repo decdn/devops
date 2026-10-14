@@ -20,7 +20,8 @@
 - name: Require a pinned release version
   ansible.builtin.assert:
     that:
-      - sponsord_version | length > 0
+      - sponsord_version is string
+      - sponsord_version is match('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)?$')
     fail_msg: >-
       sponsord_install_method "release" (the default) requires sponsord_version (e.g.
       "0.0.1") naming a v<version> release of decdn/sponsord (or of the mirror in

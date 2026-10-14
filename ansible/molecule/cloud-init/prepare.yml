@@ -26,6 +26,20 @@
         bins:
           - {name: decdn-node, src: "{{ stub_bin }}"}
           - {name: decdn, src: "{{ stub_bin }}"}
+      # The release line 0.7, for verify.yml's line play: 0.7.10 is the newest finished
+      # release (newer than 0.7.2 numerically, not as text). The prerelease, the draft
+      # and the release the index lists without SHA256SUMS.asc are all newer, and each
+      # reports another version, so installing any of them fails the version backstop.
+      - dir: v0.7.2
+        version: 0.7.2
+        reports: 0.7.2
+        bins: &line_bins
+          - {name: decdn-node, src: "{{ stub_bin }}"}
+          - {name: decdn, src: "{{ stub_bin }}"}
+      - {dir: v0.7.10, version: 0.7.10, reports: 0.7.10, bins: *line_bins}
+      - {dir: v0.7.11, version: 0.7.11, prerelease: true, bins: *line_bins}
+      - {dir: v0.7.12, version: 0.7.12, draft: true, bins: *line_bins}
+      - {dir: v0.7.13, version: 0.7.13, asc: false, bins: *line_bins}
   tasks:
     - name: The repo, as a git remote
       ansible.builtin.include_tasks: includes/repo.yml

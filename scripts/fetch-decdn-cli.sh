@@ -22,10 +22,17 @@
 # must report `decdn <version>` (roles/decdn_node/tasks/install.yml has the
 # reasons for each).
 #
+# A release line (X.Y, as the chart's appVersion is) resolves to its newest
+# finished release as roles/decdn_node/tasks/resolve-release.yml resolves one: the
+# highest vX.Y.N that is not a draft or a prerelease and has a SHA256SUMS.asc
+# asset, from GitHub's release list (sent with GITHUB_TOKEN when it is set, which
+# lifts the unauthenticated rate limit).
+#
 # Overrides, for the tests' fixture release: DECDN_VERSION (default: the chart's
-# appVersion), DECDN_RELEASE_BASE (default: decdn/decdn's GitHub releases; any
-# URL curl takes, file:// included) and DECDN_RELEASE_KEYS (default: the vendored
-# keyring). Each override is reported on stderr.
+# appVersion; X.Y or X.Y.Z), DECDN_RELEASE_INDEX (default: decdn/decdn's GitHub
+# release list), DECDN_RELEASE_BASE (default: decdn/decdn's GitHub releases; any
+# URL curl takes, file:// included, for both) and DECDN_RELEASE_KEYS (default: the
+# vendored keyring). Each override is reported on stderr.
 #
 # Exit: 0 done; 1 any failure; 2 usage.
 set -euo pipefail
@@ -41,15 +48,36 @@ dest="$1"
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 version="${DECDN_VERSION:-$(sed -nE 's/^appVersion: *"?([^" #]*)"?.*/\1/p' "$root/charts/decdn-node/Chart.yaml")}"
 # The version lands in a URL and a file name: a release number and nothing else.
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
-  die "the decdn version is '$version', not X.Y.Z (charts/decdn-node/Chart.yaml appVersion)"
+[[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] ||
+  die "the decdn version is '$version', not X.Y or X.Y.Z (charts/decdn-node/Chart.yaml appVersion)"
+index="${DECDN_RELEASE_INDEX:-https://api.github.com/repos/decdn/decdn/releases?per_page=100}"
 base="${DECDN_RELEASE_BASE:-https://github.com/decdn/decdn/releases/download}"
 keys="${DECDN_RELEASE_KEYS:-$root/ansible/roles/decdn_node/files/decdn-release-KEYS.asc}"
-for v in DECDN_VERSION DECDN_RELEASE_BASE DECDN_RELEASE_KEYS; do
+for v in DECDN_VERSION DECDN_RELEASE_INDEX DECDN_RELEASE_BASE DECDN_RELEASE_KEYS; do
   [[ -z "${!v:-}" ]] || echo "note: $v=${!v} overrides the default" >&2
 done
 [[ -f "$keys" ]] || die "no release keyring at $keys"
 
+if [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+  auth=()
+  [[ -z "${GITHUB_TOKEN:-}" ]] || auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
+  releases=$(curl -fsSL --retry 3 -H 'Accept: application/vnd.github+json' "${auth[@]}" "$index") ||
+    die "cannot read the decdn release list at $index"
+  patch=$(python3 -I -c '
+import json, re, sys
+want = re.compile(r"v" + re.escape(sys.argv[1]) + r"\.(0|[1-9][0-9]*)")
+best = -1
+for r in json.loads(sys.stdin.read()):
+    m = want.fullmatch(r.get("tag_name") or "")
+    if m and not r.get("draft", True) and not r.get("prerelease", True) \
+            and "SHA256SUMS.asc" in [a.get("name") for a in r.get("assets", [])]:
+        best = max(best, int(m.group(1)))
+print(best)
+' "$version" <<<"$releases") || die "the decdn release list at $index is not a JSON release list"
+  [[ "$patch" -ge 0 ]] || die "no finished v$version.N decdn release in $index"
+  echo "decdn $version resolves to $version.$patch" >&2
+  version="$version.$patch"
+fi
 # The triples roles/decdn_node/vars/main/arch.yml maps.
 [[ "$(uname -s)" == Linux ]] || die "decdn releases Linux binaries only; this is $(uname -s)"
 case "$(uname -m)" in

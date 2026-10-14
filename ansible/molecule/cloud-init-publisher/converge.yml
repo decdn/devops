@@ -3,7 +3,8 @@
 # with the values ../cloud-init and ../sponsord-onramp use (an http origin backend for
 # the node), and pointed at the local repo and mirror. Two edits go beyond a
 # placeholder: the keyrings (the mirror's throwaway key, as in ../cloud-init) and
-# `sponsord_onramp_caddy_tls: internal` (no ACME in a container).
+# `sponsord_onramp_caddy_tls: internal` (no ACME in a container). The onramp's
+# installer pin is the line v0.0, resolved against the mirror.
 #
 # It then asserts the host stopped at the secret gate: state "awaiting-secret", the
 # node's and all four sponsor secrets listed, nothing of any service installed.
@@ -50,6 +51,13 @@
       - regexp: '^(\s*)# sponsord_onramp_release_base: .*$'
         replace: >-
           \1sponsord_onramp_release_base: "{{ sponsor_base }}"\n\1sponsord_onramp_release_keyring: {{ mirror_key }}
+      # The installers' decdn release, a line resolved through the mirror's release list.
+      - regexp: '^(\s*)# sponsord_onramp_decdn_release: .*$'
+        replace: >-
+          \1sponsord_onramp_decdn_release: v0.0\n\1sponsord_onramp_decdn_release_index: "{{ node_base }}/releases.json"
+      - regexp: '^(\s*)# sponsord_onramp_decdn_sums_sha256: .*$'
+        replace: >-
+          \1sponsord_onramp_decdn_release_base: "{{ node_base }}"\n\1sponsord_onramp_decdn_keyring: {{ mirror_key }}
       - regexp: '^(\s*)sponsord_onramp_domain: "CHANGE_ME".*$'
         replace: '\1sponsord_onramp_domain: onramp.molecule.test\n\1sponsord_onramp_caddy_tls: internal'
       - regexp: '^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME".*$'

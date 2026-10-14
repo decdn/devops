@@ -11,9 +11,9 @@
 # The API token is generated on the host at /etc/sponsord/api-token.
 
 # --- Binary ------------------------------------------------------------------------
-# The default method, "release", installs the decdn/sponsord release the role pins
-# (tag v<sponsord_version>); set it only to hold the host on another one, together
-# with sponsord_onramp_version:
+# The default method, "release", installs the newest release of the decdn/sponsord
+# line the role pins (sponsord_version "X.Y"), on each deploy; set an exact one only
+# to hold the host on it, together with sponsord_onramp_version:
 # sponsord_version: "0.1.0"
 # Or build on the host from a git ref (tag, branch or SHA; sponsord_version is not
 # checked in this mode):

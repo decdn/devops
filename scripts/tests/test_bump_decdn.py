@@ -32,8 +32,8 @@ FILES = [
     bd.COMPOSE_ENV,
     bd.CHART,
     bd.CHART_VALUES,
-    "ansible/molecule/validation-sponsord/converge.yml",
     *dict.fromkeys(rel for rel, _, _ in bd.EXAMPLES),
+    bd.AGENTS[0],
 ]
 # rewrite never touches these: release.sh writes them.
 CHANGELOGS = [
@@ -60,9 +60,9 @@ class Fixture(unittest.TestCase):
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
         self.original = {rel: (self.root / rel).read_text() for rel in FILES}
-        onramp = self.text(bd.ONRAMP_DEFAULTS)
-        self.version = bd.pinned(self.root)
-        self.sums = bd.scalar(onramp, "sponsord_onramp_decdn_sums_sha256", bd.ONRAMP_DEFAULTS)
+        self.line = bd.pinned(self.root)
+        self.version = bd.synced(self.root)
+        self.sums = bd.env_value(self.text(bd.ONRAMP_ENV), "ONRAMP_DECDN_SUMS_SHA256", bd.ONRAMP_ENV)
         self.digest = bd.env_value(self.text(bd.COMPOSE_ENV), "DECDN_IMAGE_DIGEST", bd.COMPOSE_ENV)
 
     def tearDown(self) -> None:
@@ -74,51 +74,86 @@ class Fixture(unittest.TestCase):
     def write(self, rel: str, text: str) -> None:
         (self.root / rel).write_text(text)
 
+    def next_patch(self) -> str:
+        major, minor, patch = (int(p) for p in self.version.split("."))
+        return f"{major}.{minor}.{patch + 1}"
+
 
 class Compare(Fixture):
+    def test_the_synced_release_is_in_the_line(self) -> None:
+        self.assertEqual(self.version.rsplit(".", 1)[0], self.line)
+
     def test_relations(self) -> None:
-        major, minor, patch = (int(p) for p in self.version.split("."))
+        major, minor, _ = (int(p) for p in self.version.split("."))
         self.assertEqual(bd.compare(self.root, f"v{self.version}"), "same")
-        self.assertEqual(bd.compare(self.root, f"v{major}.{minor}.{patch + 1}"), "behind")
+        self.assertEqual(bd.compare(self.root, f"v{self.next_patch()}"), "behind")
         self.assertEqual(bd.compare(self.root, f"v{major}.{minor + 1}.0"), "behind")
 
     def test_numeric_not_lexical(self) -> None:
-        self.write(bd.NODE_DEFAULTS, self.text(bd.NODE_DEFAULTS).replace(
-            f'decdn_node_version: "{self.version}"', 'decdn_node_version: "0.0.9"'))
+        self.write(bd.COMPOSE_ENV, self.text(bd.COMPOSE_ENV).replace(
+            f"# decdn/decdn v{self.version}\n", "# decdn/decdn v0.0.9\n"))
         self.assertEqual(bd.compare(self.root, "v0.0.10"), "behind")
         self.assertEqual(bd.compare(self.root, "v0.0.8"), "ahead")
+
+    def test_kind(self) -> None:
+        major, minor, _ = (int(p) for p in self.version.split("."))
+        self.assertEqual(bd.kind(self.root, f"v{self.next_patch()}"), "patch")
+        self.assertEqual(bd.kind(self.root, f"v{major}.{minor + 1}.0"), "line")
+        self.assertEqual(bd.kind(self.root, f"v{major + 1}.{minor}.0"), "line")
 
     def test_refuses_a_non_release_tag(self) -> None:
         for tag in ("0.0.3", "v0.0.3-rc.1", "v1.2"):
             with self.subTest(tag=tag), self.assertRaises(bd.ShapeError):
                 bd.compare(self.root, tag)
+            with self.subTest(tag=tag), self.assertRaises(bd.ShapeError):
+                bd.kind(self.root, tag)
+
+    def test_refuses_an_exact_role_pin(self) -> None:
+        self.write(bd.NODE_DEFAULTS, self.text(bd.NODE_DEFAULTS).replace(
+            f'decdn_node_version: "{self.line}"', f'decdn_node_version: "{self.version}"'))
+        with self.assertRaisesRegex(bd.ShapeError, "not a release line"):
+            bd.pinned(self.root)
 
 
 class Rewrite(Fixture):
-    def test_moves_every_pin(self) -> None:
-        bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
-        onramp = self.text(bd.ONRAMP_DEFAULTS)
-        self.assertEqual(bd.pinned(self.root), "9.8.7")
-        self.assertIn("sponsord_onramp_decdn_release: v9.8.7 ", onramp)
-        self.assertIn("Default: decdn/decdn v9.8.7.", onramp)
-        self.assertIn("defaults to: decdn/decdn v9.8.7.", self.text(bd.ONRAMP_ENV))
-        self.assertIn(f"ONRAMP_DECDN_SUMS_SHA256={SUMS}\n", self.text(bd.ONRAMP_ENV))
-        self.assertIn(f"# decdn/decdn v9.8.7\nDECDN_IMAGE_DIGEST={DIGEST}\n", self.text(bd.COMPOSE_ENV))
-        self.assertIn(f"e.g. for v9.8.7\n  # {DIGEST}\n", self.text(bd.CHART_VALUES))
-        self.assertIn('appVersion: "9.8.7"', self.text(bd.CHART))
-        self.assertIn("image: ghcr.io/decdn/decdn-node:9.8.7\n", self.text(bd.CHART))
+    def assert_exact_copies(self, version: str, sums: str, digest: str) -> None:
+        self.assertIn(f"ONRAMP_DECDN_RELEASE=v{version}\n", self.text(bd.ONRAMP_ENV))
+        self.assertIn(f"last moved:\n# decdn/decdn v{version}.\n", self.text(bd.ONRAMP_ENV))
+        self.assertIn(f"ONRAMP_DECDN_SUMS_SHA256={sums}\n", self.text(bd.ONRAMP_ENV))
+        self.assertIn(f"# decdn/decdn v{version}\nDECDN_IMAGE_DIGEST={digest}\n", self.text(bd.COMPOSE_ENV))
+        self.assertIn(f"e.g. for v{version}\n  # {digest}\n", self.text(bd.CHART_VALUES))
         for tree in ("ansible/inventory", "examples/collection-fleet/inventory"):
             for host in ("decdn-node-1", "origin-1"):
                 host_vars = self.text(f"{tree}/host_vars/{host}/main.yml")
-                self.assertIn('\n# decdn_node_version: "9.8.7"\n', host_vars)
-                self.assertIn(" decdn_node_source_ref: v9.8.7\n", host_vars)
-            self.assertIn("\n# sponsord_onramp_decdn_release: v9.8.7\n",
+                self.assertIn(f'\n# decdn_node_version: "{version}"\n', host_vars)
+                self.assertIn(f" decdn_node_source_ref: v{version}\n", host_vars)
+            self.assertIn(f"\n# sponsord_onramp_decdn_release: v{version}\n",
                           self.text(f"{tree}/group_vars/sponsord_onramp_hosts.yml"))
-        self.assertIn('# sponsord_onramp_decdn_release: "v9.8.7"\n', self.text("cloud-init/user-data-publisher.yaml"))
-        self.assertIn("`decdn_node_version`, today `9.8.7`)", flat(self.text("AGENTS.md")))
-        # The pin-pair molecule case carries a copy of the digest.
-        self.assertIn(SUMS, self.text("ansible/molecule/validation-sponsord/converge.yml"))
-        self.assertNotIn(self.sums, self.text("ansible/molecule/validation-sponsord/converge.yml"))
+        self.assertIn(f'# sponsord_onramp_decdn_release: "v{version}"\n',
+                      self.text("cloud-init/user-data-publisher.yaml"))
+
+    def assert_line_copies(self, line: str) -> None:
+        self.assertEqual(bd.pinned(self.root), line)
+        self.assertIn(f"sponsord_onramp_decdn_release: v{line} ", self.text(bd.ONRAMP_DEFAULTS))
+        self.assertIn(f'appVersion: "{line}"', self.text(bd.CHART))
+        self.assertIn(f"image: ghcr.io/decdn/decdn-node:{line}\n", self.text(bd.CHART))
+        self.assertIn(f"`decdn_node_version`, today `{line}`)", flat(self.text("AGENTS.md")))
+
+    def test_a_new_line_moves_every_pin(self) -> None:
+        bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
+        self.assert_line_copies("9.8")
+        self.assert_exact_copies("9.8.7", SUMS, DIGEST)
+        self.assertEqual(bd.synced(self.root), "9.8.7")
+
+    def test_a_patch_leaves_the_line(self) -> None:
+        line_files = (bd.NODE_DEFAULTS, bd.ONRAMP_DEFAULTS, bd.CHART, "AGENTS.md")
+        changed = bd.rewrite(self.root, self.next_patch(), SUMS, DIGEST)
+        for rel in line_files:
+            with self.subTest(rel=rel):
+                self.assertNotIn(rel, changed)
+                self.assertEqual(self.text(rel), self.original[rel])
+        self.assert_line_copies(self.line)
+        self.assert_exact_copies(self.next_patch(), SUMS, DIGEST)
 
     def test_round_trip_is_byte_identical(self) -> None:
         bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
@@ -147,7 +182,7 @@ class Rewrite(Fixture):
                 self.assertEqual(n, 1)
                 self.write("AGENTS.md", text)
                 bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
-                self.assertIn(f"`decdn_node_version`, today{sep}`9.8.7`", self.text("AGENTS.md"))
+                self.assertIn(f"`decdn_node_version`, today{sep}`9.8`", self.text("AGENTS.md"))
                 bd.rewrite(self.root, self.version, self.sums, self.digest)
 
     def test_leaves_the_changelogs(self) -> None:
@@ -166,7 +201,7 @@ class Rewrite(Fixture):
             bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
 
     def test_refuses_a_second_pin_line(self) -> None:
-        self.write(bd.CHART, self.text(bd.CHART) + f'appVersion: "{self.version}"\n')
+        self.write(bd.CHART, self.text(bd.CHART) + f'appVersion: "{self.line}"\n')
         with self.assertRaisesRegex(bd.ShapeError, "2 matches"):
             bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
 
@@ -175,12 +210,11 @@ class Rewrite(Fixture):
             with self.subTest(args=args), self.assertRaises(bd.ShapeError):
                 bd.rewrite(self.root, *args)
 
-    def test_refuses_a_drifted_copy(self) -> None:
-        # The copies are found by the old value, so one that drifted from it is left
-        # behind; the read-back must catch it.
-        drifted = "c" * 64
-        self.write(bd.ONRAMP_ENV, self.text(bd.ONRAMP_ENV).replace(self.sums, drifted))
-        with self.assertRaisesRegex(bd.ShapeError, "ONRAMP_DECDN_SUMS_SHA256"):
+    def test_refuses_a_digest_beside_the_line(self) -> None:
+        # The role reads a line's digest from the release; a default one would be stale.
+        self.write(bd.ONRAMP_DEFAULTS, self.text(bd.ONRAMP_DEFAULTS).replace(
+            'sponsord_onramp_decdn_sums_sha256: "" ', f'sponsord_onramp_decdn_sums_sha256: {self.sums} '))
+        with self.assertRaisesRegex(bd.ShapeError, "sponsord_onramp_decdn_sums_sha256"):
             bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
 
     def test_refuses_a_second_artifacthub_image(self) -> None:
@@ -226,10 +260,13 @@ class Cli(Fixture):
             capture_output=True, text=True, check=False,
         )
 
-    def test_pinned_and_compare_print_one_word(self) -> None:
-        self.assertEqual(self.run_cli("pinned").stdout, f"{self.version}\n")
+    def test_pinned_synced_compare_and_kind_print_one_word(self) -> None:
+        self.assertEqual(self.run_cli("pinned").stdout, f"{self.line}\n")
+        self.assertEqual(self.run_cli("synced").stdout, f"{self.version}\n")
         r = self.run_cli("compare", "v99.0.0")
         self.assertEqual((r.returncode, r.stdout), (0, "behind\n"))
+        r = self.run_cli("kind", "v99.0.0")
+        self.assertEqual((r.returncode, r.stdout), (0, "line\n"))
 
     def test_a_refusal_exits_1(self) -> None:
         self.write(bd.COMPOSE_ENV, self.text(bd.COMPOSE_ENV).replace(f"# decdn/decdn v{self.version}\n", ""))
@@ -237,6 +274,7 @@ class Cli(Fixture):
         self.assertEqual(r.returncode, 1)
         self.assertTrue(r.stderr.startswith("bump_decdn: "), r.stderr)
         self.assertEqual(self.run_cli("compare", "v1.2").returncode, 1)
+        self.assertEqual(self.run_cli("kind", "v1.2").returncode, 1)
 
     def test_usage_exits_2(self) -> None:
         self.assertEqual(self.run_cli().returncode, 2)

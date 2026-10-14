@@ -169,21 +169,27 @@ done
 
 # The image is the digest when set, else the tag, else appVersion (which `make
 # test-scripts` holds equal to the decdn_node role's pin). Both containers run it.
+# The pull policy is Always for a release-line tag (X.Y, which upstream moves), else
+# IfNotPresent, unless image.pullPolicy is set.
 app="$(yq '.appVersion' "$chart/Chart.yaml")"
+app_policy=IfNotPresent
+[[ "$app" =~ ^[0-9]+\.[0-9]+$ ]] && app_policy=Always
 digest="sha256:$(printf 'a%.0s' {1..64})"
-image_of() { # <helm args...>: the StatefulSet's container and init container images, one per line
+image_of() { # <helm args...>: "<image> <pull policy>" of the StatefulSet's container and init container, one per line
   helm template t "$chart" -f "$chart/ci/ci-values.yaml" "$@" \
-    | yq 'select(.kind == "StatefulSet") | (.spec.template.spec.initContainers[].image, .spec.template.spec.containers[].image)'
+    | yq 'select(.kind == "StatefulSet") | (.spec.template.spec.initContainers[], .spec.template.spec.containers[]) | .image + " " + .imagePullPolicy'
 }
-for c in "unpinned|ghcr.io/decdn/decdn-node:$app|--set image.tag= --set image.digest=" \
-         "tag|ghcr.io/decdn/decdn-node:9.9.9|--set image.tag=9.9.9 --set image.digest=" \
-         "digest over tag|ghcr.io/decdn/decdn-node@$digest|--set image.tag=9.9.9 --set image.digest=$digest"; do
+for c in "unpinned|ghcr.io/decdn/decdn-node:$app $app_policy|--set image.tag= --set image.digest=" \
+         "tag|ghcr.io/decdn/decdn-node:9.9.9 IfNotPresent|--set image.tag=9.9.9 --set image.digest=" \
+         "line tag|ghcr.io/decdn/decdn-node:9.9 Always|--set image.tag=9.9 --set image.digest=" \
+         "digest over tag|ghcr.io/decdn/decdn-node@$digest IfNotPresent|--set image.tag=9.9 --set image.digest=$digest" \
+         "explicit pull policy|ghcr.io/decdn/decdn-node:9.9 Never|--set image.tag=9.9 --set image.digest= --set image.pullPolicy=Never"; do
   IFS='|' read -r what want args <<<"$c"
   # shellcheck disable=SC2086  # helm args, split on purpose
   got="$(image_of $args)" || fail "helm template (image: $what)"
   [ "$(sort -u <<<"$got")" = "$want" ] || fail "image ($what) renders '$got', want '$want' in every container"
 done
-pass "image precedence: digest, then tag, then appVersion ($app), in every container"
+pass "image precedence: digest, then tag, then appVersion ($app, $app_policy), and its pull policy, in every container"
 
 toml="$work/ci-values.toml"
 

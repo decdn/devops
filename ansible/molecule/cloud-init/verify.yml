@@ -168,3 +168,92 @@
         that:
           - not refused_stamp.stat.exists
         fail_msg: A release refused by the version backstop left a version stamp.
+
+# A release line resolves through the mirror's release list (includes/mirror.yml) to
+# its newest finished release, which is what gets downloaded, verified and stamped.
+- name: Verify — a release line installs the newest finished release in it
+  hosts: all
+  become: true
+  vars:
+    _eph: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+    _keys: "{{ _eph }}/cloud-init-mirror-KEYS-{{ inventory_hostname }}.asc"
+  tasks:
+    - name: Run the release install of the line 0.7
+      ansible.builtin.include_role:
+        name: decdn_node
+        tasks_from: install
+      vars:
+        decdn_node_install_method: release
+        decdn_node_version: "0.7"
+        decdn_node_release_base: http://127.0.0.1:8099/releases
+        decdn_node_release_index: http://127.0.0.1:8099/releases/releases.json
+        decdn_release_keyring: "{{ _keys }}"
+
+    - name: Read the version stamp after the line install
+      ansible.builtin.slurp:
+        src: /usr/local/lib/decdn/installed-version
+      register: line_stamp
+
+    - name: Run the installed decdn-node
+      ansible.builtin.command:
+        argv: [/usr/local/bin/decdn-node, --version]
+      register: line_binary
+      changed_when: false
+
+    - name: Require the newest finished release of the line
+      ansible.builtin.assert:
+        that:
+          - line_stamp.content | b64decode | trim == '0.7.10'
+          - line_binary.stdout | trim == 'decdn-node 0.7.10'
+        fail_msg: >-
+          The line 0.7 should install 0.7.10 (not the prerelease, the draft or the
+          release without SHA256SUMS.asc). Got stamp
+          "{{ line_stamp.content | b64decode | trim }}" and "{{ line_binary.stdout | trim }}".
+
+    # With the release list unreachable, a host already on a release of the line keeps
+    # it (an outage must not fail a deploy); one with no release of the line fails.
+    - name: Run the release install of the line 0.7 with the release list unreachable
+      ansible.builtin.include_role:
+        name: decdn_node
+        tasks_from: install
+      vars:
+        decdn_node_install_method: release
+        decdn_node_version: "0.7"
+        decdn_node_release_base: http://127.0.0.1:8099/releases
+        decdn_node_release_index: http://127.0.0.1:8099/releases/no-such-list.json
+        decdn_release_keyring: "{{ _keys }}"
+
+    - name: Read the version stamp after the unreachable list
+      ansible.builtin.slurp:
+        src: /usr/local/lib/decdn/installed-version
+      register: kept_stamp
+
+    - name: Require the installed release of the line to be kept
+      ansible.builtin.assert:
+        that:
+          - kept_stamp.content | b64decode | trim == '0.7.10'
+        fail_msg: "Expected 0.7.10 kept, got \"{{ kept_stamp.content | b64decode | trim }}\"."
+
+    - name: Install another line with the release list unreachable
+      block:
+        - name: Run the release install of the line 0.8 with the release list unreachable
+          ansible.builtin.include_role:
+            name: decdn_node
+            tasks_from: install
+          vars:
+            decdn_node_install_method: release
+            decdn_node_version: "0.8"
+            decdn_node_release_base: http://127.0.0.1:8099/releases
+            decdn_node_release_index: http://127.0.0.1:8099/releases/no-such-list.json
+            decdn_release_keyring: "{{ _keys }}"
+
+        - name: Fail — a line with no installed release resolved without its list
+          ansible.builtin.fail:
+            msg: The line 0.8 resolved with no release list and no release of it installed.
+      rescue:
+        - name: Require the release-list check to be what stopped it
+          ansible.builtin.assert:
+            that:
+              # The name is templated ({{ _rr_name }}), so match its fixed part.
+              - ansible_failed_task.name is match('^Require a readable release list for ')
+            fail_msg: "Expected the release-list check, got \"{{ ansible_failed_task.name }}\"."

@@ -276,6 +276,50 @@
             decdn_rejected: "{{ decdn_rejected + ['release-version'] }}"
           when: ansible_failed_task.name == "Require a pinned release version"
 
+    # A pin is a release line (X.Y) or an exact X.Y.Z, as a string: "v0.1" and
+    # "0.1.x" would only 404, and an unquoted 0.10 is the number 0.1.
+    - name: "Case release-version — release mode with a v-prefixed line"
+      block:
+        - name: Run decdn_node with release mode and a v-prefixed line
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_node_install_method: release
+            decdn_node_version: "v0.1"
+      rescue:
+        - name: Record release-version rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['release-version'] }}"
+          when: ansible_failed_task.name == "Require a pinned release version"
+
+    - name: "Case release-version — release mode with a wildcard"
+      block:
+        - name: Run decdn_node with release mode and a wildcard
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_node_install_method: release
+            decdn_node_version: "0.1.x"
+      rescue:
+        - name: Record release-version rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['release-version'] }}"
+          when: ansible_failed_task.name == "Require a pinned release version"
+
+    - name: "Case release-version — release mode with an unquoted number"
+      block:
+        - name: Run decdn_node with release mode and an unquoted number
+          ansible.builtin.include_role:
+            name: decdn_node
+          vars:
+            decdn_node_install_method: release
+            decdn_node_version: 0.1
+      rescue:
+        - name: Record release-version rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['release-version'] }}"
+          when: ansible_failed_task.name == "Require a pinned release version"
+
     # --- Case: network-unknown / network-chain (decdn_network profile guards) -----
     - name: "Case network-unknown — decdn_network names no known deployment"
       block:
@@ -936,6 +980,7 @@
       vars:
         _decdn_expected:
           ["cross-field", "binary-format", "binary-check-mode", "arch-mismatch", "arch-unset", "release-version",
+           "release-version", "release-version", "release-version",
            "network-unknown",
            "network-unknown-noaddr", "network-chain", "backup-secret-key", "backup-bare-string",
            "backup-empty", "path-cache-home", "path-backup-home", "path-decommission-cache", "range",

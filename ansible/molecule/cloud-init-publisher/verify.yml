@@ -51,6 +51,18 @@
       register: node_origin
       changed_when: false
 
+    - name: Read the decdn release the onramp serves its installers
+      ansible.builtin.slurp:
+        src: /etc/sponsord/sponsord-onramp.env
+      register: onramp_env
+
+    - name: Hash the mirror's decdn v0.0.5 SHA256SUMS
+      ansible.builtin.stat:
+        path: /srv/mirror/www/releases/decdn/v0.0.5/SHA256SUMS
+        get_checksum: true
+        checksum_algorithm: sha256
+      register: decdn_sums
+
     - name: Gather service facts
       ansible.builtin.service_facts:
 
@@ -89,6 +101,10 @@
           - running == services
           - https_health.rc == 0
           - login_hint.stdout == ''
+          # The line v0.0 resolved to the mirror's one finished release in it, and its
+          # digest was read from that release's verified SHA256SUMS.
+          - onramp_env.content | b64decode is search('(?m)^ONRAMP_DECDN_RELEASE=v0\.0\.5$')
+          - onramp_env.content | b64decode is search('(?m)^ONRAMP_DECDN_SUMS_SHA256=' ~ decdn_sums.stat.checksum ~ '$')
         fail_msg: >-
           state={{ bootstrap_state.content | b64decode | trim }} awaiting={{ awaiting.stat.exists }}
           head={{ checkout_head.content | b64decode | trim }} (tag {{ tag_sha.content | b64decode | trim }})
@@ -98,3 +114,5 @@
           running={{ running }} of {{ services }}
           https rc={{ https_health.rc }} {{ https_health.stderr }}
           hint={{ login_hint.stdout | to_json }}
+          onramp decdn pin={{ onramp_env.content | b64decode | regex_findall('ONRAMP_DECDN_\w+=\S*') }}
+          (want v0.0.5, {{ decdn_sums.stat.checksum }})

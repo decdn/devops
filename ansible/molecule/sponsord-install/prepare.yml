@@ -1,8 +1,10 @@
 ---
 # Everything ../sponsord/prepare.yml stages, then a release mirror on loopback
 # (127.0.0.1:8081): the stub packaged the way upstream names a sponsord release, a
-# SHA256SUMS signed by a throwaway key, and a second release whose binary reports
-# the wrong version. side_effect.yml installs from it; the role verifies against
+# SHA256SUMS signed by a throwaway key, a second release whose binary reports
+# the wrong version, a release of the line 0.3, and the release list (GitHub's
+# GET /releases shape) the role resolves that line from. side_effect.yml installs
+# from it; the role verifies against
 # the mirror's key (fetched to the controller, since sponsord_release_keyring is a
 # controller-side file).
 - name: Prepare the host as ../sponsord does
@@ -31,6 +33,7 @@
         - {path: /srv/sponsord-mirror/www/releases, mode: "0755"}
         - {path: /srv/sponsord-mirror/www/releases/v0.0.0-molecule-stub, mode: "0755"}
         - {path: /srv/sponsord-mirror/www/releases/v0.0.9, mode: "0755"}
+        - {path: /srv/sponsord-mirror/www/releases/v0.3.4, mode: "0755"}
         - {path: /srv/sponsord-mirror/gnupg, mode: "0700"}
         - {path: /srv/sponsord-mirror/stage, mode: "0700"}
       loop_control:
@@ -47,6 +50,7 @@
     # v<ver>/sponsord-<ver>-<triple>.tar.gz with the binary at the archive
     # root, as upstream's release.yml publishes. v0.0.9 holds the same stub, which
     # reports 0.0.0-molecule-stub: a release whose binary is not the pinned version.
+    # v0.3.4's stub reports 0.3.4, so the line 0.3 installs and passes the backstop.
     - name: Build, checksum and sign the mirror's releases
       ansible.builtin.shell:
         cmd: |
@@ -55,9 +59,13 @@
           gpg --batch --pinentry-mode loopback --passphrase '' \
             --quick-gen-key 'molecule sponsord mirror <mirror@molecule.invalid>' ed25519 sign 1d
           gpg --batch --armor --export > /srv/sponsord-mirror/KEYS.asc
-          for ver in 0.0.0-molecule-stub 0.0.9; do
+          for ver in 0.0.0-molecule-stub 0.0.9 0.3.4; do
             cd /srv/sponsord-mirror/www/releases/v$ver
-            tar -C /srv/sponsord-mirror/stage -czf "sponsord-$ver-{{ _sp_triple }}.tar.gz" sponsord
+            work=$(mktemp -d -p /srv/sponsord-mirror/stage)
+            cp -p /srv/sponsord-mirror/stage/sponsord "$work/sponsord"
+            [ "$ver" != 0.3.4 ] || sed -i 's/0\.0\.0-molecule-stub/0.3.4/' "$work/sponsord"
+            tar -C "$work" -czf "sponsord-$ver-{{ _sp_triple }}.tar.gz" sponsord
+            rm -rf "$work"
             sha256sum -- *.tar.gz > SHA256SUMS
             gpg --batch --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
             chmod 0644 -- *
@@ -68,6 +76,21 @@
         _sp_triple: >-
           {{ {'x86_64': 'x86_64-unknown-linux-gnu',
               'aarch64': 'aarch64-unknown-linux-gnu'}[ansible_facts['architecture']] }}
+
+    # v0.3.5 is newer but a prerelease, and is never downloaded: the line skips it.
+    - name: Publish the mirror's release list
+      ansible.builtin.copy:
+        dest: /srv/sponsord-mirror/www/releases/releases.json
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ _sp_list | to_nice_json }}\n"
+      vars:
+        _sp_assets: [{name: SHA256SUMS}, {name: SHA256SUMS.asc}]
+        _sp_list:
+          - {tag_name: v0.3.5, draft: false, prerelease: true, assets: "{{ _sp_assets }}"}
+          - {tag_name: v0.3.4, draft: false, prerelease: false, assets: "{{ _sp_assets }}"}
+          - {tag_name: v0.0.9, draft: false, prerelease: false, assets: "{{ _sp_assets }}"}
 
     - name: Fetch the mirror's public key to the controller
       ansible.builtin.fetch:

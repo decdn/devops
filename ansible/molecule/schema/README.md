@@ -26,8 +26,9 @@ more. Every test passed. This scenario is that regression.
 ## Keeping it current
 
 `files/schema-keys.txt` is generated from the upstream source; its header carries
-the exact regeneration command. Re-run it whenever you bump `decdn_node_version`
-to a new `decdn/decdn` release (from a checkout of its tag), **before** touching the template — the diff on that
+the exact regeneration command. Re-run it whenever the `decdn/decdn` release a
+default deploy installs moves (a new release in the `decdn_node_version` line, or a
+new line; from a checkout of its tag), **before** touching the template — the diff on that
 file is the changelog of what the config schema did.
 
 When you add a knob to the role, add it to `converge.yml` as well. A knob that is

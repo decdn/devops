@@ -11,12 +11,20 @@
   vars:
     stub_version: "0.0.0-molecule-stub"
     stubs: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule"
-    # Two repositories' releases of the same version, so each gets its own base
-    # (converge.yml): decdn/decdn's node and CLI (../cloud-init's stub), and
+    # Two repositories' releases, so each gets its own base (converge.yml) and release
+    # list: decdn/decdn's node and CLI (../cloud-init's stub), and
     # decdn/sponsord's one release holding both archives under one SHA256SUMS, as it
     # releases its workspace.
     mirror_releases:
       - dir: "decdn/v{{ stub_version }}"
+        bins:
+          - {name: decdn-node, src: "{{ stubs }}/default/files/decdn-node-stub"}
+          - {name: decdn, src: "{{ stubs }}/default/files/decdn-node-stub"}
+      # A finished release of decdn's line 0.0 (stub_version is a prerelease tag, which
+      # no line takes): the onramp's installer pin resolves v0.0 to it and serves the
+      # SHA-256 of its SHA256SUMS (converge.yml, verify.yml).
+      - dir: decdn/v0.0.5
+        version: 0.0.5
         bins:
           - {name: decdn-node, src: "{{ stubs }}/default/files/decdn-node-stub"}
           - {name: decdn, src: "{{ stubs }}/default/files/decdn-node-stub"}

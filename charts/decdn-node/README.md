@@ -59,9 +59,16 @@ What it does **not** do:
   With the defaults (10240 + 8192 MiB), the 20Gi `persistence.size` is tight.
 - **UDP reachability.** Either a load balancer that supports UDP Services, or
   `quic.hostPort.enabled` on nodes with a public IP.
-- **An image.** By default the chart runs `ghcr.io/decdn/decdn-node:<appVersion>`
-  (the decdn/decdn release the chart is synced against). Pin
-  `image.digest` instead in production: take it from the release's
+- **An image.** By default the chart runs `ghcr.io/decdn/decdn-node:<appVersion>`:
+  `appVersion` is the decdn/decdn release line the chart is synced against (`X.Y`),
+  a tag upstream moves to each new release in the line. With that default
+  `image.pullPolicy` resolves to `Always`, so a restarted pod (`kubectl rollout
+  restart statefulset/<release>`) runs the line's newest release; Helm does not roll
+  the pod on its own when the tag moves. `Always` also means every container start,
+  a crash restart included, needs the registry: while ghcr.io is unreachable the pod
+  cannot start, even with the image cached. Set `image.tag` to an exact `X.Y.Z` to hold
+  the node on one release (`IfNotPresent`), or pin `image.digest` in production:
+  take it from the release's
   `decdn-node-image-digest.txt` (`image-digest.txt` in v0.0.1), after checking its
   `.asc` against the keys in
   [SECURITY.md](https://github.com/decdn/devops/blob/main/SECURITY.md#release-verification).
@@ -488,7 +495,7 @@ make lint-helm       # helm lint --strict, positive/negative render tests, kubec
 make security-helm   # KICS over the rendered manifests (fail on HIGH)
 cli="$(scripts/fetch-decdn-cli.sh /tmp/decdn)" && DECDN_CLI="$cli" make lint-helm
                      # also run the real `decdn config validate` on each ci/*.yaml render,
-                     # with the decdn release appVersion pins (signature-checked)
+                     # with the newest decdn release of the appVersion line (signature-checked)
 DECDN_CLI=../decdn/target/release/decdn make lint-helm
                      # the same, with a local decdn build
 ```

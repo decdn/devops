@@ -4,9 +4,9 @@
 #
 #     ./gen-schema-keys.py <path-to-decdn-checkout> > schema-keys.txt
 #
-# from a checkout of v<decdn_node_version>, the decdn/decdn release the roles pin
-# (ansible/roles/decdn_node/defaults/main.yml): the generator reads the working
-# tree, so check the tag out first.
+# from a checkout of the newest release of the decdn/decdn line the roles pin
+# (decdn_node_version in ansible/roles/decdn_node/defaults/main.yml): the
+# generator reads the working tree, so check that tag out first.
 #
 # Paths, not bare leaf names: `sketch_bytes` is legal at
 # cache.tinylfu.sketch_bytes and a startup failure at cache.sketch_bytes, and

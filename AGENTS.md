@@ -129,9 +129,9 @@ scripts/                # upstream-mirror generators, the compose Alloy config g
 `ansible/roles/sponsord/vars/main/networks.yml` and
 `ansible/roles/sponsord_onramp/vars/main/networks.yml` (all `scripts/sync-network-profiles.py`)
 and `ansible/molecule/schema/files/schema-keys.txt` (`gen-schema-keys.py`), both
-generated from the decdn/decdn tag `decdn_node_version` pins. The weekly
-`upstream-drift` workflow flags staleness against that tag, and a newer upstream
-release of either repo. These are the only protocol facts (contract addresses) the
+generated from the tag of the newest decdn/decdn release in the line
+`decdn_node_version` pins. The weekly `upstream-drift` workflow flags staleness
+against that tag, and a new upstream release line of either repo. These are the only protocol facts (contract addresses) the
 repo carries, and `networks.yml` carries its upstream commit.
 
 **Generated from this repo — regenerate, never hand-edit:** `compose/alloy/config.alloy`
@@ -141,23 +141,33 @@ runtime (`scripts/render-compose-alloy.sh`, which runs the `compose`-tagged task
 test-scripts` fails while the committed file differs from a fresh render, and `make
 lint-alloy` validates and runs it.
 
-**Pinned upstream releases.** One decdn/decdn release (`decdn_node_version`, today
-`0.1.0`) and one decdn/sponsord release (`sponsord_version` = `sponsord_onramp_version`,
-today `0.1.0`; decdn/sponsord tags its whole workspace `vX.Y.Z`, there are no per-crate
-tags) are pinned across every path: the role defaults, the onramp's installer pin
-(`sponsord_onramp_decdn_release` + `_decdn_sums_sha256`, copied into
-`compose/sponsord-onramp.env.example`), `compose/.env.example`'s image digests, the
-chart's `appVersion` and the generated mirrors. cloud-init takes the role defaults at
-`DEVOPS_REF`. Docs name the pin (`decdn_node_version`, `sponsord_version`), never its
-number: besides this paragraph, only the commented examples and the comments beside a
-pinned value name a number, and they move with the pin (`bump_decdn.py` moves decdn's;
-the sponsord checklist lists sponsord's). `make test-scripts` checks the pins agree
-with each other, the Compose example, `appVersion`, the chart's `artifacthub.io/images`
-tag and this paragraph, and that both vendored KEYS hold the keys SECURITY.md
-publishes; the weekly `upstream-drift` job checks the digests and the mirrors against
-the releases and flags a newer upstream tag. The `--version` check compares the pin in
-`release` mode only (exactly, on `<binary> <version>`). Bump everything together with
-the checklists in `roles/decdn_node/README.md` and `roles/sponsord/README.md`;
+**Pinned upstream releases.** One decdn/decdn release line (`decdn_node_version`, today
+`0.1`) and one decdn/sponsord release line (`sponsord_version` = `sponsord_onramp_version`,
+today `0.1`; decdn/sponsord tags its whole workspace `vX.Y.Z`, there are no per-crate
+tags) are pinned across every path. A line, `X.Y`, is what the role defaults, the
+onramp's installer pin (`sponsord_onramp_decdn_release`, `vX.Y`) and the chart's
+`appVersion` name: the roles install its newest finished `vX.Y.N` on every run
+(`tasks/resolve-release.yml`, copied into all three roles: GitHub's release list, then
+the same signed `SHA256SUMS` and exact `--version` check against the resolved version;
+the onramp reads the installers' digest from that release's verified `SHA256SUMS`),
+and the chart's default image tag is the line's floating tag, pulled `Always`. An
+exact `X.Y.Z` in inventory (or `image.tag`/`image.digest`) holds a host on one release.
+So an upstream patch release needs no release of the collections or the chart; a new
+line does. What cannot resolve a line names one release of it and moves on every
+upstream release, repo-only: `compose/.env.example`'s image digests, the onramp's
+installer pin in `compose/sponsord-onramp.env.example` (tag + `SHA256SUMS` digest), the
+chart's example digest, the commented exact-pin examples, and the generated mirrors
+(which a patch is not expected to change; when one does, the bump PR says so and the
+collections need a release). cloud-init takes the role defaults at `DEVOPS_REF`. Docs
+name the pin (`decdn_node_version`, `sponsord_version`), never its number: besides this
+paragraph, only the commented examples and the comments beside a pinned value name a
+number, and they move with the pin (`bump_decdn.py` moves decdn's; the sponsord
+checklist lists sponsord's). `make test-scripts` checks the pins agree with each other,
+the Compose example (a release of the line), `appVersion`, the chart's
+`artifacthub.io/images` tag and this paragraph, and that the vendored KEYS hold the
+keys SECURITY.md publishes; the weekly `upstream-drift` job checks the exact copies and
+the mirrors against each line's newest release and flags a newer upstream line. Bump
+with the checklists in `roles/decdn_node/README.md` and `roles/sponsord/README.md`;
 `scripts/open-decdn-bump.sh` opens the decdn bump's PR (decdn's `publish-crates.sh`
 runs it after each release). Both upstream repos are public and also publish their
 binaries as crates (`decdn-node`, `decdn-cli`, `sponsord`, `sponsord-onramp`); the
@@ -199,8 +209,9 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   backend holds (`relay_foreign_namespaces`, ADR 002 § Retrieval by namespace, ADR 037). Recognition as an origin is on-chain (`OriginAssignment.addOrigin`,
   the publisher's step). **The public deCDN node**
   (baseline + `decdn-node`), installed by `decdn_node_install_method`:
-  `release` (the default) — a pinned GitHub release tarball verified against the
-  release's GPG-signed `SHA256SUMS` (`decdn_node_version`); `source` — a git ref (any tag/branch/SHA) cloned and `cargo build`-ed **on the
+  `release` (the default) — a GitHub release tarball, the newest of the pinned line or
+  an exact release (`decdn_node_version`, `tasks/resolve-release.yml`), verified
+  against the release's GPG-signed `SHA256SUMS`; `source` — a git ref (any tag/branch/SHA) cloned and `cargo build`-ed **on the
   node** as the unprivileged `decdn-build` user, sha256-pinned rustup, a `<repo>@<commit>`
   stamp (`tasks/source.yml`, copied into both sponsord roles, which share the user,
   home and toolchain). **No build can poison a later one:** root owns the home, the
@@ -297,7 +308,8 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   imported by `publisher.yml`) targets its own `sponsord_hosts` group, standalone or
   co-located with a node.
   - **Install:** a GPG-verified `v*` decdn/sponsord release by default
-    (`sponsord_version`), a host-side `source` build, or a manual binary.
+    (`sponsord_version`: the newest of its line, or an exact release), a host-side
+    `source` build, or a manual binary.
     The `--version` backstop checks the version in `release` mode only (the version
     has a default, so other modes would fail against it), as in the other two roles.
   - **Unit:** `DynamicUser`; the API token (generated on the host, never replaced),
@@ -647,8 +659,9 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
 
 - **`charts/decdn-node/`** — the same node on Kubernetes: a one-replica StatefulSet (one
   release = one identity) on the upstream `decdn-node` image (`ghcr.io/decdn/decdn-node`,
-  tag `appVersion` = the role's `decdn_node_version` unless `image.tag`/`image.digest`
-  is set), PVC data dir, a `prepare` init
+  tag `appVersion` = the role's `decdn_node_version` line, the floating tag upstream
+  moves to each release in it, pulled `Always` (`decdn-node.pullPolicy`), unless
+  `image.tag`/`image.digest` is set), PVC data dir, a `prepare` init
   container that installs the identity files from an `existingSecret` onto the PVC at
   `0600` (upstream rejects symlinked or group/world-readable key files) and the password
   into an in-memory volume, `DECDN_RPC_URL` via `secretKeyRef` (named keys only), public
@@ -662,9 +675,9 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   above applies here too:** `make lint-helm` runs the same `check-schema-keys.py` +
   `schema-keys.txt` on the rendered ConfigMap, so a re-sync covers both paths. CI's
   `helm` job also runs the real `decdn config validate` on each `ci/*.yaml` render, against the
-  `decdn` of the release `appVersion` pins (`scripts/fetch-decdn-cli.sh`: the role's
-  GPG check against the vendored KEYS), so a decdn bump PR validates the chart against
-  the new release. Optional
+  newest `decdn` of the line `appVersion` pins (`scripts/fetch-decdn-cli.sh`: the
+  role's line resolution and GPG check against the vendored KEYS), so a decdn bump PR
+  validates the chart against the new release. Optional
   `PrometheusRule` + dashboard ConfigMaps render `files/monitoring/`, the symlink to
   `monitoring/decdn-node/` (never through `tpl`:
   the alert annotations carry Prometheus templates).

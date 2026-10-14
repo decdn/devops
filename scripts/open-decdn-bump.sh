@@ -15,7 +15,11 @@
 #
 # The bump does checklist steps 1 to 7 (bump_decdn.py rewrite moves every pin,
 # the commented examples and AGENTS.md's pinned version; CI's helm job validates
-# the chart against the new release's binary).
+# the chart against the new release's binary). The roles and the chart pin a
+# release line, so a release in that line (a patch) moves only what names one
+# exact release: Compose, the examples and the generated mirrors, a repo-only
+# change. A release that starts a new line moves the line as well, and the
+# collections and the chart need a release after it.
 # Release facts (the SHA256SUMS digest, the decdn-node image digest) come from
 # the release's assets once their signatures verify against the vendored
 # decdn-release-KEYS.asc; the generated mirrors and KEYS come from a clone of the
@@ -116,20 +120,23 @@ bump() { python3 "$SCRIPTS/bump_decdn.py" --root "$WORKTREE" "$@"; }
 
 # ---- which release -------------------------------------------------------
 
-CURRENT=$(bump pinned) || die "could not read the decdn pin on origin/main"
+LINE=$(bump pinned) || die "could not read the decdn release line on origin/main"
+# The release the exact copies (Compose, the examples, the mirrors) name.
+CURRENT=$(bump synced) || die "could not read the decdn release devops main is synced to"
 # Never move the pin backwards: not to a patch release on an older line, nor
 # to an older tag given by hand.
 relation=$(bump compare "$TAG") || die "could not compare the pin with $TAG"
 case "$relation" in
   same)
-    echo "devops main already pins decdn $TAG; nothing to do"
+    echo "devops main is already synced to decdn $TAG; nothing to do"
     exit 0 ;;
   ahead)
-    echo "devops main pins decdn v$CURRENT, later than $TAG; nothing to do"
+    echo "devops main is synced to decdn v$CURRENT, later than $TAG; nothing to do"
     exit 0 ;;
   behind) ;;
   *) die "unexpected comparison of the pin with $TAG: $relation" ;;
 esac
+KIND=$(bump kind "$TAG") || die "could not tell whether $TAG is in the line $LINE"
 
 BRANCH="bump/decdn-${TAG}"
 existing=$(gh pr list -R "$DEVOPS" --head "$BRANCH" --state all \
@@ -186,7 +193,7 @@ UPSTREAM_SHA=$(git -C "$UPSTREAM" rev-parse HEAD)
 
 # ---- bump ----------------------------------------------------------------
 
-echo "==> Pinning decdn $TAG (from v$CURRENT)"
+echo "==> Moving decdn to $TAG (from v$CURRENT; $KIND bump, line $LINE)"
 # What a human must finish; the PR still opens, and the exit code says so.
 NEEDS=()
 indent() { sed 's/^/  /'; }
@@ -200,7 +207,11 @@ need() {
 bump rewrite "$VERSION" --sums-sha256 "$SUMS" --image-digest "$DIGEST" >/dev/null ||
   die "could not move the pins to $TAG; no PR opened"
 
-# Step 2: the generated mirrors, from the tag.
+# Step 2: the generated mirrors, from the tag. --check first: each mirror records the
+# upstream commit it came from, which moves on every tag, so only the generator can
+# tell whether the contract addresses themselves changed.
+MIRRORS_MOVED=""
+python3 scripts/sync-network-profiles.py "$UPSTREAM" --ref HEAD --check >/dev/null 2>&1 || MIRRORS_MOVED=1
 if ! out=$(python3 scripts/sync-network-profiles.py "$UPSTREAM" --ref HEAD 2>&1); then
   need "\`scripts/sync-network-profiles.py\` failed against $TAG: the role and its
   template need the change upstream made." "$out"
@@ -220,10 +231,20 @@ else
   need "\`gen-schema-keys.py\` failed against $TAG." "$out"
 fi
 
+# Within a line the deployed roles keep the mirrors they were released with, so
+# a patch that changes them is not repo-only.
+if [[ "$KIND" == patch ]] && { [[ -n "$MIRRORS_MOVED" ]] || ! git diff --quiet -- "$SCHEMA_KEYS"; }; then
+  need "$TAG changes the generated mirrors within the line $LINE: the released
+  collections still carry the old ones, so release \`decdn.node\` and
+  \`decdn.publisher\` after merging (RELEASING.md)."
+fi
+
 # Step 6: KEYS is a byte copy of upstream's.
 if ! cmp -s "$UPSTREAM/KEYS" "$KEYS"; then
   cp "$UPSTREAM/KEYS" "$KEYS"
-  need "decdn's \`KEYS\` changed and is copied to \`$KEYS\`: update the sponsord copy
+  cp "$UPSTREAM/KEYS" ansible/roles/sponsord_onramp/files/decdn-release-KEYS.asc
+  need "decdn's \`KEYS\` changed and is copied to \`$KEYS\` and the onramp's
+  \`ansible/roles/sponsord_onramp/files/decdn-release-KEYS.asc\`: update the sponsord copy
   (\`ansible/roles/sponsord/files/sponsord-release-KEYS.asc\`) and SECURITY.md's fingerprints."
 fi
 
@@ -234,7 +255,14 @@ others=$(gh pr list -R "$DEVOPS" --state open --json number,headRefName \
   others=""   # only a note in the body; not worth stopping the bump
 BODY="$WORK/body.md"
 {
-  echo "Moves the decdn/decdn pin to [${TAG}](https://github.com/${DECDN}/releases/tag/${TAG}) from \`v${CURRENT}\`."
+  if [[ "$KIND" == patch ]]; then
+    echo "Moves what names one decdn/decdn release to [${TAG}](https://github.com/${DECDN}/releases/tag/${TAG}) from \`v${CURRENT}\`:"
+    echo "Compose's image digest and onramp installer pin, the chart's example digest, the exact-pin"
+    echo "examples and the generated mirrors. The roles and the chart pin the line \`${LINE}\` and"
+    echo "pick ${TAG} up on their own."
+  else
+    echo "Moves the decdn/decdn pin to the line \`${TAG%.*}\` and [${TAG}](https://github.com/${DECDN}/releases/tag/${TAG}), from \`${LINE}\` and \`v${CURRENT}\`."
+  fi
   echo
   echo "- decdn changes: https://github.com/${DECDN}/compare/v${CURRENT}...${TAG}"
   echo "- \`SHA256SUMS\` (\`${SUMS}\`) and the \`decdn-node\` image digest (\`${DIGEST}\`)"
@@ -246,7 +274,11 @@ BODY="$WORK/body.md"
     printf -- '- %s\n' "${NEEDS[@]}"
     echo
   fi
-  echo "After merging, release each artifact the bump touched (RELEASING.md)."
+  if [[ "$KIND" == patch ]]; then
+    echo "Repo-only: no collection or chart release is needed (unless *Needs work* says otherwise)."
+  else
+    echo "After merging, release each artifact the bump touched (RELEASING.md)."
+  fi
   echo
   if [[ -n "$others" ]]; then
     echo "Older bump PRs still open: ${others}. This one supersedes them."
@@ -270,14 +302,21 @@ git --no-pager diff --stat
 
 git add -u || die "git add failed; no PR opened"
 # --no-verify: CI is the gate on this PR.
+if [[ "$KIND" == patch ]]; then
+  SUMMARY="Move what names one decdn/decdn release from v${CURRENT} to ${TAG}
+(${UPSTREAM_SHA}): the Compose image digest and onramp installer pin, the
+chart's example digest, the inventory and cloud-init exact-pin examples and the
+generated mirrors. The roles and the chart pin the line ${LINE}."
+else
+  SUMMARY="Move the decdn/decdn pin from the line ${LINE} (v${CURRENT}) to ${TAG}
+(${UPSTREAM_SHA}): the role default, the onramp's installer line, the chart's
+appVersion and Artifact Hub image, AGENTS.md's pinned line, and what names one
+release (Compose, the examples, the generated mirrors)."
+fi
 git commit --quiet --no-verify -F - <<EOF || die "git commit failed; no PR opened"
 chore: pin decdn to ${TAG}
 
-Move every decdn/decdn pin from v${CURRENT} to ${TAG} (${UPSTREAM_SHA}):
-the role default, the onramp's installer pin, the Compose image digest, the
-chart's appVersion and Artifact Hub image, the inventory and cloud-init
-examples, AGENTS.md's pinned version and the generated mirrors. The PR body
-lists anything left.
+${SUMMARY} The PR body lists anything left.
 EOF
 # No local branch: the commit is pushed from the detached worktree. Forced,
 # because the branch may be left over from a run that pushed it and opened no

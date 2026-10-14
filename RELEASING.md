@@ -16,7 +16,7 @@ refuses any publisher release whose `decdn.node: ">=X.Y.Z"` no `node-collection-
 tag on origin satisfies yet. A tag is not a Galaxy upload, so the publish job also
 asks Galaxy, before uploading a `decdn.publisher`, for a `decdn.node` that satisfies
 it, and fails while there is none: publish that node release, then re-run the job. What the artifacts must agree on is checked by CI, not by a shared
-version: the decdn version (the chart's `appVersion` and the role's
+version: the decdn release line (the chart's `appVersion` and the role's
 `decdn_node_version`) on every PR (`make test-scripts`), and the config keys each one
 renders against the same upstream schema-key inventory whenever either changes
 (`make lint-helm`, `molecule/schema`). When a change lands in several (a decdn bump
@@ -75,7 +75,9 @@ would commit, and changes no file. The script:
    `charts/decdn-node/Chart.yaml`.
    The chart's `appVersion` and its `artifacthub.io/images` tag already follow the
    role's `decdn_node_version` (`make test-scripts` refuses a PR where they differ), so
-   a decdn bump is a chart change too: release the chart.
+   a new decdn line is a chart change too: release the chart. A decdn patch release
+   in the pinned line needs no release of anything (the roles and the chart's default
+   tag follow the line); its bump PR only moves Compose and the examples.
 4. **Writes the changelog section.** It renders the same commits into a dated
    `## [X.Y.Z] — YYYY-MM-DD` section at the top of the artifact's `CHANGELOG.md`:
    `feat` under Added, `fix` under Fixed, `revert` under Removed, `security` under

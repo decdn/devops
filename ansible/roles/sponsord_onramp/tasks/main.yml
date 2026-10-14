@@ -23,7 +23,8 @@
 - name: Require a pinned release version
   ansible.builtin.assert:
     that:
-      - sponsord_onramp_version | length > 0
+      - sponsord_onramp_version is string
+      - sponsord_onramp_version is match('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)?$')
     fail_msg: >-
       sponsord_onramp_install_method "release" (the default) requires
       sponsord_onramp_version (e.g. "0.0.1") naming a v<version> release of
@@ -377,39 +378,39 @@
 - name: Validate the release pin the installers use
   ansible.builtin.assert:
     that:
-      - sponsord_onramp_decdn_release is match('^v' ~ _semver ~ '$')
-      - sponsord_onramp_decdn_sums_sha256 is match('^[0-9a-f]{64}$')
+      - sponsord_onramp_decdn_release is string
+      - sponsord_onramp_decdn_release is match('^v' ~ _line ~ '(\.' ~ _patch ~ ')?$')
+      - sponsord_onramp_decdn_sums_sha256 is match('^([0-9a-f]{64})?$')
       - >-
         sponsord_onramp_releases_base == ''
         or (sponsord_onramp_releases_base is match('^https://[^/?#@]+(/[^?#]*)?$')
             and sponsord_onramp_releases_base is not search('[\s\x27"`$\x5c\x5c{}]'))
     fail_msg: >-
-      The installers need sponsord_onramp_decdn_release (a decdn/decdn tag,
-      vMAJOR.MINOR.PATCH) and the SHA-256 of that release's SHA256SUMS in
-      sponsord_onramp_decdn_sums_sha256 (64 lowercase hex).
-      sponsord_onramp_releases_base must be "" or an https base URL.
+      The installers need sponsord_onramp_decdn_release, a decdn/decdn release line
+      (vMAJOR.MINOR, its newest release) or tag (vMAJOR.MINOR.PATCH), and with a tag
+      the SHA-256 of that release's SHA256SUMS in sponsord_onramp_decdn_sums_sha256
+      (64 lowercase hex). sponsord_onramp_releases_base must be "" or an https base
+      URL.
   vars:
-    _semver: '(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?'
+    _line: '(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+    _patch: '(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?'
 
-# The pin is a tag and its SHA256SUMS digest, and the defaults pin a real pair. An
-# inventory that moves one but not the other passes the format checks above and
-# serves installers that refuse the release on every user's machine, so the pair
-# must keep both defaults or change both. The defaults are read from this role's
-# own file, so they are not repeated here.
-- name: Require the release pin's tag and digest to move together
+# A line takes its digest from the release it resolves to (tasks/decdn-release.yml);
+# an exact tag needs the operator's. A digest beside a line could only be stale, and
+# a tag without one would leave the installers nothing to check the release with.
+- name: Require a SHA256SUMS digest exactly when the release pin is a tag
   ansible.builtin.assert:
     that:
       - >-
-        (sponsord_onramp_decdn_release == _pin_defaults.sponsord_onramp_decdn_release)
-        == (sponsord_onramp_decdn_sums_sha256 == _pin_defaults.sponsord_onramp_decdn_sums_sha256)
+        (sponsord_onramp_decdn_release is match('^v[0-9]+\.[0-9]+$'))
+        == (sponsord_onramp_decdn_sums_sha256 == '')
     fail_msg: >-
-      Set the release pin's tag and its SHA256SUMS digest together: either keep both
-      defaults ({{ _pin_defaults.sponsord_onramp_decdn_release }}) or set both. Got
       sponsord_onramp_decdn_release={{ sponsord_onramp_decdn_release }} with
-      sponsord_onramp_decdn_sums_sha256={{ sponsord_onramp_decdn_sums_sha256 }}. A tag
-      served with another release's digest fails every installer.
-  vars:
-    _pin_defaults: "{{ lookup('ansible.builtin.file', role_path ~ '/defaults/main.yml') | from_yaml }}"
+      sponsord_onramp_decdn_sums_sha256="{{ sponsord_onramp_decdn_sums_sha256 }}": a
+      release line (vX.Y) takes no digest, since the role reads it from the release
+      it resolves to; a tag (vX.Y.Z) needs the SHA-256 of that release's SHA256SUMS
+      (`sha256sum SHA256SUMS` after verifying its .asc). A tag served with another
+      release's digest fails every installer.
 
 - name: Validate the onramp's limits
   ansible.builtin.assert:
@@ -736,6 +737,9 @@
     state: absent
   notify: Restart sponsord-onramp
   when: sponsord_onramp_gate_template_src | length == 0
+
+- name: Settle the decdn release the installers use
+  ansible.builtin.include_tasks: decdn-release.yml
 
 - name: Template the non-secret sponsord-onramp.env
   ansible.builtin.template:
