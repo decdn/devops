@@ -4,7 +4,8 @@
 # and locks (scripts/molecule.sh), the release gate and scripts/release.sh, the
 # lint-compose and lint-cloud-init invariants (negative cases), compose/decdn-compose's
 # and scripts/bump_decdn.py's unit tests, the firewall holes
-# playbooks/group_vars/ derives per host, ci.yml's helm path filter, and — with
+# playbooks/group_vars/ derives per host, ci.yml's helm path filter,
+# examples/collection-fleet's inventory copy, and — with
 # UPSTREAM=<decdn checkout> — the upstream-mirror generators' exit codes.
 # `make test-scripts` runs it; CI's `scripts` job does too. Needs make, docker
 # (compose v2), jq, flock, gpg; the cloud-init cases also need cloud-init, shellcheck and yq,
@@ -341,6 +342,26 @@ elif [[ -n ${CI:-} ]]; then
 else
   skipped+=("node lifecycle playbook check (needs yq)")
 fi
+
+# --- examples/collection-fleet's inventory -------------------------------------------
+# The fleet example ships its own copy of ansible/inventory/'s templates, so a Galaxy
+# user copies one directory. group_vars/ and host_vars/ are the same files; the two
+# hosts examples differ only in their header (the comment block up to the first blank
+# line: make targets here, ansible-playbook there). Tracked files only, so a local
+# secret.yml never counts.
+inventory_files() { git -C "$repo/$1" ls-files group_vars host_vars; }
+diff <(inventory_files ansible/inventory) <(inventory_files examples/collection-fleet/inventory) >"$work/out" \
+  || { cat "$work/out" >&2; fail "examples/collection-fleet/inventory/ and ansible/inventory/ track different group_vars/host_vars files"; }
+while IFS= read -r f; do
+  cmp -s "$repo/ansible/inventory/$f" "$repo/examples/collection-fleet/inventory/$f" \
+    || fail "examples/collection-fleet/inventory/$f differs from ansible/inventory/$f: change both"
+done < <(inventory_files ansible/inventory)
+pass "examples/collection-fleet's group_vars/ and host_vars/ are ansible/inventory/'s"
+for ex in hosts-node.yml.example hosts-publisher.yml.example; do
+  diff <(sed '1,/^$/d' "$repo/ansible/inventory/$ex") <(sed '1,/^$/d' "$repo/examples/collection-fleet/inventory/$ex") >"$work/out" \
+    || { cat "$work/out" >&2; fail "examples/collection-fleet/inventory/$ex: below its header, it differs from ansible/inventory/$ex"; }
+done
+pass "examples/collection-fleet's hosts examples share ansible/inventory/'s body"
 
 # --- release gate ----------------------------------------------------------------------
 gate="$repo/scripts/check-release-version.sh"

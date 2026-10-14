@@ -42,8 +42,8 @@ The roles and the node playbooks are the
 [Ansible Galaxy](https://galaxy.ansible.com/ui/repo/published/decdn/node/), so you run
 them from a private repository that holds only your inventory. Set it up once with the
 [root README's quickstart](../README.md#quickstart-ansible-from-galaxy) (it clones this
-repository only to copy [`examples/collection-fleet/`](../examples/collection-fleet/README.md)
-and the inventory templates), then:
+repository only to copy [`examples/collection-fleet/`](../examples/collection-fleet/README.md),
+inventory templates included), then:
 
 ```bash
 ansible-playbook decdn.node.node -l <host> -u root        # a fresh host's first run (or -u ubuntu, …)

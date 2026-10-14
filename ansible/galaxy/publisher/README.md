@@ -88,8 +88,10 @@ ansible-playbook -i inventory/hosts.yml decdn.publisher.decommission -l <host>
 ```
 
 Start the inventory from
-[`hosts-publisher.yml.example`](https://github.com/decdn/devops/blob/main/ansible/inventory/hosts-publisher.yml.example)
-and the `group_vars/` and `host_vars/` beside it. Beyond the roles, the playbooks
+[`hosts-publisher.yml.example`](https://github.com/decdn/devops/blob/main/examples/collection-fleet/inventory/hosts-publisher.yml.example)
+and the `group_vars/` and `host_vars/` beside it, in
+[`examples/collection-fleet/`](https://github.com/decdn/devops/tree/main/examples/collection-fleet),
+a ready-made project for these collections. Beyond the roles, the playbooks
 bring:
 
 - **the firewall holes**, from the groups a host is in: the node's udp/4433, Caddy's

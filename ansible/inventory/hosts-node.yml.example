@@ -30,10 +30,9 @@
 # affected host: `sudo --version` reports "sudo-rs" and/or /usr/bin/sudo.ws exists. Leave
 # it commented on Debian bookworm / Ubuntu noble — that path does not exist there.
 
-# Public deCDN cache nodes — provisioned by playbooks/node.yml (`make deploy-node`)
-# and by site.yml (`make deploy`). A cache node has no origin backend: it fills a
-# miss from other nodes (node-to-node pull-through). Origins are a publisher's
-# (hosts-publisher.yml.example).
+# Public deCDN cache nodes — provisioned by the node.yml playbook and by site.yml. A
+# cache node has no origin backend: it fills a miss from other nodes (node-to-node
+# pull-through). Origins are a publisher's (hosts-publisher.yml.example).
 # Per-node config (contract addresses, region, version, …) goes in the committed
 # inventory/host_vars/<name>/main.yml; the one secret, rpc_url, goes in a git-ignored
 # secret.yml beside it (copy the shipped secret.yml.example there).

@@ -132,7 +132,9 @@ Ansible loads `group_vars/` and `host_vars/` from beside whichever `hosts.yml` y
 the overlay carries its own: create them next to its `hosts.yml`, starting from the public
 `inventory/group_vars/` and `inventory/host_vars/` templates. Git-ignore
 `host_vars/*/secret.*` in the private repo, so it never tracks a per-node secret. The public
-`inventory/group_vars/` and `inventory/host_vars/` are **not** loaded for it. Add child groups
+`inventory/group_vars/` and `inventory/host_vars/` are **not** loaded for it. (Deploying from
+the Galaxy collections instead? [`examples/collection-fleet/`](../examples/collection-fleet/README.md)
+is that private repository ready-made, inventory templates and `.gitignore` included.) Add child groups
 of your own when hosts differ by group (disk size, an egress cap on metered bandwidth), each
 with a `group_vars/<group>.yml`. Origins go in `decdn_origin_nodes`, as a child of
 `decdn_nodes` (see `inventory/hosts-publisher.yml.example`). Settings every host needs regardless of

@@ -1,0 +1,54 @@
+---
+# NODE OPERATORS: copy to inventory/hosts.yml and fill in your hosts (a publisher
+# starts from hosts-publisher.yml.example instead), then commit it: this is your
+# private fleet repository, and ansible.cfg reads inventory/hosts.yml.
+#
+# No ansible_user by default: Ansible connects as your local $USER, which is the admin
+# account the baseline role creates (the auto-detected runner). A fresh box doesn't have
+# it yet, so bootstrap each new host ONCE as a user that can sudo (root, or the image's
+# default user such as ubuntu):
+#   ansible-playbook decdn.node.node -l <host> -u root   # swap root for your image's bootstrap user
+# After that first converge ssh_hardening disables root login, and a plain
+# `ansible-playbook decdn.node.node -l <host>` connects as $USER. Set a per-host
+# ansible_user only if the admin account's name differs from your $USER (you listed
+# another name in baseline_sudo_users) or you set baseline_sudo_autodetect_runner:
+# false. Never set it to the bootstrap user: an inventory ansible_user overrides -u, and
+# root login is gone after the first converge. For the same reason, add a per-host
+# ansible_user only AFTER that host's bootstrap run.
+#
+# Ubuntu sudo-rs workaround: 25.10 (Questing) and 26.04 ship sudo-rs as the default
+# /usr/bin/sudo. Ansible's sudo become plugin passes a custom `-p` prompt sentinel and
+# waits for it before sending the become password; sudo-rs does not honor that custom
+# `-p`, so `--ask-become-pass` / -K hangs with "Timeout waiting for privilege
+# escalation prompt". This only bites when a become PASSWORD is actually sent: with the
+# default `baseline_sudo_passwordless: true` the admin user has NOPASSWD sudo, so
+# Ansible sends no become password and the hang never occurs. It resurfaces only if you
+# set `baseline_sudo_passwordless: false` (classic password sudo). Fix: classic sudo is
+# still installed at /usr/bin/sudo.ws and honors the -p prompt Ansible expects — point
+# become at it with the per-host `ansible_become_exe` line below. Only uncomment on an
+# affected host: `sudo --version` reports "sudo-rs" and/or /usr/bin/sudo.ws exists. Leave
+# it commented on Debian bookworm / Ubuntu noble — that path does not exist there.
+
+# Public deCDN cache nodes — provisioned by the node.yml playbook and by site.yml. A
+# cache node has no origin backend: it fills a miss from other nodes (node-to-node
+# pull-through). Origins are a publisher's (hosts-publisher.yml.example).
+# Per-node config (contract addresses, region, version, …) goes in the committed
+# inventory/host_vars/<name>/main.yml; the one secret, rpc_url, goes in a git-ignored
+# secret.yml beside it (copy the shipped secret.yml.example there).
+decdn_nodes:
+  hosts:
+    decdn-node-1:
+      ansible_host: REPLACE_WITH_NODE_VPS_IP_OR_DNS
+      # ansible_user: alice   # post-bootstrap, only if the admin account's name ≠ your $USER — see note above
+      # ansible_become_exe: /usr/bin/sudo.ws   # Ubuntu sudo-rs workaround — see note above
+    # More nodes: one entry each, with its own host_vars/<name>/main.yml
+    # (decdn_region is REQUIRED per host).
+    # decdn-node-2:
+    #   ansible_host: REPLACE_WITH_NODE_VPS_IP_OR_DNS
+  # Child groups, for hosts that differ in a way that is easier to express per group
+  # than per host (disk size, an egress cap on pay-per-TB bandwidth). Give
+  # each one a group_vars/<group>.yml; Ansible merges it over decdn_nodes'.
+  # children:
+  #   big_disk:
+  #     hosts:
+  #       decdn-node-2:
