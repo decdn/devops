@@ -1,8 +1,10 @@
 ---
 # Install the sponsord-onramp binary. Three methods, selected by sponsord_onramp_install_method:
-#   "release" (default): download the tarball from the pinned v<version> GitHub
-#     Release (the decdn/sponsord workspace release that also carries sponsord),
-#     verify it against the GPG-signed SHA256SUMS manifest, then extract.
+#   "release" (default): download the tarball from the GitHub Release of
+#     sponsord_onramp_version (the decdn/sponsord workspace release that also carries
+#     sponsord): an exact version, or the newest release of a line "X.Y"
+#     (tasks/resolve-release.yml). Verify it against the GPG-signed SHA256SUMS
+#     manifest, then extract.
 #     Idempotent and upgrade-aware via a version stamp.
 #   "source": clone sponsord_onramp_source_repo at sponsord_onramp_source_ref on the host and
 #     cargo-build it as an unprivileged user (tasks/source.yml).
@@ -13,6 +15,30 @@
 # the full rationale for each (status-parsed gpg, exact manifest entry, private
 # staging dir kept on failure).
 
+
+# A release line ("X.Y") becomes the newest finished release in it, an exact pin
+# stays as it is; every use below is of the resolved version.
+- name: Resolve the sponsord-onramp release to install
+  ansible.builtin.include_tasks: resolve-release.yml
+  vars:
+    # sponsord's play resolved the same line on this host moments ago: take its answer,
+    # so a release published between the two plays cannot split the one workspace
+    # release across the two binaries.
+    _rr_spec: >-
+      {{ _sponsord_resolved_version
+         if (_sponsord_resolved_version is defined
+             and _sponsord_resolved_version is match('^' ~ (sponsord_onramp_version | regex_escape) ~ '\.[0-9]+$'))
+         else sponsord_onramp_version }}
+    _rr_index: "{{ sponsord_onramp_release_index }}"
+    _rr_name: sponsord_onramp_version
+    _rr_stamp: /usr/local/lib/sponsord-onramp/installed-version
+  when: sponsord_onramp_install_method == "release"
+
+- name: Record the sponsord-onramp release to install
+  ansible.builtin.set_fact:
+    _sponsord_onramp_resolved_version: "{{ _rr_version }}"
+  when: sponsord_onramp_install_method == "release"
+
 - name: Install from the pinned GitHub Release tarball
   when: sponsord_onramp_install_method == "release"
   block:
@@ -20,8 +46,8 @@
       ansible.builtin.set_fact:
         # The archive holds ONE flat binary at its root (upstream release.yml).
         sponsord_onramp_release_archive: >-
-          sponsord-onramp-{{ sponsord_onramp_version }}-{{ sponsord_onramp_target }}.tar.gz
-        sponsord_onramp_release_url: "{{ sponsord_onramp_release_base }}/v{{ sponsord_onramp_version }}"
+          sponsord-onramp-{{ _sponsord_onramp_resolved_version }}-{{ sponsord_onramp_target }}.tar.gz
+        sponsord_onramp_release_url: "{{ sponsord_onramp_release_base }}/v{{ _sponsord_onramp_resolved_version }}"
 
     - name: Read the installed-version stamp
       ansible.builtin.slurp:
@@ -34,18 +60,18 @@
       ansible.builtin.set_fact:
         sponsord_onramp_need_install: >-
           {{ (sponsord_onramp_stamp.content is not defined)
-             or ((sponsord_onramp_stamp.content | b64decode | trim) != sponsord_onramp_version) }}
+             or ((sponsord_onramp_stamp.content | b64decode | trim) != _sponsord_onramp_resolved_version) }}
 
     - name: Report that the release download is not simulated in check mode
       ansible.builtin.debug:
         msg: >-
           check mode: skipping the download + signature verification of sponsord-onramp
-          {{ sponsord_onramp_version }}. The config and unit below still diff normally.
+          {{ _sponsord_onramp_resolved_version }}. The config and unit below still diff normally.
       when:
         - sponsord_onramp_need_install
         - ansible_check_mode
 
-    - name: Install sponsord-onramp {{ sponsord_onramp_version }}
+    - name: Install sponsord-onramp {{ _sponsord_onramp_resolved_version }}
       when:
         - sponsord_onramp_need_install
         - not ansible_check_mode
@@ -257,11 +283,11 @@
       - sponsord_onramp_installed_version.rc == 0
       - >-
         sponsord_onramp_install_method != 'release'
-        or (sponsord_onramp_installed_version.stdout | trim) == 'sponsord-onramp ' ~ sponsord_onramp_version
+        or (sponsord_onramp_installed_version.stdout | trim) == 'sponsord-onramp ' ~ _sponsord_onramp_resolved_version
     fail_msg: >-
       {{ sponsord_onramp_bin }} --version exited {{ sponsord_onramp_installed_version.rc }} with
       "{{ sponsord_onramp_installed_version.stdout | trim }}"{{
-      (', expected "sponsord-onramp ' ~ sponsord_onramp_version ~ '"')
+      (', expected "sponsord-onramp ' ~ _sponsord_onramp_resolved_version ~ '"')
         if sponsord_onramp_install_method == 'release' else '' }}.
       The binary on the host is broken or is not the pinned release. In release mode,
       remove /usr/local/lib/sponsord-onramp/installed-version to force a fresh download.
@@ -281,7 +307,7 @@
   vars:
     # [stamp name suffix, content] for the method in use.
     sponsord_onramp_stamp_record: >-
-      {{ ['version', sponsord_onramp_version] if sponsord_onramp_install_method == 'release'
+      {{ ['version', _sponsord_onramp_resolved_version] if sponsord_onramp_install_method == 'release'
          else ['source', sponsord_onramp_source_id | default('')] }}
   block:
     - name: Ensure the stamp directory exists

@@ -15,9 +15,13 @@ networks.yml (chain_id + CapacityBond and SlashJudge, which the onramp hands to 
 decdn). --check covers all three files.
 
 Everything is read from git at --ref, never from the working tree, so the checkout's
-own branch does not matter. --ref defaults to v<decdn_node_version>, the tag of the
-release the roles pin (ansible/roles/decdn_node/defaults/main.yml): the mirror must
-describe the binary a default deploy installs. Two
+own branch does not matter. --ref defaults to the release a default deploy installs
+(ansible/roles/decdn_node/defaults/main.yml): for a release line (decdn_node_version
+"X.Y") the checkout's highest vX.Y.N tag, for an exact pin v<decdn_node_version>, so
+the mirror describes the binary a default deploy runs. A tag exists before its
+release is published (upstream un-drafts it once signed), and the roles skip a
+draft, so while a release is being cut the default ref is one the roles do not
+install yet: pass --ref then (the upstream-drift job passes the resolved tag). Two
 upstream files are the source, and both the chain list AND the manifest-key mapping
 are parsed from the first, so this script holds no hand-written copy of either:
 
@@ -201,7 +205,7 @@ def strip_commit(text: str) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("upstream", type=Path, help="path to a decdn/decdn git checkout")
-    ap.add_argument("--ref", help="git ref to read (default: v<decdn_node_version>, the pinned release tag)")
+    ap.add_argument("--ref", help="git ref to read (default: the newest tag of the pinned release line)")
     ap.add_argument("--check", action="store_true", help="exit 1 if the committed file is stale")
     args = ap.parse_args()
     if args.ref is None:
@@ -209,6 +213,15 @@ def main() -> None:
         if not pinned:
             die(f"no decdn_node_version default in {DEFAULTS.relative_to(REPO)}; pass --ref")
         args.ref = f"v{pinned.group(1)}"
+        if re.fullmatch(r"[0-9]+\.[0-9]+", pinned.group(1)):
+            tags = subprocess.run(["git", "-C", str(args.upstream), "tag", "-l", f"{args.ref}.*"],
+                                  check=True, capture_output=True, text=True).stdout.split()
+            patches = [int(m.group(1)) for tag in tags
+                       if (m := re.fullmatch(rf"{re.escape(args.ref)}\.(0|[1-9][0-9]*)", tag))]
+            if not patches:
+                die(f"{args.upstream} has no {args.ref}.N tag (decdn_node_version is the line "
+                    f"{pinned.group(1)}); fetch its tags or pass --ref")
+            args.ref = f"{args.ref}.{max(patches)}"
 
     commit, profiles = load(args.upstream, args.ref)
     outputs = [

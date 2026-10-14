@@ -67,6 +67,22 @@ Image: the digest when set, else the tag, which defaults to appVersion.
 {{- end }}
 
 {{/* ---------------------------------------------------------------------------
+Pull policy: image.pullPolicy when set, else Always for a release-line tag (X.Y,
+which upstream moves to each new release) and IfNotPresent for an exact tag or a
+digest.
+--------------------------------------------------------------------------- */}}
+{{- define "decdn-node.pullPolicy" -}}
+{{- $img := .Values.image }}
+{{- if $img.pullPolicy }}
+{{- $img.pullPolicy }}
+{{- else if and (not $img.digest) (regexMatch "^[0-9]+\\.[0-9]+$" (default .Chart.AppVersion $img.tag)) }}
+{{- "Always" }}
+{{- else }}
+{{- "IfNotPresent" }}
+{{- end }}
+{{- end }}
+
+{{/* ---------------------------------------------------------------------------
 In-pod paths. data_dir is a SUBDIRECTORY of the PVC mount: the mount root carries
 fsGroup bits, and upstream refuses a data_dir with any group/world permission.
 --------------------------------------------------------------------------- */}}

@@ -48,12 +48,15 @@ decdn_rustup_sha256:
   aarch64-unknown-linux-gnu: 15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433
 
 # --- Release to install ("release" mode) ----------------------------------------
-# The decdn/sponsord release (tag v<version>) this repo pins, the
-# same one as the sponsord role's sponsord_version.
-sponsord_onramp_version: "0.1.0"         # asserted non-empty in "release" mode
+# The decdn/sponsord release to install, a line ("X.Y", the newest finished vX.Y.N)
+# or an exact "X.Y.Z": the same one as the sponsord role's sponsord_version.
+sponsord_onramp_version: "0.1"
 # Derived from the host's gathered architecture (vars/main/arch.yml).
 sponsord_onramp_target: "{{ _sponsord_onramp_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
 sponsord_onramp_release_base: "https://github.com/decdn/sponsord/releases/download"
+# Where a release line is resolved (GitHub's GET /repos/decdn/sponsord/releases
+# shape; 60 unauthenticated requests an hour per address).
+sponsord_onramp_release_index: "https://api.github.com/repos/decdn/sponsord/releases?per_page=100"
 sponsord_onramp_verify_release_signature: true
 # Upstream signs every decdn/sponsord release with the keys in its one KEYS file,
 # vendored once, in the sponsord role. Both roles ship side by side (this repo and
@@ -136,12 +139,23 @@ sponsord_onramp_brand_name: ""            # [deCDN] name on the gate page
 sponsord_onramp_gate_template_src: ""
 
 # --- Release the installers install --------------------------------------------
-# The decdn/decdn release the installers download `decdn` from: a tag and the
-# SHA-256 of that release's SHA256SUMS file (`sha256sum SHA256SUMS` after
-# verifying its .asc). Default: decdn/decdn v0.1.0. Override the tag together with
-# its digest: preflight refuses a pair where only one half moved.
-sponsord_onramp_decdn_release: v0.1.0     # decdn/decdn tag
-sponsord_onramp_decdn_sums_sha256: c88ad5479f31bb0857db2c0205c54b240cbceb33a96724e4f8a288b6d866ab66
+# The decdn/decdn release the installers download `decdn` from. A release line,
+# "vX.Y" (the default follows the decdn_node role's), serves the newest finished
+# vX.Y.N, looked up in sponsord_onramp_decdn_release_index on every run, with the
+# SHA-256 of its SHA256SUMS read from sponsord_onramp_decdn_release_base and
+# verified against sponsord_onramp_decdn_keyring first. An exact tag, "vX.Y.Z",
+# needs that digest set beside it (`sha256sum SHA256SUMS` after verifying its .asc);
+# preflight refuses a tag without one and a line with one.
+sponsord_onramp_decdn_release: v0.1       # decdn/decdn line or tag
+sponsord_onramp_decdn_sums_sha256: ""     # with a tag only
+sponsord_onramp_decdn_release_index: "https://api.github.com/repos/decdn/decdn/releases?per_page=100"
+# Where the role reads a line's SHA256SUMS: the installers' own download location
+# (<releases base>/decdn/releases/download), unless a test mirror serves it.
+sponsord_onramp_decdn_release_base: >-
+  {{ (sponsord_onramp_releases_base or 'https://github.com/decdn') ~ '/decdn/releases/download' }}
+# decdn/decdn's KEYS, vendored with this role (a copy of the decdn_node role's;
+# make test-scripts keeps them identical).
+sponsord_onramp_decdn_keyring: decdn-release-KEYS.asc
 sponsord_onramp_releases_base: ""         # [https://github.com/decdn]
 
 # --- Limits ("" = the onramp's own default, shown in brackets) -----------------

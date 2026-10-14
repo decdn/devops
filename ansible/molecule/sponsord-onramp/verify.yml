@@ -38,6 +38,7 @@
       loop:
         - /etc/sponsord/sponsord-onramp.env
         - /etc/caddy/Caddyfile
+        - /usr/local/lib/sponsord-onramp/decdn-release
 
     - name: Require the env file to carry the settings and no secret
       ansible.builtin.assert:
@@ -55,7 +56,11 @@
           - "'TOKEN' not in _env"
           - "'TURNSTILE_SECRET' not in _env"
           - "'1x0000000000000000000000000000000' not in _env"
-        fail_msg: "{{ _env }}"
+          # The exact pin is served as it is, and recorded, so a later outage on a
+          # release line cannot fall back to a release served before it.
+          - "'ONRAMP_DECDN_RELEASE=v9.9.9\n' in _env"
+          - _or_text.results[2].content | b64decode == '9.9.9\n'
+        fail_msg: "{{ _env }} (decdn-release record: {{ _or_text.results[2].content | b64decode | to_json }})"
       vars:
         _env: "{{ _or_text.results[0].content | b64decode }}"
         _profile: "{{ _sponsord_onramp_network_profiles['arbitrum-sepolia'] }}"

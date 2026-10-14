@@ -7,12 +7,16 @@ pulls a pinned GitHub Release tarball and verifies it against the GPG-signed
 and `manual` copies locally-built binaries from the Ansible control machine. This
 is the repo's deployment (`playbooks/site.yml`).
 
-**Pinned release.** `decdn_node_version` defaults to the decdn/decdn release
-this repo pins ([`defaults/main.yml`](defaults/main.yml)); see [Bumping the decdn release](#bumping-the-decdn-release)
-to move it. CI tests the role against stub binaries, not this release.
+**Pinned release line.** `decdn_node_version` defaults to the decdn/decdn release
+line this repo pins ([`defaults/main.yml`](defaults/main.yml)), `"X.Y"`: every
+run installs the newest finished `vX.Y.N` release, so a new patch release reaches the
+node (and restarts it) on the next deploy, with no new release of this role. Set an
+exact `"X.Y.Z"` to hold a host on one release. See [Bumping the decdn release](#bumping-the-decdn-release)
+to move the line. CI tests the role against stub binaries, not these releases.
 
 **Schema tracking.** This role renders `node.toml` against the config schema of
-the `decdn/decdn` release `decdn_node_version` pins. Upstream marks every config
+the newest `decdn/decdn` release of the line `decdn_node_version` pins (a patch
+release is not expected to change it). Upstream marks every config
 section `#[serde(deny_unknown_fields)]` and defines **no** serde aliases, so a key
 this role emits that your binary does not know is a startup crash-loop, not a
 warning. The role runs `decdn config validate` against the installed binary after
@@ -51,9 +55,22 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
      `decdn_verify_release_signature: false` for an air-gapped mirror that strips
      the signature — that takes the tarballs on trust.
 
-     `decdn_node_version` (default: the pinned release) names the `v<version>` release, which
-     must be reachable from the target host; override `decdn_node_release_base`
-     for a mirror.
+     `decdn_node_version` (default: the pinned release line) names the release:
+     - **A line, `"X.Y"`:** the target host reads `decdn_node_release_index`
+       (GitHub's release list for decdn/decdn) on every run and takes the highest
+       `vX.Y.N` that is not a draft or a prerelease and has a `SHA256SUMS.asc`
+       (`tasks/resolve-release.yml`). The list only chooses the tag: the download
+       is verified exactly as for an exact pin, against the resolved version. Check
+       mode reads the list too, so `make check` shows the upgrade a run would make.
+       GitHub allows 60 unauthenticated API requests an hour per address, one per
+       host per run: a large fleet behind one address pins an exact version, or
+       serves the list from a mirror.
+     - **An exact `"X.Y.Z"`:** that release, with no lookup.
+
+     Quote it: an unquoted `0.10` is the number `0.1`, which the role refuses. The
+     release must be reachable from the target host; override
+     `decdn_node_release_base` (and, for a line, `decdn_node_release_index`) for a
+     mirror.
    - **`source`** — the role builds the two binaries **on the node** from
      `decdn_node_source_repo` (default `https://github.com/decdn/decdn.git`) at
      `decdn_node_source_ref`, which is required and may be any tag, branch or SHA:
@@ -658,9 +675,11 @@ decdn appeal slash <SLASH_ID> <EVIDENCE_BUNDLE_HASH>
 Backups, restores, moving a node to a new host and decommissioning: `make backup`,
 `make decommission` and the procedures in [`docs/lifecycle.md`](../../../docs/lifecycle.md).
 
-Upgrades (`release` mode): bump `decdn_node_version` and re-deploy — the version stamp triggers re-install + restart; the persistent
-`node.secret` and `keystore.json` are untouched. A new upstream release is bumped
-in this repo as below.
+Upgrades (`release` mode): with a release line, re-deploy — a newer release in the
+line no longer matches the version stamp, so the node re-installs and restarts. With
+an exact pin, or to move to a new line, change `decdn_node_version` and re-deploy.
+The persistent `node.secret` and `keystore.json` are untouched. A new upstream line is
+bumped in this repo as below.
 
 Upgrades (`manual` mode): there is **no** version stamp — rebuild the binaries
 locally and re-deploy. `copy` compares checksums and re-pushes (and restarts) only
@@ -696,50 +715,62 @@ and drop its line from `/etc/cron.deny` and `/etc/at.deny`.
 
 ## Bumping the decdn release
 
-The repo pins one decdn/decdn release everywhere, and a new one moves every pin in
-one change. `scripts/open-decdn-bump.sh [vX.Y.Z]` opens that PR: decdn's
-`publish-crates.sh` runs it at the end of each decdn release, and a maintainer runs it
-by hand from a decdn/devops clone (with no tag, it takes decdn's latest release).
-It does steps 1 to 7 in a worktree at `origin/main`, takes
-the digests from the release's assets once their signatures verify against
-`files/decdn-release-KEYS.asc`, and lists in the PR body what is left: any
-schema-key or KEYS change, and any generator that failed. CI's `helm` job validates
-the chart against the new release's binary (step 5), so a bump PR with no "Needs
-work" list and a green CI needs no hand edits. `--dry-run` prints the diff and the PR body
-instead. The weekly `upstream-drift` workflow fails while no bump has landed.
+The role defaults, the onramp's installer pin and the chart's `appVersion` name a
+release line, so a decdn/decdn release in that line reaches deployments on its own.
+What cannot resolve a line names one release, and moves on every upstream release:
+Compose's image digest and onramp installer pin, the chart's example digest, the
+commented exact-pin examples, and the generated mirrors. `scripts/open-decdn-bump.sh
+[vX.Y.Z]` opens that PR: decdn's `publish-crates.sh` runs it at the end of each decdn
+release, and a maintainer runs it by hand from a decdn/devops clone (with no tag, it
+takes decdn's latest release). It works in a worktree at `origin/main`, takes the
+digests from the release's assets once their signatures verify against
+`files/decdn-release-KEYS.asc`, and lists in the PR body what is left: any schema-key
+or KEYS change, a generated mirror that changed within the line, and any generator
+that failed. `--dry-run` prints the diff and the PR body instead. The weekly
+`upstream-drift` workflow fails while the exact copies are behind the line's newest
+release, or a new line is out.
+
+- **A patch release (a `vX.Y.N` in the pinned line `X.Y`)** is a repo-only change: steps 2
+  to 4, 6 and 7 below. No release of the collections or the chart is needed, unless
+  the mirrors changed (the deployed roles carry them), which the PR body says.
+- **A new line (a release outside `X.Y`)** is every step, and the collections and the chart need a
+  release after it (RELEASING.md). CI's `helm` job validates the chart against the
+  new release's binary (step 5), so a bump PR with no "Needs work" list and a green
+  CI needs no hand edits.
 
 The steps:
 
-1. `decdn_node_version` in `defaults/main.yml`.
+1. The line: `decdn_node_version` in `defaults/main.yml`, and
+   `sponsord_onramp_decdn_release` (`vX.Y`) in `roles/sponsord_onramp/defaults/main.yml`.
 2. The generated mirrors, from a decdn checkout at the new tag:
    `scripts/sync-network-profiles.py <checkout> --ref v<version>` and
    `ansible/molecule/schema/files/gen-schema-keys.py <checkout> >
    ansible/molecule/schema/files/schema-keys.txt` (run on a checkout of the tag).
    If the schema keys changed, re-sync `templates/node.toml.j2` (and the chart's
    `values.config`).
-3. The onramp's installer pin: `sponsord_onramp_decdn_release` (`v<version>`) and
-   `sponsord_onramp_decdn_sums_sha256` (`sha256sum SHA256SUMS` once
-   `SHA256SUMS.asc` verifies), in `roles/sponsord_onramp/defaults/main.yml` and
-   `compose/sponsord-onramp.env.example`.
+3. Compose's onramp installer pin: `ONRAMP_DECDN_RELEASE` (`v<version>`) and
+   `ONRAMP_DECDN_SUMS_SHA256` (`sha256sum SHA256SUMS` once `SHA256SUMS.asc`
+   verifies) in `compose/sponsord-onramp.env.example`. The role reads both from the
+   release itself.
 4. `DECDN_IMAGE_DIGEST` in `compose/.env.example` (and the example digest in
    `charts/decdn-node/values.yaml`), from the release's signed
    `decdn-node-image-digest.txt` (`image-digest.txt` in v0.0.1).
-5. `appVersion` in `charts/decdn-node/Chart.yaml` and the image tag in its
-   `artifacthub.io/images` annotation. CI's `helm` job then validates the chart
-   against that release's `decdn` (`scripts/fetch-decdn-cli.sh`, the same signature
-   check as this role's).
-6. `files/decdn-release-KEYS.asc`, if upstream's `KEYS` changed (and the sponsord
-   copy, and `SECURITY.md`'s fingerprints).
-7. The commented examples that name the version (`decdn_node_version`,
-   `decdn_node_source_ref` and `sponsord_onramp_decdn_release`, in the inventory
-   templates, their `examples/collection-fleet` copies and
-   `cloud-init/user-data-publisher.yaml`) and AGENTS.md's "Pinned upstream releases".
-   Other docs name the pin, never its number. The changelog entry is the PR title
-   (`feat`, `fix` or `chore`, not `ci` or `build`, which the changelogs leave out;
-   RELEASING.md).
+5. The line again: `appVersion` in `charts/decdn-node/Chart.yaml` and the image tag in
+   its `artifacthub.io/images` annotation. CI's `helm` job then validates the chart
+   against the line's newest `decdn` (`scripts/fetch-decdn-cli.sh`, the same
+   resolution and signature check as this role's).
+6. `files/decdn-release-KEYS.asc`, if upstream's `KEYS` changed (and the sponsord and
+   sponsord_onramp copies, and `SECURITY.md`'s fingerprints).
+7. The commented exact-pin examples (`decdn_node_version`, `decdn_node_source_ref`
+   and `sponsord_onramp_decdn_release`, in the inventory templates, their
+   `examples/collection-fleet` copies and `cloud-init/user-data-publisher.yaml`), and
+   for a new line AGENTS.md's "Pinned upstream releases". Other docs name the pin,
+   never its number. The changelog entry is the PR title (`feat`, `fix` or `chore`,
+   not `ci` or `build`, which the changelogs leave out; RELEASING.md).
 
-`make test-scripts` fails while the role, the onramp's decdn pin (role and Compose
-example), the chart's `appVersion` and its `artifacthub.io/images` image, AGENTS.md's
-pinned version, or the KEYS and SECURITY.md disagree; the weekly `upstream-drift` job
-checks the digests against the release. A decdn/sponsord release is bumped the same way
+`make test-scripts` fails while the role, the onramp's decdn line, the chart's
+`appVersion` and its `artifacthub.io/images` image or AGENTS.md's pinned line
+disagree, while Compose's onramp pin is not a release of the line, or while the KEYS
+and SECURITY.md disagree; the weekly `upstream-drift` job checks the exact copies
+against the line's newest release. A decdn/sponsord release is bumped the same way
 ([sponsord's README](../sponsord/README.md#bumping-the-sponsord-release)).

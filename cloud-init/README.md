@@ -38,9 +38,10 @@ for the secrets of every group the host is in.
 > (`release` mode). The `manual` mode would install binaries that nothing verified,
 > and the Ansible path's `source` mode builds whatever its git ref points at (and
 > takes many minutes on first boot), so the lint refuses both. The release is the
-> one the roles pin at `DEVOPS_REF` (`decdn_node_version` for decdn/decdn,
-> `sponsord_version` for the sponsor); set `decdn_node_version` in the user-data to
-> pin another. `decdn_node_release_base` points the download at a mirror that serves
+> newest of the release line the roles pin at `DEVOPS_REF` (`decdn_node_version` for
+> decdn/decdn, `sponsord_version` for the sponsor), looked up on every run; set
+> `decdn_node_version` in the user-data to another line, or to an exact `"X.Y.Z"`.
+> `decdn_node_release_base` points the download at a mirror that serves
 > `v<version>/{decdn-node,decdn}-<version>-<target>.tar.gz`, `SHA256SUMS` and
 > `SHA256SUMS.asc`; the signature is still checked against deCDN's release keys.
 
@@ -103,7 +104,7 @@ log is in `/var/log/cloud-init-output.log`.
 
    Optional:
    - `ssh_allow_cidrs`, to accept SSH only from your addresses;
-   - `decdn_node_version`, to install another release than the one `DEVOPS_REF` pins;
+   - `decdn_node_version`, to install another release line, or one exact release, than the line `DEVOPS_REF` pins;
    - `decdn_node_release_base`, for a mirror (see the note above);
    - `decdn_network`, `arbitrum-sepolia` today.
 
@@ -205,8 +206,9 @@ Until then it serves its bytes as a cache does.
 
 > **Releases only.** The sponsor's services install only from GPG-verified release tarballs
 > (`release` mode), and the lint refuses `manual` and `source`. Both come from one
-> decdn/sponsord release (`v<version>`), the one the roles pin at `DEVOPS_REF`
-> unless the user-data sets `sponsord_version` and `sponsord_onramp_version`.
+> decdn/sponsord release (`v<version>`), the newest of the line the roles pin at
+> `DEVOPS_REF` unless the user-data sets `sponsord_version` and
+> `sponsord_onramp_version`.
 > `sponsord_release_base` and `sponsord_onramp_release_base` point at a mirror; the
 > signature is still checked against the KEYS vendored in the `sponsord` role.
 
@@ -214,9 +216,9 @@ Until then it serves its bytes as a cache does.
    - create the treasury wallet, open its pool (`decdn pool open`, which prints the
      pool id) and fund it;
    - create a Cloudflare Turnstile widget for your domain;
-   - check the `decdn` release the installers install: the role's pin at
-     `DEVOPS_REF` unless you set both `sponsord_onramp_decdn_release` and
-     `sponsord_onramp_decdn_sums_sha256`.
+   - check the `decdn` release the installers install: the newest release of the
+     role's line at `DEVOPS_REF`, unless you set an exact
+     `sponsord_onramp_decdn_release` with its `sponsord_onramp_decdn_sums_sha256`.
 2. **Fill in the user-data.** Replace every `CHANGE_ME`: `DEVOPS_REF`,
    `baseline_sudo_users` and `decdn_region` (as for a node), the origin backend
    (`decdn_cache_origin_url` for an http store; or `decdn_cache_origin_kind: s3` with
@@ -277,8 +279,9 @@ Day 2 is in the role READMEs. Rotate a secret by replacing its file and running
   that revision. Nothing pulls on a timer: the host only runs code you pinned. A tag is
   resolved again on every run, so if someone re-points it, the next run follows. Pin a
   SHA if that matters to you.
-- **Upgrade the node or the sponsor:** move `DEVOPS_REF` to a revision that pins the
-  new release, or set `decdn_node_version` (or `sponsord_version` and
+- **Upgrade the node or the sponsor:** re-run `decdn-bootstrap`: it installs the
+  newest release of the pinned line. For a new line, move `DEVOPS_REF` to a revision
+  that pins it, or set `decdn_node_version` (or `sponsord_version` and
   `sponsord_onramp_version`) in the inventory, and re-run.
 - **Back up, migrate or decommission:** the host is an ordinary Ansible host. Add it to
   an inventory on your workstation with the same groups and variables and use

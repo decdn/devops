@@ -1484,8 +1484,60 @@ refuses missing     "SHA256SUMS has 0 entries for $fxa"
 refuses twice       "SHA256SUMS has 2 entries for $fxa"
 refuses tampered    "$fxa does not match SHA256SUMS"
 refuses mislabelled "the binary reports 'decdn 1.2.3', not 'decdn $fxv'"
-refuses badversion  "the decdn version is '$fxv/../x', not X.Y.Z" "$fxv/../x"
+refuses badversion  "the decdn version is '$fxv/../x', not X.Y or X.Y.Z" "$fxv/../x"
 expect 2 "fetch-decdn-cli refuses a missing destination" "$repo/scripts/fetch-decdn-cli.sh"
+# A release line resolves through the release list, as the roles resolve it: the
+# good release, not the newer prerelease, draft or release without SHA256SUMS.asc
+# (none of which exist, so picking one fails the download).
+fxr() { # <tag> <draft> <prerelease> <asc>: one release-list entry
+  local assets='[{"name": "SHA256SUMS"}]'
+  [[ $4 == no ]] || assets='[{"name": "SHA256SUMS"}, {"name": "SHA256SUMS.asc"}]'
+  printf '{"tag_name": "%s", "draft": %s, "prerelease": %s, "assets": %s}' "$1" "$2" "$3" "$assets"
+}
+printf '[%s, %s, %s, %s, %s]\n' "$(fxr "v${fxv%.*}.10" false false no)" "$(fxr "v${fxv%.*}.9" true false yes)" \
+  "$(fxr "v${fxv%.*}.8" false true yes)" "$(fxr "v$fxv" false false yes)" "$(fxr v99.0.0 false false yes)" \
+  >"$fx/releases.json"
+echo 'not json' >"$fx/broken.json"
+fetch_line() { # <index file> <line> <out dir>
+  env DECDN_VERSION="$2" DECDN_RELEASE_INDEX="file://$fx/$1" DECDN_RELEASE_BASE="file://$fx/good" \
+    DECDN_RELEASE_KEYS="$fx/KEYS.asc" "$repo/scripts/fetch-decdn-cli.sh" "$fx/$3"
+}
+expect 0 "fetch-decdn-cli resolves a release line to its newest finished release" \
+  fetch_line releases.json "${fxv%.*}" out-line
+grep -qF "decdn ${fxv%.*} resolves to $fxv" "$work/out" || { cat "$work/out" >&2; fail "fetch-decdn-cli did not report the resolved release"; }
+[[ -x "$fx/out-line/decdn" ]] || fail "fetch-decdn-cli wrote no binary for the release line"
+# GITHUB_TOKEN goes to GitHub's API only: an index override (a mirror) must never
+# receive it. A loopback index records the Authorization header of the one request.
+python3 -I - "$fx" <<'PY' &
+import http.server, pathlib, sys
+fx = pathlib.Path(sys.argv[1])
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        (fx / "index-auth.txt").write_text(self.headers.get("Authorization", "none"))
+        body = (fx / "releases.json").read_bytes()
+        self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a): pass
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+(fx / "index-port").write_text(str(s.server_address[1]))
+s.handle_request()
+PY
+for _ in $(seq 50); do [[ -s "$fx/index-port" ]] && break; sleep 0.1; done
+expect 0 "fetch-decdn-cli reads an index override with GITHUB_TOKEN set" \
+  env GITHUB_TOKEN=must-not-leak DECDN_VERSION="${fxv%.*}" \
+    DECDN_RELEASE_INDEX="http://127.0.0.1:$(<"$fx/index-port")/releases.json" \
+    DECDN_RELEASE_BASE="file://$fx/good" DECDN_RELEASE_KEYS="$fx/KEYS.asc" \
+    "$repo/scripts/fetch-decdn-cli.sh" "$fx/out-override"
+wait
+[[ "$(<"$fx/index-auth.txt")" == none ]] \
+  || fail "fetch-decdn-cli sent an Authorization header to an index override: $(<"$fx/index-auth.txt")"
+pass "fetch-decdn-cli keeps GITHUB_TOKEN from an index override"
+for c in "releases.json|9.9|no finished v9.9.N decdn release" "broken.json|${fxv%.*}|is not a JSON release list"; do
+  IFS='|' read -r index line msg <<<"$c"
+  expect 1 "fetch-decdn-cli refuses the line $line in $index" fetch_line "$index" "$line" "out-$index"
+  grep -qF "$msg" "$work/out" || { cat "$work/out" >&2; fail "fetch-decdn-cli ($index, $line): not refused for '$msg'"; }
+  [[ ! -e "$fx/out-$index" ]] || fail "fetch-decdn-cli wrote a binary for the refused line $line"
+done
 
 # --- lint-cloud-init negatives: each broken variant must be rejected -------------------
 # Skipped without cloud-init on PATH, except in CI (which installs it), so a broken
@@ -1640,6 +1692,8 @@ if command -v cloud-init >/dev/null; then
     make -s -C "$repo" lint-cloud-init CLOUD_INIT_FILE="$work/ci-origin-alone.yaml"
   ci_variant "one sponsord version moved" 'set sponsord_version and sponsord_onramp_version together' 's/^(\s*)sponsord_onramp_install_method: release$/&\n\1sponsord_onramp_version: "0.0.9"/' "$sponsorud"
   ci_variant "an onramp pin without its digest" 'set both sponsord_onramp_decdn_release' 's/^(\s*)sponsord_onramp_install_method: release$/&\n\1sponsord_onramp_decdn_release: v0.0.9/' "$sponsorud"
+  ci_variant "an onramp line with a digest" 'which takes no sponsord_onramp_decdn_sums_sha256' 's/^(\s*)sponsord_onramp_install_method: release$/&\n\1sponsord_onramp_decdn_release: v0.0\n\1sponsord_onramp_decdn_sums_sha256: "'"$(printf 'a%.0s' {1..64})"'"/' "$sponsorud"
+  ci_variant "an onramp digest without its tag" 'which takes no sponsord_onramp_decdn_sums_sha256' 's/^(\s*)sponsord_onramp_install_method: release$/&\n\1sponsord_onramp_decdn_sums_sha256: "'"$(printf 'a%.0s' {1..64})"'"/' "$sponsorud"
   ci_variant "onramp nested under children" 'sponsord_hosts may hold only hosts and vars, not' '/^      sponsord_onramp_hosts:$/,/^$/{s/^      /          /}; s/^          sponsord_onramp_hosts:$/        children:\n&/' "$sponsorud"
   ci_variant "query in the onramp RPC URL" 'sponsord_onramp_rpc_url must be a public http(s) URL' 's#^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME"$#\1sponsord_onramp_rpc_url: "https://rpc.example/?api_key=x"#' "$sponsorud"
   ci_variant "fragment in the onramp RPC URL" 'sponsord_onramp_rpc_url must be a public http(s) URL' 's#^(\s*)sponsord_onramp_rpc_url: "CHANGE_ME"$#\1sponsord_onramp_rpc_url: "https://rpc.example/rpc\#k"#' "$sponsorud"
@@ -1802,6 +1856,17 @@ done
 cmp -s "$repo/ansible/roles/decdn_node/files/install-build-output.py" \
        "$repo/ansible/roles/sponsord/files/install-build-output.py" \
   || fail "decdn_node and sponsord files/install-build-output.py differ"
+# The release-line resolver is copied into every role that installs a release, and
+# the onramp carries its own copy of decdn's KEYS (it checks the installers' decdn
+# release; decdn_node ships in the other collection).
+for r in sponsord sponsord_onramp; do
+  cmp -s "$repo/ansible/roles/decdn_node/tasks/resolve-release.yml" \
+         "$repo/ansible/roles/$r/tasks/resolve-release.yml" \
+    || fail "decdn_node and $r tasks/resolve-release.yml differ"
+done
+cmp -s "$repo/ansible/roles/decdn_node/files/decdn-release-KEYS.asc" \
+       "$repo/ansible/roles/sponsord_onramp/files/decdn-release-KEYS.asc" \
+  || fail "decdn_node and sponsord_onramp files/decdn-release-KEYS.asc differ"
 # decdn_backup_local_dir and sponsord_backup_local_dir: one expression (backups/ beside
 # the repo's playbooks/, or beside the project's ansible.cfg from a collection), the
 # key's own name aside. Only decdn_node's runs in a molecule scenario.
@@ -1811,7 +1876,7 @@ backup_dir_default() { # <defaults file> <key>
 want="$(backup_dir_default "$repo/ansible/roles/decdn_node/defaults/main.yml" decdn_backup_local_dir)"
 [[ -n "$want" && "$(backup_dir_default "$repo/ansible/roles/sponsord/defaults/main.yml" sponsord_backup_local_dir)" == "$want" ]] \
   || fail "sponsord_backup_local_dir's default differs from decdn_backup_local_dir's"
-pass "source-build and decommission defaults, the backup directory and the installer, identical across roles"
+pass "source-build and decommission defaults, the backup directory, the installer, the release resolver and decdn's KEYS, identical across roles"
 # iroh_relay and iroh_dns_server have no source build (and their own per-triple
 # sha256 pins), so only their decommission keys are compared.
 decom_keys() { grep -E '^decdn_decommission_(max_hosts|prompt_seconds):' "$1" || true; }
@@ -1841,18 +1906,33 @@ pin() { # <role> <var>: a scalar default, quotes stripped
   sed -nE "s/^$2: *\"?([^\" #]*)\"?.*/\1/p" "$repo/ansible/roles/$1/defaults/main.yml"
 }
 envpin() { sed -nE "s/^$1=//p" "$repo/compose/sponsord-onramp.env.example"; }
+# A pin is a release line (X.Y: the roles resolve its newest release) or an exact
+# X.Y.Z[-pre].
+pin_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)?$'
 for p in "decdn_node decdn_node_version" "sponsord sponsord_version" "sponsord_onramp sponsord_onramp_version"; do
   # shellcheck disable=SC2086  # "<role> <var>", split on purpose
-  [ -n "$(pin $p)" ] || fail "${p#* }: no default in roles/${p% *}/defaults/main.yml"
+  [[ "$(pin $p)" =~ $pin_re ]] || fail "${p#* }: the default in roles/${p% *}/defaults/main.yml is not X.Y or X.Y.Z"
 done
 [ "$(pin sponsord sponsord_version)" = "$(pin sponsord_onramp sponsord_onramp_version)" ] \
   || fail "sponsord_version and sponsord_onramp_version differ (one decdn/sponsord release ships both)"
 [ "$(pin sponsord_onramp sponsord_onramp_decdn_release)" = "v$(pin decdn_node decdn_node_version)" ] \
   || fail "sponsord_onramp_decdn_release is not v<decdn_node_version>"
-for k in DECDN_RELEASE:decdn_release DECDN_SUMS_SHA256:decdn_sums_sha256; do
-  [ "$(envpin "ONRAMP_${k%%:*}")" = "$(pin sponsord_onramp "sponsord_onramp_${k#*:}")" ] \
-    || fail "compose/sponsord-onramp.env.example ONRAMP_${k%%:*} differs from sponsord_onramp_${k#*:}"
-done
+# Compose has no resolver: its env example names an exact release and digest, which
+# must be the role's when that pin is exact, and in its line when it is one.
+onramp_release="$(pin sponsord_onramp sponsord_onramp_decdn_release)"
+if [[ "$onramp_release" =~ ^v[0-9]+\.[0-9]+$ ]]; then
+  [ -z "$(pin sponsord_onramp sponsord_onramp_decdn_sums_sha256)" ] \
+    || fail "sponsord_onramp_decdn_release is the line $onramp_release, so its digest default must be empty"
+  [[ "$(envpin ONRAMP_DECDN_RELEASE)" =~ ^${onramp_release//./\\.}\.(0|[1-9][0-9]*)$ ]] \
+    || fail "compose/sponsord-onramp.env.example ONRAMP_DECDN_RELEASE '$(envpin ONRAMP_DECDN_RELEASE)' is not a release of $onramp_release"
+  [[ "$(envpin ONRAMP_DECDN_SUMS_SHA256)" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "compose/sponsord-onramp.env.example ONRAMP_DECDN_SUMS_SHA256 is not 64 lowercase hex"
+else
+  for k in DECDN_RELEASE:decdn_release DECDN_SUMS_SHA256:decdn_sums_sha256; do
+    [ "$(envpin "ONRAMP_${k%%:*}")" = "$(pin sponsord_onramp "sponsord_onramp_${k#*:}")" ] \
+      || fail "compose/sponsord-onramp.env.example ONRAMP_${k%%:*} differs from sponsord_onramp_${k#*:}"
+  done
+fi
 app="$(sed -nE 's/^appVersion: *"?([^" #]*)"?.*/\1/p' "$repo/charts/decdn-node/Chart.yaml")"
 [ "$app" = "$(pin decdn_node decdn_node_version)" ] \
   || fail "charts/decdn-node/Chart.yaml appVersion '$app' is not decdn_node_version"
@@ -2244,9 +2324,9 @@ fi
 
 # --- upstream-mirror generators (optional: needs a decdn/decdn checkout) --------------
 if [[ -n "${UPSTREAM:-}" ]]; then
-  # Against the release the roles pin, as the upstream-drift workflow checks.
-  expect 0 "network profiles current"  "$repo/scripts/sync-network-profiles.py" "$UPSTREAM" \
-    --ref "v$(pin decdn_node decdn_node_version)" --check
+  # Against the newest release of the line the roles pin (the script's default ref),
+  # as the upstream-drift workflow checks.
+  expect 0 "network profiles current"  "$repo/scripts/sync-network-profiles.py" "$UPSTREAM" --check
   expect 2 "network profiles: bad ref is an error, not drift"  "$repo/scripts/sync-network-profiles.py" "$UPSTREAM" --ref no/such/ref --check
 else
   skipped+=("upstream-mirror generators (set UPSTREAM=<decdn checkout>)")

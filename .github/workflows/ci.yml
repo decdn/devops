@@ -213,8 +213,12 @@ jobs:
           python-version: '3.12'
       - name: Chart lint + render tests
         # yq (mikefarah), curl, gpg and Docker ship on ubuntu-latest. The decdn CLI is the
-        # release the chart pins (appVersion), signature-checked against the vendored
-        # KEYS, so a decdn bump PR validates the chart against the new release.
+        # newest release of the line the chart pins (appVersion), resolved through
+        # GitHub's API (with the job token: runners share the unauthenticated limit) and
+        # signature-checked against the vendored KEYS, so a decdn bump PR validates the
+        # chart against the new release.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           DECDN_CLI="$(scripts/fetch-decdn-cli.sh "$RUNNER_TEMP/decdn")"
           export DECDN_CLI

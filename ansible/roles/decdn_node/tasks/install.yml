@@ -1,9 +1,12 @@
 ---
 # Install the decdn-node daemon + decdn CLI. Three methods, selected by
 # decdn_node_install_method:
-#   "release" (default): download the pinned GitHub Release tarballs, verify them
-#     against the GPG-signed SHA256SUMS manifest upstream publishes, then extract.
-#     Idempotent and upgrade-aware via a version stamp; re-extracts only on change.
+#   "release" (default): download the GitHub Release tarballs of decdn_node_version
+#     (an exact version, or the newest release of a line "X.Y",
+#     tasks/resolve-release.yml), verify them against the GPG-signed SHA256SUMS
+#     manifest upstream publishes, then extract. Idempotent and upgrade-aware via a
+#     version stamp; re-extracts only on change, so a new release in the line is
+#     installed (and the daemon restarted) by the next run.
 #   "source": clone decdn_node_source_repo at decdn_node_source_ref on the node and
 #     cargo-build it there as an unprivileged user (tasks/source.yml). Idempotent
 #     via a <repo>@<commit> stamp.
@@ -38,6 +41,22 @@
   when: decdn_bin_pre_stat.stat.checksum is defined
 
 
+# A release line ("X.Y") becomes the newest finished release in it, an exact pin
+# stays as it is; every use below is of the resolved version.
+- name: Resolve the decdn release to install
+  ansible.builtin.include_tasks: resolve-release.yml
+  vars:
+    _rr_spec: "{{ decdn_node_version }}"
+    _rr_index: "{{ decdn_node_release_index }}"
+    _rr_name: decdn_node_version
+    _rr_stamp: /usr/local/lib/decdn/installed-version
+  when: decdn_node_install_method == "release"
+
+- name: Record the decdn release to install
+  ansible.builtin.set_fact:
+    _decdn_node_resolved_version: "{{ _rr_version }}"
+  when: decdn_node_install_method == "release"
+
 - name: Install from pinned GitHub Release tarballs
   when: decdn_node_install_method == "release"
   block:
@@ -60,7 +79,7 @@
       ansible.builtin.set_fact:
         decdn_need_install: >-
           {{ (decdn_stamp.content is not defined)
-             or ((decdn_stamp.content | b64decode | trim) != decdn_node_version) }}
+             or ((decdn_stamp.content | b64decode | trim) != _decdn_node_resolved_version) }}
 
     # `ansible.builtin.tempfile` does not declare supports_check_mode, so under
     # `make check` it is skipped and registers WITHOUT a `.path`; the tasks below
@@ -71,13 +90,13 @@
       ansible.builtin.debug:
         msg: >-
           check mode: skipping the download + signature verification of
-          decdn {{ decdn_node_version }}. The binaries on the target are NOT
+          decdn {{ _decdn_node_resolved_version }}. The binaries on the target are NOT
           verified by this run; the config and unit below still diff normally.
       when:
         - decdn_need_install
         - ansible_check_mode
 
-    - name: Install decdn-node + decdn CLI {{ decdn_node_version }}
+    - name: Install decdn-node + decdn CLI {{ _decdn_node_resolved_version }}
       when:
         - decdn_need_install
         - not ansible_check_mode
@@ -120,9 +139,9 @@
 
         - name: Download release tarballs
           ansible.builtin.get_url:
-            url: "{{ decdn_node_release_base }}/v{{ decdn_node_version }}/\
-                  {{ item }}-{{ decdn_node_version }}-{{ decdn_node_target }}.tar.gz"
-            dest: "{{ decdn_stage.path }}/{{ item }}-{{ decdn_node_version }}-{{ decdn_node_target }}.tar.gz"
+            url: "{{ decdn_node_release_base }}/v{{ _decdn_node_resolved_version }}/\
+                  {{ item }}-{{ _decdn_node_resolved_version }}-{{ decdn_node_target }}.tar.gz"
+            dest: "{{ decdn_stage.path }}/{{ item }}-{{ _decdn_node_resolved_version }}-{{ decdn_node_target }}.tar.gz"
             owner: root
             group: root
             mode: "0600"
@@ -132,7 +151,7 @@
         # per-tarball hand-pasted sha256 pins.
         - name: Download the SHA256SUMS manifest
           ansible.builtin.get_url:
-            url: "{{ decdn_node_release_base }}/v{{ decdn_node_version }}/SHA256SUMS"
+            url: "{{ decdn_node_release_base }}/v{{ _decdn_node_resolved_version }}/SHA256SUMS"
             dest: "{{ decdn_stage.path }}/SHA256SUMS"
             owner: root
             group: root
@@ -140,7 +159,7 @@
 
         - name: Download the SHA256SUMS signature
           ansible.builtin.get_url:
-            url: "{{ decdn_node_release_base }}/v{{ decdn_node_version }}/SHA256SUMS.asc"
+            url: "{{ decdn_node_release_base }}/v{{ _decdn_node_resolved_version }}/SHA256SUMS.asc"
             dest: "{{ decdn_stage.path }}/SHA256SUMS.asc"
             owner: root
             group: root
@@ -225,7 +244,7 @@
             cmd: |
               set -euo pipefail
               {% for archive in decdn_release_tarballs %}
-              f={{ (archive ~ '-' ~ decdn_node_version ~ '-' ~ decdn_node_target ~ '.tar.gz') | quote }}
+              f={{ (archive ~ '-' ~ _decdn_node_resolved_version ~ '-' ~ decdn_node_target ~ '.tar.gz') | quote }}
               # Match the filename FIELD exactly, not a substring. `grep -F "  $f"`
               # collides with any sibling entry that merely STARTS with $f (a
               # "$f.sig"/"$f.sha256" line makes the count 2 and aborts a perfectly
@@ -258,7 +277,7 @@
 
         - name: Extract binaries into /usr/local/bin
           ansible.builtin.unarchive:
-            src: "{{ decdn_stage.path }}/{{ item }}-{{ decdn_node_version }}-{{ decdn_node_target }}.tar.gz"
+            src: "{{ decdn_stage.path }}/{{ item }}-{{ _decdn_node_resolved_version }}-{{ decdn_node_target }}.tar.gz"
             dest: /usr/local/bin
             remote_src: true
             owner: root
@@ -350,7 +369,7 @@
   failed_when: >-
     decdn_installed_version.rc != 0
     or (decdn_node_install_method == 'release'
-        and (decdn_installed_version.stdout | trim) != 'decdn-node ' ~ decdn_node_version)
+        and (decdn_installed_version.stdout | trim) != 'decdn-node ' ~ _decdn_node_resolved_version)
 
 # The `decdn` CLI is what runs `config validate`, `key-gen` and every day-2 command,
 # so a half-installed pair (daemon present, CLI missing) must fail here rather than
@@ -363,7 +382,7 @@
   failed_when: >-
     decdn_installed_cli_version.rc != 0
     or (decdn_node_install_method == 'release'
-        and (decdn_installed_cli_version.stdout | trim) != 'decdn ' ~ decdn_node_version)
+        and (decdn_installed_cli_version.stdout | trim) != 'decdn ' ~ _decdn_node_resolved_version)
 
 # Restart onto a daemon binary the running process may not be on. Every install
 # path above notifies on a changed binary, but a handler queued by a run that then
@@ -419,7 +438,7 @@
         dest: >-
           /usr/local/lib/decdn/{{ 'installed-version' if decdn_node_install_method == 'release'
           else 'installed-source' }}
-        content: "{{ decdn_node_version if decdn_node_install_method == 'release' else decdn_source_id }}\n"
+        content: "{{ _decdn_node_resolved_version if decdn_node_install_method == 'release' else decdn_source_id }}\n"
         owner: root
         group: root
         mode: "0644"

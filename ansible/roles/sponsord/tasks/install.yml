@@ -1,8 +1,9 @@
 ---
 # Install the sponsord binary. Three methods, selected by sponsord_install_method:
-#   "release" (default): download the tarball from the pinned v<version> GitHub
-#     Release (one tag releases the decdn/sponsord workspace), verify it against
-#     the GPG-signed SHA256SUMS manifest, then extract.
+#   "release" (default): download the tarball from the GitHub Release of
+#     sponsord_version (one tag releases the decdn/sponsord workspace): an exact
+#     version, or the newest release of a line "X.Y" (tasks/resolve-release.yml).
+#     Verify it against the GPG-signed SHA256SUMS manifest, then extract.
 #     Idempotent and upgrade-aware via a version stamp.
 #   "source": clone sponsord_source_repo at sponsord_source_ref on the host and
 #     cargo-build it as an unprivileged user (tasks/source.yml).
@@ -13,14 +14,31 @@
 # the full rationale for each (status-parsed gpg, exact manifest entry, private
 # staging dir kept on failure).
 
+
+# A release line ("X.Y") becomes the newest finished release in it, an exact pin
+# stays as it is; every use below is of the resolved version.
+- name: Resolve the sponsord release to install
+  ansible.builtin.include_tasks: resolve-release.yml
+  vars:
+    _rr_spec: "{{ sponsord_version }}"
+    _rr_index: "{{ sponsord_release_index }}"
+    _rr_name: sponsord_version
+    _rr_stamp: /usr/local/lib/sponsord/installed-version
+  when: sponsord_install_method == "release"
+
+- name: Record the sponsord release to install
+  ansible.builtin.set_fact:
+    _sponsord_resolved_version: "{{ _rr_version }}"
+  when: sponsord_install_method == "release"
+
 - name: Install from the pinned GitHub Release tarball
   when: sponsord_install_method == "release"
   block:
     - name: Name the release archive
       ansible.builtin.set_fact:
         # The archive holds ONE flat binary at its root (upstream release.yml).
-        sponsord_release_archive: "sponsord-{{ sponsord_version }}-{{ sponsord_target }}.tar.gz"
-        sponsord_release_url: "{{ sponsord_release_base }}/v{{ sponsord_version }}"
+        sponsord_release_archive: "sponsord-{{ _sponsord_resolved_version }}-{{ sponsord_target }}.tar.gz"
+        sponsord_release_url: "{{ sponsord_release_base }}/v{{ _sponsord_resolved_version }}"
 
     - name: Read the installed-version stamp
       ansible.builtin.slurp:
@@ -33,18 +51,18 @@
       ansible.builtin.set_fact:
         sponsord_need_install: >-
           {{ (sponsord_stamp.content is not defined)
-             or ((sponsord_stamp.content | b64decode | trim) != sponsord_version) }}
+             or ((sponsord_stamp.content | b64decode | trim) != _sponsord_resolved_version) }}
 
     - name: Report that the release download is not simulated in check mode
       ansible.builtin.debug:
         msg: >-
           check mode: skipping the download + signature verification of sponsord
-          {{ sponsord_version }}. The config and unit below still diff normally.
+          {{ _sponsord_resolved_version }}. The config and unit below still diff normally.
       when:
         - sponsord_need_install
         - ansible_check_mode
 
-    - name: Install sponsord {{ sponsord_version }}
+    - name: Install sponsord {{ _sponsord_resolved_version }}
       when:
         - sponsord_need_install
         - not ansible_check_mode
@@ -253,11 +271,11 @@
       - sponsord_installed_version.rc == 0
       - >-
         sponsord_install_method != 'release'
-        or (sponsord_installed_version.stdout | trim) == 'sponsord ' ~ sponsord_version
+        or (sponsord_installed_version.stdout | trim) == 'sponsord ' ~ _sponsord_resolved_version
     fail_msg: >-
       {{ sponsord_bin }} --version exited {{ sponsord_installed_version.rc }} with
       "{{ sponsord_installed_version.stdout | trim }}"{{
-      (', expected "sponsord ' ~ sponsord_version ~ '"')
+      (', expected "sponsord ' ~ _sponsord_resolved_version ~ '"')
         if sponsord_install_method == 'release' else '' }}.
       The binary on the host is broken or is not the pinned release. In release mode,
       remove /usr/local/lib/sponsord/installed-version to force a fresh download.
@@ -277,7 +295,7 @@
   vars:
     # [stamp name suffix, content] for the method in use.
     sponsord_stamp_record: >-
-      {{ ['version', sponsord_version] if sponsord_install_method == 'release'
+      {{ ['version', _sponsord_resolved_version] if sponsord_install_method == 'release'
          else ['source', sponsord_source_id | default('')] }}
   block:
     - name: Ensure the stamp directory exists

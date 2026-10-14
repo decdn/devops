@@ -8,10 +8,19 @@
 # (/srv/mirror/KEYS.asc, passed as their release keyring) rather than the vendored
 # upstream KEYS, which is the only difference from a real release.
 #
+# Each repository directory (the part of a release's dir before its last "/", or the
+# mirror root) also gets a releases.json in the shape of GitHub's GET /releases, so
+# the roles' release-line lookup (tasks/resolve-release.yml) runs against the mirror:
+# one entry per release, its assets the files the directory really holds.
+#
 # Input, from the including play:
 #   mirror_releases: [{dir: <release directory>, version: <archive version, default
-#                     stub_version>, bins: [{name: <binary>, src: <controller path>}]}]
-#   stub_version:    the version archives are named for unless the release sets one
+#                     stub_version>, bins: [{name: <binary>, src: <controller path>}],
+#                     reports: <the version the binaries print, default stub_version>,
+#                     draft / prerelease: <the index flags, default false>,
+#                     asc: <false: the index leaves SHA256SUMS.asc out, default true>}]
+#   stub_version:    the version archives are named for unless the release sets one,
+#                    and the one the stubs print (their VERSION literal)
 - name: Name the release target triple
   ansible.builtin.set_fact:
     _mirror_target: >-
@@ -70,9 +79,15 @@
       set -euo pipefail
       export GNUPGHOME=/srv/mirror/gnupg
       ver={{ item.version | default(stub_version) | quote }}
+      reports={{ item.reports | default(stub_version) | quote }}
+      work=$(mktemp -d -p /srv/mirror/stage)
       for bin in {{ item.bins | map(attribute='name') | map('quote') | join(' ') }}; do
-        tar -C /srv/mirror/stage -czf "$bin-$ver-{{ _mirror_target }}.tar.gz" "$bin"
+        cp -p "/srv/mirror/stage/$bin" "$work/$bin"
+        # The stubs print stub_version; a release that reports another rewrites it.
+        sed -i "s/{{ stub_version | regex_escape(re_type='posix_basic') }}/$reports/" "$work/$bin"
+        tar -C "$work" -czf "$bin-$ver-{{ _mirror_target }}.tar.gz" "$bin"
       done
+      rm -rf "$work"
       sha256sum -- *.tar.gz > SHA256SUMS
       gpg --batch --armor --detach-sign --output SHA256SUMS.asc SHA256SUMS
       chmod 0644 -- *
@@ -82,6 +97,34 @@
   loop: "{{ mirror_releases }}"
   loop_control:
     label: "{{ item.dir }}"
+
+- name: Write each repository's release list
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -I
+      - -c
+      - |
+        import json, os, sys
+        root = "/srv/mirror/www/releases"
+        index = {}
+        for r in json.loads(sys.argv[1]):
+            repo, _, tag = r["dir"].rpartition("/")
+            assets = sorted(os.listdir(os.path.join(root, r["dir"])))
+            if not r.get("asc", True):
+                assets.remove("SHA256SUMS.asc")
+            index.setdefault(repo, []).append({
+                "tag_name": tag, "draft": bool(r.get("draft", False)),
+                "prerelease": bool(r.get("prerelease", False)),
+                "assets": [{"name": a} for a in assets],
+            })
+        for repo, releases in index.items():
+            path = os.path.join(root, repo, "releases.json")
+            with open(path, "w") as f:
+                json.dump(releases, f, indent=1)
+            os.chmod(path, 0o644)
+      - "{{ mirror_releases | to_json }}"
+  changed_when: true
 
 - name: Install the mirror's HTTP server unit
   ansible.builtin.copy:

@@ -49,14 +49,21 @@ decdn_rustup_sha256:
   aarch64-unknown-linux-gnu: 15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433
 
 # --- Release to install ("release" mode) ----------------------------------------
-# The decdn/sponsord release (tag v<version>) this repo pins. Keep it equal to
-# sponsord_onramp_version: both come from one workspace release (README.md,
-# "Bumping the sponsord release"; make test-scripts checks the defaults agree).
-sponsord_version: "0.1.0"         # asserted non-empty in "release" mode
+# The decdn/sponsord release to install: a release line, "X.Y", installs the newest
+# finished vX.Y.N release (looked up in sponsord_release_index on every run, so a new
+# patch is installed and the daemon restarted by the next run), or an exact "X.Y.Z"
+# pins that one release. Keep it equal to sponsord_onramp_version: both come from
+# one workspace release (README.md, "Bumping the sponsord release"; make
+# test-scripts checks the defaults agree).
+sponsord_version: "0.1"
 # Release target triple, derived from the host's gathered architecture (see
 # vars/main/arch.yml). Set it explicitly only for a play with gather_facts: false.
 sponsord_target: "{{ _sponsord_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
 sponsord_release_base: "https://github.com/decdn/sponsord/releases/download"
+# Where a release line is resolved: a JSON list in the shape of GitHub's
+# GET /repos/decdn/sponsord/releases. Unauthenticated, GitHub allows 60 requests an
+# hour per address; pin an exact sponsord_version, or serve this list from a mirror.
+sponsord_release_index: "https://api.github.com/repos/decdn/sponsord/releases?per_page=100"
 # Verify SHA256SUMS.asc against sponsord_release_keyring before trusting the
 # manifest. Set false only for an air-gapped mirror that strips the signature.
 sponsord_verify_release_signature: true

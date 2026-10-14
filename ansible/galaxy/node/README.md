@@ -123,8 +123,8 @@ key lands before SSH hardening), then the node:
       vars:
         decdn_network: arbitrum-sepolia   # chain_id + every contract address, from upstream's manifest
       # Also REQUIRED per host (host_vars): decdn_region, the binaries (nothing
-      # for the default release method, which installs the pinned
-      # decdn_node_version; decdn_node_install_method: source +
+      # for the default release method, which installs the newest release of the
+      # pinned decdn_node_version line; decdn_node_install_method: source +
       # decdn_node_source_ref, or manual + decdn_release_target_dir), and the RPC URL (host-provisioned
       # /etc/decdn/decdn.env, or decdn_rpc_url in a git-ignored secret.yml).
 ```

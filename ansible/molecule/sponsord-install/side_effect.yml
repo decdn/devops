@@ -4,7 +4,8 @@
 #   1. release mode against prepare.yml's signed loopback mirror: a verified
 #      install writes the version stamp; a re-run needs no download; a bad
 #      checksum, a bad signature and a binary that is not the pinned version all
-#      fail at their own task and leave no stamp; manual mode clears the stamp.
+#      fail at their own task and leave no stamp; a release line installs its newest
+#      finished release; manual mode clears the stamp.
 #   2. sponsord_generate_treasury_wallet: with no keystore, the role mints one on
 #      the host through the decdn CLI (the default scenario's key-gen stub), records
 #      the address and stops at its pool-id step; a re-run keeps that wallet; with a
@@ -228,6 +229,29 @@
         that:
           - not _sp_stamp_failed.stat.exists
         fail_msg: A failed release install left a version stamp, so the next run would skip the download.
+
+    # 5b. A release line installs the newest finished release in it (the mirror's
+    # release list has a newer prerelease, which it skips).
+    - name: Install the release line 0.3
+      ansible.builtin.include_role:
+        name: sponsord
+      vars:
+        sponsord_install_method: release
+        sponsord_version: "0.3"
+        sponsord_release_base: "{{ _sp_base }}"
+        sponsord_release_index: "{{ _sp_base }}/releases.json"
+        sponsord_release_keyring: "{{ _sp_keys }}"
+
+    - name: Read the version stamp after the line install
+      ansible.builtin.slurp:
+        src: "{{ _sp_stamp }}"
+      register: _sp_stamp_line
+
+    - name: Require the line to install its newest finished release
+      ansible.builtin.assert:
+        that:
+          - (_sp_stamp_line.content | b64decode | trim) == '0.3.4'
+        fail_msg: "The line 0.3 should install 0.3.4, got \"{{ _sp_stamp_line.content | b64decode | trim }}\"."
 
     # 6. Back to manual (the scenario's group_vars): the stamp must go.
     - name: Converge back to the manual install

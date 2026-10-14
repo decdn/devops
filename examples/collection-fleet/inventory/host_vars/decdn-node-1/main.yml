@@ -21,7 +21,8 @@
 # --- Which binaries to install ------------------------------------------------
 # "release" (the default): the v<version> GitHub Release tarballs, verified against
 # the GPG-signed SHA256SUMS manifest. The version defaults to the decdn/decdn release
-# the role pins; set it only to hold a node on another one.
+# line the role pins ("X.Y": its newest release, installed by each deploy); set an
+# exact one only to hold a node on it.
 decdn_node_install_method: release
 # decdn_node_version: "0.1.0"
 #

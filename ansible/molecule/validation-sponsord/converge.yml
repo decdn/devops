@@ -58,6 +58,20 @@
             decdn_rejected: "{{ decdn_rejected + ['sponsord-release-version'] }}"
           when: ansible_failed_task.name == "Require a pinned release version"
 
+    - name: "Case sponsord-release-version — release mode with a v-prefixed line"
+      block:
+        - name: Run sponsord with release mode with a v-prefixed line
+          ansible.builtin.include_role:
+            name: sponsord
+          vars:
+            sponsord_install_method: release
+            sponsord_version: "v0.1"
+      rescue:
+        - name: Record sponsord-release-version rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sponsord-release-version'] }}"
+          when: ansible_failed_task.name == "Require a pinned release version"
+
     - name: "Case sponsord-manual-src — manual mode with no binary source"
       block:
         - name: Run sponsord with manual mode with no binary source
@@ -714,6 +728,20 @@
             decdn_rejected: "{{ decdn_rejected + ['onramp-release-version'] }}"
           when: ansible_failed_task.name == "Require a pinned release version"
 
+    - name: "Case onramp-release-version — release mode with a wildcard"
+      block:
+        - name: Run sponsord_onramp with release mode with a wildcard
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_install_method: release
+            sponsord_onramp_version: "0.1.x"
+      rescue:
+        - name: Record onramp-release-version rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-release-version'] }}"
+          when: ansible_failed_task.name == "Require a pinned release version"
+
     - name: "Case onramp-manual-src — manual mode with no binary source"
       block:
         - name: Run sponsord_onramp with manual mode with no binary source
@@ -940,20 +968,33 @@
             decdn_rejected: "{{ decdn_rejected + ['onramp-pin'] }}"
           when: ansible_failed_task.name == "Validate the release pin the installers use"
 
-    # The play pins a non-default pair; moving one half back to its default
-    # leaves a tag served with another release's digest.
-    - name: "Case onramp-pin-pair — the decdn digest moved without its tag"
+    # The play pins an exact tag with its digest. A tag needs its digest, and a line
+    # (the default) takes none: the role reads it from the release it resolves to.
+    - name: "Case onramp-pin-pair — an exact decdn tag without its digest"
       block:
-        - name: Run sponsord_onramp with a non-default decdn tag and the default digest
+        - name: Run sponsord_onramp with an exact decdn tag and no digest
           ansible.builtin.include_role:
             name: sponsord_onramp
           vars:
-            sponsord_onramp_decdn_sums_sha256: c88ad5479f31bb0857db2c0205c54b240cbceb33a96724e4f8a288b6d866ab66
+            sponsord_onramp_decdn_sums_sha256: ""
       rescue:
         - name: Record onramp-pin-pair rejection (only if its assert failed)
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['onramp-pin-pair'] }}"
-          when: ansible_failed_task.name == "Require the release pin's tag and digest to move together"
+          when: ansible_failed_task.name == "Require a SHA256SUMS digest exactly when the release pin is a tag"
+
+    - name: "Case onramp-pin-pair — a decdn release line with a digest"
+      block:
+        - name: Run sponsord_onramp with a decdn release line and a digest
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_decdn_release: v0.1
+      rescue:
+        - name: Record onramp-pin-pair rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-pin-pair'] }}"
+          when: ansible_failed_task.name == "Require a SHA256SUMS digest exactly when the release pin is a tag"
 
     - name: "Case onramp-pin — an upper-case SHA256SUMS digest"
       block:
@@ -1300,7 +1341,8 @@
           the daemon/crash-loop it at config load, or ship credentials insecurely).
       vars:
         _decdn_expected:
-          ["sponsord-release-version", "sponsord-manual-src", "sponsord-network-unknown",
+          ["sponsord-release-version", "sponsord-release-version", "sponsord-manual-src",
+           "sponsord-network-unknown",
            "sponsord-network-chain", "sponsord-pool-id", "sponsord-pool-id-empty",
            "sponsord-wallet-bool", "sponsord-wallet-cli", "sponsord-zero-address", "sponsord-bind",
            "sponsord-limit", "sponsord-limit", "sponsord-bool", "sponsord-bool",
@@ -1312,11 +1354,12 @@
            "sponsord-bind", "sponsord-overwrite-untracked", "sponsord-token",
            "sponsord-rpc-unusable", "sponsord-secret-env-keys", "sponsord-secret-env-keys",
            "sponsord-secret-env-symlink",
-           "onramp-release-version", "onramp-manual-src", "onramp-network-unknown", "onramp-network-mismatch",
+           "onramp-release-version", "onramp-release-version", "onramp-manual-src",
+           "onramp-network-unknown", "onramp-network-mismatch",
            "onramp-zero-address", "onramp-bind", "onramp-bind", "onramp-proxy",
            "onramp-domain", "onramp-public-url", "onramp-public-url", "onramp-rpc",
            "onramp-rpc", "onramp-rpc", "onramp-rpc", "onramp-public-url", "onramp-sitekey", "onramp-pin",
-           "onramp-pin", "onramp-pin-pair",
+           "onramp-pin", "onramp-pin-pair", "onramp-pin-pair",
            "onramp-limit", "onramp-ip-header", "onramp-token",
            "onramp-turnstile", "onramp-turnstile", "onramp-turnstile-empty",
            "onramp-turnstile-inventory",

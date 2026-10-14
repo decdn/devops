@@ -112,6 +112,14 @@ details: [`iroh_relay`](../ansible/roles/iroh_relay/README.md),
 
 ## Day 2
 
+Upgrades: the roles pin a release line for decdn/decdn (`decdn_node_version`) and for
+decdn/sponsord (`sponsord_version` = `sponsord_onramp_version`), and each deploy installs
+the line's newest release; the onramp also serves its installers the newest decdn of
+the line (`sponsord_onramp_decdn_release`). Set an exact `"X.Y.Z"` (for the installers,
+a `vX.Y.Z` tag with its `SHA256SUMS` digest) to hold a host on one release. Origin nodes
+on the chart and Compose follow the node operators' notes
+([`node-operators.md`](node-operators.md#day-2)).
+
 [`lifecycle.md`](lifecycle.md) covers backup, restore, migration and decommission for
 every service above. Decommissioning an origin stops the node but leaves its operator
 seated on-chain, where `OriginAssignment.getOrigins` still lists it. Unseat it with

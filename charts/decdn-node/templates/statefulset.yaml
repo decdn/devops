@@ -60,7 +60,7 @@ spec:
         # never the PVC: a volume snapshot must not hold the keystore and its password.
         - name: prepare
           image: {{ include "decdn-node.image" . }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ include "decdn-node.pullPolicy" . }}
           command: ["/bin/sh", "-euc"]
           args:
             - |
@@ -105,7 +105,7 @@ spec:
       containers:
         - name: decdn-node
           image: {{ include "decdn-node.image" . }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ include "decdn-node.pullPolicy" . }}
           args:
             - --config
             - {{ include "decdn-node.configFile" . }}

@@ -71,12 +71,14 @@ write_files:
           # ssh_allow_cidrs: ["203.0.113.0/24"]
 
           # The node, installed from the GPG-verified release tarballs. The release is
-          # the decdn_node role's default at DEVOPS_REF (decdn_node_version); set
-          # decdn_node_version here to pin another one.
+          # the newest of the decdn_node role's default line at DEVOPS_REF
+          # (decdn_node_version, looked up on every run); set decdn_node_version here
+          # to another line, or to an exact "X.Y.Z" to hold the node on it.
           decdn_node_install_method: release
           # Optional: a mirror that serves v<version>/{decdn-node,decdn}-<version>-<target>.tar.gz,
-          # SHA256SUMS and SHA256SUMS.asc. The signature is still checked against
-          # deCDN's release keys.
+          # SHA256SUMS and SHA256SUMS.asc (and, for a release line, its release list in
+          # GitHub's API shape, decdn_node_release_index). The signature is still
+          # checked against deCDN's release keys.
           # decdn_node_release_base: "https://mirror.example/decdn/releases/download"
           decdn_node_generate_keystore: true   # the wallet is generated on the host
           decdn_network: arbitrum-sepolia
@@ -105,9 +107,9 @@ write_files:
             ansible_python_interpreter: /usr/bin/python3
         vars:
           # sponsord, installed from the GPG-verified release tarball. The release is
-          # the sponsord role's default at DEVOPS_REF (sponsord_version); set
-          # sponsord_version here, and sponsord_onramp_version to the same, to pin
-          # another one.
+          # the newest of the sponsord role's default line at DEVOPS_REF
+          # (sponsord_version); set sponsord_version here, and sponsord_onramp_version
+          # to the same, to another line or an exact "X.Y.Z".
           sponsord_install_method: release
           # Optional: a mirror that serves v<version>/sponsord-<version>-<target>.tar.gz,
           # SHA256SUMS and SHA256SUMS.asc. The signature is still checked against the
@@ -136,10 +138,11 @@ write_files:
           # It is served to every user, so never the keyed URL sponsord uses.
           sponsord_onramp_rpc_url: "CHANGE_ME"
           sponsord_onramp_turnstile_sitekey: "CHANGE_ME"   # MUST-EDIT: the widget's public sitekey
-          # The decdn release the installers install defaults to the role's pin at
-          # DEVOPS_REF (sponsord_onramp_decdn_release, with the SHA-256 of that release's
-          # SHA256SUMS: take `sha256sum SHA256SUMS` once its SHA256SUMS.asc verifies).
-          # Override both together, e.g.:
+          # The decdn release the installers install defaults to the role's release
+          # line at DEVOPS_REF (sponsord_onramp_decdn_release): its newest release, with
+          # the digest read from it. To serve one exact release, set its tag with the
+          # SHA-256 of its SHA256SUMS (`sha256sum SHA256SUMS` once its SHA256SUMS.asc
+          # verifies), e.g.:
           # sponsord_onramp_decdn_release: "v0.1.0"
           # sponsord_onramp_decdn_sums_sha256: "<64 lowercase hex>"
 

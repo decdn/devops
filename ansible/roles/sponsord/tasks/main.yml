@@ -15,16 +15,19 @@
       "source" (build sponsord_source_ref on the host) or "manual" (copy a
       locally-built binary from the control machine).
 
-# sponsord_version defaults to the release this repo pins; an inventory
-# that blanks it gets this message instead of a bare 404 from get_url.
+# sponsord_version defaults to the release line this repo pins; an inventory
+# that blanks or misspells it gets this message instead of a bare 404 from get_url.
 - name: Require a pinned release version
   ansible.builtin.assert:
     that:
-      - sponsord_version | length > 0
+      - sponsord_version is string
+      - sponsord_version is match('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)?$')
     fail_msg: >-
-      sponsord_install_method "release" (the default) requires sponsord_version (e.g.
-      "0.0.1") naming a v<version> release of decdn/sponsord (or of the mirror in
-      sponsord_release_base). To run something unreleased, set
+      sponsord_install_method "release" (the default) requires sponsord_version: a
+      release line ("X.Y", the newest vX.Y.N release of decdn/sponsord, looked up in
+      sponsord_release_index) or an exact version ("X.Y.Z", the vX.Y.Z release), as
+      a quoted string without the "v" (got "{{ sponsord_version }}"). Downloads come
+      from sponsord_release_base. To run something unreleased, set
       sponsord_install_method "source" with a sponsord_source_ref to build on the
       host, or use "manual" to copy a binary built on the control machine.
   when: sponsord_install_method == "release"

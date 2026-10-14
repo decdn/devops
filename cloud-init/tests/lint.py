@@ -101,7 +101,7 @@ PINNED_VARS = {
 # decdn CLI it ships for that) would never get the chance.
 FORBIDDEN_VARS = {
     "decdn_release_keyring", "decdn_env_file",
-    "sponsord_release_keyring", "sponsord_onramp_release_keyring",
+    "sponsord_release_keyring", "sponsord_onramp_release_keyring", "sponsord_onramp_decdn_keyring",
     "sponsord_etc", "sponsord_secret_env_file", "sponsord_treasury_keystore_file",
     "sponsord_treasury_password_file", "sponsord_api_token_file", "sponsord_generate_api_token",
     "sponsord_generate_treasury_wallet", "sponsord_decdn_cli_bin_src",
@@ -214,9 +214,10 @@ def values_of(node, key):
     return found
 
 
-# The onramp's installer pin: the decdn release tag and its SHA256SUMS digest, which
-# only make sense together (the role defaults pin both).
+# The onramp's installer pin: a decdn release line (the role default, which takes
+# its digest from the release it resolves to) or a tag with its SHA256SUMS digest.
 ONRAMP_PINS = ("sponsord_onramp_decdn_release", "sponsord_onramp_decdn_sums_sha256")
+ONRAMP_LINE = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 
 
 def walk_strings(node, path=""):
@@ -397,10 +398,15 @@ def check_inventory(inventory):
         if (sv or ov) and not (len(sv) == len(ov) == 1 and str(sv[0]) == str(ov[0])):
             violation("inventory: set sponsord_version and sponsord_onramp_version together, once each and "
                       "equal (one decdn/sponsord release ships both)")
-        pins = [k for k in ONRAMP_PINS if values_of(inventory, k)]
-        if pins and len(pins) != len(ONRAMP_PINS):
-            violation(f"inventory: set both {' and '.join(ONRAMP_PINS)} or neither (a release tag without its "
-                      f"SHA256SUMS digest fails every installer); set: {', '.join(pins)}")
+        releases = values_of(inventory, ONRAMP_PINS[0])
+        sums = values_of(inventory, ONRAMP_PINS[1])
+        line = len(releases) == 1 and isinstance(releases[0], str) and ONRAMP_LINE.fullmatch(releases[0])
+        if releases and not line and len(sums) != 1:
+            violation(f"inventory: set both {' and '.join(ONRAMP_PINS)} for a release tag (vX.Y.Z), once each "
+                      f"(a tag without its SHA256SUMS digest fails every installer)")
+        if sums and (not releases or line):
+            violation(f"inventory: {ONRAMP_PINS[0]} is a release line (vX.Y, the role default unless set), "
+                      f"which takes no {ONRAMP_PINS[1]}: the role reads the digest from the release it resolves to")
     # Ansible applies one baseline_sudo_users list, the one from the highest-precedence
     # place that sets it, not the union. So it may be set once, and that list is checked.
     sudo_lists = {}

@@ -1,0 +1,141 @@
+---
+# Resolve a release pin to the exact version to install. Copied verbatim into the
+# sponsord and sponsord_onramp roles; make test-scripts keeps the copies identical.
+#
+# In:  _rr_spec    the pin, already validated: "X.Y.Z[-pre]" (exact) or "X.Y" (a line)
+#      _rr_index   URL of the upstream release list, in GitHub's REST API shape
+#                  (GET /repos/<owner>/<repo>/releases: a JSON list of objects with
+#                  tag_name, draft, prerelease and assets[].name)
+#      _rr_name    the variable the pin came from, for messages
+#      _rr_stamp   the role's installed-version stamp on the host, or "" for none
+# Out: _rr_version the exact version: the pin itself, or the newest finished release
+#                  of the line
+#
+# An exact pin is passed through with no network call. A line resolves to the highest
+# vX.Y.N that is neither a draft nor a prerelease and lists SHA256SUMS.asc among its
+# assets, so a release still being published, or one that cannot be verified, is
+# never picked. The index only chooses the tag: the caller still verifies SHA256SUMS
+# against its vendored KEYS and holds the binary to the resolved version, so a forged
+# index can at worst choose another signed release of the same line.
+#
+# The lookup is read-only, so it runs in check mode too (check_mode: false): `make
+# check` then reports the install a real run would make. When the list cannot be read
+# (GitHub down, or its unauthenticated limit of 60 requests an hour per address hit)
+# and the stamp names a release of the line, that release is kept with a warning, so
+# an outage does not fail a deploy that changes nothing else; it fails only a host
+# with no release of the line yet.
+- name: Take an exact pin as is, for {{ _rr_name }}
+  ansible.builtin.set_fact:
+    _rr_version: "{{ _rr_spec }}"
+  when: _rr_spec is not match('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
+
+- name: Resolve a release line to its newest release, for {{ _rr_name }}
+  when: _rr_spec is match('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')
+  block:
+    # Retried for a transient error, but not on a rate limit (403/429), which does
+    # not clear in seconds. A failure goes to the rescue, and the tasks below decide.
+    - name: Read the release list for {{ _rr_name }}
+      block:
+        - name: Fetch the release list for {{ _rr_name }}
+          ansible.builtin.uri:
+            url: "{{ _rr_index }}"
+            headers:
+              Accept: application/vnd.github+json
+            return_content: true
+            timeout: 30
+          register: _rr_response
+          check_mode: false
+          retries: 3
+          delay: 5
+          until: _rr_response.status | default(0) in [200, 403, 429]
+      rescue:
+        - name: Note that the release list could not be read
+          ansible.builtin.debug:
+            msg: "{{ _rr_index }} did not answer; the next tasks decide what to do."
+
+    - name: Decide whether the release list was read, for {{ _rr_name }}
+      ansible.builtin.set_fact:
+        _rr_listed: >-
+          {{ _rr_response.status | default(0) == 200
+             and _rr_response.content | default('') is match('\s*\[') }}
+
+    - name: Read the installed release, for {{ _rr_name }}
+      ansible.builtin.slurp:
+        src: "{{ _rr_stamp }}"
+      register: _rr_stamp_read
+      failed_when: false
+      when:
+        - not _rr_listed
+        - _rr_stamp | default('') | length > 0
+
+    - name: Keep an installed release of the line, for {{ _rr_name }}
+      ansible.builtin.set_fact:
+        _rr_kept: >-
+          {{ _rr_stamp_read.content | b64decode | trim
+             if (not _rr_listed and _rr_stamp_read.content is defined
+                 and (_rr_stamp_read.content | b64decode | trim)
+                     is match('^' ~ (_rr_spec | regex_escape) ~ '\.(0|[1-9][0-9]*)$'))
+             else '' }}
+
+    - name: Warn that the installed release is kept, for {{ _rr_name }}
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: {{ _rr_index }} could not be read (HTTP
+          {{ _rr_response.status | default('none') }}), so {{ _rr_name }}
+          "{{ _rr_spec }}" keeps the installed {{ _rr_kept }}; a newer release of the
+          line, if any, is installed by the next run that can read the list.
+      when: _rr_kept | length > 0
+
+    - name: Require a readable release list for {{ _rr_name }}
+      ansible.builtin.assert:
+        that:
+          - _rr_listed or _rr_kept | length > 0
+        fail_msg: >-
+          {{ _rr_name }} is the release line "{{ _rr_spec }}", which is resolved from
+          {{ _rr_index }}, but that did not answer with a JSON list (HTTP
+          {{ _rr_response.status | default('none') }}{{ ': ' ~ _rr_response.msg
+          if _rr_response.msg | default('') else '' }}), and no release of the line
+          is installed to keep. GitHub allows 60 unauthenticated API requests an hour
+          per address. Pin an exact version (e.g. "{{ _rr_spec }}.0") or point the
+          index variable at a mirror.
+        quiet: true
+
+    - name: Pick the newest finished release of the line
+      when: _rr_listed
+      ansible.builtin.set_fact:
+        _rr_patch: >-
+          {%- set ns = namespace(best=-1) -%}
+          {%- set want = '^v' ~ (_rr_spec | regex_escape) ~ '\.(0|[1-9][0-9]*)$' -%}
+          {%- for r in _rr_response.content | from_json -%}
+          {%-   if r is mapping
+                   and r.tag_name | default('') is string
+                   and r.tag_name | default('') is match(want)
+                   and not (r.draft | default(true))
+                   and not (r.prerelease | default(true))
+                   and 'SHA256SUMS.asc' in (r.assets | default([]) | map(attribute='name') | list) -%}
+          {%-     set n = r.tag_name.split('.')[-1] | int -%}
+          {%-     if n > ns.best -%}{%- set ns.best = n -%}{%- endif -%}
+          {%-   endif -%}
+          {%- endfor -%}
+          {{- ns.best -}}
+
+    - name: Require a release in the line
+      when: _rr_listed
+      ansible.builtin.assert:
+        that:
+          - _rr_patch | int >= 0
+        fail_msg: >-
+          {{ _rr_name }} is the release line "{{ _rr_spec }}", but {{ _rr_index }}
+          lists no finished v{{ _rr_spec }}.N release (one that is not a draft or a
+          prerelease and has a SHA256SUMS.asc asset). Pin an existing exact version or
+          another line.
+        quiet: true
+
+    - name: Record the resolved {{ _rr_name }}
+      ansible.builtin.set_fact:
+        _rr_version: "{{ (_rr_spec ~ '.' ~ (_rr_patch | int)) if _rr_listed else _rr_kept }}"
+
+- name: Report the resolved {{ _rr_name }}
+  ansible.builtin.debug:
+    msg: "{{ _rr_name }} {{ _rr_spec }} resolves to {{ _rr_version }}"
+  when: _rr_version != _rr_spec

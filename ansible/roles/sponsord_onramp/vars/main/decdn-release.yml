@@ -1,0 +1,5 @@
+---
+# Where the role records the decdn/decdn release the installers are served
+# (tasks/decdn-release.yml), whichever way it was pinned: the release-line lookup
+# falls back to it when GitHub's release list cannot be read. A fact of the role, not a knob.
+_sponsord_onramp_decdn_record: /usr/local/lib/sponsord-onramp/decdn-release

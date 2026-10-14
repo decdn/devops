@@ -13,16 +13,19 @@
       "source" (build decdn_node_source_ref on the node) or "manual" (copy
       locally-built binaries from the control machine).
 
-# decdn_node_version defaults to the release this repo pins; an inventory
-# that blanks it gets this message instead of a bare 404 from get_url.
+# decdn_node_version defaults to the release line this repo pins; an inventory
+# that blanks or misspells it gets this message instead of a bare 404 from get_url.
 - name: Require a pinned release version
   ansible.builtin.assert:
     that:
-      - decdn_node_version | length > 0
+      - decdn_node_version is string
+      - decdn_node_version is match('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)?$')
     fail_msg: >-
-      decdn_node_install_method "release" (the default) requires decdn_node_version
-      (e.g. "0.0.1") naming a v<version> release of decdn/decdn (or of the mirror in
-      decdn_node_release_base). To run something unreleased, set
+      decdn_node_install_method "release" (the default) requires decdn_node_version:
+      a release line ("X.Y", the newest vX.Y.N release of decdn/decdn, looked up in
+      decdn_node_release_index) or an exact version ("X.Y.Z", the vX.Y.Z release),
+      as a quoted string without the "v" (got "{{ decdn_node_version }}").
+      Downloads come from decdn_node_release_base. To run something unreleased, set
       decdn_node_install_method "source" with a decdn_node_source_ref to build on
       the node, or use "manual" to copy binaries built on the control machine.
   when: decdn_node_install_method == "release"
@@ -1715,7 +1718,7 @@
          or decdn_config_validate.stdout | default('', true)
          or decdn_config_validate.msg | default('(no output)', true) }}
       — this role renders a key the installed decdn
-      {{ decdn_node_version if decdn_node_install_method == 'release'
+      {{ _decdn_node_resolved_version if decdn_node_install_method == 'release'
          else '(' ~ decdn_node_install_method ~ ' install)' }} does not accept, or a
       value outside its range. Config sections are deny_unknown_fields with no
       aliases upstream, so re-sync roles/decdn_node/templates/node.toml.j2 against
