@@ -12,7 +12,7 @@
 namespace: decdn
 name: publisher
 # Set only by scripts/release.sh (RELEASING.md); 0.0.0 means never released.
-version: 0.2.0                      # pre-1.0: published shape not yet stable
+version: 0.3.0                      # pre-1.0: published shape not yet stable
 readme: README.md
 authors:
   - deCDN Contributors
