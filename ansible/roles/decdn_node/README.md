@@ -730,11 +730,12 @@ and drop its line from `/etc/cron.deny` and `/etc/at.deny`.
 
 ## Bumping the decdn release
 
-The role defaults, the onramp's installer pin and the chart's `appVersion` name a
-release line, so a decdn/decdn release in that line reaches deployments on its own.
-What cannot resolve a line names one release, and moves on every upstream release:
-Compose's image digest and onramp installer pin, the chart's example digest, the
-commented exact-pin examples, and the generated mirrors. `scripts/open-decdn-bump.sh
+The role defaults (this role's and the two sponsord roles': one decdn/decdn release
+ships the node, the CLI, sponsord and the onramp), the onramp's installer pin and the
+chart's `appVersion` name a release line, so a decdn/decdn release in that line reaches
+deployments on its own. What cannot resolve a line names one release, and moves on
+every upstream release: Compose's three image digests and onramp installer pin, the
+chart's example digest, the commented exact-pin examples, and the generated mirrors. `scripts/open-decdn-bump.sh
 [vX.Y.Z]` opens that PR: decdn's `publish-crates.sh` runs it at the end of each decdn
 release, and a maintainer runs it by hand from a decdn/devops clone (with no tag, it
 takes decdn's latest release). It works in a worktree at `origin/main`, takes the
@@ -755,7 +756,8 @@ release, or a new line is out.
 
 The steps:
 
-1. The line: `decdn_node_version` in `defaults/main.yml`, and
+1. The line: `decdn_node_version` in `defaults/main.yml`, `sponsord_version` in
+   `roles/sponsord/defaults/main.yml`, and `sponsord_onramp_version` plus
    `sponsord_onramp_decdn_release` (`vX.Y`) in `roles/sponsord_onramp/defaults/main.yml`.
 2. The generated mirrors, from a decdn checkout at the new tag:
    `scripts/sync-network-profiles.py <checkout> --ref v<version>` and
@@ -769,19 +771,23 @@ The steps:
    `ONRAMP_DECDN_SUMS_SHA256` (`sha256sum SHA256SUMS` once `SHA256SUMS.asc`
    verifies) in `compose/sponsord-onramp.env.example`. The role reads both from the
    release itself.
-4. `DECDN_IMAGE_DIGEST` in `compose/.env.example` (and the example digest in
+4. `DECDN_IMAGE_DIGEST`, `SPONSORD_IMAGE_DIGEST` and `SPONSORD_ONRAMP_IMAGE_DIGEST` in
+   `compose/.env.example` (and the node's example digest in
    `charts/decdn-node/values.yaml`), from the release's signed
-   `decdn-node-image-digest.txt` (`image-digest.txt` in v0.0.1).
+   `decdn-node-image-digest.txt` (`image-digest.txt` in v0.0.1),
+   `sponsord-image-digest.txt` and `sponsord-onramp-image-digest.txt`.
 5. The line again: `appVersion` in `charts/decdn-node/Chart.yaml` and the image tag in
    its `artifacthub.io/images` annotation. CI's `helm` job then validates the chart
    against the line's newest `decdn` (`scripts/fetch-decdn-cli.sh`, the same
    resolution and signature check as this role's).
-6. `files/decdn-release-KEYS.asc`, if upstream's `KEYS` changed (and the sponsord and
-   sponsord_onramp copies, and `SECURITY.md`'s fingerprints).
-7. The commented exact-pin examples (`decdn_node_version`, `decdn_node_source_ref`
-   and `sponsord_onramp_decdn_release`, in the inventory templates, their
-   `examples/collection-fleet` copies and `cloud-init/user-data-publisher.yaml`), and
-   for a new line AGENTS.md's "Pinned upstream releases". Other docs name the pin,
+6. `files/decdn-release-KEYS.asc`, if upstream's `KEYS` changed (the sponsord and
+   sponsord_onramp roles' byte copies with it, and `SECURITY.md`'s fingerprints).
+7. The commented exact-pin examples (`decdn_node_version`, `decdn_node_source_ref`,
+   `sponsord_version`, `sponsord_source_ref`, `sponsord_onramp_version`,
+   `sponsord_onramp_source_ref` and `sponsord_onramp_decdn_release`, in the inventory
+   templates, their `examples/collection-fleet` copies and
+   `cloud-init/user-data-publisher.yaml`), and for a new line AGENTS.md's "Pinned
+   upstream releases". Other docs name the pin,
    never its number. The changelog entry is the PR title (`feat`, `fix` or `chore`,
    not `ci` or `build`, which the changelogs leave out; RELEASING.md).
 8. The monitoring assets, by hand (nothing in CI checks the node's metric names):
@@ -789,12 +795,13 @@ The steps:
    list in `crates/node/src/metrics.rs` between the two tags, fix any renamed or
    removed `decdn_*` name in `monitoring/decdn-node/`, add a new inbound failure
    reason to both "Unattributed stream failures" panels, and chart or alert on new
-   series worth it (`.claude/skills/grafana-dashboards/SKILL.md`). Republish the
-   Grafana Cloud copies after the merge.
+   series worth it (`.claude/skills/grafana-dashboards/SKILL.md`). The same for
+   sponsord's `monitoring/sponsord/` against `crates/sponsord/src/metrics.rs`, and the
+   env var names Compose and the sponsord roles render against
+   `crates/sponsord*/src/config.rs`. Republish the Grafana Cloud copies after the merge.
 
-`make test-scripts` fails while the role, the onramp's decdn line, the chart's
-`appVersion` and its `artifacthub.io/images` image or AGENTS.md's pinned line
+`make test-scripts` fails while the three roles' lines, the onramp's decdn line, the
+chart's `appVersion` and its `artifacthub.io/images` image or AGENTS.md's pinned line
 disagree, while Compose's onramp pin is not a release of the line, or while the KEYS
-and SECURITY.md disagree; the weekly `upstream-drift` job checks the exact copies
-against the line's newest release. A decdn/sponsord release is bumped the same way
-([sponsord's README](../sponsord/README.md#bumping-the-sponsord-release)).
+copies and SECURITY.md disagree; the weekly `upstream-drift` job checks the exact
+copies against the line's newest release.

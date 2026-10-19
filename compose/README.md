@@ -68,9 +68,10 @@ onramp's domain. Nothing in it is secret. It is the only place Compose's inputs 
 from: the wrapper always names the project (`decdn`) and refuses to run while the
 shell sets a `COMPOSE_*` variable or one `compose.yaml` reads, which Compose would
 otherwise take over `.env`, so its checks see what Compose runs. `init`
-starts it from `.env.example`, which carries the digests of the newest releases of
-the lines the Ansible roles pin (`decdn_node_version` and `sponsord_version`), each
-copied from that release's signed digest file. Compose pins by digest only, so it
+starts it from `.env.example`, which carries the three digests of the newest release
+of the line the Ansible roles pin (`decdn_node_version` = `sponsord_version`: one
+decdn/decdn release ships every image), each copied from that release's signed digest
+file. Compose pins by digest only, so it
 names one release where the roles follow the line; [Operate](#operate) says how to
 take a newer one.
 
@@ -739,19 +740,12 @@ distribution than the image's may not start in it. Build with `cross`, as the up
 release does. The image must carry the `decdn` CLI too: the wrapper and the node's
 healthcheck use it.
 
-The sponsord images work the same way. `decdn/sponsord`'s `deploy/Dockerfile` builds
-either one from source:
-
-```bash
-sudo docker build -f <sponsord-checkout>/deploy/Dockerfile --build-arg BIN=sponsord \
-  -t 127.0.0.1:5000/sponsord:dev <sponsord-checkout>
-sudo docker build -f <sponsord-checkout>/deploy/Dockerfile --build-arg BIN=sponsord-onramp \
-  -t 127.0.0.1:5000/sponsord-onramp:dev <sponsord-checkout>
-sudo docker push 127.0.0.1:5000/sponsord:dev && sudo docker push 127.0.0.1:5000/sponsord-onramp:dev
-```
-
-Then set `SPONSORD_IMAGE_REPO` / `SPONSORD_IMAGE_DIGEST` and
-`SPONSORD_ONRAMP_IMAGE_REPO` / `SPONSORD_ONRAMP_IMAGE_DIGEST` in `.env`.
+The sponsord images work the same way: they are the `sponsord` and `sponsord-onramp`
+stages of decdn/decdn's root `Dockerfile`, built from the same release archives as the
+node image (`docker build --target sponsord`; upstream's `RELEASING.md` has the
+`dist/<arch>/` layout the stages copy from). Push both to the local registry, then set
+`SPONSORD_IMAGE_REPO` / `SPONSORD_IMAGE_DIGEST` and `SPONSORD_ONRAMP_IMAGE_REPO` /
+`SPONSORD_ONRAMP_IMAGE_DIGEST` in `.env`.
 
 ## Without the wrapper
 

@@ -23,10 +23,10 @@ In `release` install mode, and while `decdn_verify_release_signature` keeps its
 default of `true`, the `decdn_node` role checks every downloaded tarball against the
 release's GPG-signed `SHA256SUMS`, using the maintainer keys vendored at
 `ansible/roles/decdn_node/files/decdn-release-KEYS.asc`. The `sponsord` and
-`sponsord_onramp` roles do the same with
-`ansible/roles/sponsord/files/sponsord-release-KEYS.asc`. Both files are copies of
-upstream's `KEYS` (decdn/decdn and decdn/sponsord), which hold the same maintainer
-keys, and a good signature from any of them is accepted:
+`sponsord_onramp` roles do the same with their own `files/decdn-release-KEYS.asc`
+(one decdn/decdn release ships all four binaries). The three files are byte copies of
+upstream's `KEYS` (`make test-scripts` checks), which holds the maintainer keys, and a
+good signature from any of them is accepted:
 
 ```
 Ant Somers <ant@decdn.org>

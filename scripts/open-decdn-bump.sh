@@ -20,13 +20,14 @@
 # exact release: Compose, the examples and the generated mirrors, a repo-only
 # change. A release that starts a new line moves the line as well, and the
 # collections and the chart need a release after it.
-# Release facts (the SHA256SUMS digest, the decdn-node image digest) come from
-# the release's assets once their signatures verify against the vendored
+# Release facts (the SHA256SUMS digest, the three image digests: one decdn/decdn
+# release ships the node, the CLI, sponsord and the onramp) come from the
+# release's assets once their signatures verify against the vendored
 # decdn-release-KEYS.asc; the generated mirrors and KEYS come from a clone of the
 # tag, whose signature is checked the same way. What needs a human is listed in
 # the PR body: a schema-key change (node.toml.j2 and the chart's values.config
-# follow it by hand), a KEYS change (the sponsord copy and SECURITY.md follow
-# it), and any generator that failed.
+# follow it by hand), a KEYS change (SECURITY.md's fingerprints follow it), and
+# any generator that failed.
 #
 # Nothing happens when the pin is already at that release or a later one, or
 # when a PR from bump/decdn-<tag> exists in any state: a closed bump PR is never
@@ -48,7 +49,13 @@ DEVOPS=decdn/devops
 # location.
 SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 KEYS=ansible/roles/decdn_node/files/decdn-release-KEYS.asc
+# The sponsord roles' byte copies of it (make test-scripts keeps all three equal).
+KEYS_COPIES=(ansible/roles/sponsord/files/decdn-release-KEYS.asc
+             ansible/roles/sponsord_onramp/files/decdn-release-KEYS.asc)
 SCHEMA_KEYS=ansible/molecule/schema/files/schema-keys.txt
+# The images whose digests Compose pins, by Dockerfile stage (= the digest file's
+# name and the image's path under ghcr.io/decdn/), with bump_decdn.py's flag.
+IMAGES=(decdn-node:--image-digest sponsord:--sponsord-image-digest sponsord-onramp:--onramp-image-digest)
 
 die() { echo "error: $*" >&2; exit 1; }
 usage() { sed -n '5p' "${BASH_SOURCE[0]}" | sed 's/^# //' >&2; exit 2; }
@@ -155,31 +162,38 @@ mkdir -m 700 "$GNUPG"
 gpg --homedir "$GNUPG" --batch --quiet --import "$KEYS" 2>/dev/null ||
   die "$KEYS is not a valid OpenPGP keyring"
 ASSETS="$WORK/assets"
-gh release download "$TAG" -R "$DECDN" -D "$ASSETS" \
-  -p SHA256SUMS -p SHA256SUMS.asc \
-  -p decdn-node-image-digest.txt -p decdn-node-image-digest.txt.asc ||
-  die "could not download $TAG's SHA256SUMS and decdn-node-image-digest.txt (and their .asc)"
+patterns=(-p SHA256SUMS -p SHA256SUMS.asc)
+for img in "${IMAGES[@]}"; do
+  patterns+=(-p "${img%%:*}-image-digest.txt" -p "${img%%:*}-image-digest.txt.asc")
+done
+gh release download "$TAG" -R "$DECDN" -D "$ASSETS" "${patterns[@]}" ||
+  die "could not download $TAG's SHA256SUMS and *-image-digest.txt (and their .asc)"
 # A signature by a key the vendored KEYS does not hold fails here, including
 # upstream's next key after a rotation: vendor the new KEYS by hand (README step
 # 6) and run this again.
-for f in SHA256SUMS decdn-node-image-digest.txt; do
+for f in SHA256SUMS "${IMAGES[@]/%:*/-image-digest.txt}"; do
+  [[ -f "$ASSETS/$f" && -f "$ASSETS/$f.asc" ]] || die "$TAG has no $f (and its .asc); no PR opened"
   gpg --homedir "$GNUPG" --batch --verify "$ASSETS/$f.asc" "$ASSETS/$f" 2>"$WORK/gpg.log" || {
     cat "$WORK/gpg.log" >&2
     die "$TAG's $f does not verify against $KEYS"
   }
 done
-# A signature says a maintainer signed the file, not for which release: neither
-# file is versioned by its name. SHA256SUMS lists archives named for the
-# version, and the digest file is one line naming the decdn-node image, so a
-# signed file copied from another release, or the CLI image's digest file,
-# stops here.
-grep -qE "^[0-9a-f]{64}  decdn-node-${VERSION//./\\.}-" "$ASSETS/SHA256SUMS" ||
-  die "$TAG's SHA256SUMS lists no decdn-node-$VERSION archive"
+# A signature says a maintainer signed the file, not for which release: no file
+# is versioned by its name. SHA256SUMS lists archives named for the version, and
+# each digest file is one line naming its image, so a signed file copied from
+# another release, or the CLI image's digest file under another name, stops here.
+DIGEST_FLAGS=()
+for img in "${IMAGES[@]}"; do
+  stage=${img%%:*}
+  grep -qE "^[0-9a-f]{64}  ${stage}-${VERSION//./\\.}-" "$ASSETS/SHA256SUMS" ||
+    die "$TAG's SHA256SUMS lists no $stage-$VERSION archive"
+  line=$(<"$ASSETS/$stage-image-digest.txt")
+  [[ "$line" =~ ^ghcr\.io/decdn/${stage}@(sha256:[0-9a-f]{64})$ ]] ||
+    die "$TAG's $stage-image-digest.txt is not one ghcr.io/decdn/$stage@sha256:<digest> line"
+  DIGEST_FLAGS+=("${img#*:}" "${BASH_REMATCH[1]}")
+  [[ "$stage" != decdn-node ]] || DIGEST=${BASH_REMATCH[1]}
+done
 SUMS=$(sha256sum "$ASSETS/SHA256SUMS" | cut -d' ' -f1)
-line=$(<"$ASSETS/decdn-node-image-digest.txt")
-[[ "$line" =~ ^ghcr\.io/decdn/decdn-node@(sha256:[0-9a-f]{64})$ ]] ||
-  die "$TAG's decdn-node-image-digest.txt is not one ghcr.io/decdn/decdn-node@sha256:<digest> line"
-DIGEST=${BASH_REMATCH[1]}
 
 UPSTREAM="$WORK/decdn"
 git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$TAG" \
@@ -204,7 +218,7 @@ need() {
   NEEDS+=("$item")
 }
 
-bump rewrite "$VERSION" --sums-sha256 "$SUMS" --image-digest "$DIGEST" >/dev/null ||
+bump rewrite "$VERSION" --sums-sha256 "$SUMS" "${DIGEST_FLAGS[@]}" >/dev/null ||
   die "could not move the pins to $TAG; no PR opened"
 
 # Step 2: the generated mirrors, from the tag. --check first: each mirror records the
@@ -239,13 +253,12 @@ if [[ "$KIND" == patch ]] && { [[ -n "$MIRRORS_MOVED" ]] || ! git diff --quiet -
   \`decdn.publisher\` after merging (RELEASING.md)."
 fi
 
-# Step 6: KEYS is a byte copy of upstream's.
+# Step 6: KEYS and the sponsord roles' copies are byte copies of upstream's.
 if ! cmp -s "$UPSTREAM/KEYS" "$KEYS"; then
   cp "$UPSTREAM/KEYS" "$KEYS"
-  cp "$UPSTREAM/KEYS" ansible/roles/sponsord_onramp/files/decdn-release-KEYS.asc
-  need "decdn's \`KEYS\` changed and is copied to \`$KEYS\` and the onramp's
-  \`ansible/roles/sponsord_onramp/files/decdn-release-KEYS.asc\`: update the sponsord copy
-  (\`ansible/roles/sponsord/files/sponsord-release-KEYS.asc\`) and SECURITY.md's fingerprints."
+  for copy in "${KEYS_COPIES[@]}"; do cp "$UPSTREAM/KEYS" "$copy"; done
+  need "decdn's \`KEYS\` changed and is copied to \`$KEYS\` and the sponsord roles'
+  \`files/decdn-release-KEYS.asc\`: update SECURITY.md's fingerprints."
 fi
 
 # ---- PR body -------------------------------------------------------------
@@ -257,16 +270,16 @@ BODY="$WORK/body.md"
 {
   if [[ "$KIND" == patch ]]; then
     echo "Moves what names one decdn/decdn release to [${TAG}](https://github.com/${DECDN}/releases/tag/${TAG}) from \`v${CURRENT}\`:"
-    echo "Compose's image digest and onramp installer pin, the chart's example digest, the exact-pin"
-    echo "examples and the generated mirrors. The roles and the chart pin the line \`${LINE}\` and"
+    echo "Compose's three image digests and onramp installer pin, the chart's example digest, the"
+    echo "exact-pin examples and the generated mirrors. The roles and the chart pin the line \`${LINE}\` and"
     echo "pick ${TAG} up on their own."
   else
     echo "Moves the decdn/decdn pin to the line \`${TAG%.*}\` and [${TAG}](https://github.com/${DECDN}/releases/tag/${TAG}), from \`${LINE}\` and \`v${CURRENT}\`."
   fi
   echo
   echo "- decdn changes: https://github.com/${DECDN}/compare/v${CURRENT}...${TAG}"
-  echo "- \`SHA256SUMS\` (\`${SUMS}\`) and the \`decdn-node\` image digest (\`${DIGEST}\`)"
-  echo "  come from the release's assets, verified against \`${KEYS}\`."
+  echo "- \`SHA256SUMS\` (\`${SUMS}\`) and the image digests (\`decdn-node\`: \`${DIGEST}\`; \`sponsord\`"
+  echo "  and \`sponsord-onramp\` likewise) come from the release's assets, verified against \`${KEYS}\`."
   echo
   if ((${#NEEDS[@]})); then
     echo "**Needs work:**"
@@ -304,14 +317,14 @@ git add -u || die "git add failed; no PR opened"
 # --no-verify: CI is the gate on this PR.
 if [[ "$KIND" == patch ]]; then
   SUMMARY="Move what names one decdn/decdn release from v${CURRENT} to ${TAG}
-(${UPSTREAM_SHA}): the Compose image digest and onramp installer pin, the
+(${UPSTREAM_SHA}): the Compose image digests and onramp installer pin, the
 chart's example digest, the inventory and cloud-init exact-pin examples and the
 generated mirrors. The roles and the chart pin the line ${LINE}."
 else
   SUMMARY="Move the decdn/decdn pin from the line ${LINE} (v${CURRENT}) to ${TAG}
-(${UPSTREAM_SHA}): the role default, the onramp's installer line, the chart's
-appVersion and Artifact Hub image, AGENTS.md's pinned line, and what names one
-release (Compose, the examples, the generated mirrors)."
+(${UPSTREAM_SHA}): the three role defaults, the onramp's installer line, the
+chart's appVersion and Artifact Hub image, AGENTS.md's pinned line, and what
+names one release (Compose, the examples, the generated mirrors)."
 fi
 git commit --quiet --no-verify -F - <<EOF || die "git commit failed; no PR opened"
 chore: pin decdn to ${TAG}

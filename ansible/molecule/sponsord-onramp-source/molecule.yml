@@ -3,7 +3,7 @@
 # side by side: the same host shape, inventory and converge (that scenario's
 # prepare, converge and verify, by path), then side_effect.yml here switches both
 # roles to install_method "source" against files/fixture (a dependency-free
-# workspace shaped like decdn/sponsord whose binaries exec that scenario's stubs),
+# workspace shaped like decdn/decdn's sponsord crates whose binaries exec that scenario's stubs),
 # checks both are built in the sandbox, stamped and serving, and switches back to
 # "manual". It needs network access to static.rust-lang.org (rustup and the
 # toolchain), on both platforms.

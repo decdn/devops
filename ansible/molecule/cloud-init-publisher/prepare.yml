@@ -11,10 +11,10 @@
   vars:
     stub_version: "0.0.0-molecule-stub"
     stubs: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule"
-    # Two repositories' releases, so each gets its own base (converge.yml) and release
-    # list: decdn/decdn's node and CLI (../cloud-init's stub), and
-    # decdn/sponsord's one release holding both archives under one SHA256SUMS, as it
-    # releases its workspace.
+    # Two mirrored releases, each with its own base (converge.yml) and release list:
+    # one holding the node and CLI stubs (../cloud-init's), one holding both sponsor
+    # stubs under one SHA256SUMS. Upstream ships all four from one decdn/decdn
+    # release; the stubs are separate fixtures, so the mirror keeps two bases.
     mirror_releases:
       - dir: "decdn/v{{ stub_version }}"
         bins:

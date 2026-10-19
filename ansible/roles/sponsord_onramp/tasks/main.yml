@@ -28,7 +28,7 @@
     fail_msg: >-
       sponsord_onramp_install_method "release" (the default) requires
       sponsord_onramp_version: a release line ("X.Y", the newest vX.Y.N release of
-      decdn/sponsord, looked up in sponsord_onramp_release_index) or an exact version
+      decdn/decdn, looked up in sponsord_onramp_release_index) or an exact version
       ("X.Y.Z", the vX.Y.Z release), as a quoted string without the "v" (got
       "{{ sponsord_onramp_version }}"), the same as sponsord_version. Downloads come
       from sponsord_onramp_release_base. To run something unreleased, set sponsord_onramp_install_method "source" with a
@@ -138,7 +138,7 @@
           sponsord_onramp_install_method "manual" needs sponsord_onramp_manual_bin_src (a
           control-machine path to the sponsord-onramp binary) or
           sponsord_onramp_release_target_dir (the control-machine target/release dir of
-          a decdn/sponsord checkout; it defaults to sponsord_release_target_dir).
+          a decdn/decdn checkout; it defaults to sponsord_release_target_dir).
 
     - name: Decide whether target-dir resolution applies
       ansible.builtin.set_fact:
@@ -174,7 +174,7 @@
           No sponsord-onramp binary under sponsord_onramp_release_target_dir
           ({{ sponsord_onramp_release_target_dir }}) or its cross output dir
           ({{ (_sponsord_onramp_target_dir | dirname) ~ '/' ~ sponsord_onramp_target ~ '/release' }}).
-          Build it in a decdn/sponsord checkout — `cargo build --release -p
+          Build it in a decdn/decdn checkout — `cargo build --release -p
           sponsord-onramp`, or cross-compiling for the host, `cross build --release -p
           sponsord-onramp --target {{ sponsord_onramp_target }}`.
       when: _sponsord_onramp_use_dir | bool

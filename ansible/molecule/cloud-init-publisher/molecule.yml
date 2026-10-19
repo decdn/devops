@@ -6,8 +6,9 @@
 # covers what differs:
 #   prepare     cloud-init and the repo (as ../cloud-init), shared mount propagation
 #               (as ../sponsord), and a signed loopback mirror holding a decdn/decdn
-#               release of the node stubs and a decdn/sponsord release of the shared
-#               sponsor stubs, each under its own base.
+#               release of the node stubs and a second release of the shared sponsor
+#               stubs, each under its own base (upstream ships all four binaries in one
+#               release; the stubs are separate fixtures, so the mirror keeps two).
 #   converge    seeds the template (placeholders filled, an http origin backend;
 #               release bases, keyrings and Caddy's `tls internal` pointed at local
 #               ones) and boots. Asserts the host stopped at the secret gate with the

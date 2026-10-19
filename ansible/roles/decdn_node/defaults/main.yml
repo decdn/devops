@@ -62,7 +62,8 @@ decdn_rustup_sha256:
 # decdn_node_release_index on every run, so a new patch is installed and the daemon
 # restarted by the next run), or an exact "X.Y.Z" pins that one release. The
 # default is the line this repo is synced against; a new line also moves the
-# generated mirrors, the onramp's decdn pin and the chart's appVersion (README.md,
+# generated mirrors, the sponsord roles' pins (the same release ships sponsord and
+# its onramp), the onramp's decdn pin and the chart's appVersion (README.md,
 # "Bumping the decdn release").
 decdn_node_version: "0.2"
 # Release target triple. Derived from the host's gathered architecture (x86_64 or
