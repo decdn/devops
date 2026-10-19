@@ -440,3 +440,8 @@ denied_origins = [{% for a in decdn_content_denied_origins %}"{{ a }}"{% if not 
 [client]
 region_allowlist = [{% for r in decdn_client_region_allowlist %}"{{ r }}"{% if not loop.last %}, {% endif %}{% endfor %}]
 {% endif %}
+{% if decdn_self_update_check not in ["", none] %}
+
+[self_update]
+check = {{ decdn_self_update_check | bool | lower }}
+{% endif %}

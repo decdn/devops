@@ -120,3 +120,32 @@ tests:
       - eval_time: 1h20m
         alertname: DecdnCapacityBondRegistryResyncFailing
         exp_alerts: []
+
+  # Buyer top-up hold: a reads 1 from the start and fires at exactly the 15m for.
+  # b holds for 9 minutes (6m to 14m) and clears, inside the for, so it never
+  # fires. c's hold starts at 20m and fires at 35m; a is still firing then.
+  - interval: 1m
+    input_series:
+      - series: 'decdn_buyer_topup_unresolved{job="decdn-node", instance="a"}'
+        values: '1x60'
+      - series: 'decdn_buyer_topup_unresolved{job="decdn-node", instance="b"}'
+        values: '0x5 1x9 0x45'
+      - series: 'decdn_buyer_topup_unresolved{job="decdn-node", instance="c"}'
+        values: '0x19 1x40'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DecdnBuyerTopupUnresolved
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: DecdnBuyerTopupUnresolved
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: payments, severity: warning}
+      - eval_time: 34m
+        alertname: DecdnBuyerTopupUnresolved
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: payments, severity: warning}
+      - eval_time: 35m
+        alertname: DecdnBuyerTopupUnresolved
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: payments, severity: warning}
+          - exp_labels: {job: decdn-node, instance: c, component: payments, severity: warning}

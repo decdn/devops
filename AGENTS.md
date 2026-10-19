@@ -255,7 +255,13 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   the installed binary does not know is a startup crash-loop. Two guards: the role runs
   `decdn config validate` against the real binary after templating, and the
   `molecule/schema` scenario checks the rendered key set against a committed inventory of
-  upstream field names. Re-sync both when bumping the pinned decdn version.
+  upstream field names (`gen-schema-keys.py`, which refuses a config struct its
+  `STRUCT_PATHS` does not map, so a section upstream adds fails the regeneration instead
+  of dropping out). Re-sync both when bumping the pinned decdn version. `[self_update]`
+  (decdn v0.2) is CLI-only, the daemon ignores it: the role and `decdn-compose init`
+  render `check = false`, and `decdn-compose cli` sets `DECDN_SELF_UPDATE_CHECK=0`, so a
+  managed host never hears "run `decdn self-update`", which would replace the CLI outside
+  the signed-release install and fail the role's version check.
 
 - **`ansible/roles/grafana_alloy`** — opt-in Grafana Cloud observability for that node,
   one mirrored flag (`decdn_grafana_cloud_enabled`, `false` by default) driving a

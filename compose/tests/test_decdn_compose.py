@@ -415,8 +415,36 @@ class NodeToml(TmpDir):
             self.edit(True),
             '# deCDN node configuration\n\n[identity]\ndata_dir = "/var/lib/decdn"\nregion = "DE"\n\n'
             "[network]\n# bind_port = 4433\n\n[cache]\n"
-            'node_to_node_pull_through_enabled = true\n# region = "us-east-1"\n',
+            'node_to_node_pull_through_enabled = true\n# region = "us-east-1"\n'
+            "\n[self_update]\ncheck = false\n",
         )
+
+    def test_turns_the_self_update_notice_off_in_place(self) -> None:
+        # The shape `decdn config init` writes since v0.2: the table is there, its
+        # knob commented. The edit uncomments it as false, once (idempotent).
+        p = self.tmp / "node.toml"
+        p.write_text(
+            self.SAMPLE + '\n[client]\n# region_allowlist = ["US", "DE"]\n\n[self_update]\n'
+            "# Once a day, after a command's own work, `decdn` checks for a newer signed\n# check = true\n"
+        )
+        with mock.patch.object(dc, "NODE_TOML", p):
+            dc.edit_node_toml("DE", cache_node=False)
+            dc.edit_node_toml("DE", cache_node=False)
+        text = p.read_text()
+        self.assertTrue(text.endswith("[self_update]\n# Once a day, after a command's own work, `decdn` checks for a newer signed\ncheck = false\n"))
+        self.assertEqual(text.count("check = false"), 1)
+        self.assertIs(dc.tomllib.loads(text)["self_update"]["check"], False)
+
+    def test_a_bare_self_update_table_gets_the_knob(self) -> None:
+        p = self.tmp / "node.toml"
+        p.write_text(self.SAMPLE + "\n[self_update]\n")
+        with mock.patch.object(dc, "NODE_TOML", p):
+            dc.edit_node_toml("DE", cache_node=False)
+        self.assertIs(dc.tomllib.loads(p.read_text())["self_update"]["check"], False)
+
+    def test_cli_runs_without_the_self_update_notice(self) -> None:
+        self.assertEqual(dc.CLI_ENV["DECDN_SELF_UPDATE_CHECK"], "0")
+        self.assertEqual(dc.CLI_ENV["DECDN_KEYSTORE_PASSWORD_FILE"], str(dc.NODE_PASSWORD))
 
     def test_appends_a_missing_cache_table(self) -> None:
         p = self.tmp / "node.toml"

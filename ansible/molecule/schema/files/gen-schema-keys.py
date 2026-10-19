@@ -29,6 +29,8 @@ STRUCT_PATHS = {
     "FileConfig": None,
     "IdentityConfig": "identity",
     "ClientConfig": "client",
+    # CLI-only (the daemon ignores it): the `decdn` self-update notice knob.
+    "SelfUpdateConfig": "self_update",
     "NetworkConfig": "network",
     "DiscoveryConfig": "network.discovery",
     # Keyed by NodeId, so the concrete hop is a wildcard.
@@ -64,24 +66,31 @@ ORIGIN_PREFIXES = ("cache.origin", "cache.origins")
 ORIGIN_ENUM_FIELDS = ["kind", "url", "decompress", "path"]
 CREDENTIAL_FIELDS = ["source", "profile"]
 
-FIELD_RE = re.compile(r"^\s+pub\s+([a-z_0-9]+)\s*:")
-TYPE_RE = re.compile(r"^pub\s+(?:struct|enum)\s+([A-Za-z0-9_]+)")
+FIELD_RE = re.compile(r"^\s+pub\s+([a-z_0-9]+)\s*:(.*)$")
+TYPE_RE = re.compile(r"^pub\s+(struct|enum)\s+([A-Za-z0-9_]+)")
 
 
-def fields_by_struct(paths):
-    """Map every `pub struct`/`pub enum` name to its own `pub field:` names."""
-    out, current = {}, None
+def parse(paths):
+    """Map every `pub struct`/`pub enum` name to its own `pub field:` names, to the
+    type names those fields mention (`Option<SelfUpdateConfig>` -> SelfUpdateConfig),
+    and collect which of the names are structs (an enum is a leaf value or one of the
+    tagged origin shapes named above, never a section of its own)."""
+    fields, refs, structs, current = {}, {}, set(), None
     for path in paths:
         for line in Path(path).read_text().splitlines():
             type_match = TYPE_RE.match(line)
             if type_match:
-                current = type_match.group(1)
-                out.setdefault(current, [])
+                current = type_match.group(2)
+                fields.setdefault(current, [])
+                refs.setdefault(current, set())
+                if type_match.group(1) == "struct":
+                    structs.add(current)
                 continue
             field_match = FIELD_RE.match(line)
             if field_match and current:
-                out[current].append(field_match.group(1))
-    return out
+                fields[current].append(field_match.group(1))
+                refs[current].update(re.findall(r"\b[A-Z][A-Za-z0-9_]*\b", field_match.group(2)))
+    return fields, refs, structs
 
 
 def main():
@@ -97,7 +106,7 @@ def main():
     if missing:
         sys.exit(f"not a decdn checkout -- missing: {', '.join(missing)}")
 
-    by_struct = fields_by_struct(sources)
+    by_struct, refs, structs = parse(sources)
 
     unknown = sorted(
         name for name in STRUCT_PATHS if name not in by_struct
@@ -106,6 +115,26 @@ def main():
         sys.exit(
             "these structs are in STRUCT_PATHS but not in the upstream sources "
             f"(renamed or removed upstream?): {', '.join(unknown)}"
+        )
+
+    # The inverse: a section upstream ADDED would otherwise drop out of the
+    # inventory in silence (v0.2's [self_update] did, until this check). Every
+    # struct a mapped struct (FileConfig included) names in a field type must be
+    # mapped itself, or be the S3 origin shape the constants above spell out.
+    handled = set(STRUCT_PATHS) | {"S3OriginConfig"}
+    unmapped = sorted(
+        {
+            ref
+            for struct in STRUCT_PATHS
+            for ref in refs[struct]
+            if ref in structs and ref not in handled
+        }
+    )
+    if unmapped:
+        sys.exit(
+            "upstream config structs that no STRUCT_PATHS entry maps (a new section?): "
+            f"{', '.join(unmapped)}. Map each to its TOML path, then decide whether "
+            "node.toml.j2 (and the chart's values.config) should render it."
         )
 
     paths = set()

@@ -122,7 +122,10 @@ take a newer one.
    names the public RPC `config init` wrote, so `cli` hands the CLI a copy whose
    `rpc_url` reads your endpoint from `decdn.env` (`"${DECDN_RPC_URL}"`, which the config loader
    expands): it never appears on a command line, in a sudo log or in shell history.
-   The node serves paid traffic only after that.
+   The node serves paid traffic only after that. The CLI's daily "a newer release
+   exists, run `decdn self-update`" notice (decdn v0.2) is off in the `node.toml`
+   that `init` writes and under `cli`: the image's binary is read-only, and the pin
+   moves with `DECDN_IMAGE_DIGEST` ([Operate](#operate)).
 
 ### How it is laid out
 

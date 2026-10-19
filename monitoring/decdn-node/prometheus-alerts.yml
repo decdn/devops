@@ -1026,6 +1026,33 @@ groups:
             again. Compare decdn_buyer_wallet_usdc with the pools the
             operator address owns on chain.
 
+      # The gauge (decdn v0.2) is 1 while the node holds its top-up slot for a
+      # topUp whose outcome the chain has not shown: the submit failed in
+      # transport or the receipt could not be read, and the transaction may
+      # still mine, so no other topUp goes out meanwhile. A healthy settle
+      # clears it within a few blocks; 15m of hold is a stuck chain path.
+      - alert: DecdnBuyerTopupUnresolved
+        expr: decdn_buyer_topup_unresolved == 1
+        for: 15m
+        labels:
+          component: payments
+          severity: warning
+        annotations:
+          summary: "An unconfirmed topUp holds the top-up slot on {{ $labels.instance }}"
+          description: |
+            The node sent a topUp whose outcome the chain has not shown for
+            15 minutes, and holds its top-up slot until it does: a low-water
+            refill does nothing meanwhile, and a pull's funding recovery step
+            fails at once (decdn_node_pull_recovery_step_refused_total).
+            One of three causes: the RPC cannot answer, a pending transaction
+            holds the topUp's nonce or an earlier one, or every re-send at
+            that nonce fails because the wallet cannot fund the topUp or its
+            gas. The daemon's repeating warning names the last failure in its
+            `last` field. Check the RPC provider, then the wallet's pending
+            transactions and balance (decdn_buyer_wallet_usdc). Do not
+            restart the node to clear it: a restart forgets the hold, and the
+            node may escrow a second topUp into its own pool.
+
       - alert: DecdnBuyerLaneSeedFailing
         expr: rate(decdn_buyer_lane_seed_failures_total[15m]) > 0
         for: 30m

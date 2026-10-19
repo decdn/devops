@@ -193,9 +193,11 @@ documents each knob. Any key you do not set takes the daemon default, and a `nul
 
 Chart defaults that differ from the daemon's are the same as the role's:
 
-- `cache.max_blob_size_mb: 1024`: a deliberate cap at one tenth of the default cache (the
-  daemon default is `min(51200, cache_size_mb)`). It must be at least 1: the cache engine's
-  admit gate has no zero special-case, despite the CLI help, so `0` rejects every blob.
+- `cache.max_blob_size_mb: 1024`: the bytes held for one blob (an own-origin blob above it
+  is refused; a pull-through serves ranges of a larger one while the bytes held fit), a
+  deliberate cap at one tenth of the default cache (the daemon default is
+  `min(51200, cache_size_mb)`). It must be at least 1: the cache engine's admit gate has
+  no zero special-case, despite the CLI help, so `0` refuses every own-origin blob.
 - `observability.log_format: json` (the daemon default is `pretty`).
 - `cache.cache_size_mb: 10240` and `payment.rate_per_mb: 10` are pinned explicitly, at the
   daemon's own values.

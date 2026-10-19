@@ -26,9 +26,10 @@
 # --- Cache sizing -----------------------------------------------------------------
 # Size to each host's disk and to the largest object you expect to serve; see
 # https://github.com/decdn/devops/blob/main/docs/requirements.md for the disk formula.
-# A node rejects any blob larger than decdn_max_blob_size_mb with BlobTooLarge, and
-# decdn_cache_size_mb must be at least that. Override per host in host_vars when
-# disks differ.
+# decdn_max_blob_size_mb caps the bytes held for one blob: an own-origin blob above it
+# is refused with BlobTooLarge, and a pull-through serves ranges of a larger one while
+# the bytes held fit. decdn_cache_size_mb must be at least that. Override per host in
+# host_vars when disks differ.
 # decdn_max_blob_size_mb: 1024      # role default
 # decdn_cache_size_mb: 10240        # role default (10 GiB)
 

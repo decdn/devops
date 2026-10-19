@@ -230,6 +230,10 @@
               ("load_shed", shed.get("per_client_serve_cap") == 16),
               ("receipts", d.get("receipts", {}).get("retained_files") == 8),
               ("content.denied_hashes", d.get("content", {}).get("denied_hashes") == ["c" * 64]),
+              # The role default: the CLI's self-update notice is off on a managed
+              # host (a bare TOML bool, not a string).
+              ("self_update.check (role default false must emit)",
+               d.get("self_update", {}).get("check") is False),
               # Rate-limit tables render from a fixed key list: the keys converge set
               # must be present with the right types, and the ones it did NOT set must
               # be ABSENT (rendering a default would silently pin it).

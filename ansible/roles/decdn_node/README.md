@@ -315,7 +315,9 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
 - **Cache sizing + eviction** — `decdn_cache_size_mb`, `decdn_disk_headroom_mb`
   (free disk the eviction driver keeps unused on the `cache_dir` volume; daemon
   default `8192`, `0` opts out of the disk clamp), `decdn_max_blob_size_mb`
-  (defaults to `cache_size_mb` upstream; must be `<=` it), `decdn_max_rate_per_mb`
+  (the bytes held for one blob: an own-origin blob above it is refused, a pull-through
+  serves ranges of a larger one while the bytes held fit; daemon default
+  `min(51200, cache_size_mb)`; must be `<=` it), `decdn_max_rate_per_mb`
   (buyer-side rate ceiling), `decdn_gc_interval_sec`, `decdn_fs_rescan_interval_sec`,
   `decdn_max_probe_holds`, `decdn_stake_lane_reserved_holds`, `decdn_pinned_hashes`
   (64-char **lowercase-hex** BLAKE3), `decdn_cache_user_agent`, the
@@ -366,6 +368,12 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
   `decdn_client_region_allowlist` (a `[client]` knob) narrows which regions this
   node discovers/probes **as a client** to a list of ISO 3166-1 alpha-2 codes;
   `[]` ⇒ no filter.
+- **`decdn` CLI self-update notice** — `decdn_self_update_check` (`[self_update]
+  check`, decdn v0.2; CLI-only, the daemon ignores it) defaults to `false`: the
+  once-a-day "a newer release exists, run `decdn self-update`" line the CLI prints
+  after a command run at a terminal is wrong advice on a host this role manages (see
+  [On-chain onboarding](#on-chain-onboarding)). `true` turns it on; `""`/`null`
+  omits the section, which an exact `decdn_node_version` below `0.2` needs.
 - **Abuse limits + load shedding** — the `decdn_security_*` family,
   `decdn_load_shed_*` (`policy` is `resource-pressure`|`always-admit`; the low-water
   serve mark must be `<=` the high), and the `decdn_dht_rate_limit` /
@@ -560,6 +568,13 @@ sudo systemd-run --pty --wait --collect -p User=decdn \
   --keystore-password-file /etc/decdn/keystore.password
 ```
 
+Never run `decdn self-update` (decdn v0.2) on a host this role manages. Under plain
+`sudo` it replaces `/usr/local/bin/decdn` outside the role's signed-release install,
+and the next deploy fails its version check instead of repairing it. The role takes
+the pinned line's newest release on every run; to move, change `decdn_node_version`.
+The CLI's daily notice suggesting it is off in the rendered `node.toml`
+(`decdn_self_update_check`), which these recipes pass as `--config`.
+
 Exiting is the reverse, in order: `decdn node deregister` (leaves the active set
 and clears the declared tier — the bond stays deposited and **fully slashable**),
 then `decdn node unbond --all` (starts the unbonding window; the node is INACTIVE
@@ -747,7 +762,9 @@ The steps:
    `ansible/molecule/schema/files/gen-schema-keys.py <checkout> >
    ansible/molecule/schema/files/schema-keys.txt` (run on a checkout of the tag).
    If the schema keys changed, re-sync `templates/node.toml.j2` (and the chart's
-   `values.config`).
+   `values.config`). The generator refuses a config struct its `STRUCT_PATHS` does
+   not map (a section upstream added): map it to its TOML path, then decide whether
+   the role renders it (v0.2's `[self_update]`, CLI-only, is rendered off).
 3. Compose's onramp installer pin: `ONRAMP_DECDN_RELEASE` (`v<version>`) and
    `ONRAMP_DECDN_SUMS_SHA256` (`sha256sum SHA256SUMS` once `SHA256SUMS.asc`
    verifies) in `compose/sponsord-onramp.env.example`. The role reads both from the
@@ -767,6 +784,13 @@ The steps:
    for a new line AGENTS.md's "Pinned upstream releases". Other docs name the pin,
    never its number. The changelog entry is the PR title (`feat`, `fix` or `chore`,
    not `ci` or `build`, which the changelogs leave out; RELEASING.md).
+8. The monitoring assets, by hand (nothing in CI checks the node's metric names):
+   diff upstream's `adr/appendix-observability.md` and the `INBOUND_FAILURE_REASONS`
+   list in `crates/node/src/metrics.rs` between the two tags, fix any renamed or
+   removed `decdn_*` name in `monitoring/decdn-node/`, add a new inbound failure
+   reason to both "Unattributed stream failures" panels, and chart or alert on new
+   series worth it (`.claude/skills/grafana-dashboards/SKILL.md`). Republish the
+   Grafana Cloud copies after the merge.
 
 `make test-scripts` fails while the role, the onramp's decdn line, the chart's
 `appVersion` and its `artifacthub.io/images` image or AGENTS.md's pinned line
