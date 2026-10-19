@@ -14,11 +14,11 @@
 # The default method, "release", installs the newest release of the decdn/sponsord
 # line the role pins (sponsord_version "X.Y"), on each deploy; set an exact one only
 # to hold the host on it, together with sponsord_onramp_version:
-# sponsord_version: "0.1.0"
+# sponsord_version: "0.2.0"
 # Or build on the host from a git ref (tag, branch or SHA; sponsord_version is not
 # checked in this mode):
 # sponsord_install_method: source
-# sponsord_source_ref: v0.1.0
+# sponsord_source_ref: v0.2.0
 # Or copy a control-machine build: a decdn/sponsord checkout's target dir
 # (`cargo build --release -p sponsord`; the role checks the ELF matches the host).
 # sponsord_install_method: manual

@@ -3,7 +3,7 @@
 # SHA256SUMS digest the onramp serves (ONRAMP_DECDN_RELEASE, _SUMS_SHA256).
 #
 # An exact sponsord_onramp_decdn_release comes with the operator's
-# sponsord_onramp_decdn_sums_sha256 and is served as it is. A line ("v0.1") resolves
+# sponsord_onramp_decdn_sums_sha256 and is served as it is. A line ("v0.2") resolves
 # to the newest finished release in it (tasks/resolve-release.yml), and its digest
 # is taken from that release's SHA256SUMS, fetched from where the installers fetch
 # it and verified against the decdn/decdn KEYS vendored with this role first: every
