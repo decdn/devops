@@ -50,7 +50,7 @@ decdn_rustup_sha256:
 # --- Release to install ("release" mode) ----------------------------------------
 # The decdn/sponsord release to install, a line ("X.Y", the newest finished vX.Y.N)
 # or an exact "X.Y.Z": the same one as the sponsord role's sponsord_version.
-sponsord_onramp_version: "0.1"
+sponsord_onramp_version: "0.2"
 # Derived from the host's gathered architecture (vars/main/arch.yml).
 sponsord_onramp_target: "{{ _sponsord_onramp_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
 sponsord_onramp_release_base: "https://github.com/decdn/sponsord/releases/download"

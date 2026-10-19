@@ -989,12 +989,26 @@
           ansible.builtin.include_role:
             name: sponsord_onramp
           vars:
-            sponsord_onramp_decdn_release: v0.1
+            sponsord_onramp_decdn_release: v0.2
       rescue:
         - name: Record onramp-pin-pair rejection (only if its assert failed)
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['onramp-pin-pair'] }}"
           when: ansible_failed_task.name == "Require a SHA256SUMS digest exactly when the release pin is a tag"
+
+    - name: "Case onramp-decdn-floor — a decdn release line sponsord-onramp 0.2 refuses"
+      block:
+        - name: Run sponsord_onramp with a decdn release line below v0.2
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_decdn_release: v0.1
+            sponsord_onramp_decdn_sums_sha256: ""
+      rescue:
+        - name: Record onramp-decdn-floor rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-decdn-floor'] }}"
+          when: ansible_failed_task.name == "Refuse a decdn release below the installers' floor"
 
     - name: "Case onramp-pin — an upper-case SHA256SUMS digest"
       block:
@@ -1359,7 +1373,7 @@
            "onramp-zero-address", "onramp-bind", "onramp-bind", "onramp-proxy",
            "onramp-domain", "onramp-public-url", "onramp-public-url", "onramp-rpc",
            "onramp-rpc", "onramp-rpc", "onramp-rpc", "onramp-public-url", "onramp-sitekey", "onramp-pin",
-           "onramp-pin", "onramp-pin-pair", "onramp-pin-pair",
+           "onramp-pin", "onramp-pin-pair", "onramp-pin-pair", "onramp-decdn-floor",
            "onramp-limit", "onramp-ip-header", "onramp-token",
            "onramp-turnstile", "onramp-turnstile", "onramp-turnstile-empty",
            "onramp-turnstile-inventory",

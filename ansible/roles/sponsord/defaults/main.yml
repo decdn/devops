@@ -55,7 +55,7 @@ decdn_rustup_sha256:
 # pins that one release. Keep it equal to sponsord_onramp_version: both come from
 # one workspace release (README.md, "Bumping the sponsord release"; make
 # test-scripts checks the defaults agree).
-sponsord_version: "0.1"
+sponsord_version: "0.2"
 # Release target triple, derived from the host's gathered architecture (see
 # vars/main/arch.yml). Set it explicitly only for a play with gather_facts: false.
 sponsord_target: "{{ _sponsord_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
