@@ -224,12 +224,16 @@ decdn_cache_size_mb: 10240      # 10 GB
 # against ANY process, not just this cache (#1930). "" => daemon dflt 8192 (8 GiB);
 # 0 opts out of the disk clamp so only cache_size_mb binds.
 decdn_disk_headroom_mb: ""
-# NOTE: this is a deliberate OVERRIDE, not the daemon default. Upstream defaults
-# max_blob_size_mb to cache_size_mb; 1 GB caps any single blob at a tenth of the
-# cache so one large object cannot evict everything else. Must be <= cache_size_mb.
-# DO NOT set 0: despite what upstream's own `config init` template says, there is
-# no zero special-case in the cache engine — the admit gate is a plain
-# `advertised > max_blob_bytes`, so 0 rejects every blob with a size hint.
+# Cap on the bytes the node HOLDS for one blob (decdn v0.2): a blob from this node's
+# own origin above it is refused (BlobTooLarge); a pull-through serves a range at any
+# offset of a larger blob while the bytes held for it fit, and stops the stream once
+# they do not (decdn_serve_stream_midstream_blob_too_large_total). A deliberate
+# OVERRIDE of the daemon default, min(51200, cache_size_mb): 1 GB caps one blob at a
+# tenth of the default cache so one large object cannot evict everything else. Must
+# be <= cache_size_mb. DO NOT set 0: despite what upstream's own `config init`
+# template says, there is no zero special-case in the cache engine — the admit gate
+# is a plain `advertised > max_blob_bytes`, so 0 refuses every own-origin blob with a
+# size hint.
 decdn_max_blob_size_mb: 1024    # 1 GB
 # Buyer-side ABSOLUTE per-MB rate ceiling for paid pulls (#1375) — what this node
 # will accept a provider to quote on a cache-miss pull, on top of the always-applied
@@ -386,6 +390,17 @@ decdn_content_denied_origins: []    # 0x publisher addresses (checksum-agnostic;
 # a CLIENT (node.toml is shared with the CLI). [] => no filter (every registered
 # node considered). ISO 3166-1 alpha-2 codes, e.g. ["US", "DE"].
 decdn_client_region_allowlist: []
+
+# --- `decdn` CLI self-update notice ([self_update]) ----------------------------
+# Since decdn v0.2 the `decdn` CLI checks once a day, after a command run at a
+# terminal, for a newer signed release and prints "run `decdn self-update`". The
+# daemon ignores the section. Off here: this role owns the binaries (the newest
+# release of the pinned line, verified against the release's signed SHA256SUMS), and
+# a `decdn self-update` run as root would replace /usr/local/bin/decdn behind its
+# back and fail the next deploy's version check. Move decdn_node_version instead.
+# true turns the notice back on; "" or null omits the section (needed for an exact
+# decdn_node_version below 0.2, whose binaries refuse the key).
+decdn_self_update_check: false
 
 # --- Readiness probe (advisory) -----------------------------------------------
 # After start, the role probes http://127.0.0.1:<metrics_port>/metrics as a

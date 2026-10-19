@@ -2776,6 +2776,15 @@
           "expr": "sum(rate(decdn_dht_lookup_round_ceiling_total{instance=~\"$node\"}[$__rate_interval]))",
           "refId": "H",
           "legendFormat": "lookup round ceiling"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_dht_lookup_dial_timeouts_total{instance=~\"$node\"}[$__rate_interval]))",
+          "refId": "I",
+          "legendFormat": "lookup dial timeouts"
         }
       ],
       "fieldConfig": {

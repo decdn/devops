@@ -198,9 +198,12 @@ config:
     rate_per_mb: 10               # USDC base units (6 decimals)
   cache:
     cache_size_mb: 10240          # 10 GB
+    # The bytes held for one blob (an own-origin blob above it is refused; a
+    # pull-through serves ranges of a larger one while the bytes held fit).
     # Deliberate override (daemon default = min(51200, cache_size_mb)): caps one
     # blob at a tenth of the default cache. Must be >= 1 — the cache engine's admit
-    # gate has no zero special-case (despite the CLI help), so 0 rejects every blob.
+    # gate has no zero special-case (despite the CLI help), so 0 refuses every
+    # own-origin blob.
     max_blob_size_mb: 1024
   observability:
     log_level: info

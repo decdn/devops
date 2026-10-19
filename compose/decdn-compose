@@ -776,11 +776,28 @@ def edit_node_toml(region: str, cache_node: bool) -> None:
             text = re.sub(r"(?m)^\[cache\]$", "[cache]\nnode_to_node_pull_through_enabled = true", text, count=1)
         else:
             text = text.rstrip("\n") + "\n\n[cache]\nnode_to_node_pull_through_enabled = true\n"
+    # Since decdn v0.2, `config init` ends with a [self_update] table whose `check`
+    # is commented: the CLI's daily "run `decdn self-update`" notice, which the
+    # daemon ignores. Off here, in the file the daemon and `cli` share: the image's
+    # binary is read-only and the pin moves with DECDN_IMAGE_DIGEST, so the notice
+    # has nowhere to go (`cli` also sets DECDN_SELF_UPDATE_CHECK=0, for a file
+    # edited by hand). An older `config init` without the table gets it appended.
+    if not re.search(r"(?m)^check\s*=", text):
+        if re.search(r"(?m)^# check = .*$", text):
+            text = re.sub(r"(?m)^# check = .*$", "check = false", text, count=1)
+        elif re.search(r"(?m)^\[self_update\]$", text):
+            text = re.sub(r"(?m)^\[self_update\]$", "[self_update]\ncheck = false", text, count=1)
+        else:
+            text = text.rstrip("\n") + "\n\n[self_update]\ncheck = false\n"
     try:
         parsed = tomllib.loads(text)
     except tomllib.TOMLDecodeError as e:
         raise Refused(f"editing {NODE_TOML} left invalid TOML ({e}); it was not written") from e
-    want = {("identity", "data_dir"): str(VAR_DECDN), ("identity", "region"): region}
+    want = {
+        ("identity", "data_dir"): str(VAR_DECDN),
+        ("identity", "region"): region,
+        ("self_update", "check"): False,
+    }
     if cache_node:
         want[("cache", "node_to_node_pull_through_enabled")] = True
     wrong = [f"{t}.{k}" for (t, k), v in want.items() if parsed.get(t, {}).get(k) != v]
@@ -2157,7 +2174,7 @@ def cmd_cli(args: argparse.Namespace) -> None:
         cp = decdn_cli(
             project,
             cli_args,
-            cli_env={"DECDN_KEYSTORE_PASSWORD_FILE": str(NODE_PASSWORD)},
+            cli_env=CLI_ENV,
             network="host",
             tty=True,
             check=False,
@@ -2168,6 +2185,10 @@ def cmd_cli(args: argparse.Namespace) -> None:
 
 
 CLI_CONFIG = "/run/decdn-cli/node.toml"
+# What `cli` hands the CLI besides the node's own environment: the keystore
+# password, and no self-update notice (see edit_node_toml) even when node.toml was
+# edited by hand.
+CLI_ENV = {"DECDN_KEYSTORE_PASSWORD_FILE": str(NODE_PASSWORD), "DECDN_SELF_UPDATE_CHECK": "0"}
 
 
 def with_env_rpc_url(text: str) -> str:

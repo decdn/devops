@@ -114,8 +114,10 @@ cache_size_mb                    the cache (role default 10 GiB)
 + an fs origin, if the node holds one
 ```
 
-`max_blob_size_mb` must be ≤ `cache_size_mb`: the node rejects any blob larger than it
-(`BlobTooLarge`), so size it to the largest single object you expect to serve (role
+`max_blob_size_mb` must be ≤ `cache_size_mb`: it caps the bytes the node holds for one
+blob. A blob from the node's own origin above it is refused (`BlobTooLarge`); a
+pull-through serves ranges of a larger blob while the bytes held for it fit, and stops
+once they do not. Size it to the largest single object you expect to serve whole (role
 default 1 GiB). Put `/var/lib/decdn` on the fast disk.
 
 The Ansible `source` install method adds, outside the data volume, a Rust toolchain

@@ -3063,6 +3063,113 @@
     },
     {
       "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "Unresolved on-chain holds",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max by (instance) (decdn_buyer_pool_open_unresolved{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"})",
+          "refId": "A",
+          "legendFormat": "{{instance}} openPool"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max by (instance) (decdn_buyer_topup_unresolved{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"})",
+          "refId": "B",
+          "legendFormat": "{{instance}} topUp"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none",
+          "min": 0,
+          "max": 1,
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 83
+      },
+      "id": 38,
+      "description": "1 while this node holds its slot for an openPool or a topUp whose outcome the chain has not shown (the topUp hold is decdn v0.2): the submit failed in transport or the receipt could not be read, and the transaction may still mine, so the node sends no other transaction of that kind until a receipt arrives, the account's nonce passes it, or a re-send shows the pool closed. A hold that stays means the RPC cannot answer, a pending transaction holds the nonce or an earlier one, or every re-send at that nonce fails (the wallet cannot fund the amount or the gas); the daemon's repeating warning names the last failure in its `last` field. Do not restart a node holding a topUp slot: the restart forgets the hold, and the node may escrow a second topUp into its own pool. DecdnBuyerTopupUnresolved fires after 15m."
+    },
+    {
+      "datasource": {
         "type": "loki",
         "uid": "${DS_LOKI}"
       },
@@ -3099,7 +3206,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 83
+        "y": 90
       },
       "id": 26
     },
@@ -3109,7 +3216,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 92
+        "y": 99
       },
       "id": 33,
       "panels": [],
@@ -3207,7 +3314,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 93
+        "y": 100
       },
       "id": 34
     },
@@ -3337,7 +3444,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 93
+        "y": 100
       },
       "id": 35
     },
@@ -3432,7 +3539,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 101
+        "y": 108
       },
       "id": 36
     },
@@ -3527,7 +3634,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 101
+        "y": 108
       },
       "id": 37
     }

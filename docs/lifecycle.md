@@ -257,6 +257,14 @@ sudo systemd-run --pty --wait --collect -p User=decdn \
   --keystore-password-file /etc/decdn/keystore.password
 ```
 
+Since decdn v0.2 the CLI can end a command run at a terminal with a one-line notice
+that a newer release exists and that `decdn self-update` installs it. Never run that
+on a role-managed host: under plain `sudo` it replaces `/usr/local/bin/decdn` outside
+the role's signed-release install, and the next deploy fails its version check. The
+role moves the binaries itself (`decdn_node_version`, [node-operators.md § Day
+2](node-operators.md#day-2)), and renders the notice off in `node.toml`
+(`decdn_self_update_check`), which these recipes pass as `--config`.
+
 ## sponsord (the onboarding sponsor)
 
 sponsord keeps no state. What makes it *that* sponsor are its credentials under

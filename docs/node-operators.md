@@ -73,7 +73,9 @@ path. This repository stops at host preparation and startup.
 
 - Upgrades: every path pins a decdn/decdn release line (`X.Y`), not one release.
   On Ansible and cloud-init each deploy installs the line's newest release and restarts
-  the node onto it (set `decdn_node_version` to an exact `"X.Y.Z"` to hold a host).
+  the node onto it (set `decdn_node_version` to an exact `"X.Y.Z"` to hold a host);
+  never `decdn self-update` there, which would replace the CLI outside that install
+  and fail the next deploy's version check (the role renders its notice off).
   The chart's default image tag is the line's, pulled `Always`, so
   `kubectl rollout restart` picks a new release up (set `image.tag` or `image.digest`
   to hold it). Compose pins a digest: take a newer one as its README's
