@@ -36,6 +36,6 @@
 # role's sponsord_onramp_decdn_release line (decdn/decdn, the decdn_node role's default
 # line; a host's decdn_node_version does not move it), with the SHA-256 of its
 # verified SHA256SUMS, on each deploy. To serve one exact release, set its tag and digest:
-# sponsord_onramp_decdn_release: v0.1.0
+# sponsord_onramp_decdn_release: v0.2.0
 # sponsord_onramp_decdn_sums_sha256: "…"
 # CapacityBond and SlashJudge come from sponsord_network (group_vars/sponsord_hosts.yml).

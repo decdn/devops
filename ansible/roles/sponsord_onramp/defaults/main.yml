@@ -146,7 +146,7 @@ sponsord_onramp_gate_template_src: ""
 # verified against sponsord_onramp_decdn_keyring first. An exact tag, "vX.Y.Z",
 # needs that digest set beside it (`sha256sum SHA256SUMS` after verifying its .asc);
 # preflight refuses a tag without one and a line with one.
-sponsord_onramp_decdn_release: v0.1       # decdn/decdn line or tag
+sponsord_onramp_decdn_release: v0.2       # decdn/decdn line or tag
 sponsord_onramp_decdn_sums_sha256: ""     # with a tag only
 sponsord_onramp_decdn_release_index: "https://api.github.com/repos/decdn/decdn/releases?per_page=100"
 # Where the role reads a line's SHA256SUMS: the installers' own download location

@@ -14,8 +14,8 @@ image:
   tag: ""
   # sha256:... — takes precedence over tag when set. Prefer it: a tag can be moved.
   # Take it from the release's signed decdn-node-image-digest.txt (v0.0.1:
-  # image-digest.txt), e.g. for v0.1.0
-  # sha256:848532722735b4a115aca9606230d951c25f2dab06a7345305ecf67c7a0244b5
+  # image-digest.txt), e.g. for v0.2.0
+  # sha256:03a9f2e1167db31bb9a95af0b6672916300f86191a41db75db4c568c94899e60
   digest: ""
   # "" picks Always for a release-line tag (X.Y, the default), so a restarted pod
   # pulls the newest release in it rather than whatever the node cached first, and
