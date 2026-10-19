@@ -8,7 +8,7 @@ description: >-
 type: application
 # Chart version (SemVer), set only by scripts/release.sh (RELEASING.md); 0.0.0 means
 # never released.
-version: 0.2.0
+version: 0.3.0
 # The decdn/decdn release line the chart's config rendering is synced against, and
 # the image tag used when neither image.tag nor image.digest is set: a line ("X.Y")
 # is the floating tag upstream moves to each vX.Y.N release (pulled Always, so a
