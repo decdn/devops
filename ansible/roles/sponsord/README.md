@@ -1,6 +1,7 @@
 # Role: `sponsord`
 
-Deploys [sponsord](https://github.com/decdn/sponsord), the deCDN onboarding sponsor.
+Deploys [sponsord](https://github.com/decdn/decdn/tree/main/crates/sponsord), the deCDN
+onboarding sponsor ([docs](https://github.com/decdn/decdn/tree/main/docs/sponsord)).
 It holds the **treasury wallet**, which owns one `PaymentPool` pool, and does two
 things:
 
@@ -20,16 +21,16 @@ gate, installers, behind a TLS reverse proxy), is the
 
 - **Installs the binary.**
   - `release` (the default) downloads `sponsord-<version>-<triple>.tar.gz` from the
-    `v<version>` release of `decdn/sponsord` (one tag releases the whole workspace)
-    and verifies it against the GPG-signed `SHA256SUMS`, using
-    `files/sponsord-release-KEYS.asc`, a copy of upstream's `KEYS`.
+    `v<version>` release of `decdn/decdn` (one tag releases the whole workspace: the
+    node, the CLI, sponsord and the onramp) and verifies it against the GPG-signed
+    `SHA256SUMS`, using `files/decdn-release-KEYS.asc`, a copy of upstream's `KEYS`.
     `sponsord_version` defaults to the release line this repo pins (`"X.Y"`): every
     run takes the newest finished `vX.Y.N` from `sponsord_release_index` (GitHub's
     release list, as the decdn_node role does; see its README), so a patch release
     is installed by the next deploy. An exact `"X.Y.Z"` holds the host on one
     release. `sponsord_release_base` (and `sponsord_release_index`) point it at a
     mirror.
-  - `source` clones `sponsord_source_repo` (default `decdn/sponsord` on GitHub) at
+  - `source` clones `sponsord_source_repo` (default `decdn/decdn` on GitHub) at
     `sponsord_source_ref` (any tag, branch or SHA) on the host and runs `cargo build
     --release --locked -p sponsord` as the unprivileged `decdn-build` user, exactly
     as the `decdn_node` role's `source` mode does (see its README): a sha256-pinned
@@ -38,9 +39,9 @@ gate, installers, behind a TLS reverse proxy), is the
     unchanged commit is not rebuilt, and a root-side install that refuses
     symlinks. `sponsord_version` is not checked in this mode; set the ref to a
     release tag (`v<version>`) to build exactly that release. The build user, its
-    home and the toolchain are shared with the other roles on the host. cargo also fetches upstream's
-    `decdn/decdn` git dependencies, pinned by `Cargo.lock`.
-  - `manual` copies a binary built on the control machine, from a `decdn/sponsord`
+    home and the toolchain are shared with the other roles on the host. The clone is
+    the whole decdn workspace; `-p sponsord` builds only what the daemon needs.
+  - `manual` copies a binary built on the control machine, from a `decdn/decdn`
     checkout or the published crate (`cargo install --locked sponsord@<version>`,
     which carries no maintainer signature), with `sponsord_manual_bin_src`, or
     `sponsord_release_target_dir` with an ELF/arch check.
@@ -129,10 +130,10 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `sponsord_install_method` | `release` | `release`, `source` or `manual` |
-| `sponsord_source_repo` / `sponsord_source_ref` | `decdn/sponsord` on GitHub / `""` | `source` only. The ref is required: a tag, branch or SHA. |
+| `sponsord_source_repo` / `sponsord_source_ref` | `decdn/decdn` on GitHub / `""` | `source` only. The ref is required: a tag, branch or SHA. |
 | `sponsord_source_build_jobs` | `""` | `source` only: `CARGO_BUILD_JOBS` (`""` = one per CPU). |
 | `sponsord_manual_bin_src` / `sponsord_release_target_dir` | `""` | `manual` only. Set one. |
-| `sponsord_version` | the pinned release line | `release` mode: a `decdn/sponsord` release line (`"X.Y"`, its newest finished release) or an exact `"X.Y.Z"`, quoted; see [`defaults/main.yml`](defaults/main.yml). Equal to `sponsord_onramp_version`. |
+| `sponsord_version` | the pinned release line | `release` mode: a `decdn/decdn` release line (`"X.Y"`, its newest finished release) or an exact `"X.Y.Z"`, quoted; see [`defaults/main.yml`](defaults/main.yml). Equal to `sponsord_onramp_version` and to the decdn_node role's `decdn_node_version`. |
 | `sponsord_network` | `""` | Network profile: `arbitrum-sepolia` supplies chain id and PaymentPool. |
 | `sponsord_chain_id`, `sponsord_payment_pool_address` | from profile | Explicit values win over the profile. |
 | `sponsord_pool_id` | `""` | **Required.** 0x + 64 hex. `""` only on the wallet-creation run. |
@@ -237,35 +238,17 @@ export it, so watch the address yourself.
   (no control machine), in release mode, beside the onramp.
 - `molecule/validation-sponsord` holds the negative cases.
 
-## Bumping the sponsord release
+## Bumping the release
 
-decdn/sponsord releases `sponsord` and `sponsord-onramp` from one `vX.Y.Z` tag. Both
-roles pin its release line, so a patch release in the line reaches deployments on
-their next run; only Compose names one release. When upstream cuts a new release (the
-weekly `upstream-drift` workflow fails on it):
-
-- **A patch release (a `vX.Y.N` in the pinned line `X.Y`)** is a repo-only change: step 2,
-  plus steps 3 and 4 if they apply.
-- **A new line (a release outside `X.Y`)** is every step, and `decdn.publisher` needs a release after
-  it (RELEASING.md).
-
-1. The line: `sponsord_version` here and `sponsord_onramp_version` in
-   `roles/sponsord_onramp/defaults/main.yml`, to the same `"X.Y"`.
-2. `SPONSORD_IMAGE_DIGEST` and `SPONSORD_ONRAMP_IMAGE_DIGEST` in
-   `compose/.env.example`, from the release's signed `sponsord-image-digest.txt`
-   and `sponsord-onramp-image-digest.txt`.
-3. `files/sponsord-release-KEYS.asc`, if upstream's `KEYS` changed (and the
-   decdn_node copy, and `SECURITY.md`'s fingerprints).
-4. Re-check the env var names the Compose file and the role render against the new
-   `crates/*/src/config.rs` (AGENTS.md, `compose/`).
-5. The commented examples that name an exact version (`sponsord_version`,
-   `sponsord_source_ref`, `sponsord_onramp_version` and `sponsord_onramp_source_ref`,
-   in the inventory templates and their `examples/collection-fleet` copies) and
-   AGENTS.md's "Pinned upstream releases". Other docs name the pin, never its
-   number. The changelog entry is the PR title (`feat`, `fix` or `chore`, not `ci` or
-   `build`, which the changelogs leave out; RELEASING.md).
-
-`make test-scripts` fails while the two lines, or AGENTS.md's pinned line, disagree;
-the weekly `upstream-drift` job checks the Compose digests against the line's newest
-release. A decdn/decdn release is bumped the same way
-([decdn_node's README](../decdn_node/README.md#bumping-the-decdn-release)).
+`sponsord` and `sponsord-onramp` ship from decdn/decdn's release (one `vX.Y.Z` tag for
+the whole workspace), so there is no sponsord bump of its own: `sponsord_version` and
+`sponsord_onramp_version` are the decdn_node role's `decdn_node_version`, and the decdn
+bump moves all three together with the two Compose image digests
+([decdn_node's README](../decdn_node/README.md#bumping-the-decdn-release);
+`scripts/open-decdn-bump.sh` opens the PR). `make test-scripts` fails while the three
+lines, or AGENTS.md's pinned line, disagree; the weekly `upstream-drift` job checks the
+Compose digests against the line's newest release. What that bump leaves to a human,
+for these two roles: re-check the env var names the Compose file and the roles render
+against the new `crates/sponsord/src/config.rs` and `crates/sponsord-onramp/src/config.rs`
+(AGENTS.md, `compose/`), and the `sponsord_*` series `monitoring/sponsord/` names against
+`crates/sponsord/src/metrics.rs`.

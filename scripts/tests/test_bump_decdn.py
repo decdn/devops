@@ -27,6 +27,7 @@ _spec.loader.exec_module(bd)
 
 FILES = [
     bd.NODE_DEFAULTS,
+    bd.SPONSORD_DEFAULTS,
     bd.ONRAMP_DEFAULTS,
     bd.ONRAMP_ENV,
     bd.COMPOSE_ENV,
@@ -42,7 +43,15 @@ CHANGELOGS = [
     "charts/decdn-node/CHANGELOG.md",
 ]
 SUMS = "a" * 64
-DIGEST = "sha256:" + "b" * 64
+# One new digest per image, all distinct.
+DIGESTS = {
+    "DECDN_IMAGE_DIGEST": "sha256:" + "b" * 64,
+    "SPONSORD_IMAGE_DIGEST": "sha256:" + "c" * 64,
+    "SPONSORD_ONRAMP_IMAGE_DIGEST": "sha256:" + "f" * 64,
+}
+DIGEST = DIGESTS["DECDN_IMAGE_DIGEST"]
+KEYS = [key for key, _ in bd.IMAGE_DIGESTS]
+TREES = ("ansible/inventory", "examples/collection-fleet/inventory")
 
 
 def flat(text: str) -> str:
@@ -63,7 +72,8 @@ class Fixture(unittest.TestCase):
         self.line = bd.pinned(self.root)
         self.version = bd.synced(self.root)
         self.sums = bd.env_value(self.text(bd.ONRAMP_ENV), "ONRAMP_DECDN_SUMS_SHA256", bd.ONRAMP_ENV)
-        self.digest = bd.env_value(self.text(bd.COMPOSE_ENV), "DECDN_IMAGE_DIGEST", bd.COMPOSE_ENV)
+        self.digests = {key: bd.env_value(self.text(bd.COMPOSE_ENV), key, bd.COMPOSE_ENV) for key in KEYS}
+        self.digest = self.digests["DECDN_IMAGE_DIGEST"]
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -82,6 +92,11 @@ class Fixture(unittest.TestCase):
 class Compare(Fixture):
     def test_the_synced_release_is_in_the_line(self) -> None:
         self.assertEqual(self.version.rsplit(".", 1)[0], self.line)
+
+    def test_the_three_roles_pin_one_line(self) -> None:
+        for rel, var in bd.LINE_PINS:
+            with self.subTest(var=var):
+                self.assertEqual(bd.scalar(self.text(rel), var, rel), self.line)
 
     def test_relations(self) -> None:
         major, minor, _ = (int(p) for p in self.version.split("."))
@@ -116,97 +131,115 @@ class Compare(Fixture):
 
 
 class Rewrite(Fixture):
-    def assert_exact_copies(self, version: str, sums: str, digest: str) -> None:
+    def assert_exact_copies(self, version: str, sums: str, digests: dict[str, str]) -> None:
         self.assertIn(f"ONRAMP_DECDN_RELEASE=v{version}\n", self.text(bd.ONRAMP_ENV))
         self.assertIn(f"last moved:\n# decdn/decdn v{version}.\n", self.text(bd.ONRAMP_ENV))
         self.assertIn(f"ONRAMP_DECDN_SUMS_SHA256={sums}\n", self.text(bd.ONRAMP_ENV))
-        self.assertIn(f"# decdn/decdn v{version}\nDECDN_IMAGE_DIGEST={digest}\n", self.text(bd.COMPOSE_ENV))
-        self.assertIn(f"e.g. for v{version}\n  # {digest}\n", self.text(bd.CHART_VALUES))
-        for tree in ("ansible/inventory", "examples/collection-fleet/inventory"):
+        compose_env = self.text(bd.COMPOSE_ENV)
+        self.assertIn(f"# decdn/decdn v{version}\nDECDN_IMAGE_DIGEST={digests['DECDN_IMAGE_DIGEST']}\n", compose_env)
+        for key in KEYS:
+            self.assertIn(f"\n{key}={digests[key]}\n", compose_env)
+        self.assertIn(f"e.g. for v{version}\n  # {digests['DECDN_IMAGE_DIGEST']}\n", self.text(bd.CHART_VALUES))
+        for tree in TREES:
             for host in ("decdn-node-1", "origin-1"):
                 host_vars = self.text(f"{tree}/host_vars/{host}/main.yml")
                 self.assertIn(f'\n# decdn_node_version: "{version}"\n', host_vars)
                 self.assertIn(f" decdn_node_source_ref: v{version}\n", host_vars)
-            self.assertIn(f"\n# sponsord_onramp_decdn_release: v{version}\n",
-                          self.text(f"{tree}/group_vars/sponsord_onramp_hosts.yml"))
+            sponsord = self.text(f"{tree}/group_vars/sponsord_hosts.yml")
+            self.assertIn(f'\n# sponsord_version: "{version}"\n', sponsord)
+            self.assertIn(f"\n# sponsord_source_ref: v{version}\n", sponsord)
+            onramp = self.text(f"{tree}/group_vars/sponsord_onramp_hosts.yml")
+            self.assertIn(f'\n# sponsord_onramp_version: "{version}"\n', onramp)
+            self.assertIn(f"\n# sponsord_onramp_source_ref: v{version}\n", onramp)
+            self.assertIn(f"\n# sponsord_onramp_decdn_release: v{version}\n", onramp)
         self.assertIn(f'# sponsord_onramp_decdn_release: "v{version}"\n',
                       self.text("cloud-init/user-data-publisher.yaml"))
 
     def assert_line_copies(self, line: str) -> None:
         self.assertEqual(bd.pinned(self.root), line)
+        for rel, var in bd.LINE_PINS:
+            self.assertIn(f'\n{var}: "{line}"\n', self.text(rel))
         self.assertIn(f"sponsord_onramp_decdn_release: v{line} ", self.text(bd.ONRAMP_DEFAULTS))
         self.assertIn(f'appVersion: "{line}"', self.text(bd.CHART))
         self.assertIn(f"image: ghcr.io/decdn/decdn-node:{line}\n", self.text(bd.CHART))
-        self.assertIn(f"`decdn_node_version`, today `{line}`)", flat(self.text("AGENTS.md")))
+        self.assertIn(f"`sponsord_onramp_version`, today `{line}`)", flat(self.text("AGENTS.md")))
 
     def test_a_new_line_moves_every_pin(self) -> None:
-        bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
+        bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
         self.assert_line_copies("9.8")
-        self.assert_exact_copies("9.8.7", SUMS, DIGEST)
+        self.assert_exact_copies("9.8.7", SUMS, DIGESTS)
         self.assertEqual(bd.synced(self.root), "9.8.7")
 
     def test_a_patch_leaves_the_line(self) -> None:
-        line_files = (bd.NODE_DEFAULTS, bd.ONRAMP_DEFAULTS, bd.CHART, "AGENTS.md")
-        changed = bd.rewrite(self.root, self.next_patch(), SUMS, DIGEST)
+        line_files = (bd.NODE_DEFAULTS, bd.SPONSORD_DEFAULTS, bd.ONRAMP_DEFAULTS, bd.CHART, "AGENTS.md")
+        changed = bd.rewrite(self.root, self.next_patch(), SUMS, DIGESTS)
         for rel in line_files:
             with self.subTest(rel=rel):
                 self.assertNotIn(rel, changed)
                 self.assertEqual(self.text(rel), self.original[rel])
         self.assert_line_copies(self.line)
-        self.assert_exact_copies(self.next_patch(), SUMS, DIGEST)
+        self.assert_exact_copies(self.next_patch(), SUMS, DIGESTS)
 
     def test_round_trip_is_byte_identical(self) -> None:
-        bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
-        bd.rewrite(self.root, self.version, self.sums, self.digest)
+        bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
+        bd.rewrite(self.root, self.version, self.sums, self.digests)
         for rel in FILES:
             with self.subTest(rel=rel):
                 self.assertEqual(self.text(rel), self.original[rel])
 
-    def test_leaves_the_sponsord_pin(self) -> None:
-        onramp = self.text(bd.ONRAMP_DEFAULTS)
-        sponsord = bd.scalar(onramp, "sponsord_onramp_version", bd.ONRAMP_DEFAULTS)
-        agents = self.text("AGENTS.md")
-        bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
-        self.assertEqual(bd.scalar(self.text(bd.ONRAMP_DEFAULTS), "sponsord_onramp_version",
-                                   bd.ONRAMP_DEFAULTS), sponsord)
-        # AGENTS.md names both pins in one sentence; only decdn's moves.
-        sponsord_today = f"`sponsord_onramp_version`, today `{sponsord}`;"
-        self.assertIn(sponsord_today, flat(agents))
-        self.assertIn(sponsord_today, flat(self.text("AGENTS.md")))
+    def test_moves_the_sponsord_pins_with_the_node(self) -> None:
+        # One decdn/decdn release ships sponsord and its onramp: their lines and
+        # Compose's two sponsord digests move with the node's, and no copy of an old
+        # sponsord digest survives in a tracked file.
+        old = [self.digests[k].removeprefix("sha256:") for k in ("SPONSORD_IMAGE_DIGEST", "SPONSORD_ONRAMP_IMAGE_DIGEST")]
+        bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
+        self.assertEqual(bd.scalar(self.text(bd.SPONSORD_DEFAULTS), "sponsord_version", bd.SPONSORD_DEFAULTS), "9.8")
+        self.assertEqual(bd.scalar(self.text(bd.ONRAMP_DEFAULTS), "sponsord_onramp_version", bd.ONRAMP_DEFAULTS), "9.8")
+        for rel in FILES:
+            for digest in old:
+                self.assertNotIn(digest, self.text(rel), rel)
 
     def test_moves_agents_md_wrapped_either_way(self) -> None:
         original = self.text("AGENTS.md")
         for sep in (" ", "\n"):
             with self.subTest(sep=sep):
-                text, n = re.subn(r"(`decdn_node_version`, today)\s+`", rf"\g<1>{sep}`", original)
+                text, n = re.subn(r"(`sponsord_onramp_version`, today)\s+`", rf"\g<1>{sep}`", original)
                 self.assertEqual(n, 1)
                 self.write("AGENTS.md", text)
-                bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
-                self.assertIn(f"`decdn_node_version`, today{sep}`9.8`", self.text("AGENTS.md"))
-                bd.rewrite(self.root, self.version, self.sums, self.digest)
+                bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
+                self.assertIn(f"`sponsord_onramp_version`, today{sep}`9.8`", self.text("AGENTS.md"))
+                bd.rewrite(self.root, self.version, self.sums, self.digests)
 
     def test_leaves_the_changelogs(self) -> None:
-        image = self.digest.removeprefix("sha256:")
+        images = [d.removeprefix("sha256:") for d in self.digests.values()]
         for rel in CHANGELOGS:
-            self.write(rel, self.text(rel) + f"\n{self.sums}\n{image}\n")
+            self.write(rel, self.text(rel) + "\n" + "\n".join([self.sums, *images]) + "\n")
         subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
-        bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
+        bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
         for rel in CHANGELOGS:
             self.assertIn(self.sums, self.text(rel))
-            self.assertIn(image, self.text(rel))
+            for image in images:
+                self.assertIn(image, self.text(rel))
 
     def test_refuses_a_reshaped_file(self) -> None:
         self.write(bd.COMPOSE_ENV, self.text(bd.COMPOSE_ENV).replace(f"# decdn/decdn v{self.version}\n", ""))
         with self.assertRaisesRegex(bd.ShapeError, "compose/.env.example: 0 matches"):
-            bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
+            bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
 
     def test_refuses_a_second_pin_line(self) -> None:
         self.write(bd.CHART, self.text(bd.CHART) + f'appVersion: "{self.line}"\n')
         with self.assertRaisesRegex(bd.ShapeError, "2 matches"):
-            bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
+            bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
 
     def test_refuses_bad_arguments(self) -> None:
-        for args in (("9.8", SUMS, DIGEST), ("9.8.7", "A" * 64, DIGEST), ("9.8.7", SUMS, "b" * 64)):
+        cases = [
+            ("9.8", SUMS, DIGESTS),
+            ("9.8.7", "A" * 64, DIGESTS),
+            ("9.8.7", SUMS, {**DIGESTS, "DECDN_IMAGE_DIGEST": "b" * 64}),
+            ("9.8.7", SUMS, {**DIGESTS, "SPONSORD_IMAGE_DIGEST": "sha256:" + "C" * 64}),
+            ("9.8.7", SUMS, {k: v for k, v in DIGESTS.items() if k != "SPONSORD_ONRAMP_IMAGE_DIGEST"}),
+        ]
+        for args in cases:
             with self.subTest(args=args), self.assertRaises(bd.ShapeError):
                 bd.rewrite(self.root, *args)
 
@@ -215,44 +248,60 @@ class Rewrite(Fixture):
         self.write(bd.ONRAMP_DEFAULTS, self.text(bd.ONRAMP_DEFAULTS).replace(
             'sponsord_onramp_decdn_sums_sha256: "" ', f'sponsord_onramp_decdn_sums_sha256: {self.sums} '))
         with self.assertRaisesRegex(bd.ShapeError, "sponsord_onramp_decdn_sums_sha256"):
-            bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
+            bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
 
     def test_refuses_a_second_artifacthub_image(self) -> None:
         # Not a version the anchored edit moves, so only the read-back sees it.
         self.write(bd.CHART, self.text(bd.CHART) + "#     image: ghcr.io/decdn/decdn-node:latest\n")
         with self.assertRaisesRegex(bd.ShapeError, "artifacthub.io/images"):
-            bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
+            bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
 
     def test_refuses_a_drifted_chart_example(self) -> None:
         bare = self.digest.removeprefix("sha256:")
         self.write(bd.CHART_VALUES, self.text(bd.CHART_VALUES).replace(bare, "d" * 64))
         with self.assertRaisesRegex(bd.ShapeError, "example digest"):
-            bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
+            bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
 
     def test_refuses_an_empty_current_digest_without_writing(self) -> None:
         # Replacing "" would rewrite every tracked file.
+        for key in KEYS:
+            with self.subTest(key=key):
+                self.write(bd.COMPOSE_ENV, self.original[bd.COMPOSE_ENV].replace(
+                    f"{key}={self.digests[key]}", f"{key}="))
+                before = {rel: self.text(rel) for rel in FILES}
+                with self.assertRaisesRegex(bd.ShapeError, "is not a digest"):
+                    bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
+                for rel in FILES:
+                    self.assertEqual(self.text(rel), before[rel])
+
+    def test_refuses_two_images_on_one_digest_without_writing(self) -> None:
+        # Replacing the shared value would move both copies to one image's new digest.
         self.write(bd.COMPOSE_ENV, self.text(bd.COMPOSE_ENV).replace(
-            f"DECDN_IMAGE_DIGEST={self.digest}", "DECDN_IMAGE_DIGEST="))
+            f"SPONSORD_ONRAMP_IMAGE_DIGEST={self.digests['SPONSORD_ONRAMP_IMAGE_DIGEST']}",
+            f"SPONSORD_ONRAMP_IMAGE_DIGEST={self.digests['SPONSORD_IMAGE_DIGEST']}"))
         before = {rel: self.text(rel) for rel in FILES}
-        with self.assertRaisesRegex(bd.ShapeError, "is not a digest"):
-            bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
+        with self.assertRaisesRegex(bd.ShapeError, "two image digests are equal"):
+            bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
         for rel in FILES:
             self.assertEqual(self.text(rel), before[rel])
 
     def test_skips_binary_and_refuses_undecodable_files(self) -> None:
         (self.root / "logo.bin").write_bytes(b"\0" + self.sums.encode())
         subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
-        bd.rewrite(self.root, "9.8.7", SUMS, DIGEST)
+        bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
         self.assertEqual((self.root / "logo.bin").read_bytes(), b"\0" + self.sums.encode())
 
         (self.root / "notes.txt").write_bytes(b"\xff" + SUMS.encode())
         subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
         with self.assertRaisesRegex(bd.ShapeError, "notes.txt: not UTF-8"):
-            bd.rewrite(self.root, "1.2.3", "e" * 64, DIGEST)
+            bd.rewrite(self.root, "1.2.3", "e" * 64, DIGESTS)
 
 
 class Cli(Fixture):
     """open-decdn-bump.sh reads stdout and the exit code; a refusal must exit 1."""
+
+    REWRITE = ["rewrite", "9.8.7", "--sums-sha256", SUMS,
+               *(arg for key, flag in bd.IMAGE_DIGESTS for arg in (flag, DIGESTS[key]))]
 
     def run_cli(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -268,9 +317,15 @@ class Cli(Fixture):
         r = self.run_cli("kind", "v99.0.0")
         self.assertEqual((r.returncode, r.stdout), (0, "line\n"))
 
+    def test_rewrite_prints_the_files_it_wrote(self) -> None:
+        r = self.run_cli(*self.REWRITE)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"wrote {bd.SPONSORD_DEFAULTS}\n", r.stdout)
+        self.assertIn(f"wrote {bd.COMPOSE_ENV}\n", r.stdout)
+
     def test_a_refusal_exits_1(self) -> None:
         self.write(bd.COMPOSE_ENV, self.text(bd.COMPOSE_ENV).replace(f"# decdn/decdn v{self.version}\n", ""))
-        r = self.run_cli("rewrite", "9.8.7", "--sums-sha256", SUMS, "--image-digest", DIGEST)
+        r = self.run_cli(*self.REWRITE)
         self.assertEqual(r.returncode, 1)
         self.assertTrue(r.stderr.startswith("bump_decdn: "), r.stderr)
         self.assertEqual(self.run_cli("compare", "v1.2").returncode, 1)
@@ -279,6 +334,8 @@ class Cli(Fixture):
     def test_usage_exits_2(self) -> None:
         self.assertEqual(self.run_cli().returncode, 2)
         self.assertEqual(self.run_cli("rewrite", "9.8.7").returncode, 2)
+        # Every image's digest is required: a bump that forgot one must not run.
+        self.assertEqual(self.run_cli(*self.REWRITE[:-2]).returncode, 2)
 
 
 if __name__ == "__main__":

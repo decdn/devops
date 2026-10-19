@@ -390,14 +390,14 @@ def check_inventory(inventory):
                                    or PUBLIC_RPC_URL_BAD_CHARS.search(url)):
             violation("inventory: sponsord_onramp_rpc_url must be a public http(s) URL with no userinfo, query "
                       "or fragment (the onramp serves it to every user; a keyed URL belongs to sponsord)")
-    # decdn/sponsord ships both daemons in one release, so a user-data that moves one
+    # One decdn/decdn release ships both daemons, so a user-data that moves one
     # version off the role default must move the other with it.
     if "sponsord_onramp_hosts" in groups:
         sv = values_of(inventory, "sponsord_version")
         ov = values_of(inventory, "sponsord_onramp_version")
         if (sv or ov) and not (len(sv) == len(ov) == 1 and str(sv[0]) == str(ov[0])):
             violation("inventory: set sponsord_version and sponsord_onramp_version together, once each and "
-                      "equal (one decdn/sponsord release ships both)")
+                      "equal (one decdn/decdn release ships both)")
         releases = values_of(inventory, ONRAMP_PINS[0])
         sums = values_of(inventory, ONRAMP_PINS[1])
         line = len(releases) == 1 and isinstance(releases[0], str) and ONRAMP_LINE.fullmatch(releases[0])

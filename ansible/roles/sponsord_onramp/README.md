@@ -1,6 +1,6 @@
 # Role: `sponsord_onramp`
 
-Deploys `sponsord-onramp` from [decdn/sponsord](https://github.com/decdn/sponsord),
+Deploys `sponsord-onramp` from [decdn/decdn](https://github.com/decdn/decdn/tree/main/crates/sponsord-onramp),
 the public side of the deCDN onboarding sponsor. It serves:
 
 - the gate page people pass (Cloudflare Turnstile) before the sponsor pays for
@@ -22,17 +22,18 @@ is unreachable.
 
 - **Installs the binary**, exactly as the `sponsord` role does:
   - `release` (the default) downloads `sponsord-onramp-<version>-<triple>.tar.gz`
-    from the `v<version>` release of `decdn/sponsord` (`sponsord_onramp_version`,
-    the same release line, or exact release, as the daemon's `sponsord_version`; a
-    line resolves to its newest finished release on every run, from
-    `sponsord_onramp_release_index`) and verifies it against the GPG-signed
-    `SHA256SUMS`, with the KEYS file vendored in the `sponsord` role.
+    from the `v<version>` release of `decdn/decdn` (`sponsord_onramp_version`,
+    the same release line, or exact release, as the daemon's `sponsord_version` and
+    the node's `decdn_node_version`; a line resolves to its newest finished release
+    on every run, from `sponsord_onramp_release_index`) and verifies it against the
+    GPG-signed `SHA256SUMS`, with the decdn KEYS vendored in this role (the same
+    file the installers' decdn release is checked against).
     `sponsord_onramp_release_base` points it at a mirror.
   - `source` builds `sponsord_onramp_source_ref` of `sponsord_onramp_source_repo`
     on the host (`cargo build -p sponsord-onramp`) as the `sponsord` role's `source`
     mode does, from its own clone, so the two can pin different refs. Each builds
-    from scratch, so a co-located host compiles the sponsord workspace twice.
-  - `manual` copies a binary built in a `decdn/sponsord` checkout (or installed
+    from scratch, so a co-located host compiles the shared crates twice.
+  - `manual` copies a binary built in a `decdn/decdn` checkout (or installed
     with `cargo install --locked sponsord-onramp@<version>`, unsigned).
     `sponsord_onramp_release_target_dir` defaults to `sponsord_release_target_dir`,
     so one `cargo build --release` covers both.
@@ -121,10 +122,10 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `sponsord_onramp_install_method` | `release` | `release`, `source` or `manual` |
-| `sponsord_onramp_source_repo` / `_source_ref` | `decdn/sponsord` on GitHub / `""` | `source` only. The ref is required: a tag, branch or SHA. |
+| `sponsord_onramp_source_repo` / `_source_ref` | `decdn/decdn` on GitHub / `""` | `source` only. The ref is required: a tag, branch or SHA. |
 | `sponsord_onramp_source_build_jobs` | `""` | `source` only: `CARGO_BUILD_JOBS` (`""` = one per CPU). |
 | `sponsord_onramp_manual_bin_src` / `_release_target_dir` | `""` / `sponsord_release_target_dir` | `manual` only. |
-| `sponsord_onramp_version` | the pinned release line | `release` mode: a `decdn/sponsord` release line (`"X.Y"`, its newest finished release) or an exact `"X.Y.Z"`, quoted; see [`defaults/main.yml`](defaults/main.yml). Keep it equal to `sponsord_version`: overriding one does not move the other. |
+| `sponsord_onramp_version` | the pinned release line | `release` mode: a `decdn/decdn` release line (`"X.Y"`, its newest finished release) or an exact `"X.Y.Z"`, quoted; see [`defaults/main.yml`](defaults/main.yml). Keep it equal to `sponsord_version` (and the node's `decdn_node_version`): overriding one does not move the other. |
 | `sponsord_onramp_network` | `sponsord_network` | Supplies CapacityBond and SlashJudge. Must match the daemon's network. |
 | `sponsord_onramp_capacity_bond_address`, `_slash_judge_address` | from profile | Explicit values win. SlashJudge may be `""`. |
 | `sponsord_onramp_rpc_url` | `""` | **Required. Public**: served to every user. No credentials, query or API key. |

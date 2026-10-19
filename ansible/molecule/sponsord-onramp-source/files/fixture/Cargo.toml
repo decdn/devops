@@ -1,5 +1,5 @@
-# Test fixture for molecule/sponsord-onramp-source: a workspace shaped like
-# decdn/sponsord (packages and binaries sponsord and sponsord-onramp), with no
+# Test fixture for molecule/sponsord-onramp-source: a workspace shaped like decdn/decdn's
+# sponsord crates (packages and binaries sponsord and sponsord-onramp), with no
 # dependencies so it compiles in seconds. Each binary execs the matching Python stub
 # (molecule/sponsord, molecule/sponsord-onramp), so both roles run end to end on
 # source-built binaries.

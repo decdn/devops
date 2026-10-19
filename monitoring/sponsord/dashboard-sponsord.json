@@ -30,7 +30,7 @@
       }
     ]
   },
-  "description": "The deCDN onboarding sponsor (decdn/sponsord): pool balance, keeper, top-up hold, issuance and errors, logs. Metrics job=\"sponsord\" as the grafana_alloy role ships them.",
+  "description": "The deCDN onboarding sponsor (decdn/decdn's sponsord): pool balance, keeper, top-up hold, issuance and errors, logs. Metrics job=\"sponsord\" as the grafana_alloy role ships them.",
   "editable": true,
   "graphTooltip": 1,
   "links": [],

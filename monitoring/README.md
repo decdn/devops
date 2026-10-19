@@ -90,7 +90,7 @@ on both. So:
 
 ## sponsord
 
-`sponsord/` holds the same pair for the deCDN onboarding sponsor (`decdn/sponsord`),
+`sponsord/` holds the same pair for the deCDN onboarding sponsor (decdn/decdn's `sponsord` crate),
 which runs on the Ansible and Compose paths only. The chart never renders it: its
 `files/monitoring` symlink reaches `decdn-node/` alone, and `make lint-helm` checks that
 the packaged chart carries nothing else.
@@ -98,7 +98,7 @@ the packaged chart carries nothing else.
 | File | What it is |
 |------|------------|
 | `sponsord/dashboard-sponsord.json` | `uid: decdn-sponsord`: pool balance, the top-up hold, keeper reads and top-ups, capabilities issued, errors by code, the daemon's and the onramp's logs. |
-| `sponsord/prometheus-alerts.yml` | Rule group `sponsord`: down, keeper failing, a stale pool read (or none since start), a held top-up (and one held over 2 h), an empty pool, sponsord's own request errors. `runbook_url` points at upstream's `docs/operator.md`, "Monitor". |
+| `sponsord/prometheus-alerts.yml` | Rule group `sponsord`: down, keeper failing, a stale pool read (or none since start), a held top-up (and one held over 2 h), an empty pool, sponsord's own request errors. `runbook_url` points at upstream's `docs/sponsord/operator.md`, "Monitor". |
 
 They select `job="sponsord"`, which the `grafana_alloy` role (and Compose's `alloy`
 profile) stamps on sponsord's

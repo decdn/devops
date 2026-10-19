@@ -25,8 +25,10 @@ The generated mirrors (step 2) and the vendored KEYS (step 6) are open-decdn-bum
 they come from a checkout of the tag, not from this repo. Of the text that names the
 version, only what is keyed to a pin moves: the comments beside the pinned values,
 the commented examples, keyed by a variable name, and AGENTS.md. Docs name the pin,
-never its number: decdn/sponsord carries version numbers too, so no rewrite here
-could tell which pin a bare "0.0.2" names.
+never its number, so no rewrite here has to tell which pin a bare "0.0.2" names.
+One decdn/decdn release ships sponsord and its onramp with the node, so the sponsord
+roles' lines (sponsord_version, sponsord_onramp_version), their commented examples
+and Compose's two sponsord image digests move here too.
 
 Every edit is anchored on a pattern that must match exactly once, and the result is
 read back, so a reshaped file fails the command instead of reporting a bump. Files
@@ -54,6 +56,7 @@ SEMVER = r"[0-9]+\.[0-9]+\.[0-9]+"
 LINE_RE = r"[0-9]+\.[0-9]+"
 
 NODE_DEFAULTS = "ansible/roles/decdn_node/defaults/main.yml"
+SPONSORD_DEFAULTS = "ansible/roles/sponsord/defaults/main.yml"
 ONRAMP_DEFAULTS = "ansible/roles/sponsord_onramp/defaults/main.yml"
 ONRAMP_ENV = "compose/sponsord-onramp.env.example"
 COMPOSE_ENV = "compose/.env.example"
@@ -71,13 +74,31 @@ EXAMPLES = [
         for before, after in ((r'^# decdn_node_version: *"', '"'), (r"^# +decdn_node_source_ref: *v", "$"))
     ),
     *(
-        (f"{tree}/group_vars/sponsord_onramp_hosts.yml", r"^# sponsord_onramp_decdn_release: *v", "$")
+        (f"{tree}/group_vars/sponsord_hosts.yml", before, after)
         for tree in ("ansible/inventory", "examples/collection-fleet/inventory")
+        for before, after in ((r'^# sponsord_version: *"', '"'), (r"^# sponsord_source_ref: *v", "$"))
+    ),
+    *(
+        (f"{tree}/group_vars/sponsord_onramp_hosts.yml", before, after)
+        for tree in ("ansible/inventory", "examples/collection-fleet/inventory")
+        for before, after in (
+            (r'^# sponsord_onramp_version: *"', '"'),
+            (r"^# sponsord_onramp_source_ref: *v", "$"),
+            (r"^# sponsord_onramp_decdn_release: *v", "$"),
+        )
     ),
     ("cloud-init/user-data-publisher.yaml", r'^ *# sponsord_onramp_decdn_release: *"v', '"'),
 ]
-# The one place prose names the pinned line (its line may wrap inside the phrase).
-AGENTS = ("AGENTS.md", r"`decdn_node_version`, today\s+`", "`")
+# The one place prose names the pinned line (its line may wrap inside the phrase): the
+# three role pins in one parenthesis, the number after the last.
+AGENTS = ("AGENTS.md", r"`sponsord_onramp_version`, today\s+`", "`")
+# Compose's image digests: the env key and the flag that carries the new one (each
+# from the release's <stage>-image-digest.txt, which open-decdn-bump.sh verifies).
+IMAGE_DIGESTS = (
+    ("DECDN_IMAGE_DIGEST", "--image-digest"),
+    ("SPONSORD_IMAGE_DIGEST", "--sponsord-image-digest"),
+    ("SPONSORD_ONRAMP_IMAGE_DIGEST", "--onramp-image-digest"),
+)
 
 
 class ShapeError(Exception):
@@ -112,6 +133,14 @@ def pinned(root: Path) -> str:
     if not LINE.match(current):
         raise ShapeError(f"{NODE_DEFAULTS}: decdn_node_version {current!r} is not a release line (X.Y)")
     return current
+
+
+# The sponsord roles' pins, which the same release ships: (file, variable).
+LINE_PINS = (
+    (NODE_DEFAULTS, "decdn_node_version"),
+    (SPONSORD_DEFAULTS, "sponsord_version"),
+    (ONRAMP_DEFAULTS, "sponsord_onramp_version"),
+)
 
 
 def synced(root: Path) -> str:
@@ -185,33 +214,45 @@ def replace_everywhere(root: Path, old: str, new: str) -> list[str]:
     return changed
 
 
-def rewrite(root: Path, version: str, sums: str, digest: str) -> list[str]:
+def rewrite(root: Path, version: str, sums: str, digests: dict[str, str]) -> list[str]:
+    """Move every pin to <version>; <digests> maps each IMAGE_DIGESTS env key to its new value."""
     if not VERSION.match(version):
         raise ShapeError(f"{version} is not X.Y.Z")
     if not HEX64.match(sums):
         raise ShapeError(f"--sums-sha256 {sums!r} is not 64 lowercase hex")
-    if not (digest.startswith("sha256:") and HEX64.match(digest[len("sha256:"):])):
-        raise ShapeError(f"--image-digest {digest!r} is not sha256:<64 lowercase hex>")
+    if set(digests) != {key for key, _ in IMAGE_DIGESTS}:
+        raise ShapeError(f"digests given for {sorted(digests)}, expected {[key for key, _ in IMAGE_DIGESTS]}")
+    for key, flag in IMAGE_DIGESTS:
+        digest = digests[key]
+        if not (digest.startswith("sha256:") and HEX64.match(digest[len("sha256:"):])):
+            raise ShapeError(f"{flag} {digest!r} is not sha256:<64 lowercase hex>")
     line = line_of(version)
     pinned(root)  # a line, or the shape is not one this script moves
 
+    compose_env = read(root, COMPOSE_ENV)
     old_sums = env_value(read(root, ONRAMP_ENV), "ONRAMP_DECDN_SUMS_SHA256", ONRAMP_ENV)
-    old_digest = env_value(read(root, COMPOSE_ENV), "DECDN_IMAGE_DIGEST", COMPOSE_ENV)
-    for name, old in (("ONRAMP_DECDN_SUMS_SHA256", old_sums), ("DECDN_IMAGE_DIGEST", old_digest)):
+    old_digests = {key: env_value(compose_env, key, COMPOSE_ENV) for key, _ in IMAGE_DIGESTS}
+    for name, old in (("ONRAMP_DECDN_SUMS_SHA256", old_sums), *old_digests.items()):
         bare = old.removeprefix("sha256:")
         if not HEX64.match(bare):
             raise ShapeError(f"the current {name} {old!r} is not a digest")
+    # Three distinct images: a digest shared between two env keys would be replaced
+    # twice, so a copy of the pin could end up as the wrong image.
+    if len(set(old_digests.values())) != len(old_digests):
+        raise ShapeError(f"{COMPOSE_ENV}: two image digests are equal")
 
     changed: set[str] = set()
     if old_sums != sums:
         changed.update(replace_everywhere(root, old_sums, sums))
-    if old_digest != digest:
-        changed.update(replace_everywhere(root, old_digest.removeprefix("sha256:"), digest.removeprefix("sha256:")))
+    for key, _ in IMAGE_DIGESTS:
+        if old_digests[key] != digests[key]:
+            changed.update(replace_everywhere(
+                root, old_digests[key].removeprefix("sha256:"), digests[key].removeprefix("sha256:")))
 
     # (file, pattern, replacement): the version-bearing lines. The line copies first.
     agents_file, agents_before, agents_after = AGENTS
     edits = [
-        (NODE_DEFAULTS, r'^(decdn_node_version: *")[^"]*(")', rf"\g<1>{line}\g<2>"),
+        *((rel, rf'^({var}: *")[^"]*(")', rf"\g<1>{line}\g<2>") for rel, var in LINE_PINS),
         (ONRAMP_DEFAULTS, rf"^(sponsord_onramp_decdn_release: *)v{LINE_RE}( )", rf"\g<1>v{line}\g<2>"),
         (CHART, r'^(appVersion: *")[^"]*(")', rf"\g<1>{line}\g<2>"),
         (CHART, rf"(image: ghcr\.io/decdn/decdn-node:){LINE_RE}$", rf"\g<1>{line}"),
@@ -229,24 +270,26 @@ def rewrite(root: Path, version: str, sums: str, digest: str) -> list[str]:
             (root / rel).write_text(new)
             changed.add(rel)
 
-    verify(root, version, sums, digest)
+    verify(root, version, sums, digests)
     return sorted(changed)
 
 
-def verify(root: Path, version: str, sums: str, digest: str) -> None:
+def verify(root: Path, version: str, sums: str, digests: dict[str, str]) -> None:
     """Read every pin back; a mismatch is a file this script does not understand."""
     line = line_of(version)
     onramp = read(root, ONRAMP_DEFAULTS)
     onramp_env = read(root, ONRAMP_ENV)
+    compose_env = read(root, COMPOSE_ENV)
     chart = read(root, CHART)
     want = [
         (NODE_DEFAULTS, "decdn_node_version", pinned(root), line),
+        *((rel, var, scalar(read(root, rel), var, rel), line) for rel, var in LINE_PINS[1:]),
         (ONRAMP_DEFAULTS, "sponsord_onramp_decdn_release",
          scalar(onramp, "sponsord_onramp_decdn_release", ONRAMP_DEFAULTS), f"v{line}"),
         (ONRAMP_ENV, "ONRAMP_DECDN_RELEASE", env_value(onramp_env, "ONRAMP_DECDN_RELEASE", ONRAMP_ENV), f"v{version}"),
         (ONRAMP_ENV, "ONRAMP_DECDN_SUMS_SHA256",
          env_value(onramp_env, "ONRAMP_DECDN_SUMS_SHA256", ONRAMP_ENV), sums),
-        (COMPOSE_ENV, "DECDN_IMAGE_DIGEST", env_value(read(root, COMPOSE_ENV), "DECDN_IMAGE_DIGEST", COMPOSE_ENV), digest),
+        *((COMPOSE_ENV, key, env_value(compose_env, key, COMPOSE_ENV), digests[key]) for key, _ in IMAGE_DIGESTS),
         (COMPOSE_ENV, "the release above DECDN_IMAGE_DIGEST", synced(root), version),
         (CHART, "appVersion", scalar(chart, "appVersion", CHART), line),
     ]
@@ -260,8 +303,9 @@ def verify(root: Path, version: str, sums: str, digest: str) -> None:
     if images != [line]:
         raise ShapeError(f"{CHART}: artifacthub.io/images names {images}, expected [{line!r}]")
     example = re.findall(rf"e\.g\. for v{re.escape(version)}\n *# *(sha256:[0-9a-f]{{64}})", read(root, CHART_VALUES))
-    if example != [digest]:
-        raise ShapeError(f"{CHART_VALUES}: the example digest for v{version} is {example}, expected [{digest!r}]")
+    if example != [digests["DECDN_IMAGE_DIGEST"]]:
+        raise ShapeError(f"{CHART_VALUES}: the example digest for v{version} is {example}, "
+                         f"expected [{digests['DECDN_IMAGE_DIGEST']!r}]")
     for rel, before, after in EXAMPLES:
         found = re.findall(rf"{before}({SEMVER}){after}", read(root, rel), re.M)
         if found != [version]:
@@ -283,7 +327,8 @@ def main() -> None:
     rw = sub.add_parser("rewrite")
     rw.add_argument("version")
     rw.add_argument("--sums-sha256", required=True)
-    rw.add_argument("--image-digest", required=True)
+    for key, flag in IMAGE_DIGESTS:
+        rw.add_argument(flag, required=True, dest=key, metavar="sha256:HEX", help=f"the release's {key}")
     args = ap.parse_args()
 
     try:
@@ -296,7 +341,8 @@ def main() -> None:
         elif args.cmd == "kind":
             print(kind(args.root, args.tag))
         elif args.cmd == "rewrite":
-            for rel in rewrite(args.root, args.version, args.sums_sha256, args.image_digest):
+            digests = {key: getattr(args, key) for key, _ in IMAGE_DIGESTS}
+            for rel in rewrite(args.root, args.version, args.sums_sha256, digests):
                 print(f"wrote {rel}")
     except ShapeError as e:
         print(f"bump_decdn: {e}", file=sys.stderr)

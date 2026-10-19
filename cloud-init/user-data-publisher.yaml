@@ -106,15 +106,16 @@ write_files:
             ansible_connection: local
             ansible_python_interpreter: /usr/bin/python3
         vars:
-          # sponsord, installed from the GPG-verified release tarball. The release is
-          # the newest of the sponsord role's default line at DEVOPS_REF
+          # sponsord, installed from the GPG-verified release tarball of decdn/decdn
+          # (one release ships the node, the CLI, sponsord and the onramp). The release
+          # is the newest of the sponsord role's default line at DEVOPS_REF
           # (sponsord_version); set sponsord_version here, and sponsord_onramp_version
           # to the same, to another line or an exact "X.Y.Z".
           sponsord_install_method: release
           # Optional: a mirror that serves v<version>/sponsord-<version>-<target>.tar.gz,
           # SHA256SUMS and SHA256SUMS.asc. The signature is still checked against the
           # vendored KEYS.
-          # sponsord_release_base: "https://mirror.example/decdn/sponsord/releases/download"
+          # sponsord_release_base: "https://mirror.example/decdn/decdn/releases/download"
           sponsord_network: arbitrum-sepolia
           # MUST-EDIT: the pool the treasury owns, 0x + 64 hex, printed by `decdn pool open`.
           sponsord_pool_id: "CHANGE_ME"
@@ -125,10 +126,10 @@ write_files:
           localhost:
         vars:
           # sponsord-onramp, installed from the GPG-verified release tarball of the
-          # same decdn/sponsord release as sponsord (sponsord_onramp_version).
+          # same decdn/decdn release as sponsord (sponsord_onramp_version).
           sponsord_onramp_install_method: release
           # Optional: a mirror, as above, for v<version>/sponsord-onramp-<version>-<target>.tar.gz.
-          # sponsord_onramp_release_base: "https://mirror.example/decdn/sponsord/releases/download"
+          # sponsord_onramp_release_base: "https://mirror.example/decdn/decdn/releases/download"
           # Caddy terminates TLS with a certificate from ACME. The domain's A/AAAA records
           # must point at this VM, and tcp/80 and tcp/443 must reach it.
           sponsord_onramp_proxy: caddy

@@ -112,9 +112,9 @@ details: [`iroh_relay`](../ansible/roles/iroh_relay/README.md),
 
 ## Day 2
 
-Upgrades: the roles pin a release line for decdn/decdn (`decdn_node_version`) and for
-decdn/sponsord (`sponsord_version` = `sponsord_onramp_version`), and each deploy installs
-the line's newest release; the onramp also serves its installers the newest decdn of
+Upgrades: the roles pin one decdn/decdn release line (`decdn_node_version` =
+`sponsord_version` = `sponsord_onramp_version`: one release ships the node, sponsord and
+the onramp), and each deploy installs the line's newest release; the onramp also serves its installers the newest decdn of
 the line (`sponsord_onramp_decdn_release`). Set an exact `"X.Y.Z"` (for the installers,
 a `vX.Y.Z` tag with its `SHA256SUMS` digest) to hold a host on one release. Origin nodes
 on the chart and Compose follow the node operators' notes

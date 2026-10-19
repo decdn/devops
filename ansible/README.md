@@ -186,8 +186,8 @@ ignored on the first converge.
      `decdn_node_version` defaults to the decdn/decdn release line this repo pins (the
      role's `defaults/main.yml`, `"X.Y"`): each run installs the line's newest
      finished release, so a patch release arrives with the next deploy. Set an exact
-     `"X.Y.Z"` to hold a host on one release. The sponsord roles pin a decdn/sponsord
-     line the same way (`sponsord_version`).
+     `"X.Y.Z"` to hold a host on one release. The sponsord roles pin the same
+     decdn/decdn line the same way (`sponsord_version`, `sponsord_onramp_version`).
    - **`source`** clones `decdn_node_source_repo` (default `decdn/decdn` on GitHub) at
      `decdn_node_source_ref` (any tag, branch or SHA) **on the node** and builds it there
      as an unprivileged `decdn-build` user, in a fresh environment per commit, with a

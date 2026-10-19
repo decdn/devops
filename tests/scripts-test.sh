@@ -1857,16 +1857,17 @@ cmp -s "$repo/ansible/roles/decdn_node/files/install-build-output.py" \
        "$repo/ansible/roles/sponsord/files/install-build-output.py" \
   || fail "decdn_node and sponsord files/install-build-output.py differ"
 # The release-line resolver is copied into every role that installs a release, and
-# the onramp carries its own copy of decdn's KEYS (it checks the installers' decdn
-# release; decdn_node ships in the other collection).
+# so is decdn's KEYS: one decdn/decdn release ships the node, the CLI, sponsord and
+# the onramp (the sponsord roles ship in the other collection, so each carries its
+# own copy).
 for r in sponsord sponsord_onramp; do
   cmp -s "$repo/ansible/roles/decdn_node/tasks/resolve-release.yml" \
          "$repo/ansible/roles/$r/tasks/resolve-release.yml" \
     || fail "decdn_node and $r tasks/resolve-release.yml differ"
+  cmp -s "$repo/ansible/roles/decdn_node/files/decdn-release-KEYS.asc" \
+         "$repo/ansible/roles/$r/files/decdn-release-KEYS.asc" \
+    || fail "decdn_node and $r files/decdn-release-KEYS.asc differ"
 done
-cmp -s "$repo/ansible/roles/decdn_node/files/decdn-release-KEYS.asc" \
-       "$repo/ansible/roles/sponsord_onramp/files/decdn-release-KEYS.asc" \
-  || fail "decdn_node and sponsord_onramp files/decdn-release-KEYS.asc differ"
 # decdn_backup_local_dir and sponsord_backup_local_dir: one expression (backups/ beside
 # the repo's playbooks/, or beside the project's ansible.cfg from a collection), the
 # key's own name aside. Only decdn_node's runs in a molecule scenario.
@@ -1898,10 +1899,11 @@ done
 pass "the decommission defaults and the confirmation's service list agree across all five roles"
 
 # --- the release pins agree ----------------------------------------------------------
-# decdn/sponsord releases sponsord and sponsord-onramp from one tag, and the onramp's
-# installers should hand users the decdn the node role deploys. The pins are copied
-# into compose/sponsord-onramp.env.example and the chart's appVersion; the chart
-# check is here, not in lint-helm, so a PR that bumps only the role still runs it.
+# One decdn/decdn release ships decdn-node, decdn, sponsord and sponsord-onramp, so
+# the three roles pin one line, and the onramp's installers should hand users the
+# decdn the node role deploys. The pins are copied into
+# compose/sponsord-onramp.env.example and the chart's appVersion; the chart check is
+# here, not in lint-helm, so a PR that bumps only the role still runs it.
 pin() { # <role> <var>: a scalar default, quotes stripped
   sed -nE "s/^$2: *\"?([^\" #]*)\"?.*/\1/p" "$repo/ansible/roles/$1/defaults/main.yml"
 }
@@ -1914,7 +1916,9 @@ for p in "decdn_node decdn_node_version" "sponsord sponsord_version" "sponsord_o
   [[ "$(pin $p)" =~ $pin_re ]] || fail "${p#* }: the default in roles/${p% *}/defaults/main.yml is not X.Y or X.Y.Z"
 done
 [ "$(pin sponsord sponsord_version)" = "$(pin sponsord_onramp sponsord_onramp_version)" ] \
-  || fail "sponsord_version and sponsord_onramp_version differ (one decdn/sponsord release ships both)"
+  || fail "sponsord_version and sponsord_onramp_version differ (one decdn/decdn release ships both)"
+[ "$(pin sponsord sponsord_version)" = "$(pin decdn_node decdn_node_version)" ] \
+  || fail "sponsord_version and decdn_node_version differ (one decdn/decdn release ships sponsord and the node)"
 [ "$(pin sponsord_onramp sponsord_onramp_decdn_release)" = "v$(pin decdn_node decdn_node_version)" ] \
   || fail "sponsord_onramp_decdn_release is not v<decdn_node_version>"
 # Compose has no resolver: its env example names an exact release and digest, which
@@ -1979,9 +1983,8 @@ elif [[ -n ${CI:-} ]]; then
 else
   skipped+=("artifacthub.io/images check (needs yq)")
 fi
-# Both vendored KEYS hold the same maintainer keys (they differ in header text only),
-# and those are the fingerprints SECURITY.md publishes, so swapping a key takes a
-# visible edit there too.
+# The vendored KEYS (byte copies, checked above) hold the fingerprints SECURITY.md
+# publishes, so swapping a key takes a visible edit there too.
 command -v gpg >/dev/null || fail "gpg is required (the vendored KEYS checks)"
 fprs() { # <KEYS file>: its primary-key fingerprints, sorted
   local out
@@ -1990,8 +1993,6 @@ fprs() { # <KEYS file>: its primary-key fingerprints, sorted
 }
 want_fprs="$(fprs "$repo/ansible/roles/decdn_node/files/decdn-release-KEYS.asc")"
 [ -n "$want_fprs" ] || fail "decdn_node/files/decdn-release-KEYS.asc: no keys"
-[ "$(fprs "$repo/ansible/roles/sponsord/files/sponsord-release-KEYS.asc")" = "$want_fprs" ] \
-  || fail "the decdn and sponsord release KEYS hold different keys"
 [ "$(sed -nE 's/^Fingerprint: *//p' "$repo/SECURITY.md" | tr -d ' ' | sort)" = "$want_fprs" ] \
   || fail "SECURITY.md's Fingerprint: lines differ from the vendored KEYS"
 pass "release pins agree across roles, Compose (incl. its iroh images), the chart and its artifacthub.io/images, and AGENTS.md; the vendored KEYS match SECURITY.md"

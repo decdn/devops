@@ -131,7 +131,7 @@ scripts/                # upstream-mirror generators, the compose Alloy config g
 and `ansible/molecule/schema/files/schema-keys.txt` (`gen-schema-keys.py`), both
 generated from the tag of the newest decdn/decdn release in the line
 `decdn_node_version` pins. The weekly `upstream-drift` workflow flags staleness
-against that tag, and a new upstream release line of either repo. These are the only protocol facts (contract addresses) the
+against that tag, and a new upstream release line. These are the only protocol facts (contract addresses) the
 repo carries, and `networks.yml` carries its upstream commit.
 
 **Generated from this repo — regenerate, never hand-edit:** `compose/alloy/config.alloy`
@@ -141,37 +141,37 @@ runtime (`scripts/render-compose-alloy.sh`, which runs the `compose`-tagged task
 test-scripts` fails while the committed file differs from a fresh render, and `make
 lint-alloy` validates and runs it.
 
-**Pinned upstream releases.** One decdn/decdn release line (`decdn_node_version`, today
-`0.2`) and one decdn/sponsord release line (`sponsord_version` = `sponsord_onramp_version`,
-today `0.2`; decdn/sponsord tags its whole workspace `vX.Y.Z`, there are no per-crate
-tags) are pinned across every path. A line, `X.Y`, is what the role defaults, the
-onramp's installer pin (`sponsord_onramp_decdn_release`, `vX.Y`) and the chart's
-`appVersion` name: the roles install its newest finished `vX.Y.N` on every run
-(`tasks/resolve-release.yml`, copied into all three roles: GitHub's release list, then
-the same signed `SHA256SUMS` and exact `--version` check against the resolved version;
-the onramp reads the installers' digest from that release's verified `SHA256SUMS`),
-and the chart's default image tag is the line's floating tag, pulled `Always`. An
-exact `X.Y.Z` in inventory (or `image.tag`/`image.digest`) holds a host on one release.
-So an upstream patch release needs no release of the collections or the chart; a new
-line does. What cannot resolve a line names one release of it and moves on every
-upstream release, repo-only: `compose/.env.example`'s image digests, the onramp's
-installer pin in `compose/sponsord-onramp.env.example` (tag + `SHA256SUMS` digest), the
-chart's example digest, the commented exact-pin examples, and the generated mirrors
-(which a patch is not expected to change; when one does, the bump PR says so and the
-collections need a release). cloud-init takes the role defaults at `DEVOPS_REF`. Docs
-name the pin (`decdn_node_version`, `sponsord_version`), never its number: besides this
-paragraph, only the commented examples and the comments beside a pinned value name a
-number, and they move with the pin (`bump_decdn.py` moves decdn's; the sponsord
-checklist lists sponsord's). `make test-scripts` checks the pins agree with each other,
-the Compose example (a release of the line), `appVersion`, the chart's
-`artifacthub.io/images` tag and this paragraph, and that the vendored KEYS hold the
-keys SECURITY.md publishes; the weekly `upstream-drift` job checks the exact copies and
-the mirrors against each line's newest release and flags a newer upstream line. Bump
-with the checklists in `roles/decdn_node/README.md` and `roles/sponsord/README.md`;
-`scripts/open-decdn-bump.sh` opens the decdn bump's PR (decdn's `publish-crates.sh`
-runs it after each release). Both upstream repos are public and also publish their
-binaries as crates (`decdn-node`, `decdn-cli`, `sponsord`, `sponsord-onramp`); the
-roles do not install from crates.io (no maintainer signature).
+**Pinned upstream releases.** One decdn/decdn release line is pinned across every
+path, by three role defaults that must agree (`decdn_node_version` = `sponsord_version`
+= `sponsord_onramp_version`, today `0.2`): one decdn/decdn release (`vX.Y.Z`, the whole
+workspace, no per-crate tags) ships `decdn-node`, `decdn`, `sponsord` and
+`sponsord-onramp`, their four images and one `SHA256SUMS`. A line, `X.Y`, is what the
+role defaults, the onramp's installer pin (`sponsord_onramp_decdn_release`, `vX.Y`) and
+the chart's `appVersion` name: the roles install its newest finished `vX.Y.N` on every
+run (`tasks/resolve-release.yml`, copied into all three roles: GitHub's release list,
+then the same signed `SHA256SUMS` and exact `--version` check against the resolved
+version; the onramp reads the installers' digest from that release's verified
+`SHA256SUMS`), and the chart's default image tag is the line's floating tag, pulled
+`Always`. An exact `X.Y.Z` in inventory (or `image.tag`/`image.digest`) holds a host on
+one release. So an upstream patch release needs no release of the collections or the
+chart; a new line does. What cannot resolve a line names one release of it and moves
+on every upstream release, repo-only: `compose/.env.example`'s three image digests, the
+onramp's installer pin in `compose/sponsord-onramp.env.example` (tag + `SHA256SUMS`
+digest), the chart's example digest, the commented exact-pin examples, and the
+generated mirrors (which a patch is not expected to change; when one does, the bump PR
+says so and the collections need a release). cloud-init takes the role defaults at
+`DEVOPS_REF`. Docs name the pin (`decdn_node_version`, `sponsord_version`), never its
+number: besides this paragraph, only the commented examples and the comments beside a
+pinned value name a number, and they move with the pin (`bump_decdn.py` moves all of
+them). `make test-scripts` checks the pins agree with each other, the Compose example (a
+release of the line), `appVersion`, the chart's `artifacthub.io/images` tag and this
+paragraph, and that the vendored KEYS (three byte copies of decdn's) hold the keys
+SECURITY.md publishes; the weekly `upstream-drift` job checks the exact copies and the
+mirrors against the line's newest release and flags a newer upstream line. Bump with
+the checklist in `roles/decdn_node/README.md`; `scripts/open-decdn-bump.sh` opens the
+bump's PR (decdn's `publish-crates.sh` runs it after each release). Upstream is public
+and also publishes the binaries as crates (`decdn-node`, `decdn-cli`, `sponsord`,
+`sponsord-onramp`); the roles do not install from crates.io (no maintainer signature).
 
 **Monitoring assets are maintained here, by hand.** `monitoring/` holds the deCDN
 Grafana dashboards and Prometheus alert rules for every deploy path; upstream ships none.
@@ -183,7 +183,7 @@ node's `/metrics` and upstream's `adr/appendix-observability.md` registry (a `pl
 row emits nothing). Nothing in CI checks the names, so a typo renders `(no data)` or a
 rule that never fires. See `.claude/skills/grafana-dashboards/SKILL.md`. sponsord's pair
 lives in `monitoring/sponsord/`, which the chart does not render; its `sponsord_*`
-names must be ones upstream `decdn/sponsord` `crates/sponsord/src/metrics.rs` exports,
+names must be ones upstream decdn/decdn's `crates/sponsord/src/metrics.rs` exports,
 and its rules have promtool unit tests (`monitoring/sponsord/prometheus-alerts_test.yml`,
 run by `make lint-helm`), as the node's `DecdnNodeDown` does
 (`monitoring/decdn-node/prometheus-alerts_test.yml`, which the chart's `.helmignore`
@@ -308,13 +308,14 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   Alloy (every component healthy, the targets per profile), since `alloy validate`
   neither parses OTTL nor evaluates `sys.env`.
 
-- **`ansible/roles/sponsord`** — the deCDN onboarding sponsor (`decdn/sponsord`): the
+- **`ansible/roles/sponsord`** — the deCDN onboarding sponsor (decdn/decdn's `sponsord` crate): the
   treasury wallet's signer for capped capabilities plus the PaymentPool keeper. It is
   independent of the node, so `playbooks/sponsord.yml` (`make deploy-sponsord`, also
   imported by `publisher.yml`) targets its own `sponsord_hosts` group, standalone or
   co-located with a node.
-  - **Install:** a GPG-verified `v*` decdn/sponsord release by default
-    (`sponsord_version`: the newest of its line, or an exact release), a host-side
+  - **Install:** a GPG-verified `v*` decdn/decdn release by default
+    (`sponsord_version`: the newest of its line, the node's line, or an exact
+    release; the same release ships both daemons and the node), a host-side
     `source` build, or a manual binary.
     The `--version` backstop checks the version in `release` mode only (the version
     has a default, so other modes would fail against it), as in the other two roles.
@@ -362,8 +363,9 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   `make test-scripts`); the role checks no group name, so collection users keep their
   own groups, and its token gate and `/healthz` fail without a daemon.
   - **Install / unit / gate:** the sponsord role's patterns, copied: a
-    GPG-verified `v*` decdn/sponsord release (default), `source` or manual (the
-    KEYS and the source installer are the sponsord role's files, via `role_path`), `DynamicUser` with the token and the Turnstile secret (inventory
+    GPG-verified `v*` decdn/decdn release (default), `source` or manual (the
+    source installer is the sponsord role's file, via `role_path`; the KEYS its own
+    copy of decdn's), `DynamicUser` with the token and the Turnstile secret (inventory
     or operator, with `secret.env`'s provenance record and guards) as
     `LoadCredential=`, `PartOf=sponsord.service`, a restart-inputs
     record, and a fatal `/healthz` gate on a loopback listener.
@@ -656,7 +658,7 @@ the pinned `iroh-relay` (re-capture it when bumping `iroh_relay_version`).
   - **The allow-lists are deliberate friction.** A new key, mount or inline env var
     in `compose.yaml` fails the lint until it is added to the matching list in
     `compose/tests/*.jq`, and the PR should say why. Env var names follow upstream
-    `decdn/sponsord` (`crates/*/src/config.rs`); re-check them when bumping images.
+    decdn/decdn (`crates/sponsord*/src/config.rs`); re-check them when bumping images.
   - **CI's Compose is older than a dev box's.** The runner's release mishandled
     `config --no-env-resolution` (v2.33 lacks it), which is why the inline-env render
     uses `/dev/null` env files instead. Before relying on a newer `config` flag, try

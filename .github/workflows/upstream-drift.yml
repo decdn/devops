@@ -1,9 +1,10 @@
 ---
 name: Upstream drift
 
-# The repo pins one decdn/decdn and one decdn/sponsord release line (decdn_node_version,
-# sponsord_version: "X.Y", whose newest finished vX.Y.N the roles install) and carries
-# copies of what that release publishes. This job resolves each line as the roles do
+# The repo pins one decdn/decdn release line (decdn_node_version = sponsord_version =
+# sponsord_onramp_version: "X.Y", whose newest finished vX.Y.N the roles install; one
+# release ships the node, the CLI, sponsord and the onramp) and carries copies of what
+# that release publishes. This job resolves the line as the roles do
 # (tasks/resolve-release.yml) and checks, weekly:
 #   - the generated mirrors of decdn/decdn at that release's tag:
 #     roles/decdn_node/vars/main/networks.yml (contract addresses) and its subsets in
@@ -13,11 +14,11 @@ name: Upstream drift
 #   - the hand-copied release facts: the onramp's decdn tag and SHA256SUMS digest
 #     (compose/sponsord-onramp.env.example) and the Compose image digests
 #     (compose/.env.example), against that release's assets;
-#   - that each repo's newest vX.Y.Z tag is still in the pinned line.
+#   - that decdn's newest vX.Y.Z tag is still in the pinned line.
 # It is a scheduled early warning, not a PR gate: an upstream release must not turn
 # unrelated PRs red. Fix drift by re-running the generator it names; act on a new
-# release with the bump checklist (roles/decdn_node/README.md, roles/sponsord/README.md);
-# scripts/open-decdn-bump.sh opens the decdn bump's PR.
+# release with the bump checklist (roles/decdn_node/README.md);
+# scripts/open-decdn-bump.sh opens the bump's PR.
 on:
   schedule:
     - cron: '17 6 * * 1'        # Mondays 06:17 UTC
@@ -40,9 +41,10 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The pins, read from the role defaults (plain scalars, so no YAML parser), and
-      # each line resolved as the roles resolve it: the highest vX.Y.N that is not a
+      # The pin, read from the role defaults (plain scalars, so no YAML parser), and
+      # the line resolved as the roles resolve it: the highest vX.Y.N that is not a
       # draft or a prerelease and has a SHA256SUMS.asc asset. An exact pin is itself.
+      # The sponsord roles must pin the same line (make test-scripts checks too).
       - name: Read and resolve the pinned releases
         id: pins
         env:
@@ -62,18 +64,21 @@ jobs:
           }
           decdn="$(pin decdn_node decdn_node_version)"
           sponsord="$(pin sponsord sponsord_version)"
-          if [ -z "$decdn" ] || [ -z "$sponsord" ]; then
+          onramp="$(pin sponsord_onramp sponsord_onramp_version)"
+          if [ -z "$decdn" ] || [ -z "$sponsord" ] || [ -z "$onramp" ]; then
             echo "::error::a role has no pinned version"
             exit 1
           fi
-          decdn_tag="$(resolve decdn/decdn "$decdn")"
-          sponsord_tag="$(resolve decdn/sponsord "$sponsord")"
-          if [ -z "$decdn_tag" ] || [ -z "$sponsord_tag" ]; then
-            echo "::error::no finished release in decdn/decdn $decdn or decdn/sponsord $sponsord"
+          if [ "$sponsord" != "$decdn" ] || [ "$onramp" != "$decdn" ]; then
+            echo "::error::the roles pin different lines (decdn_node $decdn, sponsord $sponsord, sponsord_onramp $onramp); one decdn/decdn release ships all of them"
             exit 1
           fi
-          { echo "decdn=$decdn"; echo "sponsord=$sponsord"
-            echo "decdn_tag=$decdn_tag"; echo "sponsord_tag=$sponsord_tag"; } >> "$GITHUB_OUTPUT"
+          decdn_tag="$(resolve decdn/decdn "$decdn")"
+          if [ -z "$decdn_tag" ]; then
+            echo "::error::no finished release in decdn/decdn $decdn"
+            exit 1
+          fi
+          { echo "decdn=$decdn"; echo "decdn_tag=$decdn_tag"; } >> "$GITHUB_OUTPUT"
       # Public repo, the resolved tag. The sync script reads HEAD through git.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -90,9 +95,7 @@ jobs:
       - name: Compare the mirrors and the pins with upstream
         env:
           DECDN_PIN: ${{ steps.pins.outputs.decdn }}
-          SPONSORD_PIN: ${{ steps.pins.outputs.sponsord }}
           DECDN_TAG: ${{ steps.pins.outputs.decdn_tag }}
-          SPONSORD_TAG: ${{ steps.pins.outputs.sponsord_tag }}
         run: |
           rc=0
           check() {
@@ -165,16 +168,15 @@ jobs:
             echo "$repo $tag: $var should be $got, compose/.env.example has $want"
             return 1
           }
-          echo "### Upstream drift (decdn/decdn $DECDN_PIN: $DECDN_TAG, $(git -C upstream rev-parse --short HEAD); decdn/sponsord $SPONSORD_PIN: $SPONSORD_TAG)" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Upstream drift (decdn/decdn $DECDN_PIN: $DECDN_TAG, $(git -C upstream rev-parse --short HEAD))" >> "$GITHUB_STEP_SUMMARY"
           check "network profiles" python3 scripts/sync-network-profiles.py upstream --ref HEAD --check
           check "config schema keys" schema_check
           check "decdn/decdn release line" release_check decdn/decdn "$DECDN_PIN"
-          check "decdn/sponsord release line" release_check decdn/sponsord "$SPONSORD_PIN"
           check "Compose onramp decdn pin" sums_check decdn/decdn "$DECDN_TAG"
           check "Compose decdn-node digest" digest_check decdn/decdn "$DECDN_TAG" DECDN_IMAGE_DIGEST \
             decdn-node-image-digest.txt
-          check "Compose sponsord digest" digest_check decdn/sponsord "$SPONSORD_TAG" SPONSORD_IMAGE_DIGEST \
+          check "Compose sponsord digest" digest_check decdn/decdn "$DECDN_TAG" SPONSORD_IMAGE_DIGEST \
             sponsord-image-digest.txt
-          check "Compose sponsord-onramp digest" digest_check decdn/sponsord "$SPONSORD_TAG" \
+          check "Compose sponsord-onramp digest" digest_check decdn/decdn "$DECDN_TAG" \
             SPONSORD_ONRAMP_IMAGE_DIGEST sponsord-onramp-image-digest.txt
           exit "$rc"

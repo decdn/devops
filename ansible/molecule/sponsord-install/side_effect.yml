@@ -48,7 +48,7 @@
     - name: Seed a source build stamp
       ansible.builtin.copy:
         dest: /usr/local/lib/sponsord/installed-source
-        content: "https://github.com/decdn/sponsord.git@0000000000000000000000000000000000000000\n"
+        content: "https://github.com/decdn/decdn.git@0000000000000000000000000000000000000000\n"
         mode: "0644"
 
     - name: Install the pinned release
