@@ -13,6 +13,11 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# bash -eo pipefail, not the implicit `bash -e`: a failure inside a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
 # Third-party actions are pinned to a full commit SHA (a re-pointed tag can ship
 # malicious code). The trailing comment records the human-readable version;
 # .github/dependabot.yml bumps them.
@@ -38,12 +43,14 @@ jobs:
       - name: Run every hook on every file
         run: pre-commit run --all-files --show-diff-on-failure
 
-  # The inventory parses and the collections' playbooks load against it. The
-  # collections are installed fresh from Galaxy on every run (no cache): with `>=`
-  # floors in requirements.yml that is the newest release, and this job is what tells
-  # you that release still accepts your inventory. Fails until inventory/hosts.yml is
-  # committed. --syntax-check never connects and templates no variable, so the
-  # git-ignored secret.yml files are not needed.
+  # The inventory and every committed vars file load, and the collections' playbooks
+  # load against them. The collections are installed fresh from Galaxy on every run
+  # (no cache): with `>=` floors in requirements.yml that is the newest release, so a
+  # release whose playbooks no longer load fails here. What a role makes of your
+  # variables is only checked by a run (--check --diff). Fails until
+  # inventory/hosts.yml is committed. Nothing here connects to a host or reads the
+  # git-ignored secret.yml files; a committed ansible-vault file would need its
+  # password here.
   ansible:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -55,27 +62,26 @@ jobs:
       - name: Install ansible-core
         run: python -m pip install --upgrade ansible-core
       - name: Install the collections
-        # Galaxy resets connections now and then; retry rather than fail the PR.
+        # Galaxy resets connections now and then: retry those, and fail at once on
+        # anything else (a version the floors ask for that Galaxy does not have, say).
         run: |
           for attempt in 1 2 3; do
-            ansible-galaxy collection install -r requirements.yml -p collections && exit 0
-            echo "::warning::ansible-galaxy failed (attempt $attempt), retrying"
+            ansible-galaxy collection install -r requirements.yml -p collections 2>&1 | tee install.log && exit 0
+            grep -qiE 'connection (reset|refused|aborted)|timed? ?out|HTTP Error 5[0-9][0-9]' install.log \
+              || { echo "::error::ansible-galaxy collection install failed"; exit 1; }
+            ((attempt < 3)) || break
+            echo "::warning::ansible-galaxy hit a transient error (attempt $attempt), retrying"
             sleep $((attempt * 10))
           done
+          echo "::error::ansible-galaxy collection install failed 3 times"
           exit 1
-      # Ansible loads a group_vars/<name>/ directory in place of a group_vars/<name>.yml
-      # beside it, and never reads the file, without a word. Same for host_vars.
-      - name: No vars file shadowed by a vars directory
-        run: |
-          rc=0
-          for f in inventory/group_vars/* inventory/host_vars/*; do
-            [[ -f $f && -d ${f%.*} ]] || continue
-            echo "::error file=$f::${f%.*}/ shadows $f: Ansible reads only the directory. Move $f to ${f%.*}/main.yml"
-            rc=1
-          done
-          exit "$rc"
-      - name: Parse the inventory
-        run: ansible-inventory --graph
+      # The same check the pre-commit hook runs on your working tree.
+      - name: No vars source shadowed by another of the same name
+        run: scripts/check-vars-shadowing.sh
+      # --list, not --graph: it loads every group_vars/ and host_vars/ file too. Its
+      # output (your committed variables) is not printed.
+      - name: Load the inventory
+        run: ansible-inventory --list >/dev/null
       # decdn.node alone (cache nodes only)? Check decdn.node.node, decdn.node.backup
       # and decdn.node.decommission instead.
       - name: Syntax-check the playbooks

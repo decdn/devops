@@ -31,26 +31,34 @@ not from memory. A change to a role or playbook is made upstream in
    inventory or docs.
 3. **Show before deploying.** Present inventory changes; a playbook run is what mutates
    a host. Dry-run with `--check --diff` first, always pass `-l` (nothing here stops a
-   run from reaching every host the playbook targets, and a `-l` that matches none of
-   them exits 0 having done nothing), and read the PLAY RECAP.
+   run from reaching every host the playbook targets, but for decommission's
+   `decdn_decommission_max_hosts` cap, and a `-l` that matches none of them exits 0
+   having done nothing), and read the PLAY RECAP.
 
 ## Gotchas
 
-- **A vars directory shadows the file beside it.** Ansible reads
-  `group_vars/<group>/` *instead of* `group_vars/<group>.yml`, silently. To give a
-  group a `secret.yml`, first move its `<group>.yml` to `<group>/main.yml`; never keep
-  both. The same holds for `host_vars/`. CI fails on the pair.
+- **A vars directory shadows the file beside it.** Ansible reads one of
+  `group_vars/<group>/`, `<group>.yml`, `<group>.yaml` and `<group>.json` and ignores
+  the rest, silently. To give a group a `secret.yml`, first move its `<group>.yml` to
+  `<group>/main.yml`; never keep both. The same holds for `host_vars/`.
+  `scripts/check-vars-shadowing.sh` refuses such a pair (the pre-commit hook runs it on
+  the working tree, where the git-ignored directories exist; CI on the tracked files).
+- **Host vars beat group vars.** A `host_vars/<host>/secret.yml` overrides the same
+  variable in a group's `secret.yml`; a secret every host shares belongs in
+  `group_vars/all/` (move `all.yml` to `all/main.yml` first).
 - **No `ansible_user` by default.** Runs connect as the local `$USER`, the admin
-  account `baseline` creates. A fresh host's first run is `--tags baseline -u root` (or
-  the image's bootstrap user); root login is off after it. Never set `ansible_user` to
-  the bootstrap user.
-- **Ubuntu 25.10+ ships sudo-rs**, which breaks Ansible's become prompt: set
-  `ansible_become_exe: /usr/bin/sudo.ws` on those hosts (`inventory/hosts.yml` explains).
+  account `baseline` creates. A fresh host's first run connects once as root or the
+  image's bootstrap user (`-u root`; `README.md` § Run and the hosts example's header
+  say how); root login is off after it. Never set `ansible_user` to the bootstrap user.
+- **Ubuntu 25.10+ ships sudo-rs**, which hangs Ansible's become prompt, but only when
+  a become password is sent (`baseline_sudo_passwordless: false`; the default is
+  passwordless). Then set `ansible_become_exe: /usr/bin/sudo.ws` on that host
+  (`inventory/hosts-node.yml.example`'s header explains).
 - **Never run `decdn.node.decommission` on a host that also runs sponsord, a relay or
   a DNS server**: it removes the Grafana Alloy agent they share. Use
   `decdn.publisher.decommission`.
-- **Collections float on `>=` floors.** CI installs the newest release; a new release
-  can move the default decdn or sponsord release line. Read each collection's
+- **Until you pin `==X.Y.Z`, collections float on `>=` floors.** CI installs the
+  newest release; a new release can move the default decdn or sponsord release line. Read each collection's
   [CHANGELOG](https://github.com/decdn/devops/tree/main/ansible/galaxy) before an
   `--upgrade`.
 
@@ -72,8 +80,11 @@ commands.
 ## CI
 
 `.github/workflows/ci.yml`: `pre-commit` (every hook, every file), `ansible` (a fresh
-Galaxy install, the vars-shadowing check, `ansible-inventory --graph`, and
-`--syntax-check` of the site, backup and decommission playbooks), and `actionlint`.
+Galaxy install, `scripts/check-vars-shadowing.sh`, `ansible-inventory --list`, which
+loads every vars file, and `--syntax-check` of the site, backup and decommission
+playbooks), and `actionlint`. None of it checks what a role makes of your variables:
+only a `--check --diff` run does. A committed ansible-vault file would need its
+password in CI.
 
 ## This fleet
 

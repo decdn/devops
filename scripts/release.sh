@@ -7,8 +7,8 @@
 #                      [auto|patch|minor|major|X.Y.Z]
 #                      [--execute] [--no-verify] [--allow-unconventional]
 #
-#   node-collection       node-collection-vX.Y.Z       ansible/galaxy/node/{galaxy.yml,CHANGELOG.md}
-#   publisher-collection  publisher-collection-vX.Y.Z  ansible/galaxy/publisher/{galaxy.yml,CHANGELOG.md}
+#   node-collection       node-collection-vX.Y.Z       ansible/galaxy/node/{galaxy.yml,CHANGELOG.md} + the example floor
+#   publisher-collection  publisher-collection-vX.Y.Z  ansible/galaxy/publisher/{galaxy.yml,CHANGELOG.md} + the example floor
 #   chart                 decdn-node-X.Y.Z             charts/decdn-node/{Chart.yaml,CHANGELOG.md}
 #
 # A collection release also raises that collection's floor in
@@ -70,6 +70,7 @@ level="${level:-auto}"
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"
+example=""
 case "$artifact" in
   node-collection|publisher-collection)
     collection="${artifact%-collection}"
@@ -112,7 +113,7 @@ esac
 [[ -f "$manifest" && -f "$changelog" ]] || die "$manifest or $changelog is missing"
 # What the release commit changes.
 files=("$manifest" "$changelog")
-if [[ -n "${example:-}" ]]; then
+if [[ -n "$example" ]]; then
   [[ -f "$example" ]] || die "$example is missing"
   files+=("$example")
 fi
@@ -284,17 +285,19 @@ awk -v v="$version" '
 rc=0
 cmp -s "$manifest" "$tmp/manifest" || rc=$?
 ((rc == 1)) || die "could not set the version in $manifest"
-if [[ -n "${example:-}" ]]; then
+if [[ -n "$example" ]]; then
   # The `version:` under the collection's `- name:` entry, and only that one.
   awk -v name="decdn.$collection" -v v="$version" '
     /^[[:space:]]*- name:/ { mine = ($3 == name) }
     mine && /^[[:space:]]+version:/ { sub(/version:.*/, "version: \">=" v "\""); mine = 0; n++ }
     {print}
-    END {exit n == 1 ? 0 : 1}' "$example" > "$tmp/example" \
-    || die "$example has no version: under decdn.$collection"
+    END {print n + 0 > "/dev/stderr"; exit n == 1 ? 0 : 1}' "$example" > "$tmp/example" 2>"$tmp/example.n" \
+    || die "$example has $(cat "$tmp/example.n") version: lines under decdn.$collection, not one"
   rc=0
   cmp -s "$example" "$tmp/example" || rc=$?
-  ((rc == 1)) || die "could not set the decdn.$collection floor in $example"
+  ((rc != 0)) || die "$example already says decdn.$collection >=$version: was it edited by hand?"
+  ((rc == 1)) || die "could not compare $example with its new floor"
+
 fi
 
 show_diff() { # <file> <new copy>
@@ -306,7 +309,7 @@ echo "release $artifact: ${prev:+$prefix$prev -> }$tag"
 echo
 show_diff "$manifest" "$tmp/manifest"
 show_diff "$changelog" "$tmp/changelog"
-[[ -z "${example:-}" ]] || show_diff "$example" "$tmp/example"
+[[ -z "$example" ]] || show_diff "$example" "$tmp/example"
 echo
 # Until PUBLISH_ENABLED is true, a tag push only builds (RELEASING.md), but the version
 # is used up all the same: say so before it is.
@@ -332,7 +335,7 @@ fi
 written=1
 cp "$tmp/manifest" "$manifest"
 cp "$tmp/changelog" "$changelog"
-[[ -z "${example:-}" ]] || cp "$tmp/example" "$example"
+[[ -z "$example" ]] || cp "$tmp/example" "$example"
 scripts/check-release-version.sh "$tag" || die "the release gate refused $tag: nothing was committed"
 if [[ "$artifact" == "chart" ]]; then
   scripts/chart-artifacthub-changes.py "$changelog" "$version" >/dev/null \

@@ -4,12 +4,12 @@
 #   pip install pre-commit && pre-commit install   # one-time install
 #   pre-commit run --all-files                     # run on all files
 #
-# CI runs the same hooks, then parses the inventory and syntax-checks the
+# CI runs the same hooks; beside them, it loads the inventory and syntax-checks the
 # collections' playbooks against it (.github/workflows/ci.yml).
 minimum_pre_commit_version: "3.5.0"
 default_install_hook_types: [pre-commit]
 
-# The installed collections.
+# The installed collections, and ansible's .ansible/ working directory.
 exclude: >-
   (?x)^(
     collections/|
@@ -27,11 +27,19 @@ repos:
       - id: check-merge-conflict
       - id: check-added-large-files
         args: [--maxkb=512]
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
       - id: mixed-line-ending
         args: [--fix=lf]
       - id: check-yaml
         args: [--unsafe]   # tolerate custom/!vault tags; syntax check only
       - id: check-json
+
+  # ── Bash ───────────────────────────────────────────────────────────────────
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.11.0
+    hooks:
+      - id: shellcheck
 
   # ── Markdown (relaxed ruleset; see .markdownlint-cli2.yaml) ────────────────
   - repo: https://github.com/DavidAnson/markdownlint-cli2
@@ -39,8 +47,8 @@ repos:
     hooks:
       - id: markdownlint-cli2
 
-  # ── YAML lint for the Ansible inputs (.yamllint) ───────────────────────────
-  # *.yml.example templates don't match (they end in .example) and are skipped.
+  # ── Local: yamllint for the Ansible inputs (.yamllint), vars shadowing ─────
+  # *.yml.example templates don't match yamllint's files (they end in .example).
   - repo: local
     hooks:
       - id: yamllint-ansible
@@ -49,3 +57,12 @@ repos:
         language: python
         additional_dependencies: ["yamllint==1.35.1"]
         files: ^(inventory/.*|requirements)\.ya?ml$
+
+      # On your working tree, so it sees the git-ignored secret.yml files (and their
+      # directories) that CI never does.
+      - id: vars-shadowing
+        name: no vars source shadowed by another of the same name
+        entry: scripts/check-vars-shadowing.sh
+        language: script
+        pass_filenames: false
+        always_run: true

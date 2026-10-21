@@ -1,7 +1,7 @@
 ---
 extends: default
 rules:
-  # Keep compatible with ansible-lint's embedded yamllint requirements.
+  # Compatible with ansible-lint's embedded yamllint requirements, should you add it.
   comments-indentation: false
   octal-values:
     forbid-implicit-octal: true

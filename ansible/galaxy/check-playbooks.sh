@@ -13,9 +13,10 @@
 #     collection playbook: the firewall holes must come out as they do from
 #     ansible/playbooks/, so the shipped group_vars/ load and agree;
 #   - runs examples/collection-fleet as a private copy of it runs (its ansible.cfg,
-#     the collection's hosts example as inventory/hosts.yml): the inventory parses,
-#     and every decdn.<collection>.<playbook> its docs and CI name ships and passes a
-#     syntax check. Its tracked files only, so stage a new one first.
+#     the collection's hosts example as inventory/hosts.yml): the inventory and its
+#     vars files load, and every decdn.<collection>.<playbook> its README, AGENTS.md
+#     and CI name ships and passes a syntax check. Its tracked files only, so stage a
+#     new one first.
 # galaxy-importer cannot do the first: its ansible-lint sees one collection, outside
 # any collections path, so it only warns that it cannot find the roles.
 # The roles' own dependencies (devsec.hardening, ansible.posix) come from `make deps`
@@ -55,7 +56,9 @@ export ANSIBLE_DEPRECATION_WARNINGS=0
 # file from the caller.
 mkdir "$work/no-roles"
 export ANSIBLE_ROLES_PATH="$work/no-roles"
-unset ANSIBLE_CONFIG
+# No inventory from the caller either: the example's ansible.cfg names its own, and
+# fails on one that does not parse.
+unset ANSIBLE_CONFIG ANSIBLE_INVENTORY ANSIBLE_INVENTORY_UNPARSED_FAILED ANSIBLE_INVENTORY_ANY_UNPARSED_IS_FAILED
 
 inventory="$ansible_dir/tests/firewall-holes/inventory.yml"
 playbooks="$work/ansible_collections/decdn/$collection/playbooks"
@@ -72,9 +75,11 @@ echo "ok   decdn.$collection: $n playbooks pass a syntax check by FQCN"
 
 # examples/collection-fleet, as a private copy of it runs: its tracked files, its
 # ansible.cfg (read from the copy's directory; ANSIBLE_COLLECTIONS_PATH stands in for
-# its collections/), the collection's hosts example as inventory/hosts.yml. Every
-# decdn.<collection>.<playbook> its docs and CI name must ship, and passes a syntax
-# check against that inventory, after the inventory parses as its CI parses it.
+# its collections/), the collection's hosts example as inventory/hosts.yml. The
+# inventory loads as its CI loads it (vars files included) and holds the hosts
+# example's groups, so a cfg that stopped being read (no inventory: an implicit
+# localhost, exit 0) fails here. Every decdn.<collection>.<playbook> its README,
+# AGENTS.md and CI name must ship, and passes a syntax check against that inventory.
 example="$ansible_dir/../examples/collection-fleet"
 fleet="$work/fleet"
 mkdir "$fleet"
@@ -82,10 +87,21 @@ git -C "$example" ls-files -z | (cd "$example" && xargs -0 cp --parents -t "$fle
   || { echo "check-playbooks.sh: could not copy examples/collection-fleet" >&2; exit 1; }
 hosts_example="hosts-$collection.yml.example"
 cp "$fleet/inventory/$hosts_example" "$fleet/inventory/hosts.yml"
-named="$(cd "$fleet" && grep -ohE "decdn\.$collection\.[a-z_]+" README.md AGENTS.md .github/workflows/ci.yml | sort -u)"
+docs=(README.md AGENTS.md .github/workflows/ci.yml)
+for f in "${docs[@]}"; do
+  [[ -f "$fleet/$f" ]] || { echo "check-playbooks.sh: examples/collection-fleet/$f is not tracked (git add it)" >&2; exit 1; }
+done
+# grep exits 1 on no match: that is the check below, not a failure here.
+named="$(cd "$fleet" && { grep -ohE "decdn\.$collection\.[a-z_]+" "${docs[@]}" || (($? == 1)); } | sort -u)"
 [[ -n $named ]] || { echo "check-playbooks.sh: examples/collection-fleet names no decdn.$collection playbook" >&2; exit 1; }
-(cd "$fleet" && ansible-inventory --graph </dev/null >"$work/inventory.log" 2>&1) \
-  || { cat "$work/inventory.log" >&2; echo "check-playbooks.sh: examples/collection-fleet's $hosts_example does not parse" >&2; exit 1; }
+(cd "$fleet" && ansible-inventory --list </dev/null >"$work/inventory.json" 2>"$work/inventory.log") \
+  || { cat "$work/inventory.log" >&2; echo "check-playbooks.sh: examples/collection-fleet's $hosts_example does not load" >&2; exit 1; }
+groups=(decdn_nodes)
+[[ $collection == publisher ]] && groups+=(decdn_origin_nodes)
+for g in "${groups[@]}"; do
+  grep -qF "\"$g\": {" "$work/inventory.json" \
+    || { echo "check-playbooks.sh: examples/collection-fleet's inventory has no $g group: was its ansible.cfg read?" >&2; exit 1; }
+done
 n=0
 for fqcn in $named; do
   [[ -f "$playbooks/${fqcn##*.}.yml" ]] \
@@ -94,5 +110,5 @@ for fqcn in $named; do
     || { cat "$work/syntax.log" >&2; echo "check-playbooks.sh: $fqcn fails its syntax check in examples/collection-fleet" >&2; exit 1; }
   n=$((n + 1))
 done
-echo "ok   examples/collection-fleet with $hosts_example: the inventory parses and the $n decdn.$collection playbooks it names pass a syntax check"
+echo "ok   examples/collection-fleet with $hosts_example: the inventory loads and the $n decdn.$collection playbooks it names pass a syntax check"
 "$ansible_dir/tests/firewall-holes/check.sh" "$playbooks"

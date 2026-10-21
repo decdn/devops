@@ -75,7 +75,9 @@ would commit, and changes no file. The script:
    `charts/decdn-node/Chart.yaml`. A collection release also raises that collection's
    floor in `examples/collection-fleet/requirements.yml` to the new version, so a fleet
    copied from the example starts from it (`make test-scripts` refuses a PR where they
-   differ).
+   differ). Until the tag's publish job uploads it, that floor names a version Galaxy
+   does not have, and a copy of the example cannot install: so a publish that fails
+   or waits is one to finish promptly.
    The chart's `appVersion` and its `artifacthub.io/images` tag already follow the
    role's `decdn_node_version` (`make test-scripts` refuses a PR where they differ), so
    a new decdn line is a chart change too: release the chart. A decdn patch release

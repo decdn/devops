@@ -429,7 +429,8 @@ jobs:
         run: make test-scripts
 
   # Lint the workflow files themselves, and the one examples/collection-fleet ships
-  # (actionlint finds only .github/workflows/ on its own).
+  # (actionlint finds only .github/workflows/ on its own). Named paths replace its own
+  # discovery: every workflow here is *.yml, and a *.yaml one would go unlinted.
   actionlint:
     runs-on: ubuntu-latest
     timeout-minutes: 10         # ~15s in practice

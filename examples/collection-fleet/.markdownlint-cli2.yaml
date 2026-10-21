@@ -1,5 +1,5 @@
 # markdownlint-cli2 config — a relaxed ruleset that still catches structural issues
-# (broken links, empty/duplicate headings, multiple H1s, …). The disabled rules are
+# (link fragments that match no heading, empty/duplicate headings, multiple H1s, …). The disabled rules are
 # purely stylistic.
 config:
   MD013: false                 # line length — prose/tables run long
