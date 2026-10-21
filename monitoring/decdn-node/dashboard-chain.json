@@ -2438,7 +2438,7 @@
       },
       "title": "On-chain transaction outcomes",
       "type": "timeseries",
-      "description": "Every node transaction counts once by outcome. A receipt wait that fails or times out falls back to fetching the receipt by hash, and a receipt found there counts as landed or reverted. receipt failed and timeout are the transactions still unconfirmed after that fetch; they can still mine, and their tx hash is in the warn! line. receipt recovered is not an outcome: it counts the waits the fetch by hash resolved, which points at a lagging RPC provider.",
+      "description": "Every node transaction counts once by outcome. A receipt wait that fails or times out falls back to fetching the receipt by hash, and a receipt found there counts as landed or reverted. receipt failed and timeout are the transactions still unconfirmed after that fetch; they can still mine, and their tx hash is in the warn! line. maybe broadcast is a send that failed with no tx hash (a timeout, a reset, an HTTP 5xx, or an `already known`, `nonce too low` or `replacement transaction underpriced` answer): it can be in a mempool or have mined, and the claims stay for the next sweep (decdn after v0.2; DecdnRedemptionMaybeBroadcast). receipt recovered is not an outcome: it counts the waits the fetch by hash resolved, which points at a lagging RPC provider.",
       "targets": [
         {
           "datasource": {
@@ -2472,8 +2472,17 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(decdn_onchain_tx_receipt_failed_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "expr": "sum(rate(decdn_onchain_tx_maybe_broadcast_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "D",
+          "legendFormat": "maybe broadcast"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_onchain_tx_receipt_failed_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "E",
           "legendFormat": "receipt failed"
         },
         {
@@ -2482,7 +2491,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "expr": "sum(rate(decdn_onchain_tx_timeout_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
-          "refId": "E",
+          "refId": "F",
           "legendFormat": "timeout"
         },
         {
@@ -2491,7 +2500,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "expr": "sum(rate(decdn_onchain_tx_receipt_recovered_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
-          "refId": "F",
+          "refId": "G",
           "legendFormat": "receipt recovered"
         }
       ],
@@ -3166,7 +3175,7 @@
         "y": 83
       },
       "id": 38,
-      "description": "1 while this node holds its slot for an openPool or a topUp whose outcome the chain has not shown (the topUp hold is decdn v0.2): the submit failed in transport or the receipt could not be read, and the transaction may still mine, so the node sends no other transaction of that kind until a receipt arrives, the account's nonce passes it, or a re-send shows the pool closed. A hold that stays means the RPC cannot answer, a pending transaction holds the nonce or an earlier one, or every re-send at that nonce fails (the wallet cannot fund the amount or the gas); the daemon's repeating warning names the last failure in its `last` field. Do not restart a node holding a topUp slot: the restart forgets the hold, and the node may escrow a second topUp into its own pool. DecdnBuyerTopupUnresolved fires after 15m."
+      "description": "1 while this node holds its slot for an openPool or a topUp whose outcome the chain has not shown (the topUp hold is decdn v0.2): the submit got no tx hash or the receipt could not be read, and the transaction may still mine. A submit gets no tx hash when the transport fails, or when the RPC node already holds the transaction (`already known`), counts its nonce as spent (`nonce too low`) or holds another transaction of this key at that nonce (`replacement transaction underpriced`); each can answer a gateway that retried a send another backend accepted. Meanwhile the node sends no other transaction of that kind until a receipt arrives, the account's nonce passes it, or a re-send shows the pool closed. A hold that stays means the RPC cannot answer, a pending transaction holds the nonce or an earlier one, or every re-send at that nonce fails (the wallet cannot fund the amount or the gas); the daemon's repeating warning names the last failure in its `last` field. Do not restart a node holding a topUp slot: the restart forgets the hold, and the node may escrow a second topUp into its own pool. DecdnBuyerTopupUnresolved fires after 15m."
     },
     {
       "datasource": {
