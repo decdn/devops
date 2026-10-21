@@ -12,6 +12,11 @@ lifecycle guards included), and this repository holds only your inventory.
 | `ansible.cfg` | decdn/devops's `ansible/ansible.cfg`, minus `roles_path`, failing on an inventory that does not parse |
 | `.gitignore` | keeps the installed collections, per-host secrets and backups out of git |
 | `inventory/` | the inventory templates: `hosts-node.yml.example` and `hosts-publisher.yml.example`, with their `group_vars/` and `host_vars/` |
+| `.github/workflows/ci.yml` | CI: the pre-commit hooks; a fresh Galaxy install that loads your inventory and syntax-checks the playbooks against it; actionlint ([Checks](#checks)) |
+| `.pre-commit-config.yaml`, `.yamllint`, `.markdownlint-cli2.yaml` | the lint gate: hygiene, shellcheck, yamllint over `inventory/` and `requirements.yml`, markdownlint, and the vars-shadowing check |
+| `scripts/check-vars-shadowing.sh` | refuses two vars sources of the same name in `group_vars/` or `host_vars/`, which Ansible would silently reduce to one |
+| `.github/dependabot.yml` | weekly bumps of the pinned actions and hook revs (not of the collections) |
+| `AGENTS.md`, `CLAUDE.md` | guidance for AI coding agents; fill in its *This fleet* section |
 
 The `inventory/` templates are decdn/devops's `ansible/inventory/` ones, with the hosts
 examples' headers written for this layout (decdn/devops's `make test-scripts` keeps
@@ -36,6 +41,22 @@ on-host secrets), and commit them. In `hosts-publisher.yml.example` only the ori
 live: uncomment the groups you run. Rename `host_vars/decdn-node-1/` (and `origin-1/`)
 to your hosts, and keep secrets in the git-ignored `host_vars/<host>/secret.yml`
 (copied from its `secret.yml.example`).
+
+A secret every host of a group shares (one `decdn_rpc_url` for every node, say) can go
+once in the git-ignored `group_vars/<group>/secret.yml` instead, and one for every host
+(a `grafana_alloy_api_token` the sponsord and relay hosts use too) in
+`group_vars/all/secret.yml`. Move the group's file into that directory first:
+
+```bash
+mkdir inventory/group_vars/decdn_nodes
+git mv inventory/group_vars/decdn_nodes.yml inventory/group_vars/decdn_nodes/main.yml
+```
+
+Ansible reads a `group_vars/<group>/` directory *in place of* a `group_vars/<group>.yml`
+beside it and never says so, so keeping both silently drops every setting in the file
+(the same holds for `host_vars/`, and for a `.yml` beside a `.yaml`).
+`scripts/check-vars-shadowing.sh` refuses such a pair, from the pre-commit hook and
+from CI. A host's own `secret.yml` still wins over the group's for the same variable.
 
 ## Run
 
@@ -92,8 +113,31 @@ playbook for the host's group, and read the PLAY RECAP:
 The Makefile's third check, an inventory that fails to parse, is `ansible.cfg`'s
 `unparsed_is_failed` here.
 
+## Checks
+
+```bash
+pip install pre-commit && pre-commit install   # once: the hooks run on every commit
+pre-commit run --all-files                     # hygiene, yamllint, markdownlint
+```
+
+CI (`.github/workflows/ci.yml`) runs on pull requests and pushes to `main`: the same
+hooks, and beside them an `ansible` job that installs the collections fresh from
+Galaxy, runs the vars-shadowing check, loads the inventory with every vars file
+(`ansible-inventory --list`) and syntax-checks `decdn.publisher.site`, `.backup` and
+`.decommission` against it (swap in the `decdn.node.*` ones if you installed
+`decdn.node` alone). That job fails until `inventory/hosts.yml` is committed. It
+installs the newest releases the floors allow, so a collection release whose playbooks
+no longer load fails your next PR. What a role makes of your variables (a renamed or
+newly required one) only a run shows: dry-run with `--check --diff` after an upgrade.
+
 ## Upgrade
 
-Raise the versions in `requirements.yml` (pin `==X.Y.Z` once the fleet runs), read
-each collection's CHANGELOG, then `ansible-galaxy collection install -r
-requirements.yml -p collections --upgrade` and dry-run before deploying.
+The floors in `requirements.yml` are the newest tagged release of each collection when
+this directory was copied, so a fresh install takes the newest anyway. (A floor is
+raised when its release is tagged, a little before Galaxy publishes it: if the install
+cannot find that version, lower the floor to the newest one on Galaxy.) Once the fleet runs,
+pin exact versions (`==X.Y.Z`) and raise them deliberately: read each collection's
+[CHANGELOG](https://github.com/decdn/devops/tree/main/ansible/galaxy) (a release can
+move the default decdn or sponsord release line, or roll out host changes), then
+`ansible-galaxy collection install -r requirements.yml -p collections --upgrade` and
+dry-run before deploying.

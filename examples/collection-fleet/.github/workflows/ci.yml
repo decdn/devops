@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege by default; jobs widen only what they need.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# bash -eo pipefail, not the implicit `bash -e`: a failure inside a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
+# Third-party actions are pinned to a full commit SHA (a re-pointed tag can ship
+# malicious code). The trailing comment records the human-readable version;
+# .github/dependabot.yml bumps them.
+jobs:
+  # Every pre-commit hook on every file: hygiene, markdownlint and yamllint. The same
+  # gate `pre-commit run --all-files` runs locally.
+  pre-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10         # hook environments are cached; ~1m cold
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install pre-commit
+        run: python -m pip install --upgrade pre-commit
+      # Hook environments (node for markdownlint, yamllint's virtualenv) keyed on the
+      # config that pins them.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+      - name: Run every hook on every file
+        run: pre-commit run --all-files --show-diff-on-failure
+
+  # The inventory and every committed vars file load, and the collections' playbooks
+  # load against them. The collections are installed fresh from Galaxy on every run
+  # (no cache): with `>=` floors in requirements.yml that is the newest release, so a
+  # release whose playbooks no longer load fails here. What a role makes of your
+  # variables is only checked by a run (--check --diff). Fails until
+  # inventory/hosts.yml is committed. Nothing here connects to a host or reads the
+  # git-ignored secret.yml files; a committed ansible-vault file would need its
+  # password here.
+  ansible:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install ansible-core
+        run: python -m pip install --upgrade ansible-core
+      - name: Install the collections
+        # Galaxy resets connections now and then: retry those, and fail at once on
+        # anything else (a version the floors ask for that Galaxy does not have, say).
+        run: |
+          for attempt in 1 2 3; do
+            ansible-galaxy collection install -r requirements.yml -p collections 2>&1 | tee install.log && exit 0
+            grep -qiE 'connection (reset|refused|aborted)|timed? ?out|HTTP Error 5[0-9][0-9]' install.log \
+              || { echo "::error::ansible-galaxy collection install failed"; exit 1; }
+            ((attempt < 3)) || break
+            echo "::warning::ansible-galaxy hit a transient error (attempt $attempt), retrying"
+            sleep $((attempt * 10))
+          done
+          echo "::error::ansible-galaxy collection install failed 3 times"
+          exit 1
+      # The same check the pre-commit hook runs on your working tree.
+      - name: No vars source shadowed by another of the same name
+        run: scripts/check-vars-shadowing.sh
+      # --list, not --graph: it loads every group_vars/ and host_vars/ file too. Its
+      # output (your committed variables) is not printed.
+      - name: Load the inventory
+        run: ansible-inventory --list >/dev/null
+      # decdn.node alone (cache nodes only)? Check decdn.node.node, decdn.node.backup
+      # and decdn.node.decommission instead.
+      - name: Syntax-check the playbooks
+        run: |
+          for pb in decdn.publisher.site decdn.publisher.backup decdn.publisher.decommission; do
+            ansible-playbook "$pb" --syntax-check
+          done
+
+  # Lint the workflow files themselves.
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10         # ~15s in practice
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: reviewdog/action-actionlint@419a49378266e892f40c773b4f2fc6de9aa87499 # v1.80.4
+        with:
+          reporter: github-check
+          fail_on_error: true

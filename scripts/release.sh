@@ -7,9 +7,13 @@
 #                      [auto|patch|minor|major|X.Y.Z]
 #                      [--execute] [--no-verify] [--allow-unconventional]
 #
-#   node-collection       node-collection-vX.Y.Z       ansible/galaxy/node/{galaxy.yml,CHANGELOG.md}
-#   publisher-collection  publisher-collection-vX.Y.Z  ansible/galaxy/publisher/{galaxy.yml,CHANGELOG.md}
+#   node-collection       node-collection-vX.Y.Z       ansible/galaxy/node/{galaxy.yml,CHANGELOG.md} + the example floor
+#   publisher-collection  publisher-collection-vX.Y.Z  ansible/galaxy/publisher/{galaxy.yml,CHANGELOG.md} + the example floor
 #   chart                 decdn-node-X.Y.Z             charts/decdn-node/{Chart.yaml,CHANGELOG.md}
+#
+# A collection release also raises that collection's floor in
+# examples/collection-fleet/requirements.yml to the new version, so a fleet copied
+# from the example starts from it (make test-scripts checks they agree).
 #
 # Without --execute it is a dry run: it prints the new tag and the diff it would
 # commit, and changes no file. The level defaults to `auto`, the bump git-cliff
@@ -35,7 +39,7 @@
 # --execute runs scripts/check-release-version.sh on the result (and, for the chart,
 # scripts/chart-artifacthub-changes.py), then the artifact's make target (make
 # galaxy-check-<collection> or make lint-helm) unless --no-verify: a tag that fails its workflow
-# burns the version. If any of that or the commit fails, both files are restored. Run
+# burns the version. If any of that or the commit fails, the files are restored. Run
 # it on an up-to-date, clean main, with git configured to sign (user.signingkey), and
 # with a bypass of the main ruleset (its PR rule and its required status checks): the
 # release commit goes straight to main.
@@ -66,6 +70,7 @@ level="${level:-auto}"
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"
+example=""
 case "$artifact" in
   node-collection|publisher-collection)
     collection="${artifact%-collection}"
@@ -73,6 +78,7 @@ case "$artifact" in
     prefix="$artifact-v"
     manifest="$overlay/galaxy.yml"
     changelog="$overlay/CHANGELOG.md"
+    example="examples/collection-fleet/requirements.yml"
     workflow="release-collection.yml"
     check=(make -C ansible "galaxy-check-$collection")
     # What `galaxy/build.sh <collection>` ships: the roles in its roles.txt, the
@@ -105,16 +111,22 @@ case "$artifact" in
   *) usage ;;
 esac
 [[ -f "$manifest" && -f "$changelog" ]] || die "$manifest or $changelog is missing"
+# What the release commit changes.
+files=("$manifest" "$changelog")
+if [[ -n "$example" ]]; then
+  [[ -f "$example" ]] || die "$example is missing"
+  files+=("$example")
+fi
 
 tmp="$(mktemp -d)"
 written=0 committed=0 pushed=0 reported=0
 cleanup() {
-  # Once --execute has written the two files, any failure before the release commit
+  # Once --execute has written the files, any failure before the release commit
   # exists puts them back. Nothing is restored before that: a refusal never touches
   # the operator's own edits.
   if ((written == 1 && committed == 0)); then
-    git checkout -q -- "$manifest" "$changelog" \
-      || echo "release: could not restore $manifest and $changelog: run git checkout -- $manifest $changelog" >&2
+    git checkout -q -- "${files[@]}" \
+      || echo "release: could not restore ${files[*]}: run git checkout -- ${files[*]}" >&2
   fi
   # Stopped (Ctrl-C, say) between the release commit and the end of the push.
   if ((committed == 1 && pushed == 0 && reported == 0)); then
@@ -273,6 +285,20 @@ awk -v v="$version" '
 rc=0
 cmp -s "$manifest" "$tmp/manifest" || rc=$?
 ((rc == 1)) || die "could not set the version in $manifest"
+if [[ -n "$example" ]]; then
+  # The `version:` under the collection's `- name:` entry, and only that one.
+  awk -v name="decdn.$collection" -v v="$version" '
+    /^[[:space:]]*- name:/ { mine = ($3 == name) }
+    mine && /^[[:space:]]+version:/ { sub(/version:.*/, "version: \">=" v "\""); mine = 0; n++ }
+    {print}
+    END {print n + 0 > "/dev/stderr"; exit n == 1 ? 0 : 1}' "$example" > "$tmp/example" 2>"$tmp/example.n" \
+    || die "$example has $(cat "$tmp/example.n") version: lines under decdn.$collection, not one"
+  rc=0
+  cmp -s "$example" "$tmp/example" || rc=$?
+  ((rc != 0)) || die "$example already says decdn.$collection >=$version: was it edited by hand?"
+  ((rc == 1)) || die "could not compare $example with its new floor"
+
+fi
 
 show_diff() { # <file> <new copy>
   local rc=0
@@ -283,6 +309,7 @@ echo "release $artifact: ${prev:+$prefix$prev -> }$tag"
 echo
 show_diff "$manifest" "$tmp/manifest"
 show_diff "$changelog" "$tmp/changelog"
+[[ -z "$example" ]] || show_diff "$example" "$tmp/example"
 echo
 # Until PUBLISH_ENABLED is true, a tag push only builds (RELEASING.md), but the version
 # is used up all the same: say so before it is.
@@ -298,7 +325,7 @@ if ((execute == 0)); then
   echo "  scripts/check-release-version.sh $tag"
   [[ "$artifact" == "chart" ]] && echo "  scripts/chart-artifacthub-changes.py $changelog $version"
   ((verify == 1)) && echo "  ${check[*]}"
-  echo "  git commit -S -m 'chore(release): $tag' -- $manifest $changelog"
+  echo "  git commit -S -m 'chore(release): $tag' -- ${files[*]}"
   echo "  git tag -s $tag -m $tag"
   echo "  git push --atomic origin main $tag"
   exit 0
@@ -308,6 +335,7 @@ fi
 written=1
 cp "$tmp/manifest" "$manifest"
 cp "$tmp/changelog" "$changelog"
+[[ -z "$example" ]] || cp "$tmp/example" "$example"
 scripts/check-release-version.sh "$tag" || die "the release gate refused $tag: nothing was committed"
 if [[ "$artifact" == "chart" ]]; then
   scripts/chart-artifacthub-changes.py "$changelog" "$version" >/dev/null \
@@ -317,7 +345,7 @@ if ((verify == 1)); then
   "${check[@]}" || die "${check[*]} failed: nothing was committed"
 fi
 
-git commit --quiet -S -m "chore(release): $tag" -- "$manifest" "$changelog" \
+git commit --quiet -S -m "chore(release): $tag" -- "${files[@]}" \
   || die "git commit failed (a pre-commit hook, or signing): nothing was committed"
 committed=1
 git tag -s "$tag" -m "$tag" || { reported=1; die "tagging failed after the release commit. To undo: git reset --hard origin/main"; }

@@ -39,8 +39,11 @@ jobs:
           filters: |
             # ci.yml is listed because the ansible jobs' cache wiring lives here, so a
             # change to it must re-run them — same reason the helm filter claims it.
+            # galaxy-build runs examples/collection-fleet against the built
+            # collections (galaxy/check-playbooks.sh), so the example counts too.
             ansible:
               - 'ansible/**'
+              - 'examples/collection-fleet/**'
               - '.github/workflows/ci.yml'
             # The chart shares the schema-key inventory and checker with molecule,
             # and renders monitoring/decdn-node/ through a symlink; lint-helm also
@@ -425,7 +428,9 @@ jobs:
       - name: Script and guard tests
         run: make test-scripts
 
-  # Lint the workflow files themselves.
+  # Lint the workflow files themselves, and the one examples/collection-fleet ships
+  # (actionlint finds only .github/workflows/ on its own). Named paths replace its own
+  # discovery: every workflow here is *.yml, and a *.yaml one would go unlinted.
   actionlint:
     runs-on: ubuntu-latest
     timeout-minutes: 10         # ~15s in practice
@@ -438,3 +443,4 @@ jobs:
         with:
           reporter: github-check
           fail_on_error: true
+          actionlint_flags: .github/workflows/*.yml examples/collection-fleet/.github/workflows/*.yml

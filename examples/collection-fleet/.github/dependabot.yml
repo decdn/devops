@@ -1,0 +1,36 @@
+---
+# Dependabot — keeps the SHA-pinned GitHub Actions and the pre-commit hook revs
+# current.
+#
+#   github-actions  rewrites `uses: owner/repo@<sha> # vX.Y.Z` to the new sha + comment
+#   pre-commit      bumps the `rev:` of each repo in .pre-commit-config.yaml
+#
+# Ansible Galaxy (requirements.yml) is not a Dependabot ecosystem.
+#
+# NOT covered, bump manually:
+#   - the deCDN collections in requirements.yml (read each CHANGELOG first)
+#   - the local yamllint hook's `additional_dependencies` pin
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci          # conventional commits -> "ci(deps): ..."
+      include: scope
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      pre-commit-hooks:
+        patterns: ["*"]

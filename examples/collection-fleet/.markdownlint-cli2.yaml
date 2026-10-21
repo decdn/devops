@@ -1,0 +1,19 @@
+# markdownlint-cli2 config — a relaxed ruleset that still catches structural issues
+# (link fragments that match no heading, empty/duplicate headings, multiple H1s, …). The disabled rules are
+# purely stylistic.
+config:
+  MD013: false                 # line length — prose/tables run long
+  MD033: false                 # inline HTML
+  MD041: false                 # first line need not be a top-level heading
+  MD040: false                 # bare code fences (ASCII trees) are fine
+  MD031: false                 # blank lines around fences
+  MD022: false                 # blank lines around headings
+  MD049: false                 # emphasis style (underscore vs asterisk)
+  MD060: false                 # table pipe spacing/alignment
+  MD004: false                 # unordered list marker style (-, +, *)
+  MD024:
+    siblings_only: true        # duplicate headings only flagged within a section
+
+# The installed collections' docs are excluded at the pre-commit layer too.
+ignores:
+  - "collections/**"

@@ -432,6 +432,111 @@ fleet_refuses "a filled-in hosts.yml git would track" "hosts.yml is not git-igno
 fleet_fixture; echo "# header only" | cat - "$fleet_inv/hosts-node.yml.example" >"$work/h" && mv "$work/h" "$fleet_inv/hosts-node.yml.example"
 expect 0 "fleet inventory check allows a header-only edit" fleet_check_fixture
 
+# --- examples/collection-fleet's pins ------------------------------------------------
+# fleet_pins_check <root>: requirements.yml's floor for each collection is that
+# collection's galaxy.yml version (scripts/release.sh moves both in the release
+# commit), and the example's CI and hooks pin what this repo's own do: every `uses:`
+# in its ci.yml is pinned to a commit SHA this repo's ci.yml uses, and every pre-commit
+# `rev:` and the yamllint pin is this repo's for the same hook repo. This repo's
+# Dependabot bumps our action SHAs and hook revs (the yamllint pin is bumped by hand);
+# its PR fails here until the example is moved too.
+fleet_pins_check() {
+  local root="$1" ex="$1/examples/collection-fleet" c f floor ver line repo_url rev mine theirs n=0
+  for c in node publisher; do
+    floor="$(awk -v name="decdn.$c" '/^[[:space:]]*- name:/ { mine = ($3 == name) }
+      mine && /^[[:space:]]+version:/ { gsub(/.*version:[[:space:]]*"?>=|".*/, ""); print; exit }' "$ex/requirements.yml")"
+    ver="$(sed -nE 's/^version:[[:space:]]*"?([^"#[:space:]]+)"?.*/\1/p' "$root/ansible/galaxy/$c/galaxy.yml")"
+    [[ -n $floor && -n $ver ]] || fail "could not read decdn.$c's floor ('$floor') or galaxy.yml version ('$ver')"
+    [[ $floor == "$ver" ]] \
+      || fail "examples/collection-fleet/requirements.yml: decdn.$c >=$floor, but its galaxy.yml is $ver (scripts/release.sh moves both)"
+  done
+  while IFS= read -r line; do
+    [[ $line =~ @[0-9a-f]{40}$ ]] \
+      || fail "examples/collection-fleet/.github/workflows/ci.yml uses $line, not pinned to a commit SHA"
+    grep -qF -- "uses: $line" "$root/.github/workflows/ci.yml" \
+      || fail "examples/collection-fleet/.github/workflows/ci.yml uses $line, which .github/workflows/ci.yml does not: pin the same SHA"
+    n=$((n + 1))
+  done < <(sed -nE 's/^[[:space:]]*(- )?uses:[[:space:]]*([^[:space:]#]+).*/\2/p' "$ex/.github/workflows/ci.yml")
+  ((n >= 3)) || fail "found $n pinned actions in examples/collection-fleet/.github/workflows/ci.yml"
+  # "<repo> <rev>" for each hook repo with a rev, and "yamllint <pin>".
+  hook_pins() {
+    awk '/^[[:space:]]*- repo:/ {r=$3} /^[[:space:]]+rev:/ {print r, $2}' "$1"
+    sed -nE 's/.*additional_dependencies:.*"(yamllint==[^"]+)".*/yamllint \1/p' "$1"
+  }
+  mine="$(hook_pins "$root/.pre-commit-config.yaml")"
+  theirs="$(hook_pins "$ex/.pre-commit-config.yaml")"
+  # The yamllint pin is read in one spelling (a one-line, double-quoted list): one
+  # written another way would drop out of the comparison unseen.
+  for f in "$root/.pre-commit-config.yaml" "$ex/.pre-commit-config.yaml"; do
+    [[ "$(grep -c 'yamllint==' "$f")" == "$(hook_pins "$f" | grep -c '^yamllint ')" ]] \
+      || fail "$f: a yamllint== pin not in the form additional_dependencies: [\"yamllint==X\"]"
+  done
+  grep -q '^yamllint ' <<<"$theirs" || fail "examples/collection-fleet/.pre-commit-config.yaml pins no yamllint"
+  n=0
+  while read -r repo_url rev; do
+    grep -q -- "^$repo_url " <<<"$mine" \
+      || fail "examples/collection-fleet/.pre-commit-config.yaml uses $repo_url, a hook repo this repo does not"
+    grep -qxF -- "$repo_url $rev" <<<"$mine" \
+      || fail "examples/collection-fleet/.pre-commit-config.yaml pins $repo_url $rev, not this repo's $(grep -F -- "$repo_url " <<<"$mine" | cut -d' ' -f2 | xargs)"
+    n=$((n + 1))
+  done <<<"$theirs"
+  ((n >= 4)) || fail "found $n hook pins in examples/collection-fleet/.pre-commit-config.yaml"
+  pass "examples/collection-fleet pins the collections' releases, and this repo's actions and hook revs"
+}
+fleet_pins_check "$repo"
+pins_fixture() {
+  local f
+  rm -rf "$work/pins" && mkdir -p "$work/pins"
+  for f in ansible/galaxy/node/galaxy.yml ansible/galaxy/publisher/galaxy.yml .github/workflows/ci.yml \
+      .pre-commit-config.yaml examples/collection-fleet/requirements.yml \
+      examples/collection-fleet/.github/workflows/ci.yml examples/collection-fleet/.pre-commit-config.yaml; do
+    mkdir -p "$work/pins/$(dirname "$f")" && cp "$repo/$f" "$work/pins/$f"
+  done
+}
+pins_check_fixture() { (fleet_pins_check "$work/pins"); }
+pins_refuses() {
+  expect 1 "fleet pins check refuses $1" pins_check_fixture
+  grep -qF -- "$2" "$work/out" || { cat "$work/out" >&2; fail "fleet pins check: $1 failed without \"$2\""; }
+}
+pins_fixture
+expect 0 "fleet pins check passes on its fixture" pins_check_fixture
+sed -i -E 's/^version:[[:space:]]*[0-9.]+/version: 99.0.0/' "$work/pins/ansible/galaxy/publisher/galaxy.yml"
+pins_refuses "a floor behind its collection's release" "decdn.publisher >="
+pins_fixture; sed -i -E '0,/actions\/checkout@[0-9a-f]{40}/s//actions\/checkout@0000000000000000000000000000000000000000/' \
+  "$work/pins/examples/collection-fleet/.github/workflows/ci.yml"
+pins_refuses "an action pinned to another SHA" "uses actions/checkout@0000000000000000000000000000000000000000"
+pins_fixture; sed -i -E '0,/actions\/checkout@[0-9a-f]{40}/s//actions\/checkout@v7/' \
+  "$work/pins/examples/collection-fleet/.github/workflows/ci.yml"
+pins_refuses "an action pinned to a tag" "uses actions/checkout@v7, not pinned to a commit SHA"
+pins_fixture; sed -i -E 's/yamllint==[0-9.]+/yamllint==0.0.1/' "$work/pins/examples/collection-fleet/.pre-commit-config.yaml"
+pins_refuses "another yamllint pin" "pins yamllint yamllint==0.0.1"
+pins_fixture; sed -i -E "s/\[\"(yamllint==[0-9.]+)\"\]/['\\1']/" "$work/pins/examples/collection-fleet/.pre-commit-config.yaml"
+pins_refuses "a yamllint pin in another spelling" "not in the form additional_dependencies"
+pins_fixture; sed -i 's#https://github.com/koalaman/shellcheck-precommit#https://example.invalid/hooks#' \
+  "$work/pins/examples/collection-fleet/.pre-commit-config.yaml"
+pins_refuses "a hook repo this repo does not use" "uses https://example.invalid/hooks, a hook repo this repo does not"
+pins_fixture; sed -i -E '0,/rev: v[0-9.]+/s//rev: v0.0.0/' "$work/pins/.pre-commit-config.yaml"
+pins_refuses "a hook rev this repo has moved" "pins https://github.com/pre-commit/pre-commit-hooks"
+
+# --- examples/collection-fleet/scripts/check-vars-shadowing.sh --------------------------
+# Ansible reads one of <name>, <name>.yml, <name>.yaml and <name>.json in group_vars/
+# and host_vars/, silently. The example's pre-commit hook and CI run this check; here it
+# passes on the example's own inventory and refuses each kind of pair.
+shadow="$repo/examples/collection-fleet/scripts/check-vars-shadowing.sh"
+expect 0 "check-vars-shadowing passes on the example's inventory" "$shadow" "$repo/examples/collection-fleet/inventory"
+# shadow_refuses <description> <message> <path to create, relative to the inventory>
+shadow_refuses() {
+  rm -rf "$work/shadow" && cp -R "$repo/examples/collection-fleet/inventory" "$work/shadow"
+  case $3 in */) mkdir -p "$work/shadow/$3" ;; *) touch "$work/shadow/$3" ;; esac
+  expect 1 "check-vars-shadowing refuses $1" "$shadow" "$work/shadow"
+  grep -qF -- "$2" "$work/out" || { cat "$work/out" >&2; fail "check-vars-shadowing: $1 failed without \"$2\""; }
+}
+shadow_refuses "a group directory beside its file" "has decdn_nodes decdn_nodes.yml" group_vars/decdn_nodes/
+shadow_refuses "a .yaml beside a .yml" "has all.yaml all.yml" group_vars/all.yaml
+shadow_refuses "a host file beside its directory" "has origin-1 origin-1.yml" host_vars/origin-1.yml
+shadow_refuses "an extensionless file beside a .yml" "has all all.yml" group_vars/all
+expect 2 "check-vars-shadowing refuses a missing inventory" "$shadow" "$work/no-such-inventory"
+
 # --- release gate ----------------------------------------------------------------------
 gate="$repo/scripts/check-release-version.sh"
 expect 2 "release gate rejects a stray argument" "$gate" decdn-node-0.1.0 notes.md
@@ -917,6 +1022,15 @@ if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
     printf 'namespace: decdn\nname: %s\nversion: 0.0.0                      # a comment\n' "$c" > "$rs/ansible/galaxy/$c/galaxy.yml"
   done
   printf 'dependencies:\n  decdn.node: ">=0.0.2"\n' >> "$rs/ansible/galaxy/publisher/galaxy.yml"
+  # The example's floors, which each collection release moves.
+  rsreq="$rs/examples/collection-fleet/requirements.yml"
+  mkdir -p "$(dirname "$rsreq")"
+  printf 'collections:\n  - name: decdn.node\n    version: ">=0.0.0"\n  - name: decdn.publisher\n    version: ">=0.0.0"\n' > "$rsreq"
+  # <collection> <floor>: the example's floor for it.
+  rsfloor() {
+    awk -v name="decdn.$1" '/- name:/ { mine = ($3 == name) } mine && /version:/ { print $2; exit }' "$rsreq" \
+      | grep -qxF "\">=$2\"" || fail "release.sh: the example's decdn.$1 floor is not >=$2: $(cat "$rsreq")"
+  }
   for log in "$chart/CHANGELOG.md" "$rs"/ansible/galaxy/{node,publisher}/CHANGELOG.md; do
     printf '# Changelog\n\nIntro.\n\n## [Unreleased]\n\nInitial.\n\n### Added\n\n- The first entry.\n' > "$log"
   done
@@ -1129,10 +1243,23 @@ if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
   # Each collection is released on its own tags and paths: its roles.txt, its overlay.
   # decdn.publisher depends on decdn.node, so its first release waits for node's.
   rsrefused "decdn.publisher's first release before decdn.node's" "origin's highest node-collection tag is none" publisher-collection minor
+  : > "$RS_MAKE_LOG"; touch "$RS_MAKE_FAIL"
+  rsrefused "to commit a collection when the make check fails" "make -C ansible galaxy-check-node failed: nothing was committed" node-collection patch --execute
+  rm "$RS_MAKE_FAIL"
+  rsclean "with a failing collection check"
+  [[ -z "$(rsgit tag -l 'node-collection-*')" ]] || fail "release.sh made a node-collection tag after its check failed"
+  rsfloor node 0.0.0
+  expect 0 "release.sh dry-runs the node collection's first release" rsrel node-collection patch
+  rssaid "a collection dry run" '+    version: ">=0.0.1"'
+  rssaid "a collection dry run" "examples/collection-fleet/requirements.yml"
   : > "$RS_MAKE_LOG"
   expect 0 "release.sh cuts the node collection's first release" rsrel node-collection patch --execute
   rsmade galaxy-check-node
   rspushed node-collection-v0.0.1
+  rsfloor node 0.0.1; rsfloor publisher 0.0.0
+  [[ "$(rsgit show --name-only --format= HEAD | sort | xargs)" == \
+     "ansible/galaxy/node/CHANGELOG.md ansible/galaxy/node/galaxy.yml examples/collection-fleet/requirements.yml" ]] \
+    || fail "release.sh's node release commit changed: $(rsgit show --name-only --format= HEAD | xargs)"
   # The fixture's publisher declares decdn.node >=0.0.2: a lower node release is not enough.
   rsrefused "decdn.publisher's first release below its decdn.node constraint" \
     "needs decdn.node >=0.0.2, and origin's highest node-collection tag is 0.0.1" publisher-collection patch
@@ -1141,10 +1268,16 @@ if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
   grep -qx 'version: 0.0.1                      # a comment' "$rs/ansible/galaxy/node/galaxy.yml" \
     || fail "release.sh did not set node/galaxy.yml to 0.0.1 keeping its comment: $(grep '^version' "$rs/ansible/galaxy/node/galaxy.yml")"
   grep -qx '## \[Unreleased\]' "$rs/ansible/galaxy/publisher/CHANGELOG.md" || fail "release.sh touched the publisher collection's changelog"
+  # A node floor publisher's release would not set, to see it left alone.
+  sed -i '0,/">=0.0.1"/s//">=0.0.9"/' "$rsreq"; rsgit commit -qam "test: a distinct node floor"; rspush
   : > "$RS_MAKE_LOG"
   expect 0 "release.sh cuts the publisher collection's first release after node's" rsrel publisher-collection patch --execute
   rsmade galaxy-check-publisher
   rspushed publisher-collection-v0.0.1
+  rsfloor node 0.0.9; rsfloor publisher 0.0.1
+  [[ "$(rsgit show --name-only --format= HEAD | sort | xargs)" == \
+     "ansible/galaxy/publisher/CHANGELOG.md ansible/galaxy/publisher/galaxy.yml examples/collection-fleet/requirements.yml" ]] \
+    || fail "release.sh's publisher release commit changed: $(rsgit show --name-only --format= HEAD | xargs)"
   # A later release is held to the constraint too: raised past the highest node tag,
   # the collection would not install from Galaxy.
   sed -i 's/">=0.0.1"/">=0.1.0"/' "$rs/ansible/galaxy/publisher/galaxy.yml"
@@ -1191,7 +1324,18 @@ if command -v git-cliff >/dev/null && command -v ssh-keygen >/dev/null; then
   rssaid "after a group_vars fix, for publisher" "+- **playbooks**: A firewall hole fix"
   rssaid "with a feature at 0.0.x" "publisher-collection-v0.0.1 -> publisher-collection-v0.1.0"
   ! grep -qF "Ship the unshipped role" "$work/out" || fail "release.sh's collection section lists a build commit"
-  pass "release.sh releases each collection on its own tags, roles.txt, playbooks.txt and overlay, publisher after node"
+  # A floor already at the release, two entries, no entry, no example: each refused.
+  cp "$rsreq" "$work/rs-saved"
+  sed -i '0,/">=0.0.9"/s//">=0.0.3"/' "$rsreq"; rsgit commit -qam "test: a floor at the next release"; rspush
+  rsrefused "a floor already at the release" "already says decdn.node >=0.0.3" node-collection 0.0.3
+  printf '  - name: decdn.node\n    version: ">=0.0.1"\n' >> "$rsreq"; rsgit commit -qam "test: two node entries"; rspush
+  rsrefused "two entries for the collection" "has 2 version: lines under decdn.node" node-collection
+  cp "$work/rs-saved" "$rsreq"
+  sed -i '/decdn.node/,+1d' "$rsreq"; rsgit commit -qam "test: drop the node floor"; rspush
+  rsrefused "an example with no floor for the collection" "has 0 version: lines under decdn.node" node-collection
+  git -C "$rs" rm -q "$rsreq"; rsgit commit -qm "test: drop the example"; rspush
+  rsrefused "a repo without the example's requirements.yml" "requirements.yml is missing" node-collection
+  pass "release.sh releases each collection on its own tags, roles.txt, playbooks.txt and overlay, publisher after node, and moves its floor in the example"
   unset GIT_CONFIG_GLOBAL GIT_CONFIG_NOSYSTEM RS_MAKE_LOG RS_MAKE_FAIL
 elif [[ -n ${CI:-} ]]; then
   fail "git-cliff or ssh-keygen is not on PATH in CI; the release.sh tests would be skipped"
