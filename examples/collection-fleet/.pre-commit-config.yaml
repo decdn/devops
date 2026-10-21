@@ -1,0 +1,51 @@
+---
+# Pre-commit hooks for the fleet inventory.
+#
+#   pip install pre-commit && pre-commit install   # one-time install
+#   pre-commit run --all-files                     # run on all files
+#
+# CI runs the same hooks, then parses the inventory and syntax-checks the
+# collections' playbooks against it (.github/workflows/ci.yml).
+minimum_pre_commit_version: "3.5.0"
+default_install_hook_types: [pre-commit]
+
+# The installed collections.
+exclude: >-
+  (?x)^(
+    collections/|
+    \.ansible/
+  )
+
+repos:
+  # ── Generic hygiene ────────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]   # keep markdown hard line breaks
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=512]
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: check-yaml
+        args: [--unsafe]   # tolerate custom/!vault tags; syntax check only
+      - id: check-json
+
+  # ── Markdown (relaxed ruleset; see .markdownlint-cli2.yaml) ────────────────
+  - repo: https://github.com/DavidAnson/markdownlint-cli2
+    rev: v0.23.3
+    hooks:
+      - id: markdownlint-cli2
+
+  # ── YAML lint for the Ansible inputs (.yamllint) ───────────────────────────
+  # *.yml.example templates don't match (they end in .example) and are skipped.
+  - repo: local
+    hooks:
+      - id: yamllint-ansible
+        name: yamllint (inventory/, requirements.yml)
+        entry: yamllint -c .yamllint
+        language: python
+        additional_dependencies: ["yamllint==1.35.1"]
+        files: ^(inventory/.*|requirements)\.ya?ml$

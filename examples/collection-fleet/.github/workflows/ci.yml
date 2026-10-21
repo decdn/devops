@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege by default; jobs widen only what they need.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Third-party actions are pinned to a full commit SHA (a re-pointed tag can ship
+# malicious code). The trailing comment records the human-readable version;
+# .github/dependabot.yml bumps them.
+jobs:
+  # Every pre-commit hook on every file: hygiene, markdownlint and yamllint. The same
+  # gate `pre-commit run --all-files` runs locally.
+  pre-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10         # hook environments are cached; ~1m cold
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install pre-commit
+        run: python -m pip install --upgrade pre-commit
+      # Hook environments (node for markdownlint, yamllint's virtualenv) keyed on the
+      # config that pins them.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+      - name: Run every hook on every file
+        run: pre-commit run --all-files --show-diff-on-failure
+
+  # The inventory parses and the collections' playbooks load against it. The
+  # collections are installed fresh from Galaxy on every run (no cache): with `>=`
+  # floors in requirements.yml that is the newest release, and this job is what tells
+  # you that release still accepts your inventory. Fails until inventory/hosts.yml is
+  # committed. --syntax-check never connects and templates no variable, so the
+  # git-ignored secret.yml files are not needed.
+  ansible:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install ansible-core
+        run: python -m pip install --upgrade ansible-core
+      - name: Install the collections
+        # Galaxy resets connections now and then; retry rather than fail the PR.
+        run: |
+          for attempt in 1 2 3; do
+            ansible-galaxy collection install -r requirements.yml -p collections && exit 0
+            echo "::warning::ansible-galaxy failed (attempt $attempt), retrying"
+            sleep $((attempt * 10))
+          done
+          exit 1
+      # Ansible loads a group_vars/<name>/ directory in place of a group_vars/<name>.yml
+      # beside it, and never reads the file, without a word. Same for host_vars.
+      - name: No vars file shadowed by a vars directory
+        run: |
+          rc=0
+          for f in inventory/group_vars/* inventory/host_vars/*; do
+            [[ -f $f && -d ${f%.*} ]] || continue
+            echo "::error file=$f::${f%.*}/ shadows $f: Ansible reads only the directory. Move $f to ${f%.*}/main.yml"
+            rc=1
+          done
+          exit "$rc"
+      - name: Parse the inventory
+        run: ansible-inventory --graph
+      # decdn.node alone (cache nodes only)? Check decdn.node.node, decdn.node.backup
+      # and decdn.node.decommission instead.
+      - name: Syntax-check the playbooks
+        run: |
+          for pb in decdn.publisher.site decdn.publisher.backup decdn.publisher.decommission; do
+            ansible-playbook "$pb" --syntax-check
+          done
+
+  # Lint the workflow files themselves.
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10         # ~15s in practice
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: reviewdog/action-actionlint@419a49378266e892f40c773b4f2fc6de9aa87499 # v1.80.4
+        with:
+          reporter: github-check
+          fail_on_error: true

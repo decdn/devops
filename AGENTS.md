@@ -81,7 +81,7 @@ compose/                # one-host Docker Compose path (README.md)
 charts/decdn-node/      # Helm chart (README.md); ci/ values mirror molecule/schema's three plays; files/monitoring -> ../../../monitoring/decdn-node (symlink); tests/render-test.sh (make lint-helm); artifacthub-repo.yml
 monitoring/             # Grafana dashboards + Prometheus rules, maintained here by hand: decdn-node/ (rendered by the chart), sponsord/, iroh-relay/ (+ exported-metrics.txt); README.md
 docs/                   # cross-path operator docs: node-operators.md, publishers.md, requirements.md, lifecycle.md
-examples/collection-fleet/  # consumer project for the collections; its inventory/ mirrors ansible/inventory/'s templates byte for byte except the hosts-*.yml.example comment headers (make test-scripts checks both parse to the same inventory): change both
+examples/collection-fleet/  # consumer project for the collections, with its own CI, pre-commit and AGENTS.md; its inventory/ mirrors ansible/inventory/'s templates byte for byte except the hosts-*.yml.example comment headers (make test-scripts checks both parse to the same inventory): change both. release.sh moves its requirements.yml floors; its action SHAs and hook revs track this repo's (make test-scripts); galaxy/check-playbooks.sh runs it against the built collections
 scripts/                # upstream mirrors (sync-network-profiles.py, gen-schema-keys.py), render-compose-alloy.sh, the decdn bump (open-decdn-bump.sh, bump_decdn.py), fetch-decdn-cli.sh, release.sh (+ cliff.toml, chart-artifacthub-changes.py), molecule.sh, limit-guard.sh
 ```
 

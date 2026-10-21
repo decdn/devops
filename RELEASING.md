@@ -72,7 +72,10 @@ would commit, and changes no file. The script:
    (they are all `ci`, `test`, `style`, `build` or release commits, or unconventional
    ones `--allow-unconventional` leaves out), whatever the level.
 3. **Sets `version:`** in `ansible/galaxy/<collection>/galaxy.yml` or
-   `charts/decdn-node/Chart.yaml`.
+   `charts/decdn-node/Chart.yaml`. A collection release also raises that collection's
+   floor in `examples/collection-fleet/requirements.yml` to the new version, so a fleet
+   copied from the example starts from it (`make test-scripts` refuses a PR where they
+   differ).
    The chart's `appVersion` and its `artifacthub.io/images` tag already follow the
    role's `decdn_node_version` (`make test-scripts` refuses a PR where they differ), so
    a new decdn line is a chart change too: release the chart. A decdn patch release
@@ -100,7 +103,7 @@ would commit, and changes no file. The script:
    before anything is committed.
 6. **Commits** (`--execute` only) `chore(release): <tag>` and tags `<tag>`, both
    signed, and pushes them with `git push --atomic origin main <tag>`: origin gets both
-   or neither. If a check or the commit (a pre-commit hook, say) fails, both files are
+   or neither. If a check or the commit (a pre-commit hook, say) fails, the files are
    restored and nothing is committed. If tagging or the push fails, or the script is
    stopped after the commit, the commit (and the tag) stay local, and it says whether
    origin got anything and how to undo. A refusal before step 5 never touches the

@@ -71,6 +71,15 @@ repos:
         files: ^(ansible|cloud-init)/.*\.(ya?ml)$
         exclude: ^ansible/(collections|\.ansible)/
 
+      # examples/collection-fleet's inventory and requirements.yml, under its own
+      # .yamllint, as the yamllint hook it ships runs them in a copy.
+      - id: yamllint-collection-fleet
+        name: yamllint (examples/collection-fleet/)
+        entry: yamllint -c examples/collection-fleet/.yamllint
+        language: python
+        additional_dependencies: ["yamllint==1.35.1"]
+        files: ^examples/collection-fleet/(inventory/.*|requirements)\.ya?ml$
+
       # Opt-in: full ansible-lint locally (needs `make -C ansible deps` first).
       #   pre-commit run ansible-lint --hook-stage manual
       - id: ansible-lint

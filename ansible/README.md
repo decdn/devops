@@ -131,7 +131,10 @@ make deploy INVENTORY=../../decdn-fleet/hosts.yml LIMIT=<host>
 Ansible loads `group_vars/` and `host_vars/` from beside whichever `hosts.yml` you pass, so
 the overlay carries its own: create them next to its `hosts.yml`, starting from the public
 `inventory/group_vars/` and `inventory/host_vars/` templates. Git-ignore
-`host_vars/*/secret.*` in the private repo, so it never tracks a per-node secret. The public
+`host_vars/*/secret.*` in the private repo, so it never tracks a per-node secret (and
+`group_vars/*/secret.*` for a secret a whole group shares; a `group_vars/<group>/`
+directory silently replaces a `group_vars/<group>.yml` beside it, so move that file to
+`<group>/main.yml` first). The public
 `inventory/group_vars/` and `inventory/host_vars/` are **not** loaded for it. (Deploying from
 the Galaxy collections instead? [`examples/collection-fleet/`](../examples/collection-fleet/README.md)
 is a ready-made private repository for that path, inventory templates and `.gitignore` included.) Add child groups

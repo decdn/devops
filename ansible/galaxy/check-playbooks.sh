@@ -11,7 +11,11 @@
 #     molecule/collection runs decdn.node's);
 #   - runs tests/firewall-holes/check.sh on its playbooks/, which runs a probe AS a
 #     collection playbook: the firewall holes must come out as they do from
-#     ansible/playbooks/, so the shipped group_vars/ load and agree.
+#     ansible/playbooks/, so the shipped group_vars/ load and agree;
+#   - runs examples/collection-fleet as a private copy of it runs (its ansible.cfg,
+#     the collection's hosts example as inventory/hosts.yml): the inventory parses,
+#     and every decdn.<collection>.<playbook> its docs and CI name ships and passes a
+#     syntax check. Its tracked files only, so stage a new one first.
 # galaxy-importer cannot do the first: its ansible-lint sees one collection, outside
 # any collections path, so it only warns that it cannot find the roles.
 # The roles' own dependencies (devsec.hardening, ansible.posix) come from `make deps`
@@ -65,4 +69,30 @@ for pb in "$playbooks"/*.yml; do
 done
 ((n > 0)) || { echo "check-playbooks.sh: decdn.$collection ships no playbook" >&2; exit 1; }
 echo "ok   decdn.$collection: $n playbooks pass a syntax check by FQCN"
+
+# examples/collection-fleet, as a private copy of it runs: its tracked files, its
+# ansible.cfg (read from the copy's directory; ANSIBLE_COLLECTIONS_PATH stands in for
+# its collections/), the collection's hosts example as inventory/hosts.yml. Every
+# decdn.<collection>.<playbook> its docs and CI name must ship, and passes a syntax
+# check against that inventory, after the inventory parses as its CI parses it.
+example="$ansible_dir/../examples/collection-fleet"
+fleet="$work/fleet"
+mkdir "$fleet"
+git -C "$example" ls-files -z | (cd "$example" && xargs -0 cp --parents -t "$fleet") \
+  || { echo "check-playbooks.sh: could not copy examples/collection-fleet" >&2; exit 1; }
+hosts_example="hosts-$collection.yml.example"
+cp "$fleet/inventory/$hosts_example" "$fleet/inventory/hosts.yml"
+named="$(cd "$fleet" && grep -ohE "decdn\.$collection\.[a-z_]+" README.md AGENTS.md .github/workflows/ci.yml | sort -u)"
+[[ -n $named ]] || { echo "check-playbooks.sh: examples/collection-fleet names no decdn.$collection playbook" >&2; exit 1; }
+(cd "$fleet" && ansible-inventory --graph </dev/null >"$work/inventory.log" 2>&1) \
+  || { cat "$work/inventory.log" >&2; echo "check-playbooks.sh: examples/collection-fleet's $hosts_example does not parse" >&2; exit 1; }
+n=0
+for fqcn in $named; do
+  [[ -f "$playbooks/${fqcn##*.}.yml" ]] \
+    || { echo "check-playbooks.sh: examples/collection-fleet names $fqcn, which decdn.$collection does not ship" >&2; exit 1; }
+  (cd "$fleet" && ansible-playbook "$fqcn" --syntax-check </dev/null >"$work/syntax.log" 2>&1) \
+    || { cat "$work/syntax.log" >&2; echo "check-playbooks.sh: $fqcn fails its syntax check in examples/collection-fleet" >&2; exit 1; }
+  n=$((n + 1))
+done
+echo "ok   examples/collection-fleet with $hosts_example: the inventory parses and the $n decdn.$collection playbooks it names pass a syntax check"
 "$ansible_dir/tests/firewall-holes/check.sh" "$playbooks"

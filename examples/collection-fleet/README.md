@@ -12,6 +12,10 @@ lifecycle guards included), and this repository holds only your inventory.
 | `ansible.cfg` | decdn/devops's `ansible/ansible.cfg`, minus `roles_path`, failing on an inventory that does not parse |
 | `.gitignore` | keeps the installed collections, per-host secrets and backups out of git |
 | `inventory/` | the inventory templates: `hosts-node.yml.example` and `hosts-publisher.yml.example`, with their `group_vars/` and `host_vars/` |
+| `.github/workflows/ci.yml` | CI: the pre-commit hooks, then a fresh Galaxy install that parses your inventory and syntax-checks the playbooks against it, and actionlint ([Checks](#checks)) |
+| `.pre-commit-config.yaml`, `.yamllint`, `.markdownlint-cli2.yaml` | the lint gate: hygiene, yamllint over `inventory/` and `requirements.yml`, markdownlint |
+| `.github/dependabot.yml` | weekly bumps of the pinned actions and hook revs (not of the collections) |
+| `AGENTS.md`, `CLAUDE.md` | guidance for AI coding agents; fill in its *This fleet* section |
 
 The `inventory/` templates are decdn/devops's `ansible/inventory/` ones, with the hosts
 examples' headers written for this layout (decdn/devops's `make test-scripts` keeps
@@ -36,6 +40,19 @@ on-host secrets), and commit them. In `hosts-publisher.yml.example` only the ori
 live: uncomment the groups you run. Rename `host_vars/decdn-node-1/` (and `origin-1/`)
 to your hosts, and keep secrets in the git-ignored `host_vars/<host>/secret.yml`
 (copied from its `secret.yml.example`).
+
+A secret every host of a group shares (one `decdn_rpc_url` or `grafana_alloy_api_token`
+for the whole fleet, say) can go once in the git-ignored `group_vars/<group>/secret.yml`
+instead. Move the group's file into that directory first:
+
+```bash
+mkdir inventory/group_vars/decdn_nodes
+git mv inventory/group_vars/decdn_nodes.yml inventory/group_vars/decdn_nodes/main.yml
+```
+
+Ansible reads a `group_vars/<group>/` directory *in place of* a `group_vars/<group>.yml`
+beside it and never says so, so keeping both silently drops every setting in the file
+(the same holds for `host_vars/`). CI fails on such a pair.
 
 ## Run
 
@@ -92,8 +109,27 @@ playbook for the host's group, and read the PLAY RECAP:
 The Makefile's third check, an inventory that fails to parse, is `ansible.cfg`'s
 `unparsed_is_failed` here.
 
+## Checks
+
+```bash
+pip install pre-commit && pre-commit install   # once: the hooks run on every commit
+pre-commit run --all-files                     # hygiene, yamllint, markdownlint
+```
+
+CI (`.github/workflows/ci.yml`) runs the same hooks on every push and pull request,
+then installs the collections fresh from Galaxy, fails on a vars file a vars directory
+shadows, parses the inventory and syntax-checks `decdn.publisher.site`, `.backup` and
+`.decommission` against it (swap in the `decdn.node.*` ones if you installed
+`decdn.node` alone). Its `ansible` job fails until `inventory/hosts.yml` is committed.
+It installs the newest releases the floors allow, so a collection release that no
+longer accepts your inventory fails your next PR, not your next deploy.
+
 ## Upgrade
 
-Raise the versions in `requirements.yml` (pin `==X.Y.Z` once the fleet runs), read
-each collection's CHANGELOG, then `ansible-galaxy collection install -r
-requirements.yml -p collections --upgrade` and dry-run before deploying.
+The floors in `requirements.yml` are the newest releases of each collection when this
+directory was copied, so a fresh install takes the newest anyway. Once the fleet runs,
+pin exact versions (`==X.Y.Z`) and raise them deliberately: read each collection's
+[CHANGELOG](https://github.com/decdn/devops/tree/main/ansible/galaxy) (a release can
+move the default decdn or sponsord release line, or roll out host changes), then
+`ansible-galaxy collection install -r requirements.yml -p collections --upgrade` and
+dry-run before deploying.
