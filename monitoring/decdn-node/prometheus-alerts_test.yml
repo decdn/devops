@@ -1,8 +1,9 @@
 # promtool unit tests for prometheus-alerts.yml beside it, run by the chart's
 # tests/render-test.sh (`make lint-helm`). DecdnNodeDown's absence arm only shows
-# itself on a series that stops, and DecdnCapacityBondRegistryResyncFailing's
-# threshold only on `increase` extrapolation, neither of which promtool check can
-# catch. The test clock starts at 0. The chart's .helmignore keeps this file out of
+# itself on a series that stops, and the thresholds of
+# DecdnCapacityBondRegistryResyncFailing and DecdnRedemptionMaybeBroadcast only on
+# `increase` extrapolation, none of which promtool check can catch;
+# DecdnBuyerTopupUnresolved pins its for. The test clock starts at 0. The chart's .helmignore keeps this file out of
 # the package.
 #
 # It does not run in place: render-test.sh copies it into a scratch directory as
@@ -148,4 +149,49 @@ tests:
         alertname: DecdnBuyerTopupUnresolved
         exp_alerts:
           - exp_labels: {job: decdn-node, instance: a, component: payments, severity: warning}
+          - exp_labels: {job: decdn-node, instance: c, component: payments, severity: warning}
+
+  # Maybe-broadcast. a adds one at 20m and one at 60m, never more than one in a
+  # 30m window, and never fires. b adds one a minute from 0: its increase reads 2.5
+  # at 2m30s (no extrapolation below a zero first sample), so it goes pending then
+  # and fires at exactly the 30m for. c adds one every 14m on a running counter:
+  # two in a window read about 2.07 with extrapolation, so it goes pending at 28m
+  # and fires at 58m. d adds 10 at once at 20m and stays quiet: pending until the
+  # jump leaves the window (48m30s), short of the for, so a one-off burst of any
+  # size never fires.
+  - interval: 1m
+    input_series:
+      - series: 'decdn_onchain_tx_maybe_broadcast_total{job="decdn-node", instance="a"}'
+        values: '0x19 1x39 2x20'
+      - series: 'decdn_onchain_tx_maybe_broadcast_total{job="decdn-node", instance="b"}'
+        values: '0+1x70'
+      - series: 'decdn_onchain_tx_maybe_broadcast_total{job="decdn-node", instance="c"}'
+        values: '5x13 6x13 7x13 8x13 9x13 10x13'
+      - series: 'decdn_onchain_tx_maybe_broadcast_total{job="decdn-node", instance="d"}'
+        values: '5x19 15x60'
+    alert_rule_test:
+      - eval_time: 32m
+        alertname: DecdnRedemptionMaybeBroadcast
+        exp_alerts: []
+      - eval_time: 32m30s
+        alertname: DecdnRedemptionMaybeBroadcast
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: b, component: payments, severity: warning}
+      - eval_time: 48m30s
+        alertname: DecdnRedemptionMaybeBroadcast
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: b, component: payments, severity: warning}
+      - eval_time: 57m30s
+        alertname: DecdnRedemptionMaybeBroadcast
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: b, component: payments, severity: warning}
+      - eval_time: 58m
+        alertname: DecdnRedemptionMaybeBroadcast
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: b, component: payments, severity: warning}
+          - exp_labels: {job: decdn-node, instance: c, component: payments, severity: warning}
+      - eval_time: 70m
+        alertname: DecdnRedemptionMaybeBroadcast
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: b, component: payments, severity: warning}
           - exp_labels: {job: decdn-node, instance: c, component: payments, severity: warning}

@@ -2776,15 +2776,6 @@
           "expr": "sum(rate(decdn_dht_lookup_round_ceiling_total{instance=~\"$node\"}[$__rate_interval]))",
           "refId": "H",
           "legendFormat": "lookup round ceiling"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_dht_lookup_dial_timeouts_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "I",
-          "legendFormat": "lookup dial timeouts"
         }
       ],
       "fieldConfig": {
@@ -3421,8 +3412,17 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(decdn_dht_bucket_refresh_failures_total{instance=~\"$node\"}[$__rate_interval]))",
+          "expr": "sum(rate(decdn_dht_lookup_dial_timeouts_total{instance=~\"$node\"}[$__rate_interval]))",
           "refId": "D",
+          "legendFormat": "lookup dial timeouts"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_dht_bucket_refresh_failures_total{instance=~\"$node\"}[$__rate_interval]))",
+          "refId": "E",
           "legendFormat": "bucket refresh failures"
         },
         {
@@ -3431,7 +3431,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "expr": "sum(rate(decdn_dht_bootstrap_find_node_failures_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "E",
+          "refId": "F",
           "legendFormat": "bootstrap failures"
         }
       ],
@@ -3516,7 +3516,7 @@
         "y": 85
       },
       "id": 45,
-      "description": "Lookups this node ran and STORE records peers accepted from it. A round timeout is a lookup round whose peers did not all answer in time. A refresh failure is a FindNode error, an invalid peer key or a panicked refresh task; a bootstrap failure is a FindNode against a seed that failed."
+      "description": "Lookups this node ran and STORE records peers accepted from it. A round timeout is a lookup round whose peers did not all answer in time. A dial timeout is a lookup FIND_VALUE RPC whose QUIC dial missed the 2 s dial budget; the lookup then skips that peer for a cooldown, so a steady rate of about one per cooldown names an offline bonded peer, and round timeouts should stay near zero (ADR 022 § Routing Table). A refresh failure is a FindNode error, an invalid peer key or a panicked refresh task; a bootstrap failure is a FindNode against a seed that failed."
     },
     {
       "datasource": {
@@ -3730,7 +3730,7 @@
         "y": 92
       },
       "id": 48,
-      "description": "p50, p95 and p99 duration of one probe collection window on the cache-miss path, from the start of the concurrent probes (dials included) to the end of collection (ADR 001 §Probe response collection). Collection stops early once enough holders answer, or when every probe resolves; the 500 ms probe timeout bounds each probe. A p95 near 0.5 s means rounds wait on a slow or unreachable peer before enough holders answer. A probe-cache hit sends no probe and is not in these series."
+      "description": "p50, p95 and p99 duration of one probe collection window on the cache-miss path, from the start of the concurrent probes (dials included) to the end of collection (ADR 001 §Probe response collection). Collection stops early once enough holders answer, or when every probe resolves; the 1 s probe timeout bounds each probe. A p95 near 1 s means rounds wait on a slow or unreachable peer before enough holders answer. A probe-cache hit sends no probe and is not in these series."
     },
     {
       "collapsed": false,
