@@ -846,17 +846,19 @@ groups:
             Redemption steps keep failing: a redeemMany that reverted or was
             refused at send, or a lane the redeemer could not plan or load.
             An unconfirmed receipt does not count here; DecdnOnchainTxUnconfirmed
-            covers it. Nor does a send that failed with no tx hash (decdn after
-            v0.2); DecdnRedemptionMaybeBroadcast covers it.
+            covers it. From the first decdn release after v0.2.0, nor does a send
+            that failed with no tx hash; DecdnRedemptionMaybeBroadcast covers it.
             The claims stay and retry, but unredeemed revenue accrues and a
             closing pool's grace window can run out. Read the redeemMany warn!
             lines (each carries the tx hash when one was issued) and check the
             RPC provider and the operator key's gas balance.
 
-      # The counter ships in the first decdn release after v0.2; on an older
+      # The counter ships in the first decdn release after v0.2.0; on an older
       # node the series is absent and the rule stays silent. Not folded into
       # DecdnOnchainTxUnconfirmed (for: 0m): a node's seller and buyer share one
       # key, so a harmless nonce collision between them gives these same answers.
+      # As with DecdnRedemptionFailing, increase() extrapolation reads two events
+      # in the window at about 2.05, so two failed sends per ~30m, sustained, fire.
       - alert: DecdnRedemptionMaybeBroadcast
         expr: increase(decdn_onchain_tx_maybe_broadcast_total[30m]) > 2
         for: 30m
@@ -870,12 +872,15 @@ groups:
             out, was reset or got an HTTP 5xx, or the RPC answered `already
             known`, `nonce too low` or `replacement transaction underpriced`.
             Each may still have broadcast; the claims stay, and the next sweep
-            skips lanes the chain shows paid. A steady rate stops redemptions
-            while unredeemed revenue accrues and a closing pool's grace window
-            runs. Check the RPC's eth_sendRawTransaction health (reads can
-            still work), compare `cast nonce <operator> --block pending` with
-            `--block latest` for a lagging backend, and read the
-            "redeemMany send failed with no tx hash" warn lines.
+            skips lanes the chain shows paid. Or this node's seller and buyer
+            services, which share one key, collided at a nonce, and nothing
+            was broadcast. If decdn_onchain_tx_landed_total is flat and
+            decdn_unredeemed_usdc keeps rising, redemptions are not landing and
+            a closing pool's grace window can run out. Check the RPC's
+            eth_sendRawTransaction health (reads can still work), compare
+            `cast nonce <operator> --block pending` with `--block latest` for
+            a lagging backend, and read the "redeemMany send failed with no tx
+            hash" warn lines.
 
       - alert: DecdnWatermarkReconcileFailing
         expr: increase(decdn_redemption_reconcile_failures_total[30m]) > 2
@@ -996,7 +1001,8 @@ groups:
             vouchers on it. The redeemer must land them before the grace window
             ends or the revenue is lost. Check that redeemMany is landing
             (decdn_onchain_tx_landed_total, DecdnRedemptionFailing,
-            DecdnOnchainTxUnconfirmed) and that the operator key has gas.
+            DecdnRedemptionMaybeBroadcast, DecdnOnchainTxUnconfirmed) and that
+            the operator key has gas.
 
       - alert: DecdnBuyerWalletUnfunded
         # Scoped on `> 0`, not on the series existing: every metric is registered
@@ -1055,9 +1061,10 @@ groups:
       # topUp whose outcome the chain has not shown: the submit got no tx hash
       # or the receipt could not be read, and the transaction may still mine,
       # so no other topUp goes out meanwhile. A submit gets no tx hash when the
-      # transport fails, or when the RPC node already holds the transaction
-      # (`already known`), counts its nonce as spent (`nonce too low`) or holds
-      # another transaction of this key at that nonce (`replacement transaction
+      # transport fails and, from the first decdn release after v0.2.0, also
+      # when the RPC node already holds the transaction (`already known`),
+      # counts its nonce as spent (`nonce too low`) or holds another
+      # transaction of this key at that nonce (`replacement transaction
       # underpriced`), as when a seller redemption took the topUp's nonce. A
       # healthy settle clears it within a few blocks; 15m of hold is a stuck
       # chain path.
