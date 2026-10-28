@@ -267,7 +267,8 @@ Optional (omitted from `node.toml` unless set):
   backend a publisher's **origin node** fills a cache miss from (in this repo's
   playbooks, a `decdn_origin_nodes` host; `playbooks/origin.yml` requires one).
   Unset ⇒ no `[cache.origin]`: a **cache node**, which fills a miss from other nodes
-  (`decdn_node_to_node_pull_through_enabled`, on by default without an origin) and
+  (`decdn_node_to_node_pull_through_enabled`, which the daemon derives on without an
+  origin) and
   fails it `NoOrigin` when none of them has the blob. For an
   ordered fallback chain use `decdn_cache_origins` (a list of the same per-kind
   dicts) instead — the two forms are mutually exclusive upstream and the role
@@ -334,7 +335,8 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
   (`off`|`margin`), `decdn_serve_economics_discount` (a **float** in `(0.0, 1.0]`,
   not basis points), `decdn_serve_economics_n_max`, and the warming budget/refill pair.
 - **Node-to-node pull-through (#29)** — `decdn_node_to_node_pull_through_enabled`
-  (bool) gates all serve-time origin pull from upstream nodes;
+  (bool) gates all serve-time origin pull from upstream nodes. Unset, the daemon
+  derives it: on without an origin, off with one;
   `decdn_node_pull_probe_fanout`, `decdn_node_pull_timeout_sec`,
   `decdn_node_pull_stall_window_sec` and `decdn_node_pull_min_throughput_bps` tune it.
   The last two replaced a single stall timeout: a leg is now abandoned when it

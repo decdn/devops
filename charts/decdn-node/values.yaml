@@ -180,9 +180,9 @@ origin:
 # rpc_url, access_key_id, session_token, and any key containing "password" or
 # "secret" — use secrets.env (rpcUrlKey / passthroughKeys).
 #
-# cache.node_to_node_pull_through_enabled, when unset, is derived: true when no
-# cache.origin / cache.origins is configured, false when one is (as the Ansible
-# role does).
+# cache.node_to_node_pull_through_enabled, when unset, is not rendered: the daemon
+# derives it, true when no cache.origin / cache.origins is configured, false when
+# one is.
 config:
   identity:
     region: ""                    # required, ISO 3166-1 alpha-2, uppercase

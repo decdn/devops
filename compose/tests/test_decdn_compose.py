@@ -402,20 +402,20 @@ class NodeToml(TmpDir):
         '[network]\n# bind_port = 4433\n\n[cache]\n# region = "us-east-1"\n'
     )
 
-    def edit(self, cache_node: bool) -> str:
+    def edit(self) -> str:
         p = self.tmp / "node.toml"
         p.write_text(self.SAMPLE)
         with mock.patch.object(dc, "NODE_TOML", p):
-            dc.edit_node_toml("DE", cache_node=cache_node)
-            dc.edit_node_toml("DE", cache_node=cache_node)  # idempotent
+            dc.edit_node_toml("DE")
+            dc.edit_node_toml("DE")  # idempotent
         return p.read_text()
 
-    def test_cache_node(self) -> None:
+    def test_fills_in_identity_and_leaves_pull_through_to_the_daemon(self) -> None:
         self.assertEqual(
-            self.edit(True),
+            self.edit(),
             '# deCDN node configuration\n\n[identity]\ndata_dir = "/var/lib/decdn"\nregion = "DE"\n\n'
             "[network]\n# bind_port = 4433\n\n[cache]\n"
-            'node_to_node_pull_through_enabled = true\n# region = "us-east-1"\n'
+            '# region = "us-east-1"\n'
             "\n[self_update]\ncheck = false\n",
         )
 
@@ -428,8 +428,8 @@ class NodeToml(TmpDir):
             "# Once a day, after a command's own work, `decdn` checks for a newer signed\n# check = true\n"
         )
         with mock.patch.object(dc, "NODE_TOML", p):
-            dc.edit_node_toml("DE", cache_node=False)
-            dc.edit_node_toml("DE", cache_node=False)
+            dc.edit_node_toml("DE")
+            dc.edit_node_toml("DE")
         text = p.read_text()
         self.assertTrue(text.endswith("[self_update]\n# Once a day, after a command's own work, `decdn` checks for a newer signed\ncheck = false\n"))
         self.assertEqual(text.count("check = false"), 1)
@@ -439,19 +439,12 @@ class NodeToml(TmpDir):
         p = self.tmp / "node.toml"
         p.write_text(self.SAMPLE + "\n[self_update]\n")
         with mock.patch.object(dc, "NODE_TOML", p):
-            dc.edit_node_toml("DE", cache_node=False)
+            dc.edit_node_toml("DE")
         self.assertIs(dc.tomllib.loads(p.read_text())["self_update"]["check"], False)
 
     def test_cli_runs_without_the_self_update_notice(self) -> None:
         self.assertEqual(dc.CLI_ENV["DECDN_SELF_UPDATE_CHECK"], "0")
         self.assertEqual(dc.CLI_ENV["DECDN_KEYSTORE_PASSWORD_FILE"], str(dc.NODE_PASSWORD))
-
-    def test_appends_a_missing_cache_table(self) -> None:
-        p = self.tmp / "node.toml"
-        p.write_text('[identity]\n# data_dir = "~/.decdn"\n# region = "US"\n')
-        with mock.patch.object(dc, "NODE_TOML", p):
-            dc.edit_node_toml("DE", cache_node=True)
-        self.assertTrue(dc.tomllib.loads(p.read_text())["cache"]["node_to_node_pull_through_enabled"])
 
     def test_refuses_what_it_cannot_fill_in(self) -> None:
         # A future `config init` that writes region active (or not at all): the
@@ -460,7 +453,7 @@ class NodeToml(TmpDir):
         p.write_text('[identity]\n# data_dir = "~/.decdn"\nregion = "US"\n\n[cache]\n')
         before = p.read_text()
         with mock.patch.object(dc, "NODE_TOML", p), self.assertRaises(dc.Refused) as cm:
-            dc.edit_node_toml("DE", cache_node=True)
+            dc.edit_node_toml("DE")
         self.assertIn("identity.region", str(cm.exception))
         self.assertEqual(p.read_text(), before)
 
@@ -468,10 +461,7 @@ class NodeToml(TmpDir):
         p = self.tmp / "node.toml"
         p.write_text("[cache]\n")
         with mock.patch.object(dc, "NODE_TOML", p), self.assertRaises(dc.Refused):
-            dc.edit_node_toml("DE", cache_node=True)
-
-    def test_origin_has_no_pull_through(self) -> None:
-        self.assertNotIn("pull_through", self.edit(False))
+            dc.edit_node_toml("DE")
 
 
 class Mirror(TmpDir):

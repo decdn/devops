@@ -88,9 +88,9 @@ take a newer one.
    This creates the `decdn` system account, `/etc/decdn` and `/var/lib/decdn`, then
    uses the node image's `decdn` CLI to generate the keystore password, the node key
    and the eth keystore (`decdn key-gen`) and the config (`decdn config init --chain
-   arbitrum-sepolia`, with the data dir and region set and, for a cache node,
-   `node_to_node_pull_through_enabled = true` so it fills a miss from other nodes; the
-   daemon's default is off). **Back up the keys now:**
+   arbitrum-sepolia`, with the data dir and region set; the daemon turns
+   `node_to_node_pull_through_enabled` on for a cache node, so it fills a miss from other
+   nodes). **Back up the keys now:**
    `sudo compose/decdn-compose backup -r age1…`.
 
 2. **The RPC endpoint**, which may embed an API key, goes in the root-only env file
@@ -167,9 +167,6 @@ Dashboards and alert rules are in [`monitoring/`](../monitoring/README.md).
 - **Config change:** edit `/etc/decdn/node.toml`, then
   `sudo compose/decdn-compose restart decdn-node` (or
   `sudo compose/decdn-compose cli node reload` for the hot-reloadable sections).
-- **Coming from an earlier setup** whose `node.toml` predates the pull-through line:
-  add `node_to_node_pull_through_enabled = true` under `[cache]` for a cache node
-  (not an origin), then `restart decdn-node`.
 
 ### Run it as an origin (publishers)
 

@@ -749,17 +749,17 @@ def init_node(project: Project, args: argparse.Namespace, origin_url: str | None
             if project.env.get("DECDN_ORIGIN_DIR"):
                 mounts.append(f"{project.env['DECDN_ORIGIN_DIR']}:{ORIGIN_TARGET}:ro")
         decdn_cli(project, cmd, etc_rw=True, extra_mounts=mounts)
-        edit_node_toml(args.region, cache_node=origin_url is None)
+        edit_node_toml(args.region)
         say(f"wrote {NODE_TOML} ({args.chain}, region {args.region})")
     install_template("decdn.env.example", project.env_file("DECDN_ENV_FILE"), 0o600)
 
 
-def edit_node_toml(region: str, cache_node: bool) -> None:
-    """Fill in what `config init` leaves commented: the data dir, the region, and
-    for a cache node the pull-through that fills its misses from other nodes (the
-    daemon's default is off; the Ansible role turns it on without an origin). The
-    result is parsed back and checked, so a change in `config init`'s output fails
-    here instead of leaving a node without its region or pull-through."""
+def edit_node_toml(region: str) -> None:
+    """Fill in what `config init` leaves commented: the data dir and the region.
+    Pull-through is left to the daemon, which derives it from the node's role (on
+    for a cache node, off for an origin). The result is parsed back and checked,
+    so a change in `config init`'s output fails here instead of leaving a node
+    without its region."""
     text = NODE_TOML.read_text()
     # data_dir and region live in [identity], where `config init` leaves them
     # commented; edit only that table (an S3 origin's table has a `# region` too).
@@ -771,11 +771,6 @@ def edit_node_toml(region: str, cache_node: bool) -> None:
         if not re.search(rf"(?m)^{key}\s*=", body):
             body = re.sub(rf"(?m)^# {key} = .*$", f'{key} = "{value}"', body, count=1)
     text = text[: ident.start(1)] + body + text[ident.end(1) :]
-    if cache_node and not re.search(r"(?m)^node_to_node_pull_through_enabled\s*=", text):
-        if re.search(r"(?m)^\[cache\]$", text):
-            text = re.sub(r"(?m)^\[cache\]$", "[cache]\nnode_to_node_pull_through_enabled = true", text, count=1)
-        else:
-            text = text.rstrip("\n") + "\n\n[cache]\nnode_to_node_pull_through_enabled = true\n"
     # Since decdn v0.2, `config init` ends with a [self_update] table whose `check`
     # is commented: the CLI's daily "run `decdn self-update`" notice, which the
     # daemon ignores. Off here, in the file the daemon and `cli` share: the image's
@@ -798,8 +793,6 @@ def edit_node_toml(region: str, cache_node: bool) -> None:
         ("identity", "region"): region,
         ("self_update", "check"): False,
     }
-    if cache_node:
-        want[("cache", "node_to_node_pull_through_enabled")] = True
     wrong = [f"{t}.{k}" for (t, k), v in want.items() if parsed.get(t, {}).get(k) != v]
     if wrong:
         raise Refused(
