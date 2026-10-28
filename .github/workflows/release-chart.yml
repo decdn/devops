@@ -57,7 +57,7 @@ jobs:
         run: |
           [[ "$TAG" == decdn-node-* ]] || { echo "::error::$TAG is not a chart tag (decdn-node-X.Y.Z)"; exit 1; }
           scripts/check-release-version.sh "$TAG" --notes release-notes.md
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
       # Helm is pinned five times: ci.yml's helm, kics and scripts jobs, and both jobs
