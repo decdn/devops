@@ -2841,7 +2841,7 @@
       },
       "title": "Pools awaiting re-anchor",
       "type": "timeseries",
-      "description": "Pools the settlement watcher seeded from one admission-time getPool (a pool whose PoolOpened lies below its scan start), or marked stale, and has not yet re-read at a pinned block. Set at the end of every watcher tick, after that tick's reads. A value that never falls is a pool stuck pending: an open a reorg dropped, a read always skipped as stale, or a read that keeps faulting; each costs one getPool per rotation. DecdnSettlementReanchorStuck fires after 30m above 0.",
+      "description": "Pools the settlement watcher seeded from one admission-time getPool (a pool whose PoolOpened lies below its scan start), or marked stale, and has not yet re-read at a pinned block. Set at the end of every watcher tick, after that tick's reads. It is an aggregate with no per-pool label: a value that never falls is a backlog that does not drain, either a pool that keeps failing to anchor (an open a reorg dropped, a read always skipped as stale, a read that keeps faulting) or new seeds replacing anchored ones; a steady anchored rate beside it is churn. Each pending pool costs one getPool per rotation. DecdnSettlementReanchorBacklog fires after 30m above 0.",
       "targets": [
         {
           "datasource": {

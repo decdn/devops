@@ -42,7 +42,7 @@ the iroh relay's in `monitoring/iroh-relay/`):
   section in upstream's `docs/runbook.md` (20 of 57) also carry a `runbook_url`.
   `DecdnNodeDown`, `DecdnCapacityBondRegistryResyncFailing`, `DecdnBuyerTopupUnresolved`,
   `DecdnRedemptionMaybeBroadcast`, `DecdnNodeClockSkew`,
-  `DecdnSettlementLedgerWriteFailing`, `DecdnSettlementReanchorStuck` and
+  `DecdnSettlementLedgerWriteFailing`, `DecdnSettlementReanchorBacklog` and
   `DecdnSettlementReanchorLowerDeposit` have promtool unit tests in
   `prometheus-alerts_test.yml` (the chart's `.helmignore` keeps that file out of the
   package): keep them in step.
