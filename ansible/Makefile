@@ -286,6 +286,15 @@ build-node build-publisher: build-%:
 # consumer runs them (syntax by FQCN, the firewall holes their group_vars/ give),
 # which the importer's ansible-lint, seeing one collection outside any collections
 # path, cannot. decdn.publisher installs with the decdn.node it depends on.
+#
+# galaxy-importer ships no executable, so it runs as a module of the Python it is
+# installed in: `python` when that one imports it (CI pip-installs it there), else a
+# uv-managed environment (`uv tool install` cannot take a package with no executable,
+# and uv tools are isolated, so `python` never sees one), which brings its own
+# ansible-core and ansible-lint. Override with GALAXY_IMPORTER_PYTHON=<interpreter>.
+GALAXY_IMPORTER_PYTHON ?= $(shell python -c 'import galaxy_importer' 2>/dev/null && echo python \
+  || { command -v uv >/dev/null 2>&1 && echo 'uv tool run --from galaxy-importer python' || echo python; })
+
 galaxy-check: galaxy-check-node galaxy-check-publisher
 
 galaxy-check-publisher: build-node
@@ -293,8 +302,8 @@ galaxy-check-publisher: build-node
 galaxy-check-node galaxy-check-publisher: galaxy-check-%: build-%
 	@set -o pipefail; \
 	  tarball=$$(ls -1 build/decdn-$*-*.tar.gz); \
-	  echo "galaxy-importer: $$tarball"; \
-	  if ! python -m galaxy_importer.main "$$tarball" 2>&1 | tee build/importer-$*.log \
+	  echo "galaxy-importer: $$tarball ($(GALAXY_IMPORTER_PYTHON))"; \
+	  if ! $(GALAXY_IMPORTER_PYTHON) -m galaxy_importer.main "$$tarball" 2>&1 | tee build/importer-$*.log \
 	     || ! grep -q "Importer processing completed successfully" build/importer-$*.log; then \
 	    echo "FAIL: galaxy-importer reported errors or did not complete (see build/importer-$*.log)"; exit 1; \
 	  fi
