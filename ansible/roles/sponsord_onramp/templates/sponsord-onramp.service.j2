@@ -8,7 +8,7 @@
 # and hands them to this unit as credentials.
 [Unit]
 Description=sponsord-onramp: the public onramp in front of sponsord
-Documentation=https://github.com/decdn/sponsord
+Documentation=https://github.com/decdn/decdn/blob/main/docs/sponsord/operator.md
 After=network-online.target sponsord.service
 Wants=network-online.target sponsord.service
 # The onramp reads the daemon's limits once, at start; restart it with the daemon.

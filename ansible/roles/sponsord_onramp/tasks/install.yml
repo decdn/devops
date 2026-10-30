@@ -1,8 +1,8 @@
 ---
 # Install the sponsord-onramp binary. Three methods, selected by sponsord_onramp_install_method:
 #   "release" (default): download the tarball from the GitHub Release of
-#     sponsord_onramp_version (the decdn/sponsord workspace release that also carries
-#     sponsord): an exact version, or the newest release of a line "X.Y"
+#     sponsord_onramp_version (the decdn/decdn release that also carries sponsord
+#     and the node): an exact version, or the newest release of a line "X.Y"
 #     (tasks/resolve-release.yml). Verify it against the GPG-signed SHA256SUMS
 #     manifest, then extract.
 #     Idempotent and upgrade-aware via a version stamp.
@@ -158,7 +158,7 @@
               if grep -qE '^\[GNUPG:\] (EXPKEYSIG|REVKEYSIG|EXPSIG)' gpg-status.txt; then
                 echo "SHA256SUMS carries a good signature from an EXPIRED or REVOKED" >&2
                 echo "release key. Refusing to install. Re-sync" >&2
-                echo "roles/sponsord/files/sponsord-release-KEYS.asc from upstream KEYS," >&2
+                echo "roles/sponsord_onramp/files/decdn-release-KEYS.asc from upstream KEYS," >&2
                 echo "or verify this release out of band." >&2
                 exit 1
               fi

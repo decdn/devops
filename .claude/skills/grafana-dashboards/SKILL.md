@@ -47,7 +47,7 @@ the iroh relay's in `monitoring/iroh-relay/`):
 - `monitoring/sponsord/` — the onboarding sponsor's own pair: `dashboard-sponsord.json` (uid
   `decdn-sponsord`) and `prometheus-alerts.yml` (group `sponsord`, `job="sponsord"`).
   The chart does not render this directory (sponsord has no Kubernetes path). Its
-  `sponsord_*` names come from upstream `decdn/sponsord` `crates/sponsord/src/metrics.rs`
+  `sponsord_*` names come from upstream decdn/decdn's `crates/sponsord/src/metrics.rs`
   (check them with the recipe after the node one below). Its logs are plain text,
   not JSON: select `{unit="sponsord.service"}` and filter on the `level` label the
   `grafana_alloy` role parses. The rules have promtool unit tests in

@@ -7,12 +7,13 @@
 #
 # The onramp listens on loopback. Caddy, installed by this role unless you turn it
 # off, terminates TLS for sponsord_onramp_domain and is the only public listener
-# (AGENTS.md hard rule 2). Upstream: github.com/decdn/sponsord, docs/operator.md.
+# (AGENTS.md hard rule 2). Upstream: github.com/decdn/decdn (crates/sponsord-onramp),
+# docs/sponsord/operator.md.
 
 # --- Install method -----------------------------------------------------------
 # "release" (default): download the pinned v<version> GitHub Release tarball and
-#   verify it against the GPG-signed SHA256SUMS. decdn/sponsord releases its whole
-#   workspace (sponsord, sponsord-onramp) from one vX.Y.Z tag.
+#   verify it against the GPG-signed SHA256SUMS. One decdn/decdn release (vX.Y.Z)
+#   ships the node, the CLI, sponsord and sponsord-onramp.
 # "source": clone sponsord_onramp_source_repo at sponsord_onramp_source_ref on the host and
 #   `cargo build -p sponsord-onramp` there as an unprivileged build user (see "Build from
 #   source" below).
@@ -20,7 +21,7 @@
 sponsord_onramp_install_method: release    # "release" | "source" | "manual"
 sponsord_onramp_manual_bin_src: ""        # manual: control-machine path to the binary
 # Alternative to sponsord_onramp_manual_bin_src: the control-machine `target/release`
-# dir of a decdn/sponsord checkout (falls back to target/<triple>/release). The role
+# dir of a decdn/decdn checkout (falls back to target/<triple>/release). The role
 # checks the binary is an ELF for the host's architecture before shipping it.
 sponsord_onramp_release_target_dir: "{{ sponsord_release_target_dir | default('') }}"
 
@@ -28,7 +29,7 @@ sponsord_onramp_release_target_dir: "{{ sponsord_release_target_dir | default(''
 # The repo and the ref to build: any tag, branch or commit SHA (REQUIRED in
 # "source" mode). A branch is re-resolved every run, so a moved branch rebuilds;
 # an unchanged commit does not. The URL must not embed credentials.
-sponsord_onramp_source_repo: "https://github.com/decdn/sponsord.git"
+sponsord_onramp_source_repo: "https://github.com/decdn/decdn.git"
 sponsord_onramp_source_ref: ""
 # CARGO_BUILD_JOBS for the build ("" = one per CPU); lower it if the host runs
 # out of memory compiling.
@@ -48,20 +49,21 @@ decdn_rustup_sha256:
   aarch64-unknown-linux-gnu: 15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433
 
 # --- Release to install ("release" mode) ----------------------------------------
-# The decdn/sponsord release to install, a line ("X.Y", the newest finished vX.Y.N)
-# or an exact "X.Y.Z": the same one as the sponsord role's sponsord_version.
+# The decdn/decdn release to install, a line ("X.Y", the newest finished vX.Y.N)
+# or an exact "X.Y.Z": the same one as the sponsord role's sponsord_version (and
+# the decdn_node role's decdn_node_version: one release ships all four binaries).
 sponsord_onramp_version: "0.2"
 # Derived from the host's gathered architecture (vars/main/arch.yml).
 sponsord_onramp_target: "{{ _sponsord_onramp_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
-sponsord_onramp_release_base: "https://github.com/decdn/sponsord/releases/download"
-# Where a release line is resolved (GitHub's GET /repos/decdn/sponsord/releases
+sponsord_onramp_release_base: "https://github.com/decdn/decdn/releases/download"
+# Where a release line is resolved (GitHub's GET /repos/decdn/decdn/releases
 # shape; 60 unauthenticated requests an hour per address).
-sponsord_onramp_release_index: "https://api.github.com/repos/decdn/sponsord/releases?per_page=100"
+sponsord_onramp_release_index: "https://api.github.com/repos/decdn/decdn/releases?per_page=100"
 sponsord_onramp_verify_release_signature: true
-# Upstream signs every decdn/sponsord release with the keys in its one KEYS file,
-# vendored once, in the sponsord role. Both roles ship side by side (this repo and
-# the decdn.publisher collection), so the path holds in either.
-sponsord_onramp_release_keyring: "{{ role_path }}/../sponsord/files/sponsord-release-KEYS.asc"
+# decdn/decdn's KEYS, vendored with this role: the same file the installers' decdn
+# release is checked against (sponsord_onramp_decdn_keyring below), since one
+# release ships both.
+sponsord_onramp_release_keyring: decdn-release-KEYS.asc
 
 # --- Chain ----------------------------------------------------------------------
 # The onramp takes the chain id and the PaymentPool from the daemon (/v1/info). It
@@ -140,7 +142,8 @@ sponsord_onramp_gate_template_src: ""
 
 # --- Release the installers install --------------------------------------------
 # The decdn/decdn release the installers download `decdn` from. A release line,
-# "vX.Y" (the default follows the decdn_node role's), serves the newest finished
+# "vX.Y" (the default follows the decdn_node role's, and so the release the onramp
+# itself comes from), serves the newest finished
 # vX.Y.N, looked up in sponsord_onramp_decdn_release_index on every run, with the
 # SHA-256 of its SHA256SUMS read from sponsord_onramp_decdn_release_base and
 # verified against sponsord_onramp_decdn_keyring first. An exact tag, "vX.Y.Z",

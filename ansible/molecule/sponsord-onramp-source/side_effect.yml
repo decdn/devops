@@ -1,6 +1,6 @@
 ---
 # "source" for both roles on the host ../sponsord-onramp converged: each builds its
-# own clone of one fixture repo shaped like decdn/sponsord, sharing one build user and
+# own clone of one fixture repo shaped like decdn/decdn's sponsord crates, sharing one build user and
 # toolchain, installs and stamps its binary, and passes its /healthz gate; "manual"
 # afterwards clears both stamps. The host is left on the manual stubs for verify.
 #

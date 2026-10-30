@@ -1305,13 +1305,13 @@
             tag: sponsord-source-repo
             method: source
             # kics-scan ignore-line
-            repo: "https://token@github.com/decdn/sponsord.git"
+            repo: "https://token@github.com/decdn/decdn.git"
             task: Refuse credentials in the source repo URL
           - role: sponsord
             tag: sponsord-source-repo
             method: source
             # kics-scan ignore-line
-            repo: "https://github.com/decdn/sponsord.git?access_token=x"
+            repo: "https://github.com/decdn/decdn.git?access_token=x"
             task: Refuse credentials in the source repo URL
           - {role: sponsord, tag: sponsord-source-jobs, method: source, jobs: "0",
              task: Validate sponsord_source_build_jobs}
@@ -1323,14 +1323,14 @@
             tag: onramp-source-repo
             method: source
             # kics-scan ignore-line
-            repo: "https://user:token@github.com/decdn/sponsord.git"
+            repo: "https://user:token@github.com/decdn/decdn.git"
             task: Refuse credentials in the source repo URL
           # Accepted: the scp form passes the credential check and fails at the
           # next assert (the bad jobs value) instead.
           - role: sponsord_onramp
             tag: onramp-source-repo-scp-ok
             method: source
-            repo: "git@github.com:decdn/sponsord.git"
+            repo: "git@github.com:decdn/decdn.git"
             jobs: "x"
             task: Validate sponsord_onramp_source_build_jobs
           - {role: sponsord_onramp, tag: onramp-source-jobs, method: source, jobs: "-1",

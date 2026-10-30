@@ -17,7 +17,7 @@
 # sponsord_onramp_install_method: source
 # sponsord_onramp_source_ref: v0.2.0
 # Or manual, which follows sponsord_release_target_dir (`cargo build --release` in
-# a decdn/sponsord checkout builds both binaries):
+# a decdn/decdn checkout builds both binaries):
 # sponsord_onramp_install_method: manual
 
 # --- Public address ----------------------------------------------------------------

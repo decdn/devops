@@ -24,7 +24,7 @@
       - sponsord_version is match('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)?$')
     fail_msg: >-
       sponsord_install_method "release" (the default) requires sponsord_version: a
-      release line ("X.Y", the newest vX.Y.N release of decdn/sponsord, looked up in
+      release line ("X.Y", the newest vX.Y.N release of decdn/decdn, looked up in
       sponsord_release_index) or an exact version ("X.Y.Z", the vX.Y.Z release), as
       a quoted string without the "v" (got "{{ sponsord_version }}"). Downloads come
       from sponsord_release_base. To run something unreleased, set
@@ -135,7 +135,7 @@
         fail_msg: >-
           sponsord_install_method "manual" needs sponsord_manual_bin_src (a
           control-machine path to the sponsord binary) or sponsord_release_target_dir
-          (the control-machine target/release dir of a decdn/sponsord checkout).
+          (the control-machine target/release dir of a decdn/decdn checkout).
 
     # Internal facts, never a set_fact on sponsord_manual_bin_src itself: an
     # include_role `vars:` value would outrank it, and a derived path would leak
@@ -175,7 +175,7 @@
           No sponsord binary under sponsord_release_target_dir
           ({{ sponsord_release_target_dir }}) or its cross output dir
           ({{ (_sponsord_target_dir | dirname) ~ '/' ~ sponsord_target ~ '/release' }}).
-          Build it in a decdn/sponsord checkout — `cargo build --release -p sponsord`,
+          Build it in a decdn/decdn checkout — `cargo build --release -p sponsord`,
           or cross-compiling for the host,
           `cross build --release -p sponsord --target {{ sponsord_target }}`.
       when: _sponsord_use_dir | bool

@@ -1,9 +1,9 @@
 # sponsord reference Prometheus alerting rules
 #
-# For the deCDN onboarding sponsor (decdn/sponsord), whose /metrics the
-# grafana_alloy role ships as job="sponsord". The series and what upstream asks
-# operators to alert on are in upstream docs/operator.md, "Monitor"; the names
-# are crates/sponsord/src/metrics.rs. Thresholds are operator-onboarding
+# For the deCDN onboarding sponsor (decdn/decdn's `sponsord` crate), whose /metrics
+# the grafana_alloy role ships as job="sponsord". The series and what upstream asks
+# operators to alert on are in upstream docs/sponsord/operator.md, "Monitor"; the
+# names are crates/sponsord/src/metrics.rs. Thresholds are operator-onboarding
 # defaults, not normative.
 #
 # NOT covered: the treasury wallet's own USDC and gas balance, which pays every
@@ -65,7 +65,7 @@ groups:
           component: sponsor
           severity: warning
         annotations:
-          runbook_url: "https://github.com/decdn/sponsord/blob/main/docs/operator.md#5-monitor"
+          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/sponsord/operator.md#5-monitor"
           summary: "sponsord pool keeper failing on {{ $labels.instance }}"
           description: |
             The keeper failed a chain read or a top-up in the last two
@@ -88,7 +88,7 @@ groups:
           component: sponsor
           severity: warning
         annotations:
-          runbook_url: "https://github.com/decdn/sponsord/blob/main/docs/operator.md#5-monitor"
+          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/sponsord/operator.md#5-monitor"
           summary: "sponsord has not read its pool balance for 3h on {{ $labels.instance }}"
           description: |
             sponsord_pool_last_check_unix has not advanced for three
@@ -103,7 +103,7 @@ groups:
           component: sponsor
           severity: warning
         annotations:
-          runbook_url: "https://github.com/decdn/sponsord/blob/main/docs/operator.md#5-monitor"
+          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/sponsord/operator.md#5-monitor"
           summary: "sponsord has not read its pool balance since it started on {{ $labels.instance }}"
           description: |
             sponsord_pool_last_check_unix is still 0 three hours after
@@ -119,7 +119,7 @@ groups:
           component: sponsor
           severity: warning
         annotations:
-          runbook_url: "https://github.com/decdn/sponsord/blob/main/docs/operator.md#5-monitor"
+          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/sponsord/operator.md#5-monitor"
           summary: "sponsord is holding pool top-ups on {{ $labels.instance }}"
           description: |
             The keeper broadcast a top-up and could not read its receipt,
@@ -142,7 +142,7 @@ groups:
           component: sponsor
           severity: critical
         annotations:
-          runbook_url: "https://github.com/decdn/sponsord/blob/main/docs/operator.md#5-monitor"
+          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/sponsord/operator.md#5-monitor"
           summary: "sponsord top-ups held for over 2h on {{ $labels.instance }}"
           description: |
             A top-up has sat unconfirmed for more than two hours, so the
@@ -162,7 +162,7 @@ groups:
           component: sponsor
           severity: critical
         annotations:
-          runbook_url: "https://github.com/decdn/sponsord/blob/main/docs/operator.md#5-monitor"
+          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/sponsord/operator.md#5-monitor"
           summary: "sponsord pool empty on {{ $labels.instance }}"
           description: |
             The pool's remaining balance was 0 at the keeper's last read.

@@ -93,45 +93,45 @@ carries its upstream commit) and `ansible/molecule/schema/files/schema-keys.txt`
 `grafana_alloy` template rendered in its `compose` runtime
 (`scripts/render-compose-alloy.sh`); `make test-scripts` fails while it differs from a
 fresh render, `make lint-alloy` runs it. The weekly `upstream-drift` workflow flags
-stale mirrors and a new upstream release line of either repo.
+stale mirrors and a new upstream release line.
 
-**Pinned upstream releases.** One decdn/decdn release line (`decdn_node_version`, today
-`0.2`) and one decdn/sponsord release line (`sponsord_version` = `sponsord_onramp_version`,
-today `0.2`; decdn/sponsord tags its whole workspace `vX.Y.Z`, there are no per-crate
-tags) are pinned across every path. A line, `X.Y`, is what the role defaults, the
-onramp's installer pin (`sponsord_onramp_decdn_release`, `vX.Y`) and the chart's
-`appVersion` name: the roles install its newest finished `vX.Y.N` on every run
-(`tasks/resolve-release.yml`, copied into all three roles: GitHub's release list, then
-the same signed `SHA256SUMS` and exact `--version` check against the resolved version;
-the onramp reads the installers' digest from that release's verified `SHA256SUMS`),
-and the chart's default image tag is the line's floating tag, pulled `Always`. An
-exact `X.Y.Z` in inventory (or `image.tag`/`image.digest`) holds a host on one release.
-So an upstream patch release needs no release of the collections or the chart; a new
-line does. What cannot resolve a line names one release of it and moves on every
-upstream release, repo-only: `compose/.env.example`'s image digests, the onramp's
-installer pin in `compose/sponsord-onramp.env.example` (tag + `SHA256SUMS` digest), the
-chart's example digest, the commented exact-pin examples, and the generated mirrors
-(which a patch is not expected to change; when one does, the bump PR says so and the
-collections need a release). cloud-init takes the role defaults at `DEVOPS_REF`. Docs
-name the pin (`decdn_node_version`, `sponsord_version`), never its number: besides this
-paragraph, only the commented examples and the comments beside a pinned value name a
-number, and they move with the pin (`bump_decdn.py` moves decdn's; the sponsord
-checklist lists sponsord's). `make test-scripts` checks the pins agree with each other,
-the Compose example (a release of the line), `appVersion`, the chart's
-`artifacthub.io/images` tag and this paragraph, and that the vendored KEYS hold the
-keys SECURITY.md publishes; the weekly `upstream-drift` job checks the exact copies and
-the mirrors against each line's newest release and flags a newer upstream line. Bump
-with the checklists in `roles/decdn_node/README.md` and `roles/sponsord/README.md`;
-`scripts/open-decdn-bump.sh` opens the decdn bump's PR (decdn's `publish-crates.sh`
-runs it after each release). Both upstream repos are public and also publish their
-binaries as crates (`decdn-node`, `decdn-cli`, `sponsord`, `sponsord-onramp`); the
-roles do not install from crates.io (no maintainer signature).
+**Pinned upstream releases.** One decdn/decdn release line is pinned across every
+path, by three role defaults that must agree (`decdn_node_version` = `sponsord_version`
+= `sponsord_onramp_version`, today `0.2`): one decdn/decdn release (`vX.Y.Z`, the whole
+workspace, no per-crate tags) ships `decdn-node`, `decdn`, `sponsord` and
+`sponsord-onramp`, their four images and one `SHA256SUMS`. A line, `X.Y`, is what the
+role defaults, the onramp's installer pin (`sponsord_onramp_decdn_release`, `vX.Y`) and
+the chart's `appVersion` name: the roles install its newest finished `vX.Y.N` on every
+run (`tasks/resolve-release.yml`, copied into all three roles: GitHub's release list,
+then the same signed `SHA256SUMS` and exact `--version` check against the resolved
+version; the onramp reads the installers' digest from that release's verified
+`SHA256SUMS`), and the chart's default image tag is the line's floating tag, pulled
+`Always`. An exact `X.Y.Z` in inventory (or `image.tag`/`image.digest`) holds a host on
+one release. So an upstream patch release needs no release of the collections or the
+chart; a new line does. What cannot resolve a line names one release of it and moves
+on every upstream release, repo-only: `compose/.env.example`'s three image digests, the
+onramp's installer pin in `compose/sponsord-onramp.env.example` (tag + `SHA256SUMS`
+digest), the chart's example digest, the commented exact-pin examples, and the
+generated mirrors (which a patch is not expected to change; when one does, the bump PR
+says so and the collections need a release). cloud-init takes the role defaults at
+`DEVOPS_REF`. Docs name the pin (`decdn_node_version`, `sponsord_version`), never its
+number: besides this paragraph, only the commented examples and the comments beside a
+pinned value name a number, and they move with the pin (`bump_decdn.py` moves all of
+them). `make test-scripts` checks the pins agree with each other, the Compose example (a
+release of the line), `appVersion`, the chart's `artifacthub.io/images` tag and this
+paragraph, and that the vendored KEYS (three byte copies of decdn's) hold the keys
+SECURITY.md publishes; the weekly `upstream-drift` job checks the exact copies and the
+mirrors against the line's newest release and flags a newer upstream line. Bump with
+the checklist in `roles/decdn_node/README.md`; `scripts/open-decdn-bump.sh` opens the
+bump's PR (decdn's `publish-crates.sh` runs it after each release). Upstream is public
+and also publishes the binaries as crates (`decdn-node`, `decdn-cli`, `sponsord`,
+`sponsord-onramp`); the roles do not install from crates.io (no maintainer signature).
 
 **Monitoring assets** (`monitoring/`, see its README and
 `.claude/skills/grafana-dashboards/SKILL.md`): upstream ships none. Every `decdn_*` /
 `sponsord_*` series a panel or rule names must be one the daemon exports (the node's
 `/metrics` and upstream's `adr/appendix-observability.md` registry, where a `planned`
-row emits nothing; `decdn/sponsord` `crates/sponsord/src/metrics.rs`) — nothing in CI
+row emits nothing; decdn/decdn's `crates/sponsord/src/metrics.rs`) — nothing in CI
 checks those names, so a typo renders `(no data)` or a rule that never fires. The
 relay's `relayserver_*` names *are* checked, against `exported-metrics.txt`, the
 `/metrics` of the pinned `iroh-relay`: re-capture it when bumping `iroh_relay_version`.

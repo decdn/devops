@@ -38,8 +38,8 @@ for the secrets of every group the host is in.
 > (`release` mode). The `manual` mode would install binaries that nothing verified,
 > and the Ansible path's `source` mode builds whatever its git ref points at (and
 > takes many minutes on first boot), so the lint refuses both. The release is the
-> newest of the release line the roles pin at `DEVOPS_REF` (`decdn_node_version` for
-> decdn/decdn, `sponsord_version` for the sponsor), looked up on every run; set
+> newest of the release line the roles pin at `DEVOPS_REF` (`decdn_node_version`;
+> the sponsor's `sponsord_version` is the same line), looked up on every run; set
 > `decdn_node_version` in the user-data to another line, or to an exact `"X.Y.Z"`.
 > `decdn_node_release_base` points the download at a mirror that serves
 > `v<version>/{decdn-node,decdn}-<version>-<target>.tar.gz`, `SHA256SUMS` and
@@ -206,9 +206,9 @@ Until then it serves its bytes as a cache does.
 
 > **Releases only.** The sponsor's services install only from GPG-verified release tarballs
 > (`release` mode), and the lint refuses `manual` and `source`. Both come from one
-> decdn/sponsord release (`v<version>`), the newest of the line the roles pin at
-> `DEVOPS_REF` unless the user-data sets `sponsord_version` and
-> `sponsord_onramp_version`.
+> decdn/decdn release (`v<version>`, the same release as the node's), the newest of
+> the line the roles pin at `DEVOPS_REF` unless the user-data sets `sponsord_version`
+> and `sponsord_onramp_version`.
 > `sponsord_release_base` and `sponsord_onramp_release_base` point at a mirror; the
 > signature is still checked against the KEYS vendored in the `sponsord` role.
 
