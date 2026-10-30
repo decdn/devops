@@ -243,7 +243,8 @@
 
 # --- Host files -------------------------------------------------------------------
 # The DNS provider's credentials are the operator's, written on the host: the role
-# checks the file is there, root-only and non-empty, and never reads it back.
+# checks the file is there and non-empty, locks it to root 0600, and never reads it
+# back.
 - name: Check the ACME DNS credentials file
   ansible.builtin.stat:
     path: "{{ decdn_gateway_acme_env_file }}"
@@ -264,6 +265,16 @@
         sudo install -d -m 0750 {{ decdn_gateway_etc }}
         sudo install -m 0600 /dev/null {{ decdn_gateway_acme_env_file }}
         sudoedit {{ decdn_gateway_acme_env_file }}   # e.g. CLOUDFLARE_DNS_API_TOKEN=...
+  when: decdn_gateway_tls == 'acme'
+
+# Ownership + mode only; the content is the operator's.
+- name: Lock down the ACME DNS credentials file
+  ansible.builtin.file:
+    path: "{{ decdn_gateway_acme_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    follow: false
   when: decdn_gateway_tls == 'acme'
 
 # Before any mutation: nginx sites someone else enabled are never disabled silently.

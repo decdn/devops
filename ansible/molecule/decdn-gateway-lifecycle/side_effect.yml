@@ -6,13 +6,14 @@
   tasks:
     # The exec provider would run EXEC_PATH for the TXT record; the ACME server is
     # unreachable, so lego fails before it gets that far.
+    # World-readable on purpose: the role must lock it down.
     - name: Write the DNS provider's credentials file
       ansible.builtin.copy:
         dest: /etc/decdn-gateway/acme-dns.env
         content: "EXEC_PATH=/bin/false\n"
         owner: root
         group: root
-        mode: "0600"
+        mode: "0644"
 
     - name: Converge on acme
       block:
@@ -36,6 +37,18 @@
             fail_msg: >-
               The acme converge failed at "{{ ansible_failed_task.name }}", not at the
               issuance check: {{ ansible_failed_result.msg | default('') }}
+
+    - name: Stat the DNS provider's credentials file
+      ansible.builtin.stat:
+        path: /etc/decdn-gateway/acme-dns.env
+      register: _gw_acme_env
+
+    - name: Require the role to have locked it to root 0600
+      ansible.builtin.assert:
+        that:
+          - _gw_acme_env.stat.mode == '0600'
+          - _gw_acme_env.stat.pw_name == 'root'
+        fail_msg: "{{ _gw_acme_env.stat.mode }} {{ _gw_acme_env.stat.pw_name }}"
 
     - name: Run the installed lego
       ansible.builtin.command:
