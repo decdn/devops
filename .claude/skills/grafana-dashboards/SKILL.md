@@ -39,10 +39,11 @@ the iroh relay's in `monitoring/iroh-relay/`):
   process, iroh transport, DHT and probe, logs, traces.
 - `prometheus-alerts.yml` — three groups: `decdn-slash-safety`, `decdn-liveness`,
   `decdn-delivery`. Every rule carries a `component` label. Only rules with a matching
-  section in upstream's `docs/runbook.md` (20 of 53) also carry a `runbook_url`.
-  `DecdnNodeDown`, `DecdnCapacityBondRegistryResyncFailing`, `DecdnBuyerTopupUnresolved`
-  and `DecdnRedemptionMaybeBroadcast` have promtool unit tests in `prometheus-alerts_test.yml` (the chart's `.helmignore` keeps that file
-  out of the package): keep them in step.
+  section in upstream's `docs/runbook.md` (20 of 54) also carry a `runbook_url`.
+  `DecdnNodeDown`, `DecdnCapacityBondRegistryResyncFailing`, `DecdnBuyerTopupUnresolved`,
+  `DecdnRedemptionMaybeBroadcast` and `DecdnNodeClockSkew` have promtool unit tests in
+  `prometheus-alerts_test.yml` (the chart's `.helmignore` keeps that file out of the
+  package): keep them in step.
 
 - `monitoring/sponsord/` — the onboarding sponsor's own pair: `dashboard-sponsord.json` (uid
   `decdn-sponsord`) and `prometheus-alerts.yml` (group `sponsord`, `job="sponsord"`).
@@ -123,12 +124,7 @@ region) emits nothing — read a stray hit with that in mind. `decdn_health` is 
    Do not write a `by (reason)` query against a series that has no such label.
 3. A name that resolves can still sit at a permanent zero because nothing increments it.
 4. A panel or alert that names a *new* metric needs the metric in upstream
-   `crates/node/src/metrics.rs` first, in a released or pinned `decdn-node`. The one
-   exception: `decdn_onchain_tx_maybe_broadcast_total` (decdn/decdn#2574) lands ahead of
-   the release after v0.2.0, because its absence keeps `DecdnRedemptionMaybeBroadcast`
-   silent and the hole it covers would otherwise go unalerted (#170). The name check
-   prints it against a v0.2 node; drop this exception once `decdn_node_version` moves
-   past 0.2.
+   `crates/node/src/metrics.rs` first, in a released or pinned `decdn-node`.
 5. The two "Unattributed stream failures" panels (overview and delivery) subtract every
    inbound failure reason from `decdn_streams_failed_total{direction="inbound"}`. When
    upstream adds a reason to `INBOUND_FAILURE_REASONS` in `crates/node/src/metrics.rs`,

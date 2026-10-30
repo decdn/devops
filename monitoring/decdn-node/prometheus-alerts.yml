@@ -642,6 +642,45 @@ groups:
             Otherwise check that the host firewall allows UDP on
             network.bind_port.
 
+      # A request whose timestamp is more than 30 s from the receiver's clock is
+      # refused with TIMESTAMP_SKEW (ADR 005, ADR 013). The first arm counts this
+      # node's probes and pulls that upstreams refused, the second the inbound
+      # probes this node refused; when this node's clock is off, both rise with
+      # every peer it talks to. The node records no reputation outcome for
+      # either, so nothing else alerts on it. The counters carry no peer label,
+      # so one peer with a bad clock that keeps talking to this node trips it
+      # too: the description says how to tell. A refusal holds the 15m increase
+      # above zero for 15m, so one stray event never outlasts the 30m for;
+      # refusals at least every ~15m for 30m do. Both counters ship in decdn
+      # v0.3.0; on an older node the series are absent and the rule stays
+      # silent.
+      - alert: DecdnNodeClockSkew
+        expr: >-
+          increase(decdn_node_upstream_timestamp_rejected_total[15m]) > 0
+          or
+          increase(decdn_probe_timestamp_skew_refusals_total[15m]) > 0
+        for: 30m
+        labels:
+          component: node
+          severity: warning
+        annotations:
+          summary: "Requests refused for clock skew on {{ $labels.instance }}: its clock is likely more than 30 s off"
+          description: |
+            For 30 minutes, upstream peers have kept refusing this node's
+            probes and pulls with TIMESTAMP_SKEW
+            (decdn_node_upstream_timestamp_rejected_total), or this node has
+            kept refusing inbound probes for the same reason
+            (decdn_probe_timestamp_skew_refusals_total): a request's
+            timestamp and the receiving node's clock differ by more than
+            30 seconds. Most likely this node's clock is off, and then every
+            upstream pull and probe it sends fails. Check time sync on the
+            host (on Kubernetes, the cluster node): `chronyc tracking` or
+            `timedatectl status` should show the clock synchronised, and
+            chronyd or systemd-timesyncd must be running and able to reach
+            its NTP servers (UDP 123 outbound). If the host clock is right,
+            one peer's is off instead: the throttled warn! lines name the
+            peer, and the same alert fires on the other nodes it talks to.
+
       # NOTE: /health 503 detection requires an external prober (e.g.
       # blackbox_exporter) — it is not surfaced as a decdn_* metric. Add
       # an alert in your blackbox rules file along the lines of
@@ -846,15 +885,15 @@ groups:
             Redemption steps keep failing: a redeemMany that reverted or was
             refused at send, or a lane the redeemer could not plan or load.
             An unconfirmed receipt does not count here; DecdnOnchainTxUnconfirmed
-            covers it. From the first decdn release after v0.2.0, nor does a send
-            that failed with no tx hash; DecdnRedemptionMaybeBroadcast covers it.
+            covers it. From decdn v0.3.0, nor does a send that failed with no
+            tx hash; DecdnRedemptionMaybeBroadcast covers it.
             The claims stay and retry, but unredeemed revenue accrues and a
             closing pool's grace window can run out. Read the redeemMany warn!
             lines (each carries the tx hash when one was issued) and check the
             RPC provider and the operator key's gas balance.
 
-      # The counter ships in the first decdn release after v0.2.0; on an older
-      # node the series is absent and the rule stays silent. Not folded into
+      # The counter ships in decdn v0.3.0; on an older node the series is
+      # absent and the rule stays silent. Not folded into
       # DecdnOnchainTxUnconfirmed (for: 0m): a node's seller and buyer share one
       # key, so a harmless nonce collision between them gives these same answers.
       # As with DecdnRedemptionFailing, increase() extrapolation reads two events
@@ -1061,13 +1100,12 @@ groups:
       # topUp whose outcome the chain has not shown: the submit got no tx hash
       # or the receipt could not be read, and the transaction may still mine,
       # so no other topUp goes out meanwhile. A submit gets no tx hash when the
-      # transport fails and, from the first decdn release after v0.2.0, also
-      # when the RPC node already holds the transaction (`already known`),
-      # counts its nonce as spent (`nonce too low`) or holds another
-      # transaction of this key at that nonce (`replacement transaction
-      # underpriced`), as when a seller redemption took the topUp's nonce. A
-      # healthy settle clears it within a few blocks; 15m of hold is a stuck
-      # chain path.
+      # transport fails and, from decdn v0.3.0, also when the RPC node already
+      # holds the transaction (`already known`), counts its nonce as spent
+      # (`nonce too low`) or holds another transaction of this key at that
+      # nonce (`replacement transaction underpriced`), as when a seller
+      # redemption took the topUp's nonce. A healthy settle clears it within a
+      # few blocks; 15m of hold is a stuck chain path.
       - alert: DecdnBuyerTopupUnresolved
         expr: decdn_buyer_topup_unresolved == 1
         for: 15m
