@@ -125,7 +125,8 @@
           probe.rate_limit
           receipts
           security
-          self_update'
+          self_update
+          serve.rate_limit'
           if [ "$tables" != "$(echo "$expected" | sed 's/^ *//')" ]; then
             echo "rendered table set changed. got:" >&2; echo "$tables" >&2
             echo "expected:" >&2; echo "$expected" | sed 's/^ *//' >&2

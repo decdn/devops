@@ -97,7 +97,7 @@ stale mirrors and a new upstream release line.
 
 **Pinned upstream releases.** One decdn/decdn release line is pinned across every
 path, by three role defaults that must agree (`decdn_node_version` = `sponsord_version`
-= `sponsord_onramp_version`, today `0.2`): one decdn/decdn release (`vX.Y.Z`, the whole
+= `sponsord_onramp_version`, today `0.3`): one decdn/decdn release (`vX.Y.Z`, the whole
 workspace, no per-crate tags) ships `decdn-node`, `decdn`, `sponsord` and
 `sponsord-onramp`, their four images and one `SHA256SUMS`. A line, `X.Y`, is what the
 role defaults, the onramp's installer pin (`sponsord_onramp_decdn_release`, `vX.Y`) and

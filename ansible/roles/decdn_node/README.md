@@ -377,7 +377,8 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
 - **Abuse limits + load shedding** — the `decdn_security_*` family,
   `decdn_load_shed_*` (`policy` is `resource-pressure`|`always-admit`; the low-water
   serve mark must be `<=` the high), and the `decdn_dht_rate_limit` /
-  `decdn_probe_rate_limit` **dicts** (any subset of eight keys; rate keys are floats,
+  `decdn_probe_rate_limit` / `decdn_serve_rate_limit` (`[serve.rate_limit]`, decdn v0.3:
+  inbound client requests) **dicts** (any subset of eight keys; rate keys are floats,
   the rest integers — an unknown key is rejected at deploy time, because the template
   would otherwise silently drop it).
 - **Receipts + local denylist** — `decdn_receipts_max_file_bytes`,
@@ -759,6 +760,9 @@ The steps:
 1. The line: `decdn_node_version` in `defaults/main.yml`, `sponsord_version` in
    `roles/sponsord/defaults/main.yml`, and `sponsord_onramp_version` plus
    `sponsord_onramp_decdn_release` (`vX.Y`) in `roles/sponsord_onramp/defaults/main.yml`.
+   If upstream moved `MIN_DECDN_RELEASE` (`crates/sponsord-onramp/src/config.rs`), add
+   the new floor to the onramp role's "Refuse a decdn release below the installers'
+   floor" assert and a case to `molecule/validation-sponsord`.
 2. The generated mirrors, from a decdn checkout at the new tag:
    `scripts/sync-network-profiles.py <checkout> --ref v<version>` and
    `ansible/molecule/schema/files/gen-schema-keys.py <checkout> >

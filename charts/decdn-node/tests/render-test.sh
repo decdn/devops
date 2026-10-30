@@ -217,7 +217,8 @@ observability
 payment
 probe.rate_limit
 receipts
-security"
+security
+serve.rate_limit"
 [ "$tables" = "$expected" ] || { diff <(echo "$expected") <(echo "$tables") >&2 || true; fail "table set of ci-values render"; }
 keys="$(grep -cE '^[a-z_0-9]+ = ' "$toml" || true)"
 [ "$keys" -ge 125 ] || fail "only $keys scalar keys in ci-values render (expected >= 125)"

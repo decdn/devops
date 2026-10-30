@@ -828,11 +828,11 @@
   loop_control:
     label: "{{ item.name }}"
 
-# The two rate-limit tables share one shape. Reject unknown keys here rather than
-# letting them render: [dht.rate_limit] / [probe.rate_limit] are deny_unknown_fields
+# The three rate-limit tables share one shape. Reject unknown keys here rather than
+# letting them render: [dht|probe|serve.rate_limit] are deny_unknown_fields
 # upstream, and the template's key loop would silently DROP anything not on its
 # list — so a typo'd knob would leave the limit at its default with no trace.
-- name: Validate optional DHT + probe rate-limit tables
+- name: Validate optional DHT, probe + serve rate-limit tables
   ansible.builtin.assert:
     that:
       - item.value | type_debug in ["dict", "AnsibleMapping"]
@@ -863,6 +863,7 @@
   loop:
     - {name: decdn_dht_rate_limit, value: "{{ decdn_dht_rate_limit }}"}
     - {name: decdn_probe_rate_limit, value: "{{ decdn_probe_rate_limit }}"}
+    - {name: decdn_serve_rate_limit, value: "{{ decdn_serve_rate_limit }}"}
   loop_control:
     label: "{{ item.name }}"
   when: item.value | length > 0
