@@ -201,8 +201,6 @@ Chart defaults that differ from the daemon's are the same as the role's:
 - `observability.log_format: json` (the daemon default is `pretty`).
 - `cache.cache_size_mb: 10240` and `payment.rate_per_mb: 10` are pinned explicitly, at the
   daemon's own values.
-- `cache.node_to_node_pull_through_enabled`: derived when unset. It is `true` with no
-  `cache.origin` or `cache.origins`, and `false` when an origin is configured.
 
 **Managed keys.** The chart sets these to match the pod spec. Setting any of them in
 `config` fails the render. (Their `DECDN_*` env equivalents cannot be injected either;
@@ -281,8 +279,8 @@ secrets:
     passthroughKeys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY]
 ```
 
-With a backend set, `cache.node_to_node_pull_through_enabled` derives to `false` (misses
-fill from the backend), and the daemon defaults `cache.relay_foreign_namespaces` to
+With a backend set, the daemon derives `cache.node_to_node_pull_through_enabled` to
+`false` (misses fill from the backend) and defaults `cache.relay_foreign_namespaces` to
 `false`, so the node serves only what its backend holds and declines the rest, even a
 blob already in its cache
 ([ADR 002 § Retrieval by namespace](https://github.com/decdn/decdn/blob/main/adr/002-content-addressing.md#retrieval-by-namespace),

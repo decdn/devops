@@ -374,11 +374,6 @@ Arg: dict "cfg" <map> "root" <$>
 {{- if and $originVolume (eq $fsOrigins 0) }}
 {{- fail "origin.volume is set, but no config.cache origin has kind fs: remove it, or add the fs origin that reads it" }}
 {{- end }}
-{{- /* Ported from the decdn_node role (0f58d03): a node with no origin can only
-     fill a miss from other nodes, so pull-through defaults on; with an origin, off. */}}
-{{- if not (hasKey $cache "node_to_node_pull_through_enabled") }}
-{{- $_ := set $cache "node_to_node_pull_through_enabled" (not (or $hasOrigin $hasOrigins)) }}
-{{- end }}
 {{- if and (hasKey $cache "max_blob_size_mb") (hasKey $cache "cache_size_mb") }}
 {{- if gt (float64 $cache.max_blob_size_mb) (float64 $cache.cache_size_mb) }}
 {{- fail "config.cache.max_blob_size_mb must be <= config.cache.cache_size_mb" }}

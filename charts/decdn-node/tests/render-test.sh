@@ -233,14 +233,16 @@ for name in ci-values ci-origins ci-resolve-only; do
 done
 pass "no secret-bearing keys, no float-rendered integers"
 
-# Pull-through derivation (ported from the role): origins => false, none => true.
-grep -qx 'node_to_node_pull_through_enabled = false' "$work/ci-origins.toml" || fail "pull-through with origins should derive false"
-grep -qx 'node_to_node_pull_through_enabled = true' "$work/ci-resolve-only.toml" || fail "pull-through without origin should derive true"
+# Pull-through: unset renders no key, so the daemon derives it from the role; an
+# explicit value is rendered as given.
+for f in "$work/ci-origins.toml" "$work/ci-resolve-only.toml"; do
+  absent '^node_to_node_pull_through_enabled' "$f" || fail "unset pull-through should not render in $f"
+done
 helm template t "$chart" -f "$chart/ci/ci-resolve-only.yaml" \
   --set config.cache.node_to_node_pull_through_enabled=false \
   | yq 'select(.kind == "ConfigMap" and .data["node.toml"] != null) | .data["node.toml"]' \
-  | grep -qx 'node_to_node_pull_through_enabled = false' || fail "explicit pull-through=false should win"
-pass "pull-through derivation"
+  | grep -qx 'node_to_node_pull_through_enabled = false' || fail "explicit pull-through=false should render"
+pass "pull-through is left to the daemon unless set"
 
 # Resolve-only discovery: dns_origin alone must still produce the table.
 grep -qx '\[network.discovery\]' "$work/ci-resolve-only.toml" || fail "resolve-only: no [network.discovery]"

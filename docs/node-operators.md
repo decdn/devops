@@ -27,8 +27,8 @@ loopback, and the chain's contract addresses taken from upstream's deployment ma
 and compares the paths.
 
 A node without an origin backend fills a miss by pulling from other nodes
-(`node_to_node_pull_through_enabled`). The Ansible role and the chart turn that on for
-you, and so does `decdn-compose init node` on Compose; the daemon's default is off. A pull is paid
+(`node_to_node_pull_through_enabled`). The daemon turns that on for a node with no origin
+backend and off for an origin node, on every deployment path. A pull is paid
 from the node's own PaymentPool (the node-to-node tier of
 [ADR 003](https://github.com/decdn/decdn/blob/main/adr/003-payments.md)), so the node
 fronts USDC for its misses. `buyer_working_deposit_micro_usdc` is not a cap: it is the
