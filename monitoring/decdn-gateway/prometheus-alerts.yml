@@ -1,0 +1,121 @@
+# deCDN public gateway reference Prometheus alerting rules
+#
+# For `decdn gateway --public-url` (roles/decdn_gateway), whose loopback metrics the
+# grafana_alloy role ships as job="decdn-gateway". Every series is an unlabeled
+# counter or gauge; the names are the ones decdn 0.3.0 exports (exported-metrics.txt
+# beside this file, which `make lint-helm` checks them against), listed upstream in
+# adr/appendix-gateway.md § Metrics. Thresholds are operator-onboarding defaults,
+# not normative.
+#
+# NOT covered: the wallet's balance and the certificate's expiry. The gateway
+# exports neither; DecdnGatewayPoolCannotPay is the symptom of the first (watch the
+# wallet's USDC and ETH yourself), and a blackbox check of https://<domain>/ the
+# guard for the second (lego renews it from decdn-gateway-certs.timer).
+#
+# The gateway runs on the Ansible path. The decdn-node chart does NOT render this
+# file (its PrometheusRule reads ../decdn-node/prometheus-alerts.yml).
+#
+# Validate locally with `make lint-helm`: it runs promtool check rules on this
+# file, and promtool test rules on prometheus-alerts_test.yml against a copy
+# with the annotations stripped (see that file).
+#
+# Load into Grafana Cloud with mimirtool (see ../README.md), or into Prometheus via
+# rule_files (example in ../decdn-node/prometheus-alerts.yml).
+
+groups:
+  - name: decdn-gateway
+    interval: 30s
+    rules:
+      # The second arm fires on a series that stopped arriving. An agent scraping on the
+      # host (grafana_alloy) writes no up=0 when the host, its network or the agent itself
+      # is gone, so `up == 0` alone stays silent when the whole host is. (A central
+      # Prometheus writes up=0 itself; there the arm fires once the target leaves service
+      # discovery.) The arm keeps the instance label (absent() would not). Both arms
+      # reduce to job and instance, the labels the alert carries: a changed region or
+      # other label on a live target does not fire, one target fires once even with
+      # two label sets in the window, and the for: carries over between the arms. It
+      # remembers a series for 1d, so it resolves a day after the last sample even if
+      # the host is still dead, and a decommissioned host or a renamed job or instance
+      # fires until then: silence it.
+      - alert: DecdnGatewayDown
+        expr: |
+          max by (job, instance) (up{job="decdn-gateway"} == 0)
+          or max by (job, instance) (
+               max_over_time(up{job="decdn-gateway"}[1d]) unless on(job, instance) up{job="decdn-gateway"})
+        for: 2m
+        labels:
+          component: gateway
+          severity: critical
+        annotations:
+          summary: "decdn-gateway on {{ $labels.instance }} unreachable"
+          description: |
+            The gateway's metrics scrape has failed for two minutes, or its
+            series stopped arriving (the host, its network or the scraping
+            agent is down). Browsers reaching the gateway's domain get a 502
+            from nginx, or nothing at all. Read why on the host: journalctl -u
+            decdn-gateway -e. Adjust the job="decdn-gateway" selector if your
+            scrape job is named differently.
+
+      # 503: the pull worker found the pool unable to pay (FundingNeeded) and could
+      # not refill it. Every request that needs a pull fails the same way until the
+      # wallet holds USDC (and ETH for gas) again, so one such answer that keeps
+      # recurring is the alert, not a share.
+      - alert: DecdnGatewayPoolCannotPay
+        expr: >-
+          sum by (job, instance) (increase(decdn_gateway_pull_failures_funding_total{job="decdn-gateway"}[10m]))
+          > 0
+        for: 5m
+        labels:
+          component: gateway
+          severity: critical
+        annotations:
+          summary: "The gateway on {{ $labels.instance }} cannot pay for pulls"
+          description: |
+            The gateway answered 503 (its pool cannot pay) in each of the
+            last 10-minute windows for 5 minutes. Its pool is empty and the
+            wallet could not refill it. Fund the gateway's wallet with USDC,
+            and ETH for gas, then read the pool's state on the host:
+            journalctl -u decdn-gateway -e.
+
+      # 402 is the allowance doing its job, so a warning: the day's bytes are spent,
+      # or requests do not fit what is left. Sustained, it means the allowance is
+      # smaller than the traffic the gateway is meant to carry.
+      - alert: DecdnGatewayAllowanceSpent
+        expr: >-
+          sum by (job, instance) (increase(decdn_gateway_requests_allowance_exhausted_total{job="decdn-gateway"}[15m]))
+          > 0
+        for: 15m
+        labels:
+          component: gateway
+          severity: warning
+        annotations:
+          summary: "The gateway on {{ $labels.instance }} is refusing requests past its daily allowance"
+          description: |
+            The gateway has answered 402 (the day's allowance is spent, or a
+            request does not fit what is left) for 15 minutes. Clients get the
+            decdn: URI to fetch with a paying client. Raise
+            decdn_gateway_allowance_bytes_per_day (or a namespace's
+            decdn_gateway_namespace_allowances) if this traffic should be
+            served; the allowance resets at 00:00 UTC.
+
+      # 502: the pull itself failed (no node served it in time, or every source
+      # failed). A share of the answers that needed a pull, so a quiet gateway with
+      # one bad link does not page.
+      - alert: DecdnGatewayPullFailures
+        expr: >-
+          sum by (job, instance) (rate(decdn_gateway_pull_failures_other_total{job="decdn-gateway"}[15m]))
+          / (sum by (job, instance) (rate(decdn_gateway_pull_failures_other_total{job="decdn-gateway"}[15m]))
+             + sum by (job, instance) (rate(decdn_gateway_requests_ok_total{job="decdn-gateway"}[15m])))
+          > 0.5
+        for: 15m
+        labels:
+          component: gateway
+          severity: warning
+        annotations:
+          summary: "Most pulls through the gateway on {{ $labels.instance }} fail"
+          description: |
+            More than half of the gateway's answers in the last 15 minutes
+            were 502 (the pull failed), for 15 minutes. Nodes may not be
+            reachable from the host (QUIC/UDP outbound, the iroh relays), or
+            the RPC endpoint may be failing. Read the reasons on the host:
+            journalctl -u decdn-gateway -e.

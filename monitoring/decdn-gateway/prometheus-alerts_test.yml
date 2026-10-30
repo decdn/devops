@@ -1,0 +1,138 @@
+# promtool unit tests for prometheus-alerts.yml beside it, run by the chart's
+# tests/render-test.sh (`make lint-helm`). The Down rule has an absence arm and the
+# others take increases and a ratio of counters, which promtool check cannot catch.
+# The test clock starts at 0.
+#
+# It does not run in place: render-test.sh copies it into a scratch directory as
+# decdn-gateway-alerts_test.yml, beside a copy of prometheus-alerts.yml with the
+# annotations stripped (promtool compares annotations exactly, and they are prose)
+# named decdn-gateway-alerts.yml, the name rule_files below expects.
+rule_files:
+  - decdn-gateway-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # Down. a fails its scrape (up=0) and fires at exactly the for, under job and
+  # instance alone (its region label is dropped). Its samples end at 5m too, and
+  # the absence arm carries the alert on without resetting the for (at 10m30s a
+  # for restarted at the handoff would not have run out yet). b is
+  # healthy throughout. c stops at 5m with no staleness marker (the host died with
+  # its agent): up goes absent once the 5m lookback passes, the absence arm fires
+  # after the for, is still firing at 23h and resolves once the 1d window holds no
+  # sample (25h). d gets a staleness marker and is back 1m later, inside the for,
+  # so it never fires (checked at 6m, inside the gap). d2's marker is followed by
+  # a gap longer than the for: it fires at 7m30s and resolves when it is back
+  # (10m30s). e changes its region label on a live target and does not fire;
+  # when it stops later (15m30s) it fires once, under job and instance alone,
+  # although both of its label sets are still in the 1d window.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="decdn-gateway", instance="a", region="eu"}'
+        values: '0x10'
+      - series: 'up{job="decdn-gateway", instance="b"}'
+        values: '1x3000'
+      - series: 'up{job="decdn-gateway", instance="c"}'
+        values: '1x10'
+      - series: 'up{job="decdn-gateway", instance="d"}'
+        values: '1x10 stale _x1 1x2987'
+      - series: 'up{job="decdn-gateway", instance="d2"}'
+        values: '1x10 stale _x9 1x2979'
+      - series: 'up{job="decdn-gateway", instance="e", region="eu"}'
+        values: '1x10'
+      - series: 'up{job="decdn-gateway", instance="e", region="us"}'
+        values: '_x11 1x20'
+    alert_rule_test:
+      - eval_time: 1m30s
+        alertname: DecdnGatewayDown
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: DecdnGatewayDown
+        exp_alerts:
+          - exp_labels: {job: decdn-gateway, instance: a, component: gateway, severity: critical}
+      - eval_time: 6m
+        alertname: DecdnGatewayDown
+        exp_alerts:
+          - exp_labels: {job: decdn-gateway, instance: a, component: gateway, severity: critical}
+      - eval_time: 8m
+        alertname: DecdnGatewayDown
+        exp_alerts:
+          - exp_labels: {job: decdn-gateway, instance: a, component: gateway, severity: critical}
+          - exp_labels: {job: decdn-gateway, instance: d2, component: gateway, severity: critical}
+      - eval_time: 10m30s
+        alertname: DecdnGatewayDown
+        exp_alerts:
+          - exp_labels: {job: decdn-gateway, instance: a, component: gateway, severity: critical}
+      - eval_time: 13m
+        alertname: DecdnGatewayDown
+        exp_alerts:
+          - exp_labels: {job: decdn-gateway, instance: a, component: gateway, severity: critical}
+          - exp_labels: {job: decdn-gateway, instance: c, component: gateway, severity: critical}
+      - eval_time: 23h
+        alertname: DecdnGatewayDown
+        exp_alerts:
+          - exp_labels: {job: decdn-gateway, instance: a, component: gateway, severity: critical}
+          - exp_labels: {job: decdn-gateway, instance: c, component: gateway, severity: critical}
+          - exp_labels: {job: decdn-gateway, instance: e, component: gateway, severity: critical}
+      - eval_time: 25h
+        alertname: DecdnGatewayDown
+        exp_alerts: []
+
+  # Pool cannot pay. a answers its first 503 at 5m30s and none after: the 10m
+  # increase holds it above zero until 15m30s, so it fires once the for has run
+  # (10m30s) and resolves when the window has passed it. b never answers 503.
+  - interval: 30s
+    input_series:
+      - series: 'decdn_gateway_pull_failures_funding_total{job="decdn-gateway", instance="a"}'
+        values: '0x10 1x50'
+      - series: 'decdn_gateway_pull_failures_funding_total{job="decdn-gateway", instance="b"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DecdnGatewayPoolCannotPay
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: DecdnGatewayPoolCannotPay
+        exp_alerts:
+          - exp_labels: {job: decdn-gateway, instance: a, component: gateway, severity: critical}
+      - eval_time: 17m
+        alertname: DecdnGatewayPoolCannotPay
+        exp_alerts: []
+
+  # Allowance spent. a answers 402 throughout and fires once the 15m for has run;
+  # b never does.
+  - interval: 30s
+    input_series:
+      - series: 'decdn_gateway_requests_allowance_exhausted_total{job="decdn-gateway", instance="a"}'
+        values: '0+2x60'
+      - series: 'decdn_gateway_requests_allowance_exhausted_total{job="decdn-gateway", instance="b"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DecdnGatewayAllowanceSpent
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: DecdnGatewayAllowanceSpent
+        exp_alerts:
+          - exp_labels: {job: decdn-gateway, instance: a, component: gateway, severity: warning}
+
+  # Pull failures, a share: a fails three pulls for every one it serves (0.75) and
+  # fires once the for has run; b fails one in four (0.25) and never does.
+  - interval: 30s
+    input_series:
+      - series: 'decdn_gateway_requests_ok_total{job="decdn-gateway", instance="a"}'
+        values: '0+1x60'
+      - series: 'decdn_gateway_pull_failures_other_total{job="decdn-gateway", instance="a"}'
+        values: '0+3x60'
+      - series: 'decdn_gateway_requests_ok_total{job="decdn-gateway", instance="b"}'
+        values: '0+3x60'
+      - series: 'decdn_gateway_pull_failures_other_total{job="decdn-gateway", instance="b"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: DecdnGatewayPullFailures
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: DecdnGatewayPullFailures
+        exp_alerts:
+          - exp_labels: {job: decdn-gateway, instance: a, component: gateway, severity: warning}

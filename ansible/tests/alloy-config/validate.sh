@@ -325,6 +325,27 @@ for want in '^iroh_dns_server_metrics_bind: 127\.0\.0\.1([[:space:]]|$)' '^iroh_
   grep -qE "$want" "$ansible_dir/roles/iroh_dns_server/defaults/main.yml" \
     || fail "iroh_dns_server's metrics default is not 127.0.0.1:9117: update the fallback in config.alloy.j2"
 done
+assert_lacks defaults.alloy 'prometheus.scrape "decdn_gateway"' "a gateway scrape while it is disabled"
+assert_lacks defaults.alloy 'decdn-gateway\\.service' "a gateway log rule while it is disabled"
+assert_lacks dnsonly.alloy 'prometheus.scrape "decdn_gateway"' "a gateway scrape on a host without one"
+assert_lacks gatewayonly.alloy 'prometheus.scrape "decdn_node"' "the node scrape on a gateway-only host"
+assert_has gatewayonly.alloy 'prometheus.scrape "decdn_gateway"' "the gateway scrape"
+assert_has gatewayonly.alloy '"__address__" = "127.0.0.1:19094"' "the gateway listener from decdn_gateway_metrics_port"
+assert_has gatewayonly.alloy '"job"         = "decdn-gateway"' "the gateway job label"
+assert_has gatewayonly.alloy 'forward_to      = [prometheus.relabel.decdn_gateway_identity.receiver]' "the gateway scrape feeding its own identity"
+assert_has gatewayonly.alloy 'replacement  = "decdn-gateway"' "the gateway metric service_name"
+assert_has gatewayonly.alloy 'regex         = "decdn-gateway\\.service"' "the gateway log-stream unit match"
+assert_has gatewayonly.alloy 'replacement   = "decdn-gateway"' "the gateway log-stream service_name"
+assert_has gatewayonly.alloy '"(?:decdn-node|decdn-gateway)\\.service"' "the gateway in the priority exemption"
+assert_has gatewayonly.alloy '{unit=~"(decdn-gateway)\\.service"}' "the gateway in the plain-text level selector"
+assert_has colocatedgateway.alloy 'prometheus.scrape "decdn_node"' "the node scrape on a node that also runs a gateway"
+assert_has colocatedgateway.alloy 'prometheus.scrape "decdn_gateway"' "the gateway scrape on a node that also runs one"
+assert_has colocatedgateway.alloy '"__address__" = "127.0.0.1:9094"' "the default gateway metrics listener"
+# The same fallback for the gateway: 127.0.0.1:9094, the decdn_gateway role's default.
+for want in '^decdn_gateway_metrics_address: 127\.0\.0\.1([[:space:]]|$)' '^decdn_gateway_metrics_port: 9094([[:space:]]|$)'; do
+  grep -qE "$want" "$ansible_dir/roles/decdn_gateway/defaults/main.yml" \
+    || fail "decdn_gateway's metrics default is not 127.0.0.1:9094: update the fallback in config.alloy.j2"
+done
 echo "ok: per-daemon scrape toggles"
 
 # --- Gate 1b'': the Compose runtime -------------------------------------------

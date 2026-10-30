@@ -278,6 +278,46 @@ prometheus.relabel "iroh_dns_server_identity" {
 }
 
 {% endif %}
+{% if grafana_alloy_decdn_gateway_enabled | bool %}
+{# The public gateway's metrics (requests by answer, bytes served, pulls, pointer
+   updates) on its loopback metrics listener (roles/decdn_gateway; the fallbacks
+   match its defaults). It answers only a loopback Host, which a scrape of this
+   address sends. Its own relabel, as the relay's. #}
+{% if ga_compose %}
+{{ ga_compose_targets('decdn_gateway', decdn_gateway_metrics_address | default('127.0.0.1') ~ ':' ~ decdn_gateway_metrics_port | default(9094), grafana_alloy_decdn_gateway_job, _ga_compose_profiles.decdn_gateway) }}
+prometheus.scrape "decdn_gateway" {
+  targets         = discovery.relabel.decdn_gateway_targets.output
+{% else %}
+prometheus.scrape "decdn_gateway" {
+  targets = [
+    { "__address__" = {{ (decdn_gateway_metrics_address | default('127.0.0.1') ~ ':' ~ decdn_gateway_metrics_port | default(9094)) | tojson }},
+      "instance"    = {{ ga_str(_ga_instance_id) }},
+      "job"         = {{ grafana_alloy_decdn_gateway_job | tojson }} },
+  ]
+{% endif %}
+  forward_to      = [prometheus.relabel.decdn_gateway_identity.receiver]
+  scrape_interval = {{ grafana_alloy_scrape_interval | to_json }}
+}
+
+{% set ga_decdn_gateway_labels = [
+     ["service_name", grafana_alloy_decdn_gateway_service_name],
+     ["service_namespace", grafana_alloy_service_namespace],
+     ["service_instance_id", _ga_instance_id],
+     ["deployment_environment", grafana_alloy_deployment_environment],
+     ["region", grafana_alloy_region],
+   ] %}
+prometheus.relabel "decdn_gateway_identity" {
+  forward_to = [prometheus.remote_write.cloud.receiver]
+{% for name, value in ga_decdn_gateway_labels if value | length > 0 %}
+
+  rule {
+    target_label = {{ name | tojson }}
+    replacement  = {{ ga_str(value) }}
+  }
+{% endfor %}
+}
+
+{% endif %}
 prometheus.remote_write "cloud" {
   endpoint {
     url = {{ ga_endpoint(grafana_alloy_prom_url, 'GC_PROM_REMOTE_WRITE_URL') }}
@@ -493,12 +533,13 @@ loki.relabel "journal_rules" {
     target_label  = "boot_id"
   }
 {# The units that log tracing-subscriber's plain text (the sponsord daemon, its
-   onramp, iroh-relay and iroh-dns-server), parsed for a level by loki.process
-   "daemon_level" below. #}
+   onramp, iroh-relay, iroh-dns-server and the gateway's decdn CLI), parsed for a
+   level by loki.process "daemon_level" below. #}
 {% set ga_text_units = (['sponsord'] if grafana_alloy_sponsord_enabled | bool else [])
      + (['sponsord-onramp'] if grafana_alloy_sponsord_onramp_enabled | bool else [])
      + (['iroh-relay'] if grafana_alloy_iroh_relay_enabled | bool else [])
-     + (['iroh-dns-server'] if grafana_alloy_iroh_dns_server_enabled | bool else []) %}
+     + (['iroh-dns-server'] if grafana_alloy_iroh_dns_server_enabled | bool else [])
+     + (['decdn-gateway'] if grafana_alloy_decdn_gateway_enabled | bool else []) %}
 {% if grafana_alloy_logs_drop_priority_regex | length > 0 %}
 
   // Cost guardrail: the regex is anchored to the WHOLE value by Prometheus
@@ -772,6 +813,17 @@ loki.relabel "journal_identity" {
     regex         = "iroh-dns-server\\.service"
     target_label  = "service_name"
     replacement   = {{ grafana_alloy_iroh_dns_server_service_name | tojson }}
+  }
+{% endif %}
+{% if grafana_alloy_decdn_gateway_enabled | bool and grafana_alloy_decdn_gateway_service_name | length > 0 %}
+{# The gateway's stream (the unit roles/decdn_gateway installs; also named in the
+   journal_rules exemption and the daemon_level selector above). #}
+
+  rule {
+    source_labels = ["unit"]
+    regex         = "decdn-gateway\\.service"
+    target_label  = "service_name"
+    replacement   = {{ grafana_alloy_decdn_gateway_service_name | tojson }}
   }
 {% endif %}
 }

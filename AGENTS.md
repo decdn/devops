@@ -136,8 +136,10 @@ and also publishes the binaries as crates (`decdn-node`, `decdn-cli`, `sponsord`
 `/metrics` and upstream's `adr/appendix-observability.md` registry, where a `planned`
 row emits nothing; decdn/decdn's `crates/sponsord/src/metrics.rs`) — nothing in CI
 checks those names, so a typo renders `(no data)` or a rule that never fires. The
-relay's `relayserver_*` names *are* checked, against `exported-metrics.txt`, the
-`/metrics` of the pinned `iroh-relay`: re-capture it when bumping `iroh_relay_version`.
+relay's `relayserver_*` and the gateway's `decdn_gateway_*` names *are* checked, against
+each one's `exported-metrics.txt`, the metrics of the pinned `iroh-relay` and decdn:
+re-capture the relay's when bumping `iroh_relay_version`, the gateway's when the decdn
+line moves.
 The chart renders `monitoring/decdn-node/` through the `files/monitoring` symlink
 (`.Files` cannot read outside the chart), never through `tpl` (the alert annotations
 carry Prometheus templates), so copy a chart tree with `cp -RL`. Alert rules have
