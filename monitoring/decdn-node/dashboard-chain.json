@@ -2087,7 +2087,7 @@
       },
       "title": "Redemption failures",
       "type": "timeseries",
-      "description": "Redemption steps that failed: a redeemMany that reverted or was refused at send, or a lane the redeemer could not plan or load. An unconfirmed receipt does not count here; the On-chain transaction outcomes panel shows it as receipt failed or timeout. From decdn v0.3.0, neither does a send that failed with no tx hash; that panel shows it as maybe broadcast.",
+      "description": "Redemption steps that failed: a redeemMany that reverted or was refused at send, or a lane the redeemer could not plan or load. An unconfirmed receipt does not count here; the On-chain transaction outcomes panel shows it as receipt failed or timeout. From decdn v0.3.0, neither does a send that failed with no tx hash; that panel shows it as maybe broadcast. Skipped — pool unresolved counts lanes kept out of a submit because their pool stayed unknown after the pre-submit getPool: the read faulted, which clears on a later cycle, or the chain shows the pool absent or Closed, which logs a warn! naming it and keeps its lanes out.",
       "targets": [
         {
           "datasource": {
@@ -2115,6 +2115,15 @@
           "expr": "sum(rate(decdn_redemption_skipped_expired_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "F",
           "legendFormat": "skipped — capability expired"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_redemption_skipped_pool_unresolved_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "G",
+          "legendFormat": "skipped — pool unresolved"
         },
         {
           "datasource": {
@@ -2710,12 +2719,462 @@
       "id": 31
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "Settlement ledger",
+      "type": "timeseries",
+      "description": "The settlement ledger (settle.redb) is what `decdn node earnings` reads. Write failures are rows decoded from a landed redeemMany that could not be written (disk full, store locked). Skipped rows are landed redemptions that produced no row for a reason other than paying nothing: a Settled log that does not decode or names no log index, a backfill whose block time or receipt the RPC could not supply, or a ledger read that failed; each is also a warn!. The redemption stands either way, but the earnings table silently trails the chain (`decdn node earnings --address` still reads the chain's record). DecdnSettlementLedgerWriteFailing alerts on write failures.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_settlement_ledger_write_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "ledger write failures"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_settlement_ledger_skipped_rows_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "B",
+          "legendFormat": "ledger rows skipped"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 75
+      },
+      "id": 39
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 75
+        "y": 82
+      },
+      "id": 40,
+      "panels": [],
+      "title": "Settlement re-anchor",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "Pools awaiting re-anchor",
+      "type": "timeseries",
+      "description": "Pools the settlement watcher seeded from one admission-time getPool (a pool whose PoolOpened lies below its scan start), or marked stale, and has not yet re-read at a pinned block. Set at the end of every watcher tick, after that tick's reads. It is an aggregate with no per-pool label: a value that never falls is a backlog that does not drain, either a pool that keeps failing to anchor (an open a reorg dropped, a read always skipped as stale, a read that keeps faulting) or new seeds replacing anchored ones; a steady anchored rate beside it is churn. Each pending pool costs one getPool per rotation. DecdnSettlementReanchorBacklog fires after 30m above 0.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "decdn_settlement_reanchor_pending_pools{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}",
+          "refId": "A",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 83
+      },
+      "id": 41
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "Re-anchor ticks that read no pool",
+      "type": "timeseries",
+      "description": "Re-anchor ticks that read no pool, so every pending pool waits for the next tick. Block read failed: the block-number read failed. Backend behind the watcher: the block number was below the highest log block the settlement watcher applied. Either one sustained points at the RPC provider.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_settlement_reanchor_block_read_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "block read failed"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_settlement_reanchor_behind_watcher_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "B",
+          "legendFormat": "backend behind the watcher"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 83
+      },
+      "id": 42
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "Re-anchor read outcomes",
+      "type": "timeseries",
+      "description": "Per-pool getPool reads at the pinned block. Anchored is the denominator for the rest. Pool read failed: the rest of the tick's batch waits; a steady rate with no RPC outage points at ABI drift on getPool. Absent: no pool at the pinned block (a backend behind the admit read, or an open a reorg dropped); the pool stays served from its seed. The skips are reads older than state the node holds: below a folded event; a lower totalRedeemed (a reorg lowered it, and the node refuses the pool early); a lower deposit (a reorg lowered it, and the node serves past the pool's funds, which the on-chain redeem caps; DecdnSettlementReanchorLowerDeposit). Failed, absent and skipped pools stay pending.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_settlement_reanchor_anchored_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "anchored"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_settlement_reanchor_pool_read_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "B",
+          "legendFormat": "pool read failed"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_settlement_reanchor_absent_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "C",
+          "legendFormat": "absent"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_settlement_reanchor_skipped_below_folded_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "D",
+          "legendFormat": "skipped — below a folded event"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_settlement_reanchor_skipped_lower_redeemed_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "E",
+          "legendFormat": "skipped — lower totalRedeemed"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_settlement_reanchor_skipped_lower_deposit_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "F",
+          "legendFormat": "skipped — lower deposit"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 83
+      },
+      "id": 43
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 90
       },
       "id": 22,
       "panels": [],
@@ -2729,6 +3188,7 @@
       },
       "title": "Top-ups",
       "type": "timeseries",
+      "description": "Background low-water top-ups that landed or failed. Nonce lost counts topUps whose nonce was spent with nothing escrowed: this node's seller redeemer signs redeemMany with the same key, so a redemption sent at the same moment took the nonce, and the node retries with a fresh topUp. A funding call that runs out of retries also counts as failed. A sustained nonce-lost rate means the redeemer and the buyer contend for the key's nonces.",
       "targets": [
         {
           "datasource": {
@@ -2747,6 +3207,15 @@
           "expr": "sum(rate(decdn_buyer_topup_failure_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "B",
           "legendFormat": "top-up failed"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_buyer_topup_nonce_lost_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "C",
+          "legendFormat": "top-up nonce lost"
         }
       ],
       "fieldConfig": {
@@ -2820,7 +3289,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 76
+        "y": 91
       },
       "id": 23
     },
@@ -2932,7 +3401,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 76
+        "y": 91
       },
       "id": 24
     },
@@ -3066,7 +3535,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 76
+        "y": 91
       },
       "id": 25
     },
@@ -3172,7 +3641,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 83
+        "y": 98
       },
       "id": 38,
       "description": "1 while this node holds its slot for an openPool or a topUp whose outcome the chain has not shown (the topUp hold is decdn v0.2): the submit got no tx hash or the receipt could not be read, and the transaction may still mine. A submit gets no tx hash when the transport fails and, from decdn v0.3.0, also when the RPC node already holds the transaction (`already known`), counts its nonce as spent (`nonce too low`) or holds another transaction of this key at that nonce (`replacement transaction underpriced`). Each of those can come back when a gateway retries a send that another backend already accepted, or when this node's own seller redemption took that nonce; the node then settles the nonce against the chain, and the hold ends once the redemption mines. Meanwhile the node sends no other transaction of that kind until a receipt arrives, the account's nonce passes it, or a re-send shows the pool closed. A hold that stays means the RPC cannot answer, a pending transaction holds the nonce or an earlier one, or every re-send at that nonce fails (the wallet cannot fund the amount or the gas); the daemon's repeating warning names the last failure in its `last` field. Do not restart a node holding a topUp slot: the restart forgets the hold, and the node may escrow a second topUp into its own pool. DecdnBuyerTopupUnresolved fires after 15m."
@@ -3215,7 +3684,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 90
+        "y": 105
       },
       "id": 26
     },
@@ -3225,7 +3694,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 99
+        "y": 114
       },
       "id": 33,
       "panels": [],
@@ -3323,7 +3792,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 100
+        "y": 115
       },
       "id": 34
     },
@@ -3453,7 +3922,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 100
+        "y": 115
       },
       "id": 35
     },
@@ -3548,7 +4017,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 108
+        "y": 123
       },
       "id": 36
     },
@@ -3643,7 +4112,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 108
+        "y": 123
       },
       "id": 37
     }

@@ -613,6 +613,106 @@ groups:
             unaffected, but the audit log has gaps. Check disk space and
             permissions under identity.data_dir.
 
+      # The settlement ledger (decdn/decdn#2598) is observability, not a claim:
+      # the redemption stands and only `decdn node earnings` misses the row, so
+      # it sits with the receipt log here rather than with the payment rules.
+      # Like DecdnWatcherPersistFailures, every write failure is worth a look,
+      # and increase(...[1h]) resolves the alert an hour after the last one.
+      # No runbook_url: upstream's "A settlement ledger row that does not
+      # decode" covers a corrupt row on read, not a failed write.
+      # The second arm covers failures already counted when the node is first
+      # scraped after a (re)start: the counter starts at its value, so increase
+      # sees no rise, and the watcher backfills redemptions across a restart at
+      # once. Uptime under an hour bounds the counter to the same 1h the first
+      # arm looks at; unlike a bare uptime check it needs a failure, so a deploy
+      # alone stays quiet. `or on` keeps one series per node.
+      - alert: DecdnSettlementLedgerWriteFailing
+        expr: >-
+          increase(decdn_settlement_ledger_write_failures_total[1h]) > 0
+          or on (job, instance)
+          (decdn_settlement_ledger_write_failures_total > 0
+            and on (job, instance) decdn_node_uptime_seconds < 3600)
+        for: 0m
+        labels:
+          component: settlement
+          severity: warning
+        annotations:
+          summary: "Settlement ledger writes failing on {{ $labels.instance }}"
+          description: |
+            A landed redeemMany decoded into a settlement ledger row that could
+            not be written to settle.redb. The redemption stands and the
+            revenue is not lost, but `decdn node earnings` reads this ledger,
+            so its table now silently trails the chain. Check disk space and
+            health under identity.data_dir, and whether another process holds
+            settle.redb. The "settlement ledger write failed" warn! line names
+            the tx; `decdn node earnings --address <operator>` still reads the
+            chain's record.
+
+      # The settlement watcher sets the gauge at the end of every tick, after
+      # that tick's re-anchor reads, so a pool seeded at admission (or marked
+      # stale) and anchored on the next tick never shows. The gauge is an
+      # aggregate with no per-pool label, so a value that stays above 0 is a
+      # backlog that does not drain, not proof that one pool is stuck: it is
+      # either a pool that keeps failing to anchor (an open a reorg dropped, a
+      # read always skipped as stale, a read that keeps faulting) or new seeds
+      # that keep replacing anchored ones. A restart can seed more pools than
+      # one tick reads (64), which drains in a few ticks, well inside the for.
+      - alert: DecdnSettlementReanchorBacklog
+        expr: decdn_settlement_reanchor_pending_pools > 0
+        for: 30m
+        labels:
+          component: settlement
+          severity: warning
+        annotations:
+          summary: "Re-anchor backlog has not drained for 30m on {{ $labels.instance }} ({{ $value }} pools pending)"
+          description: |
+            For 30 minutes the settlement watcher has always held some pools
+            seeded from an admission-time getPool that it has not yet re-read
+            at a pinned block. Their projected deposit and totalRedeemed come
+            from that one read, and each costs a getPool every rotation. The
+            gauge has no per-pool label: the "pool re-anchor" warn! lines say
+            whether the same pool keeps failing or new pools keep arriving,
+            and the re-anchor panels on the chain dashboard say why reads do
+            not anchor: block-read failures or a backend behind the watcher
+            (the RPC provider), getPool read failures with no RPC outage (ABI
+            drift on getPool), absent reads (an open a reorg dropped), or
+            skipped reads (the read is older than state the node holds;
+            DecdnSettlementReanchorLowerDeposit covers the case that
+            over-serves). A steady anchored rate beside a non-zero gauge is
+            churn, not a stuck pool.
+
+      # A topUp that a reorg dropped leaves the projection holding a deposit the
+      # chain no longer shows. The read is skipped and the pool stays pending
+      # until the chain passes the held value again (the topUp re-mines). A
+      # pending pool is re-read only on its turn: a tick reads at most 64 pools
+      # from a rotating cursor and reads none when the block read fails or the
+      # backend is behind, so skips of one pool can be far apart. The pending
+      # gauge is the state that holds between them: the rule asks for a
+      # lower-deposit skip in the last hour while pools are still pending, for
+      # 30m. A reorg that heals anchors the pool and empties the gauge (on a
+      # node with no other pending pool), so it stays quiet.
+      - alert: DecdnSettlementReanchorLowerDeposit
+        expr: >-
+          increase(decdn_settlement_reanchor_skipped_lower_deposit_total[1h]) > 0
+          and on (job, instance)
+          decdn_settlement_reanchor_pending_pools > 0
+        for: 30m
+        labels:
+          component: settlement
+          severity: warning
+        annotations:
+          summary: "Projected pool deposit above the chain's on {{ $labels.instance }}"
+          description: |
+            For 30 minutes the settlement watcher has had pools pending re-anchor,
+            and within the last hour a re-anchor read found a pool deposit below
+            the one this node holds: a reorg dropped a topUp the node had
+            already folded. Until the chain passes the held deposit again, the
+            node admits and serves against funds the pool does not have. The
+            on-chain redeem caps what it collects, so the excess is delivery
+            that is never paid. The "read deposit is below the held one" warn!
+            lines name the pool with its held and read deposit; check that
+            pool's topUp on a block explorer.
+
       - alert: DecdnPublicNodeInboundRelayed
         # Relayed inbound is expected behind NAT, so the alert is scoped to
         # nodes that report a public address. The volume arm keeps a quiet

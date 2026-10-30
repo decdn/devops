@@ -4156,11 +4156,113 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 16,
         "x": 0,
         "y": 126
       },
       "id": 9012
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "Admission read-slot timeouts",
+      "type": "timeseries",
+      "description": "Admission chain reads (getPool, getAuthorization) that found every read slot taken for the whole slot wait and were refused without a read (decdn/decdn#2706). The request answers NotFound and counts as a refusal on decdn_serve_stream_rejected_pool_unconfirmed_total (pool unconfirmed, shown here for scale and on Serve refusals by reason), so read-slot timeouts are the share of those refusals where the node was busy, not the pool or signer unresolved. Not a stream-failure reason of its own: the Unattributed stream failures panel already subtracts the refusal it explains.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_admit_read_slot_timeouts_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "read-slot timeouts"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_stream_rejected_pool_unconfirmed_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
+          "refId": "B",
+          "legendFormat": "pool unconfirmed refusals"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "reqps",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 126
+      },
+      "id": 9013
     }
   ],
   "preload": false,
