@@ -281,11 +281,23 @@ build-node build-publisher: build-%:
 # exactly one tarball per collection, so the glob is unambiguous. We gate on BOTH the
 # pipeline exit (set -o pipefail catches a crash / "No module named …" that prints
 # no error keyword) AND the importer's explicit success line (it can log content
-# errors while still exiting 0). Warnings are kept in build/importer-<collection>.log.
+# errors while still exiting 0), and refuse its "ansible-lint|ansible-doc not found,
+# skipping" warnings: it prints the success line with those checks never run, as it
+# does under a python whose bin/ is not on PATH. Warnings are kept in
+# build/importer-<collection>.log.
 # Then galaxy/check-playbooks.sh installs the artifact and checks its playbooks as a
 # consumer runs them (syntax by FQCN, the firewall holes their group_vars/ give),
 # which the importer's ansible-lint, seeing one collection outside any collections
 # path, cannot. decdn.publisher installs with the decdn.node it depends on.
+#
+# galaxy-importer ships no executable (so `uv tool install` refuses it) and runs as a
+# module: under `python` when that imports it (CI pip-installs it there), else under
+# `uv tool run --upgrade`, which brings its own ansible-core and ansible-lint and, like
+# CI's `pip install --upgrade`, the newest of each; else `python`, which fails loudly.
+# Override with GALAXY_IMPORTER_PYTHON=<command>.
+GALAXY_IMPORTER_PYTHON ?= $(shell python -c 'import galaxy_importer' 2>/dev/null && echo python \
+  || { command -v uv >/dev/null 2>&1 && echo 'uv tool run --upgrade --from galaxy-importer python' || echo python; })
+
 galaxy-check: galaxy-check-node galaxy-check-publisher
 
 galaxy-check-publisher: build-node
@@ -293,9 +305,12 @@ galaxy-check-publisher: build-node
 galaxy-check-node galaxy-check-publisher: galaxy-check-%: build-%
 	@set -o pipefail; \
 	  tarball=$$(ls -1 build/decdn-$*-*.tar.gz); \
-	  echo "galaxy-importer: $$tarball"; \
-	  if ! python -m galaxy_importer.main "$$tarball" 2>&1 | tee build/importer-$*.log \
+	  echo "galaxy-importer: $$tarball ($(GALAXY_IMPORTER_PYTHON))"; \
+	  if ! $(GALAXY_IMPORTER_PYTHON) -m galaxy_importer.main "$$tarball" 2>&1 | tee build/importer-$*.log \
 	     || ! grep -q "Importer processing completed successfully" build/importer-$*.log; then \
 	    echo "FAIL: galaxy-importer reported errors or did not complete (see build/importer-$*.log)"; exit 1; \
+	  fi; \
+	  if grep -E "(ansible-lint|ansible-doc) not found, skipping" build/importer-$*.log; then \
+	    echo "FAIL: galaxy-importer skipped a check: put that python's bin/ on PATH"; exit 1; \
 	  fi
 	./galaxy/check-playbooks.sh $*
