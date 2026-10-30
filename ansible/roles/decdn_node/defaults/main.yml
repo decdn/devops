@@ -65,7 +65,7 @@ decdn_rustup_sha256:
 # generated mirrors, the sponsord roles' pins (the same release ships sponsord and
 # its onramp), the onramp's decdn pin and the chart's appVersion (README.md,
 # "Bumping the decdn release").
-decdn_node_version: "0.2"
+decdn_node_version: "0.3"
 # Release target triple. Derived from the host's gathered architecture (x86_64 or
 # aarch64, see vars/main/arch.yml), so arm64 hosts (Graviton, Ampere, Hetzner CAX)
 # get the aarch64 tarball with no inventory change. Needs facts: a play with

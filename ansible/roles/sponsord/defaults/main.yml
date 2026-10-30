@@ -56,7 +56,7 @@ decdn_rustup_sha256:
 # decdn_node role's decdn_node_version: one decdn/decdn release ships all four
 # binaries (roles/decdn_node/README.md, "Bumping the decdn release"; make
 # test-scripts checks the defaults agree, and scripts/bump_decdn.py moves them together).
-sponsord_version: "0.2"
+sponsord_version: "0.3"
 # Release target triple, derived from the host's gathered architecture (see
 # vars/main/arch.yml). Set it explicitly only for a play with gather_facts: false.
 sponsord_target: "{{ _sponsord_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"

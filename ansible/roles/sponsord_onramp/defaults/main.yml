@@ -52,7 +52,7 @@ decdn_rustup_sha256:
 # The decdn/decdn release to install, a line ("X.Y", the newest finished vX.Y.N)
 # or an exact "X.Y.Z": the same one as the sponsord role's sponsord_version (and
 # the decdn_node role's decdn_node_version: one release ships all four binaries).
-sponsord_onramp_version: "0.2"
+sponsord_onramp_version: "0.3"
 # Derived from the host's gathered architecture (vars/main/arch.yml).
 sponsord_onramp_target: "{{ _sponsord_onramp_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
 sponsord_onramp_release_base: "https://github.com/decdn/decdn/releases/download"
@@ -149,7 +149,7 @@ sponsord_onramp_gate_template_src: ""
 # verified against sponsord_onramp_decdn_keyring first. An exact tag, "vX.Y.Z",
 # needs that digest set beside it (`sha256sum SHA256SUMS` after verifying its .asc);
 # preflight refuses a tag without one and a line with one.
-sponsord_onramp_decdn_release: v0.2       # decdn/decdn line or tag
+sponsord_onramp_decdn_release: v0.3       # decdn/decdn line or tag
 sponsord_onramp_decdn_sums_sha256: ""     # with a tag only
 sponsord_onramp_decdn_release_index: "https://api.github.com/repos/decdn/decdn/releases?per_page=100"
 # Where the role reads a line's SHA256SUMS: the installers' own download location
