@@ -14,6 +14,7 @@ all:
         co-located-onramp: {}
         relay-node: {}
         dns-node: {}
+        gateway-node: {}
         origin-listed: {}
       # A publisher's origins: a child group, so its hosts are decdn_nodes too.
       children:
@@ -51,3 +52,7 @@ all:
         dns: {}
         dns-node: {}
         dns-sponsord: {}
+    decdn_gateway_hosts:
+      hosts:
+        gateway: {}
+        gateway-node: {}

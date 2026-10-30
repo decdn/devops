@@ -17,13 +17,14 @@ the collections are built:
 |----------|---------|-------------|
 | **`site.yml`** | Everything in the inventory: `node.yml`, then `publisher.yml`. | `make check` / `make deploy` |
 | **`node.yml`** | **Node operators.** Harden the host and deploy a public deCDN **cache node** (`decdn-node`) on hosts in `decdn_nodes` that are not in `decdn_origin_nodes`. | `make check-node` / `make deploy-node` |
-| **`publisher.yml`** | **Publishers.** `origin.yml`, `sponsord.yml`, `iroh_relay.yml` and `iroh_dns_server.yml`, in that order. | `make check-publisher` / `make deploy-publisher` |
+| **`publisher.yml`** | **Publishers.** `origin.yml`, `sponsord.yml`, `iroh_relay.yml`, `iroh_dns_server.yml` and `decdn_gateway.yml`, in that order. | `make check-publisher` / `make deploy-publisher` |
 | `origin.yml` | Harden the host and deploy a publisher's **origin node**: `decdn-node` with an origin backend, on hosts in `decdn_origin_nodes` (a child of `decdn_nodes`). Refuses an origin outside `decdn_nodes` or without a backend. | `make check-origin` / `make deploy-origin` |
-| `backup.yml` | Encrypted backup of a node's identity or full state, and of sponsord's credentials. | `make backup` |
-| `decommission.yml` | Stop a node, an iroh relay, an iroh DNS server, the onramp and sponsord and remove their services (keeps the keys; no on-chain steps). | `make decommission` |
+| `backup.yml` | Encrypted backup of a node's identity or full state, of sponsord's credentials and of a gateway's wallet and namespace pointers. | `make backup` |
+| `decommission.yml` | Stop a node, an iroh relay, an iroh DNS server, a public gateway, the onramp and sponsord and remove their services (keeps the keys; no on-chain steps). | `make decommission` |
 | `sponsord.yml` | Harden the host and deploy **sponsord**, the onboarding sponsor, on hosts in `sponsord_hosts`, with or without a node; then its public **sponsord-onramp** (behind Caddy) on hosts in `sponsord_onramp_hosts`. Also run by `publisher.yml`. | `make check-sponsord` / `make deploy-sponsord` |
 | `iroh_relay.yml` | Harden the host and deploy a self-hosted **iroh relay** (`iroh-relay`), the fallback path for peers that cannot hole-punch, on hosts in `iroh_relay_hosts`. Also run by `publisher.yml`. | `make check-relay` / `make deploy-relay` |
 | `iroh_dns_server.yml` | Harden the host and deploy a self-hosted **iroh DNS server** (`iroh-dns-server`), the pkarr relay and DNS server nodes are discovered through, on hosts in `iroh_dns_server_hosts`. Also run by `publisher.yml`. | `make check-dns` / `make deploy-dns` |
+| `decdn_gateway.yml` | Harden the host and deploy a **public gateway** (`decdn gateway --public-url`) on a domain of your own, behind nginx with a wildcard certificate, on hosts in `decdn_gateway_hosts`. Also run by `publisher.yml`. | `make check-gateway` / `make deploy-gateway` |
 
 ```
 baseline        host hardening: DevSec os/ssh, nftables default-deny inbound,
@@ -37,8 +38,10 @@ baseline        host hardening: DevSec os/ssh, nftables default-deny inbound,
    │                      listener behind Caddy (ACME TLS, tcp/80 + tcp/443)
    ├─ iroh_relay      self-hosted iroh relay; its own Let's Encrypt TLS on tcp/80 +
    │                  tcp/443, QUIC address discovery udp/7842; loopback metrics
-   └─ iroh_dns_server self-hosted pkarr relay + DNS server for node discovery; its own
-                      Let's Encrypt TLS on tcp/443, DNS on udp+tcp/53; loopback metrics
+   ├─ iroh_dns_server self-hosted pkarr relay + DNS server for node discovery; its own
+   │                  Let's Encrypt TLS on tcp/443, DNS on udp+tcp/53; loopback metrics
+   └─ decdn_gateway   public HTTP gateway on loopback, paying from its own pool;
+                      nginx in front (tcp/80 + tcp/443, lego wildcard certificate)
 ```
 
 ## Security model
@@ -50,9 +53,10 @@ specific to this path:
   `baseline_extra_inbound`) are the only holes, plus **tcp/80 + tcp/443** for Caddy on a
   `sponsord_onramp_hosts` host, **tcp/80, tcp/443 + udp/7842** for the relay on an
   `iroh_relay_hosts` host and **tcp/443, udp/53 + tcp/53** for the DNS server on an
-  `iroh_dns_server_hosts` host; metrics 9090, the admin RPC 9191, sponsord 8090, the
-  onramp 8080, the relay's metrics 9092 and the DNS server's metrics 9117 and health
-  listener 9118 stay loopback. Baseline turns off `os_hardening`'s ufw config template
+  `iroh_dns_server_hosts` host and **tcp/80 + tcp/443** for nginx on a
+  `decdn_gateway_hosts` host; metrics 9090, the admin RPC 9191, sponsord 8090, the
+  onramp 8080, the relay's metrics 9092, the DNS server's metrics 9117 and health
+  listener 9118, and the gateway 8484 and its metrics 9094 stay loopback. Baseline turns off `os_hardening`'s ufw config template
   (`ufw_manage_defaults: false`) so a misleading DROP-policy `/etc/default/ufw` is never
   written. Do not install or enable ufw: it would replace the nftables ruleset and drop
   QUIC and SSH.
@@ -189,8 +193,9 @@ ignored on the first converge.
      `decdn_node_version` defaults to the decdn/decdn release line this repo pins (the
      role's `defaults/main.yml`, `"X.Y"`): each run installs the line's newest
      finished release, so a patch release arrives with the next deploy. Set an exact
-     `"X.Y.Z"` to hold a host on one release. The sponsord roles pin the same
-     decdn/decdn line the same way (`sponsord_version`, `sponsord_onramp_version`).
+     `"X.Y.Z"` to hold a host on one release. The sponsord roles and the gateway role
+     pin the same decdn/decdn line the same way (`sponsord_version`,
+     `sponsord_onramp_version`, `decdn_gateway_version`).
    - **`source`** clones `decdn_node_source_repo` (default `decdn/decdn` on GitHub) at
      `decdn_node_source_ref` (any tag, branch or SHA) **on the node** and builds it there
      as an unprivileged `decdn-build` user, in a fresh environment per commit, with a
@@ -400,6 +405,30 @@ deploy-dns`; `make deploy` covers it too.
 
 Setup and variables: [`roles/iroh_dns_server/README.md`](roles/iroh_dns_server/README.md).
 
+### Public gateway (optional)
+
+The eighth role, `decdn_gateway`, deploys deCDN's public HTTP gateway (`decdn gateway
+--public-url`) on a domain of your own: `https://<domain>/<hash>`, a bundle as a
+website at `https://<hash32>.<domain>/`, and a namespace's at `https://<ns>.<domain>/`
+once its owner points it there. Put it on a host of its own (or beside a node) in
+`decdn_gateway_hosts`, then run `make deploy-gateway`; `make deploy` covers it too.
+
+- **It pays for every request** from its own pool, funded by a wallet of its own
+  (`decdn_gateway_generate_keystore` mints one), within
+  `decdn_gateway_allowance_bytes_per_day`.
+- **nginx terminates TLS** in front of it, with a wildcard certificate for
+  `<domain>` and `*.<domain>` that lego obtains over ACME DNS-01 through your DNS
+  provider (`decdn_gateway_acme_dns_provider`, its token in a root-only env file on
+  the host). nginx also limits `PUT /_pointer` per client address.
+  `decdn_gateway_hosts` excludes `sponsord_onramp_hosts`, `iroh_relay_hosts` and
+  `iroh_dns_server_hosts` (all want 443).
+- **Namespace-hint hosts** (`<ns>.<hash32>.<domain>`, where the gateway's `?ns=`
+  redirect lands) have no certificate: no wildcard covers two labels
+  (decdn/decdn#2784).
+- **Back up** the wallet and the namespace pointers (`make backup`).
+
+Setup and variables: [`roles/decdn_gateway/README.md`](roles/decdn_gateway/README.md).
+
 ### Backup and decommission
 
 ```bash
@@ -410,8 +439,8 @@ make decommission LIMIT=<host>                                     # typed confi
 
 Backups need `decdn_backup_age_recipients` (public keys); on `sponsord_hosts` they
 archive the treasury keystore and password, the API token and the Turnstile secret.
-On a sponsord host, decommission refuses while sponsord holds an unconfirmed pool
-top-up. An iroh relay has nothing to back up; its decommission keeps its config and
+On a gateway host they archive its wallet and namespace pointers. On a sponsord
+host, decommission refuses while sponsord holds an unconfirmed pool top-up. An iroh relay has nothing to back up; its decommission keeps its config and
 Let's Encrypt state. Restore, host migration and the on-chain exit:
 [`docs/lifecycle.md`](../docs/lifecycle.md).
 
@@ -529,7 +558,7 @@ the RPC URL when it is not provisioned on the host instead). Highlights:
 
 ## Packaging as Galaxy collections (`decdn.node`, `decdn.publisher`)
 
-The seven roles and the playbooks are also packaged as two collections, published on
+The eight roles and the playbooks are also packaged as two collections, published on
 Ansible Galaxy (`ansible-galaxy collection install decdn.node` or `decdn.publisher`),
 for operators who run a fleet from an inventory and the collections alone
 (`ansible-playbook -i inventory/hosts.yml decdn.publisher.site`) or bring their own playbooks:
@@ -537,7 +566,7 @@ for operators who run a fleet from an inventory and the collections alone
 | Collection | Roles | Playbooks | For |
 |---|---|---|---|
 | **`decdn.node`** | `baseline`, `decdn_node`, `grafana_alloy` | `node`, and node-only `backup` and `decommission` | node operators |
-| **`decdn.publisher`** | `sponsord`, `sponsord_onramp`, `iroh_relay`, `iroh_dns_server` | every playbook here (`site`, `node`, `publisher`, `origin`, `sponsord`, `iroh_relay`, `iroh_dns_server`, `backup`, `decommission`) | publishers; depends on `decdn.node` |
+| **`decdn.publisher`** | `sponsord`, `sponsord_onramp`, `iroh_relay`, `iroh_dns_server`, `decdn_gateway` | every playbook here (`site`, `node`, `publisher`, `origin`, `sponsord`, `iroh_relay`, `iroh_dns_server`, `decdn_gateway`, `backup`, `decommission`) | publishers; depends on `decdn.node` |
 
 Each collection's overlay lives in [`galaxy/<collection>/`](galaxy/) (`galaxy.yml`, the
 collection `README.md`/`CHANGELOG.md`, `meta/runtime.yml`, `roles.txt` and

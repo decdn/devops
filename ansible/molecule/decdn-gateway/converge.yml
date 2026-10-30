@@ -1,0 +1,7 @@
+---
+# The real entry point: both plays of playbooks/decdn_gateway.yml (the placement
+# guard, then the gateway), so playbooks/group_vars/ resolve exactly as a deploy
+# would. Variables come from molecule.yml's inventory group_vars; baseline is
+# skipped there.
+- name: Converge
+  ansible.builtin.import_playbook: ../../playbooks/decdn_gateway.yml

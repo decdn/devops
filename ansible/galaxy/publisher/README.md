@@ -7,7 +7,7 @@ An origin is a `decdn-node` with an origin backend, deployed with
 [`decdn.node`](https://github.com/decdn/devops/tree/main/ansible/galaxy/node)'s
 `decdn_node` role; this collection holds the publisher's other services. It is part of
 the public, reusable slice of the [`decdn/devops`](https://github.com/decdn/devops)
-repository: four roles, and the playbooks that deploy a whole publisher fleet with
+repository: five roles, and the playbooks that deploy a whole publisher fleet with
 them and `decdn.node`'s (see [Usage](#usage)):
 
 | Role | Purpose |
@@ -16,6 +16,7 @@ them and `decdn.node`'s (see [Usage](#usage)):
 | `decdn.publisher.sponsord_onramp` | `sponsord-onramp`, sponsord's public side (Turnstile gate, installers, capability API), on the daemon's host — local binary, a host-side source build or a GPG-verified decdn/decdn `v*` release (pinned by `sponsord_onramp_version`, kept equal to `sponsord_version`), `DynamicUser` unit with the daemon token and Turnstile secret as systemd credentials, loopback listener behind Caddy (distro package, ACME TLS, admin API off; or your own proxy), `/healthz` deploy gate; `tasks_from: decommission`. |
 | `decdn.publisher.iroh_relay` | A self-hosted [iroh relay](https://github.com/n0-computer/iroh) (`iroh-relay`) for deCDN peers that cannot hole-punch — sha256-pinned upstream release (or a local binary), its own Let's Encrypt TLS, QUIC address discovery, `DynamicUser` unit holding only `CAP_NET_BIND_SERVICE`, loopback metrics, a deploy gate on every listener, a refusal of ports another process holds; access limited to an allowlist of endpoint IDs by default (`iroh_relay_access`; `tasks_from: node-ids` reads nodes' IDs); `tasks_from: decommission`. Point nodes at it with `decdn_relay_urls`. |
 | `decdn.publisher.iroh_dns_server` | A self-hosted [iroh DNS server](https://github.com/n0-computer/iroh) (`iroh-dns-server`): the pkarr relay deCDN nodes publish their address records to and the DNS server peers resolve them through, in place of n0's `dns.iroh.link` — sha256-pinned upstream release (or a local binary), its own Let's Encrypt TLS, DNS on one bind address (clear of systemd-resolved's stub), `DynamicUser` unit holding only `CAP_NET_BIND_SERVICE`, loopback metrics, a deploy gate on every listener, `/healthz`'s version and an SOA answer over udp and tcp, a refusal of ports another process holds; `tasks_from: decommission`. Point nodes at it with `decdn_discovery_pkarr_url` and `decdn_discovery_dns_origin`. |
+| `decdn.publisher.decdn_gateway` | deCDN's public HTTP gateway (`decdn gateway --public-url`) on a domain of your own, paying for every request from its own wallet's pool within a daily allowance — a GPG-verified decdn/decdn `v*` release of the CLI (pinned by `decdn_gateway_version`, kept equal to `decdn_node_version`) or a local binary, at its own path beside a node's, hardened unit on loopback (SIGINT stop), behind the distro's nginx with a wildcard certificate for `<domain>` and `*.<domain>` from lego over ACME DNS-01 (any lego DNS provider) and a per-client limit on `PUT /_pointer`; a deploy gate on the loopback listener and the https chain; `tasks_from: backup` / `decommission`. |
 
 ## Requirements
 
@@ -71,13 +72,14 @@ inventory defines it, so `site` deploys whatever the inventory holds:
 | Playbook | Runs |
 |----------|------|
 | `decdn.publisher.site` | `node`, then `publisher`: everything in the inventory |
-| `decdn.publisher.publisher` | `origin`, `sponsord`, `iroh_relay`, `iroh_dns_server`, in that order |
+| `decdn.publisher.publisher` | `origin`, `sponsord`, `iroh_relay`, `iroh_dns_server`, `decdn_gateway`, in that order |
 | `decdn.publisher.node` | cache nodes: `decdn_nodes` outside `decdn_origin_nodes` (the same playbook as `decdn.node.node`) |
 | `decdn.publisher.origin` | origin nodes: `decdn_origin_nodes`, a child group of `decdn_nodes`; refuses one without an origin backend |
 | `decdn.publisher.sponsord` | `sponsord_hosts`, then the onramp on `sponsord_onramp_hosts` (which must be `sponsord_hosts` too) |
 | `decdn.publisher.iroh_relay` | `iroh_relay_hosts`, one at a time; in allowlist mode (the default) it first reads every node's endpoint ID for the allowlist |
 | `decdn.publisher.iroh_dns_server` | `iroh_dns_server_hosts`, one at a time |
-| `decdn.publisher.backup` | encrypted backups of the nodes' identities (or full state) and sponsord's credentials |
+| `decdn.publisher.decdn_gateway` | `decdn_gateway_hosts`; refuses one that is also an onramp, relay or DNS server host |
+| `decdn.publisher.backup` | encrypted backups of the nodes' identities (or full state), sponsord's credentials and the gateways' wallets and namespace pointers |
 | `decdn.publisher.decommission` | stops and removes every service on the run's hosts (the onramp's Caddy is stopped and disabled, not removed), then the Alloy agent, after one typed confirmation of the hosts; keeps the keys, never touches the chain |
 
 ```bash
@@ -95,14 +97,15 @@ a ready-made project for these collections. Beyond the roles, the playbooks
 bring:
 
 - **the firewall holes**, from the groups a host is in: the node's udp/4433, Caddy's
-  tcp/80 + tcp/443 on an onramp host, the relay's tcp/80 + tcp/443 + udp/7842 and the
-  DNS server's tcp/443 + udp/53 + tcp/53, one list per host whatever the play, so a
+  tcp/80 + tcp/443 on an onramp host, the relay's tcp/80 + tcp/443 + udp/7842, the
+  DNS server's tcp/443 + udp/53 + tcp/53 and the gateway's nginx on tcp/80 + tcp/443,
+  one list per host whatever the play, so a
   co-located host renders one firewall. They and the Grafana Alloy per-daemon toggles
   live in the playbooks' own `group_vars/`, which ship beside them;
 - **the placement checks** the roles leave out: an origin must be a `decdn_nodes` host
   too and have an origin backend, an onramp a `sponsord_hosts` one, a relay may not
-  share a host with an onramp (both want tcp/80 and tcp/443), and a DNS server with
-  neither (all want tcp/443);
+  share a host with an onramp (both want tcp/80 and tcp/443), a DNS server with
+  neither (all want tcp/443), and a gateway with none of the three;
 - **the lifecycle guards**: `decommission` refuses more hosts than
   `decdn_decommission_max_hosts` (default 1) and refuses while sponsord holds an
   unconfirmed pool top-up.
@@ -115,9 +118,10 @@ bring:
   override them. Importing a shipped playbook from one of your own changes none of
   this: its plays read the collection's `group_vars/`, not those beside your playbook.
 - **Backups.** `decdn.publisher.backup` fetches the nodes' identity archives and
-  sponsord's credentials to `backups/` beside your project's `ansible.cfg` (never into
-  the installed collection). Without a project `ansible.cfg`, set
-  `decdn_backup_local_dir` and `sponsord_backup_local_dir`.
+  sponsord's credentials and the gateways' wallets to `backups/` beside your project's
+  `ansible.cfg` (never into the installed collection). Without a project
+  `ansible.cfg`, set `decdn_backup_local_dir`, `sponsord_backup_local_dir` and
+  `decdn_gateway_backup_local_dir`.
 - **Scope.** The repository's Makefile guards (a `LIMIT` preflight, a required `LIMIT`
   for decommission) do not ship: scope a run with `-l` yourself.
 
@@ -157,11 +161,12 @@ onramp:
       # git-ignored secret.yml).
 ```
 
-Of the shipped playbooks' placement checks, three concern this collection's roles,
+Of the shipped playbooks' placement checks, four concern this collection's roles,
 which do not check them, so a playbook of your own must keep them: `sponsord_onramp` runs on a
 `sponsord` host (it reads the daemon's API token and calls it on loopback); an iroh
 relay does not share a host with the onramp (both want tcp/80 and tcp/443); an iroh
-DNS server shares a host with neither (all want tcp/443). The relay and DNS server
+DNS server shares a host with neither (all want tcp/443); a gateway shares a host with
+none of the three (its nginx wants tcp/80 and tcp/443). The relay and DNS server
 roles also refuse ports another process holds; the onramp's Caddy does not check. See each role's README for the full variable list and
 day-2 ops:
 
@@ -169,6 +174,7 @@ day-2 ops:
 - [`roles/sponsord_onramp`](https://github.com/decdn/devops/tree/main/ansible/roles/sponsord_onramp)
 - [`roles/iroh_relay`](https://github.com/decdn/devops/tree/main/ansible/roles/iroh_relay)
 - [`roles/iroh_dns_server`](https://github.com/decdn/devops/tree/main/ansible/roles/iroh_dns_server)
+- [`roles/decdn_gateway`](https://github.com/decdn/devops/tree/main/ansible/roles/decdn_gateway)
 
 ## Security model
 
@@ -180,11 +186,15 @@ derive that from `sponsord_onramp_hosts`; from your own playbook, add them yours
 and udp/7842 on every address (its metrics stay on loopback), so a relay host opens
 those three. `iroh_dns_server` is public by design too: it terminates its own TLS on
 tcp/443 and answers DNS on udp/53 and tcp/53 at one address (its metrics and health
-listener stay on loopback), so a DNS server host opens those three. No secrets ship
+listener stay on loopback), so a DNS server host opens those three. `decdn_gateway`
+listens on loopback: nginx is its public side on tcp/80 and tcp/443 (the shipped
+playbooks derive the holes from `decdn_gateway_hosts`). No secrets ship
 in the collection or are committed: the treasury keystore, the RPC URL and the
 Turnstile secret are host-provisioned or rendered to `0600` files. The keystore, its
 password, the API token and the Turnstile secret reach the daemons as systemd
-credentials; the RPC URL, as an `EnvironmentFile`.
+credentials; the RPC URL, as an `EnvironmentFile`. The gateway's wallet and its DNS
+provider token are host-provisioned `0600` files too, and its RPC URL is rendered
+into a `0600` config, never onto a command line.
 
 ## License
 

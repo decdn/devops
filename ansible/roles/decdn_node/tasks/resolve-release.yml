@@ -1,6 +1,7 @@
 ---
 # Resolve a release pin to the exact version to install. Copied verbatim into the
-# sponsord and sponsord_onramp roles; make test-scripts keeps the copies identical.
+# sponsord, sponsord_onramp and decdn_gateway roles; make test-scripts keeps the copies
+# identical.
 #
 # In:  _rr_spec    the pin, already validated: "X.Y.Z[-pre]" (exact) or "X.Y" (a line)
 #      _rr_index   URL of the upstream release list, in GitHub's REST API shape

@@ -4,9 +4,10 @@
 #   sponsord.yml         sponsord_hosts (+ sponsord_onramp_hosts)
 #   iroh_relay.yml       iroh_relay_hosts (reads the nodes' IDs, origins included)
 #   iroh_dns_server.yml  iroh_dns_server_hosts
+#   decdn_gateway.yml    decdn_gateway_hosts
 # Entry point `make deploy-publisher`, also imported by site.yml after node.yml. Each
 # component has its own entry point too (deploy-origin, deploy-sponsord,
-# deploy-relay, deploy-dns), and each play matches nothing unless the inventory
+# deploy-relay, deploy-dns, deploy-gateway), and each play matches nothing unless the inventory
 # defines its group.
 - name: Provision origin nodes
   ansible.builtin.import_playbook: origin.yml
@@ -19,3 +20,6 @@
 
 - name: Provision iroh DNS servers
   ansible.builtin.import_playbook: iroh_dns_server.yml
+
+- name: Provision public gateways
+  ansible.builtin.import_playbook: decdn_gateway.yml

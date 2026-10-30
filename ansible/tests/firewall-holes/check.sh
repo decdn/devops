@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The baseline firewall's public holes are derived from a host's groups in
 # playbooks/group_vars/ (all.yml builds the list; decdn_nodes.yml, decdn_origin_nodes.yml,
-# sponsord_hosts.yml, iroh_relay_hosts.yml and iroh_dns_server_hosts.yml all point
-# baseline_extra_inbound at it). Resolve them for
+# sponsord_hosts.yml, iroh_relay_hosts.yml, iroh_dns_server_hosts.yml and
+# decdn_gateway_hosts.yml all point baseline_extra_inbound at it). Resolve them for
 # every host shape in inventory.yml, outside any role, which is how the sponsord
 # play sees a co-located node, and compare with expected.json.
 # Needs ansible-core and jq. tests/scripts-test.sh runs it.

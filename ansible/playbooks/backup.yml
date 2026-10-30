@@ -1,12 +1,13 @@
 ---
-# Encrypted backups: each node's identity (default) or full state, and each
-# sponsord host's credentials (the treasury keystore and password, the API token,
-# the onramp's Turnstile secret).
+# Encrypted backups: each node's identity (default) or full state, each sponsord
+# host's credentials (the treasury keystore and password, the API token, the
+# onramp's Turnstile secret), and each gateway's wallet and namespace pointers.
 #   make backup LIMIT=<host> ANSIBLE_ARGS='-e decdn_backup_scope=full'
 #   ansible-playbook -i inventory/hosts.yml decdn.publisher.backup -l <host>   # from the collection
 # decdn_backup_age_recipients (public keys) is required; set it in group_vars
-# (sponsord_backup_age_recipients defaults to it). See roles/decdn_node/tasks/backup.yml
-# and roles/sponsord/tasks/backup.yml for what is archived and docs/lifecycle.md for
+# (sponsord_backup_age_recipients and decdn_gateway_backup_age_recipients default to
+# it). See roles/decdn_node/tasks/backup.yml, roles/sponsord/tasks/backup.yml and
+# roles/decdn_gateway/tasks/backup.yml for what is archived and docs/lifecycle.md for
 # restore and host migration.
 - name: Back up deCDN nodes
   hosts: decdn_nodes
@@ -31,6 +32,18 @@
     - name: Back up this host's sponsord credentials
       ansible.builtin.include_role:
         name: sponsord
+        tasks_from: backup
+
+# Hot: the gateway never writes its wallet, and its pointers are written by rename.
+- name: Back up public gateways
+  hosts: decdn_gateway_hosts
+  become: true
+  serial: 1
+  gather_facts: false
+  tasks:
+    - name: Back up this host's gateway wallet and pointers
+      ansible.builtin.include_role:
+        name: decdn_gateway
         tasks_from: backup
 
 # No play for iroh_relay_hosts: a relay holds no state worth a backup. Its only

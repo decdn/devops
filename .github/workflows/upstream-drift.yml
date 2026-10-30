@@ -8,7 +8,7 @@ name: Upstream drift
 # (tasks/resolve-release.yml) and checks, weekly:
 #   - the generated mirrors of decdn/decdn at that release's tag:
 #     roles/decdn_node/vars/main/networks.yml (contract addresses) and its subsets in
-#     roles/sponsord{,_onramp}/vars/main/, and ansible/molecule/schema/files/
+#     roles/{sponsord,sponsord_onramp,decdn_gateway}/vars/main/, and ansible/molecule/schema/files/
 #     schema-keys.txt (the node.toml key inventory). They describe the binary a
 #     default deploy installs, so they are generated from the tag, not from main;
 #   - the hand-copied release facts: the onramp's decdn tag and SHA256SUMS digest
@@ -65,12 +65,13 @@ jobs:
           decdn="$(pin decdn_node decdn_node_version)"
           sponsord="$(pin sponsord sponsord_version)"
           onramp="$(pin sponsord_onramp sponsord_onramp_version)"
-          if [ -z "$decdn" ] || [ -z "$sponsord" ] || [ -z "$onramp" ]; then
+          gateway="$(pin decdn_gateway decdn_gateway_version)"
+          if [ -z "$decdn" ] || [ -z "$sponsord" ] || [ -z "$onramp" ] || [ -z "$gateway" ]; then
             echo "::error::a role has no pinned version"
             exit 1
           fi
-          if [ "$sponsord" != "$decdn" ] || [ "$onramp" != "$decdn" ]; then
-            echo "::error::the roles pin different lines (decdn_node $decdn, sponsord $sponsord, sponsord_onramp $onramp); one decdn/decdn release ships all of them"
+          if [ "$sponsord" != "$decdn" ] || [ "$onramp" != "$decdn" ] || [ "$gateway" != "$decdn" ]; then
+            echo "::error::the roles pin different lines (decdn_node $decdn, sponsord $sponsord, sponsord_onramp $onramp, decdn_gateway $gateway); one decdn/decdn release ships all of them"
             exit 1
           fi
           decdn_tag="$(resolve decdn/decdn "$decdn")"

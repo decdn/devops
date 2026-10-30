@@ -1,0 +1,16 @@
+---
+# Only the restart-inputs comparison in tasks/main.yml notifies this: a restart
+# forgives the day's allowance and drops the pulls in flight.
+- name: Restart decdn-gateway
+  ansible.builtin.systemd:
+    name: decdn-gateway
+    state: restarted
+    daemon_reload: true
+
+# A reload is graceful: nginx's old workers finish their requests. Under --check on
+# a host without nginx its install is only simulated, so there is nothing to reload.
+- name: Reload nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+  when: not ansible_check_mode or decdn_gateway_nginx_installed | default(false)

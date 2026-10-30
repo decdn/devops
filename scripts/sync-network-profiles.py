@@ -8,11 +8,13 @@ Writes ansible/roles/decdn_node/vars/main/networks.yml: one entry per chain upst
 would bake into node.toml. Operators then set `decdn_network: <name>` instead of
 hand-copying eight addresses that change wholesale on every upstream redeploy.
 
-Also writes the subsets two other roles need, from the same parsed data, so the roles
-can never disagree about a chain: ansible/roles/sponsord/vars/main/networks.yml
-(chain_id + the PaymentPool address) and ansible/roles/sponsord_onramp/vars/main/
+Also writes the subsets three other roles need, from the same parsed data, so the
+roles can never disagree about a chain: ansible/roles/sponsord/vars/main/networks.yml
+(chain_id + the PaymentPool address), ansible/roles/sponsord_onramp/vars/main/
 networks.yml (chain_id + CapacityBond and SlashJudge, which the onramp hands to users'
-decdn). --check covers all three files.
+decdn) and ansible/roles/decdn_gateway/vars/main/networks.yml (chain_id + the
+addresses the gateway pays through and the PublisherRegistry). --check covers all four
+files.
 
 Everything is read from git at --ref, never from the working tree, so the checkout's
 own branch does not matter. --ref defaults to the release a default deploy installs
@@ -50,6 +52,7 @@ OUT = REPO / "ansible/roles/decdn_node/vars/main/networks.yml"
 DEFAULTS = REPO / "ansible/roles/decdn_node/defaults/main.yml"
 SPONSORD_OUT = REPO / "ansible/roles/sponsord/vars/main/networks.yml"
 ONRAMP_OUT = REPO / "ansible/roles/sponsord_onramp/vars/main/networks.yml"
+GATEWAY_OUT = REPO / "ansible/roles/decdn_gateway/vars/main/networks.yml"
 
 # Upstream ChainAddresses field -> decdn_node variable suffix (decdn_<suffix>).
 # Order is the output order.
@@ -69,6 +72,10 @@ FIELDS = {
 SPONSORD_FIELDS = ["payment_pool_address"]
 # Likewise for sponsord_onramp (variables sponsord_onramp_<suffix>).
 ONRAMP_FIELDS = ["capacity_bond_address", "slash_judge_address"]
+# Likewise for decdn_gateway (variables decdn_gateway_<suffix>): what a paying client
+# reads, and the registry it checks namespace pointers against.
+GATEWAY_FIELDS = ["payment_pool_address", "capacity_bond_address", "slash_judge_address",
+                  "publisher_registry_address"]
 
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 REGISTRY = re.compile(r"KNOWN_CHAINS\s*:\s*&\[\s*KnownChain\s*\]\s*=\s*&\[(?P<body>.*?)\];", re.S)
@@ -228,6 +235,7 @@ def main() -> None:
         (OUT, render(commit, profiles)),
         (SPONSORD_OUT, render_subset(commit, profiles, "sponsord", SPONSORD_FIELDS)),
         (ONRAMP_OUT, render_subset(commit, profiles, "sponsord_onramp", ONRAMP_FIELDS)),
+        (GATEWAY_OUT, render_subset(commit, profiles, "decdn_gateway", GATEWAY_FIELDS)),
     ]
     if args.check:
         stale = False

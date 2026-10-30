@@ -29,6 +29,7 @@ FILES = [
     bd.NODE_DEFAULTS,
     bd.SPONSORD_DEFAULTS,
     bd.ONRAMP_DEFAULTS,
+    bd.GATEWAY_DEFAULTS,
     bd.ONRAMP_ENV,
     bd.COMPOSE_ENV,
     bd.CHART,
@@ -152,6 +153,8 @@ class Rewrite(Fixture):
             self.assertIn(f'\n# sponsord_onramp_version: "{version}"\n', onramp)
             self.assertIn(f"\n# sponsord_onramp_source_ref: v{version}\n", onramp)
             self.assertIn(f"\n# sponsord_onramp_decdn_release: v{version}\n", onramp)
+            gateway = self.text(f"{tree}/group_vars/decdn_gateway_hosts.yml")
+            self.assertIn(f'\n# decdn_gateway_version: "{version}"\n', gateway)
         self.assertIn(f'# sponsord_onramp_decdn_release: "v{version}"\n',
                       self.text("cloud-init/user-data-publisher.yaml"))
 
@@ -162,7 +165,7 @@ class Rewrite(Fixture):
         self.assertIn(f"sponsord_onramp_decdn_release: v{line} ", self.text(bd.ONRAMP_DEFAULTS))
         self.assertIn(f'appVersion: "{line}"', self.text(bd.CHART))
         self.assertIn(f"image: ghcr.io/decdn/decdn-node:{line}\n", self.text(bd.CHART))
-        self.assertIn(f"`sponsord_onramp_version`, today `{line}`)", flat(self.text("AGENTS.md")))
+        self.assertIn(f"`decdn_gateway_version`, today `{line}`)", flat(self.text("AGENTS.md")))
 
     def test_a_new_line_moves_every_pin(self) -> None:
         bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
@@ -171,7 +174,8 @@ class Rewrite(Fixture):
         self.assertEqual(bd.synced(self.root), "9.8.7")
 
     def test_a_patch_leaves_the_line(self) -> None:
-        line_files = (bd.NODE_DEFAULTS, bd.SPONSORD_DEFAULTS, bd.ONRAMP_DEFAULTS, bd.CHART, "AGENTS.md")
+        line_files = (bd.NODE_DEFAULTS, bd.SPONSORD_DEFAULTS, bd.ONRAMP_DEFAULTS, bd.GATEWAY_DEFAULTS, bd.CHART,
+                      "AGENTS.md")
         changed = bd.rewrite(self.root, self.next_patch(), SUMS, DIGESTS)
         for rel in line_files:
             with self.subTest(rel=rel):
@@ -203,11 +207,11 @@ class Rewrite(Fixture):
         original = self.text("AGENTS.md")
         for sep in (" ", "\n"):
             with self.subTest(sep=sep):
-                text, n = re.subn(r"(`sponsord_onramp_version`, today)\s+`", rf"\g<1>{sep}`", original)
+                text, n = re.subn(r"(`decdn_gateway_version`, today)\s+`", rf"\g<1>{sep}`", original)
                 self.assertEqual(n, 1)
                 self.write("AGENTS.md", text)
                 bd.rewrite(self.root, "9.8.7", SUMS, DIGESTS)
-                self.assertIn(f"`sponsord_onramp_version`, today{sep}`9.8`", self.text("AGENTS.md"))
+                self.assertIn(f"`decdn_gateway_version`, today{sep}`9.8`", self.text("AGENTS.md"))
                 bd.rewrite(self.root, self.version, self.sums, self.digests)
 
     def test_leaves_the_changelogs(self) -> None:

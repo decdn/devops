@@ -55,7 +55,7 @@ Two things here are generated from `decdn/decdn`; regenerate, never hand-edit:
 
 | Mirror | Regenerate with |
 |--------|-----------------|
-| `ansible/roles/{decdn_node,sponsord,sponsord_onramp}/vars/main/networks.yml` (contract addresses per network) | `scripts/sync-network-profiles.py <decdn-checkout>` |
+| `ansible/roles/{decdn_node,sponsord,sponsord_onramp,decdn_gateway}/vars/main/networks.yml` (contract addresses per network) | `scripts/sync-network-profiles.py <decdn-checkout>` |
 | `ansible/molecule/schema/files/schema-keys.txt` (node.toml keys) | `ansible/molecule/schema/files/gen-schema-keys.py <decdn-checkout> > …` |
 
 Both describe the newest release of the line the roles pin (`decdn_node_version`), so

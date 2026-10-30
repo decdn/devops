@@ -1,0 +1,72 @@
+---
+# The gateway's certificate tooling and lifecycle, split from ../decdn-gateway so the
+# two run side by side: the same host shape, inventory and converge (that
+# scenario's, by path), then side_effect.yml here:
+#   lego         switched to acme against an ACME server that does not answer: lego
+#                downloaded and held to its pinned sha256 and version, the
+#                certificate service and timer installed, and the first issuance's
+#                failure FATAL, with nginx left serving the old certificate; back on
+#                self-signed, the timer is stopped;
+#   backup       playbooks/backup.yml with a molecule age key: the archive decrypts
+#                to the wallet and the pointers;
+#   decommission refusals (a wrong confirmation: nothing touched), then for real:
+#                the gateway and its units gone, nginx stopped, the wallet, the state
+#                and the certificate kept; then once more, a safe no-op.
+# verify.yml here checks what decommission removed and kept. No idempotence step:
+# decommission is one-shot. Debian 12 only: ../decdn-gateway covers the platforms.
+#
+# The inventory below must stay identical to ../decdn-gateway/molecule.yml's
+# (`make test-scripts` checks).
+driver:
+  name: docker
+platforms:
+  - name: gateway-lifecycle-molecule
+    # Same digest-pinned images as ../sponsord (repo convention).
+    image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    groups:
+      - decdn_gateway_hosts
+provisioner:
+  name: ansible
+  options:
+    skip-tags: baseline
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # Same pipelining note as ../default/molecule.yml.
+    ANSIBLE_PIPELINING: "true"
+  playbooks:
+    converge: ../decdn-gateway/converge.yml
+  inventory:
+    group_vars:
+      decdn_gateway_hosts:
+        decdn_gateway_install_method: manual
+        decdn_gateway_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/decdn-gateway/files/decdn-gateway-stub"
+        # Not the binary's version: proves a manual install is not held to the pin.
+        decdn_gateway_version: "9.9.9-not-the-binary"
+        decdn_gateway_domain: gateway.molecule.test
+        decdn_gateway_rpc_url: "https://rpc.example.invalid/v2/molecule-key"
+        decdn_gateway_generate_keystore: true
+        decdn_gateway_tls: self-signed
+        decdn_gateway_allowance_bytes_per_day: 2GiB
+        decdn_gateway_namespace_allowances: {7: 20GiB}
+        decdn_gateway_working_deposit_micro_usdc: 5000000
+        decdn_gateway_pointer_rate: 6r/m
+        decdn_gateway_pointer_burst: 2
+        decdn_gateway_readiness_retries: 10
+        decdn_gateway_readiness_delay: 1
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    - destroy
+    - create
+    - converge
+    - side_effect
+    - verify
+    - destroy

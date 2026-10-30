@@ -1,0 +1,629 @@
+---
+# Provision the public gateway: validate, gate on the host's files, install,
+# configure, start, gate on the loopback listener, then put nginx with its
+# certificate in front. Every pure-input assert runs before the first host
+# mutation, and every gate on a host file before the binary is installed. See
+# roles/decdn_gateway/README.md for the inputs.
+
+# --- Install method + target ----------------------------------------------------
+- name: Require a valid install method
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_install_method in ["release", "manual"]
+    fail_msg: >-
+      decdn_gateway_install_method must be "release" (the pinned GitHub Release
+      tarball of the decdn CLI) or "manual" (copy a binary from the control machine).
+
+- name: Require a pinned release version
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_version is string
+      - decdn_gateway_version is match('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)?$')
+      - decdn_gateway_verify_release_signature is boolean
+    fail_msg: >-
+      decdn_gateway_install_method "release" (the default) requires
+      decdn_gateway_version: a release line ("X.Y", the newest vX.Y.N release of
+      decdn/decdn) or an exact version ("X.Y.Z"), as a quoted string without the "v"
+      (got "{{ decdn_gateway_version }}"), the same as decdn_node_version; and
+      decdn_gateway_verify_release_signature a boolean.
+  when: decdn_gateway_install_method == "release"
+
+- name: Require a supported target triple
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_target in _decdn_gateway_arch_targets.values()
+    fail_msg: >-
+      decdn_gateway_target resolved to "{{ decdn_gateway_target }}", which is not one of
+      the Linux targets upstream releases ({{ _decdn_gateway_arch_targets.values() | join(', ') }}).
+      It is derived from the host's gathered architecture
+      ("{{ ansible_facts.get('architecture', 'not gathered') }}"): gather facts or set
+      decdn_gateway_target explicitly.
+
+- name: Require a manual binary source
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_manual_bin_src | length > 0
+    fail_msg: >-
+      decdn_gateway_install_method "manual" needs decdn_gateway_manual_bin_src, a
+      control-machine path to the decdn binary (`cargo build --release -p decdn-cli`
+      in a decdn/decdn checkout, for the host's architecture).
+  when: decdn_gateway_install_method == "manual"
+
+# --- Public address + listeners ---------------------------------------------------
+- name: Require the domain the gateway serves
+  ansible.builtin.assert:
+    that:
+      # A lowercase DNS name: labels of letters, digits and inner hyphens, at least
+      # one dot. The gateway matches Host exactly, and nginx lowercases it.
+      - decdn_gateway_domain is match('^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$')
+    fail_msg: >-
+      decdn_gateway_domain must be the lowercase DNS name the gateway serves, without
+      a scheme or a path, e.g. gateway.example.org (got "{{ decdn_gateway_domain }}").
+      <domain> and *.<domain> must resolve to this host.
+
+# AGENTS.md hard rule 2: the gateway's own listeners stay on loopback; nginx is the
+# public side. Upstream refuses a non-loopback metrics listener itself; this says why
+# before anything is installed.
+- name: Require both listeners on loopback
+  ansible.builtin.assert:
+    that:
+      - item.address is match('^127(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$')
+      - item.port | string is match('^[1-9][0-9]*$')
+      - item.port | int <= 65535
+    fail_msg: >-
+      {{ item.name }} must be an IPv4 loopback address and a TCP port (got
+      "{{ item.address }}:{{ item.port }}"). nginx is the public side (AGENTS.md hard
+      rule 2); the gateway itself never listens beyond loopback.
+  loop:
+    - name: decdn_gateway_listen_address / decdn_gateway_port
+      address: "{{ decdn_gateway_listen_address }}"
+      port: "{{ decdn_gateway_port }}"
+    - name: decdn_gateway_metrics_address / decdn_gateway_metrics_port
+      address: "{{ decdn_gateway_metrics_address }}"
+      port: "{{ decdn_gateway_metrics_port }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require the two listeners on different ports
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_port | int != decdn_gateway_metrics_port | int
+    fail_msg: decdn_gateway_port and decdn_gateway_metrics_port must differ.
+
+# The unit's StateDirectory= is the home's name under /var/lib: the only path the
+# gateway may write under ProtectSystem=strict.
+- name: Require the home and data directories under /var/lib
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_home is match('^/var/lib/[A-Za-z0-9._-]+$')
+      - decdn_gateway_data_dir.startswith(decdn_gateway_home ~ '/')
+      - decdn_gateway_keystore_file.startswith(decdn_gateway_home ~ '/')
+    fail_msg: >-
+      decdn_gateway_home must be a directory directly under /var/lib (got
+      "{{ decdn_gateway_home }}"), and decdn_gateway_data_dir and
+      decdn_gateway_keystore_file must sit inside it: the unit makes the home its
+      StateDirectory, the one place the gateway may write.
+
+# --- Allowance ---------------------------------------------------------------------
+# Upstream's byte-size parser: a count of bytes, or one with a binary unit up to G.
+- name: Validate the allowances
+  vars:
+    _bytes: '^[0-9]+([KMG]i?B?|B)?$'
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_allowance_bytes_per_day | string is match(_bytes, ignorecase=true)
+      - decdn_gateway_namespace_allowances is mapping
+      - >-
+        decdn_gateway_namespace_allowances.keys() | map('string')
+        | reject('match', '^[1-9][0-9]*$') | list | length == 0
+      - >-
+        decdn_gateway_namespace_allowances.values() | map('string')
+        | reject('match', _bytes, ignorecase=true) | list | length == 0
+    fail_msg: >-
+      decdn_gateway_allowance_bytes_per_day must be a byte count or a size such as
+      512MiB or 20GiB (units up to G; got "{{ decdn_gateway_allowance_bytes_per_day }}"),
+      and decdn_gateway_namespace_allowances a mapping of decimal namespace ids (no
+      leading zero, never 0) to such sizes, e.g. {7: 20GiB} (got
+      {{ decdn_gateway_namespace_allowances | to_json }}).
+
+# --- Chain ------------------------------------------------------------------------
+- name: Require a known decdn_gateway_network
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_network == "" or decdn_gateway_network in _decdn_gateway_network_profiles
+    fail_msg: >-
+      decdn_gateway_network "{{ decdn_gateway_network }}" is not a known network.
+      Known: {{ _decdn_gateway_network_profiles.keys() | join(', ') }}. Leave it "" to
+      set decdn_gateway_chain_id and the contract addresses yourself.
+
+- name: Report a contract address overridden in inventory
+  ansible.builtin.debug:
+    msg: >-
+      decdn_gateway_network "{{ decdn_gateway_network }}" is in use, but inventory
+      overrides decdn_gateway_{{ item }}. The inventory value wins over the profile;
+      make sure that is deliberate (a stale hand-copied address is the usual cause).
+  loop: [payment_pool_address, capacity_bond_address, slash_judge_address, publisher_registry_address]
+  when:
+    - decdn_gateway_network | length > 0
+    - (lookup('ansible.builtin.vars', 'decdn_gateway_' ~ item) | lower) != (_decdn_gateway_profile[item] | lower)
+
+- name: Require the chain id and the contract addresses
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_chain_id | string is match('^[1-9][0-9]*$')
+      - item | string is match('^0x[0-9a-fA-F]{40}$')
+      - item | string != '0x' ~ '0' * 40
+    fail_msg: >-
+      decdn_gateway_chain_id must be a positive integer and every contract address
+      0x + 40 hex, not zero (got chain "{{ decdn_gateway_chain_id }}", address
+      "{{ item }}"). Set decdn_gateway_network to take them from the role's mirror of
+      upstream's deployment manifest — never hand-copy them.
+  loop:
+    - "{{ decdn_gateway_payment_pool_address }}"
+    - "{{ decdn_gateway_capacity_bond_address }}"
+    - "{{ decdn_gateway_slash_judge_address }}"
+    - "{{ decdn_gateway_publisher_registry_address }}"
+
+# The URL may embed an API key, so the message never echoes it. It lands in a TOML
+# basic string, so no quote, backslash or control character.
+- name: Require an http(s) RPC URL
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_rpc_url is string
+      - decdn_gateway_rpc_url is match('^https?://[^/?#\s]+')
+      - decdn_gateway_rpc_url is not search('["\x5c\x5c\x00-\x1f\x7f]')
+    fail_msg: >-
+      decdn_gateway_rpc_url is required: the http(s) JSON-RPC endpoint the gateway
+      pays through, with no double quote, backslash or control character. It may hold
+      an API key; set it in the git-ignored host_vars/<host>/secret.yml.
+  no_log: true
+
+- name: Validate the working deposit
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_working_deposit_micro_usdc | string == ''
+        or decdn_gateway_working_deposit_micro_usdc | string is match('^[1-9][0-9]*$')
+    fail_msg: >-
+      decdn_gateway_working_deposit_micro_usdc must be "" (the CLI's default) or a
+      positive number of micro-USDC (got "{{ decdn_gateway_working_deposit_micro_usdc }}").
+
+# RUST_LOG lands in the unit's Environment=; each comma-separated part must be a
+# level or target=level (the onramp role's rule).
+- name: Validate decdn_gateway_log_level
+  vars:
+    _directive: '(?i)^(?:[a-z_][a-z0-9_:]*=)?(?:trace|debug|info|warn|error|off)\Z'
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_log_level | string | length > 0
+      - (decdn_gateway_log_level | string).split(',') | reject('match', _directive) | list | length == 0
+    fail_msg: >-
+      decdn_gateway_log_level must be comma-separated parts that are each a level
+      (trace, debug, info, warn, error, off) or target=level, such as info or
+      decdn=debug,info; got "{{ decdn_gateway_log_level }}".
+
+# --- TLS + rate limit ------------------------------------------------------------
+- name: Validate the TLS settings
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_tls in ['acme', 'self-signed']
+      - decdn_gateway_generate_keystore is boolean
+    fail_msg: >-
+      decdn_gateway_tls must be "acme" or "self-signed", and
+      decdn_gateway_generate_keystore a boolean.
+
+- name: Require the ACME settings
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_acme_email is match('^[A-Za-z0-9._+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,63}$')
+      - decdn_gateway_acme_dns_provider is match('^[a-z0-9][a-z0-9._-]*$')
+      - >-
+        decdn_gateway_acme_server is match('^[a-z0-9-]+$')
+        or decdn_gateway_acme_server is match('^https://[^/?#@\s"]+(/[^?#\s"]*)?$')
+      - decdn_gateway_lego_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+      - _decdn_gateway_lego_arches[decdn_gateway_target] in decdn_gateway_lego_sha256
+      - decdn_gateway_lego_sha256[_decdn_gateway_lego_arches[decdn_gateway_target]] is match('^[0-9a-f]{64}$')
+    fail_msg: >-
+      decdn_gateway_tls "acme" needs decdn_gateway_acme_email (the ACME account
+      contact; got "{{ decdn_gateway_acme_email }}"), decdn_gateway_acme_dns_provider
+      (a lego DNS provider code such as cloudflare; got
+      "{{ decdn_gateway_acme_dns_provider }}") and decdn_gateway_acme_server (a lego
+      shortcode or an https directory URL), and a sha256 in decdn_gateway_lego_sha256
+      for this host's architecture.
+  when: decdn_gateway_tls == 'acme'
+
+- name: Validate the PUT /_pointer rate limit
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_pointer_rate is match('^[1-9][0-9]*r/[sm]$')
+      - decdn_gateway_pointer_burst | string is match('^[0-9]+$')
+    fail_msg: >-
+      decdn_gateway_pointer_rate must be an nginx limit_req rate such as 6r/m or 1r/s
+      (got "{{ decdn_gateway_pointer_rate }}"), and decdn_gateway_pointer_burst a
+      non-negative integer (got "{{ decdn_gateway_pointer_burst }}").
+
+# --- Host files -------------------------------------------------------------------
+# The DNS provider's credentials are the operator's, written on the host: the role
+# checks the file is there and non-empty, locks it to root 0600, and never reads it
+# back.
+- name: Check the ACME DNS credentials file
+  ansible.builtin.stat:
+    path: "{{ decdn_gateway_acme_env_file }}"
+    follow: false
+  register: decdn_gateway_acme_env_stat
+  when: decdn_gateway_tls == 'acme'
+
+- name: Require the ACME DNS credentials file
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_acme_env_stat.stat.isreg | default(false)
+      - decdn_gateway_acme_env_stat.stat.size | default(0) > 0
+    fail_msg: |-
+      {{ decdn_gateway_acme_env_file }} is missing, empty or not a regular file. lego
+      reads the {{ decdn_gateway_acme_dns_provider }} provider's credentials from it
+      (https://go-acme.github.io/lego/dns/{{ decdn_gateway_acme_dns_provider }}/ lists
+      the variables). Write it on this host, as root:
+        sudo install -d -m 0750 {{ decdn_gateway_etc }}
+        sudo install -m 0600 /dev/null {{ decdn_gateway_acme_env_file }}
+        sudoedit {{ decdn_gateway_acme_env_file }}   # e.g. CLOUDFLARE_DNS_API_TOKEN=...
+  when: decdn_gateway_tls == 'acme'
+
+# Ownership + mode only; the content is the operator's.
+- name: Lock down the ACME DNS credentials file
+  ansible.builtin.file:
+    path: "{{ decdn_gateway_acme_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    follow: false
+  when: decdn_gateway_tls == 'acme'
+
+# Before any mutation: nginx sites someone else enabled are never disabled silently.
+# The role's site is a default_server on 80 and 443, which nginx refuses beside
+# another default_server; the package's own default site is replaced.
+- name: List the enabled nginx sites and conf.d snippets
+  ansible.builtin.find:
+    paths: [/etc/nginx/sites-enabled, /etc/nginx/conf.d]
+    file_type: any
+    hidden: true
+  register: decdn_gateway_nginx_enabled
+
+- name: Read where each enabled site points
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  register: decdn_gateway_nginx_enabled_stat
+  loop: "{{ decdn_gateway_nginx_enabled.files | map(attribute='path') | list }}"
+
+- name: Refuse nginx sites this role did not enable
+  vars:
+    # The role's own link, and the package's default site while it still is that.
+    _ours:
+      - "{{ _decdn_gateway_nginx_site_link }}"
+    _foreign: >-
+      {{ decdn_gateway_nginx_enabled_stat.results
+         | rejectattr('item', 'in', _ours)
+         | rejectattr('item', 'equalto', '/etc/nginx/sites-enabled/default')
+         | map(attribute='item') | list
+         + (decdn_gateway_nginx_enabled_stat.results
+            | selectattr('item', 'equalto', '/etc/nginx/sites-enabled/default')
+            | rejectattr('stat.lnk_source', 'defined')
+            | map(attribute='item') | list)
+         + (decdn_gateway_nginx_enabled_stat.results
+            | selectattr('item', 'equalto', '/etc/nginx/sites-enabled/default')
+            | selectattr('stat.lnk_source', 'defined')
+            | rejectattr('stat.lnk_source', 'equalto', '/etc/nginx/sites-available/default')
+            | map(attribute='item') | list) }}
+  ansible.builtin.assert:
+    that:
+      - _foreign | length == 0
+    fail_msg: >-
+      nginx on this host already serves other configuration: {{ _foreign | join(', ') }}.
+      The role's site takes tcp/80 and tcp/443 as the default server, so it would
+      conflict with them. Move those sites to another host, or remove them, before
+      deploying the gateway here.
+
+# --- User & directories -----------------------------------------------------------
+- name: Create the gateway's system group
+  ansible.builtin.group:
+    name: "{{ decdn_gateway_group }}"
+    system: true
+
+- name: Create the gateway's system user
+  ansible.builtin.user:
+    name: "{{ decdn_gateway_user }}"
+    group: "{{ decdn_gateway_group }}"
+    system: true
+    home: "{{ decdn_gateway_home }}"
+    create_home: true
+    shell: /usr/sbin/nologin
+
+- name: Ensure the home and config directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ decdn_gateway_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ decdn_gateway_home }}", owner: "{{ decdn_gateway_user }}", mode: "0700"}
+    - {path: "{{ decdn_gateway_etc }}", owner: root, mode: "0750"}
+  loop_control:
+    label: "{{ item.path }}"
+
+# --- Install the binary -----------------------------------------------------------
+- name: Install the decdn CLI for the gateway
+  ansible.builtin.import_tasks: install.yml
+
+# --- Opt-in wallet generation (decdn_gateway_generate_keystore) -------------------
+# As decdn_node's: mint a fresh wallet ONLY when neither the keystore nor its
+# password exists. A password beside a missing keystore is the operator's and is
+# kept; a keystore without its password is never orphaned by a new one (the gate
+# below fails instead). Skipped under --check, which cannot dry-run a binary.
+- name: Check for an existing keystore and password (generate mode)
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: decdn_gateway_pregen_stat
+  loop:
+    - "{{ decdn_gateway_keystore_file }}"
+    - "{{ decdn_gateway_keystore_password_file }}"
+  when: decdn_gateway_generate_keystore
+
+- name: Generate a fresh wallet
+  when:
+    - decdn_gateway_generate_keystore
+    - not ansible_check_mode
+    - not decdn_gateway_pregen_stat.results[0].stat.exists
+  block:
+    - name: Generate a random keystore password
+      ansible.builtin.command: openssl rand -base64 32
+      register: decdn_gateway_pw_gen
+      no_log: true
+      changed_when: true
+      when: not decdn_gateway_pregen_stat.results[1].stat.exists
+
+    - name: Write the generated keystore password file
+      ansible.builtin.copy:
+        dest: "{{ decdn_gateway_keystore_password_file }}"
+        owner: "{{ decdn_gateway_user }}"
+        group: "{{ decdn_gateway_group }}"
+        mode: "0600"
+        content: "{{ decdn_gateway_pw_gen.stdout }}\n"
+      no_log: true
+      when: not decdn_gateway_pregen_stat.results[1].stat.exists
+
+    # key-gen writes keystore.json (and a node.secret the gateway never reads) into
+    # --output-dir.
+    - name: Generate the keystore
+      ansible.builtin.command:
+        argv:
+          - "{{ decdn_gateway_bin }}"
+          - key-gen
+          - --output-dir
+          - "{{ decdn_gateway_keystore_file | dirname }}"
+          - --keystore-password-file
+          - "{{ decdn_gateway_keystore_password_file }}"
+        creates: "{{ decdn_gateway_keystore_file }}"
+      become: true
+      become_user: "{{ decdn_gateway_user }}"
+      environment:
+        DECDN_SELF_UPDATE_CHECK: "0"
+      register: decdn_gateway_keygen
+
+    # stdout is the CLI's public NodeId + eth address (no secret material).
+    - name: Show the generated wallet's address (fund it)
+      ansible.builtin.debug:
+        msg: "{{ decdn_gateway_keygen.stdout_lines }}"
+      when:
+        - decdn_gateway_generate_keystore
+        - decdn_gateway_keygen.changed | default(false)
+
+# --- Require the wallet before start ----------------------------------------------
+- name: Check the keystore and its password
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  register: decdn_gateway_wallet_stat
+  loop:
+    - "{{ decdn_gateway_keystore_file }}"
+    - "{{ decdn_gateway_keystore_password_file }}"
+
+- name: Require the keystore and its password as regular files
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_wallet_stat.results | rejectattr('stat.isreg', 'defined') | list | length == 0
+      - decdn_gateway_wallet_stat.results | rejectattr('stat.isreg') | list | length == 0
+    fail_msg: |-
+      The gateway pays from its own wallet: {{ decdn_gateway_keystore_file }} and its
+      password {{ decdn_gateway_keystore_password_file }} must both exist as regular
+      files. Give it a wallet of its own (never a node's or sponsord's treasury), as
+      root on this host, the password first:
+        umask 077
+        openssl rand -base64 32 | sudo tee {{ decdn_gateway_keystore_password_file }} >/dev/null
+        sudo chown {{ decdn_gateway_user }}: {{ decdn_gateway_keystore_password_file }}
+        sudo -u {{ decdn_gateway_user }} {{ decdn_gateway_bin }} key-gen \
+          --output-dir {{ decdn_gateway_keystore_file | dirname }} \
+          --keystore-password-file {{ decdn_gateway_keystore_password_file }}
+      or copy an existing keystore.json there. Or set decdn_gateway_generate_keystore:
+      true to have the role do it. Then fund its address with USDC (at least the
+      working deposit) and ETH for gas.
+  when: not (ansible_check_mode and decdn_gateway_generate_keystore)
+
+- name: Lock down the keystore and its password
+  ansible.builtin.file:
+    path: "{{ item.item }}"
+    owner: "{{ decdn_gateway_user }}"
+    group: "{{ decdn_gateway_group }}"
+    mode: "0600"
+    follow: false
+  loop: "{{ decdn_gateway_wallet_stat.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+# --- Config + unit ----------------------------------------------------------------
+# The chain settings, RPC URL included, in a 0600 file rather than on the command
+# line (ps shows argv). diff: false, so --diff never prints the URL either. The
+# restart-inputs comparison below restarts the gateway when it changes.
+- name: Template gateway.toml
+  ansible.builtin.template:
+    src: gateway.toml.j2
+    dest: "{{ decdn_gateway_config_file }}"
+    owner: "{{ decdn_gateway_user }}"
+    group: "{{ decdn_gateway_group }}"
+    mode: "0600"
+  diff: false
+
+- name: Install the decdn-gateway systemd unit
+  ansible.builtin.template:
+    src: decdn-gateway.service.j2
+    dest: /etc/systemd/system/decdn-gateway.service
+    owner: root
+    group: root
+    mode: "0644"
+
+# --- Restart inputs ---------------------------------------------------------------
+# As roles/sponsord_onramp: hashes of everything the gateway starts from, recorded
+# once it is healthy, so a rotated password (edited on the host, out of band) or a
+# restart lost to a failed run is caught next converge. This comparison is the
+# role's only restart trigger: a restart forgives the day's allowance and drops the
+# pulls in flight, so it happens exactly when an input changed.
+- name: Hash the restart inputs
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: true
+    checksum_algorithm: sha256
+  register: decdn_gateway_inputs_stat
+  loop:
+    - "{{ decdn_gateway_config_file }}"
+    - /etc/systemd/system/decdn-gateway.service
+    - "{{ decdn_gateway_bin }}"
+    - "{{ decdn_gateway_keystore_password_file }}"
+    - "{{ decdn_gateway_keystore_file }}"
+
+- name: Read the restart-input checksums this role last recorded
+  ansible.builtin.slurp:
+    src: "{{ decdn_gateway_inputs_checksum_file }}"
+  register: decdn_gateway_inputs_recorded
+  failed_when: >-
+    decdn_gateway_inputs_recorded.failed
+    and 'not found' not in (decdn_gateway_inputs_recorded.msg | default(''))
+  changed_when: false
+
+- name: Read whether the gateway is already running
+  ansible.builtin.systemd_service:
+    name: decdn-gateway
+  register: decdn_gateway_is_active
+
+- name: Summarise the restart-input checksums
+  ansible.builtin.set_fact:
+    decdn_gateway_inputs_sums: >-
+      {{ decdn_gateway_inputs_stat.results | map(attribute='stat') | map('default', {}, true)
+         | map(attribute='checksum', default='') | join(' ') }}
+    decdn_gateway_inputs_recorded_sums: >-
+      {{ decdn_gateway_inputs_recorded.content | default('') | b64decode | trim }}
+
+- name: Note restart inputs that changed since the gateway last started healthy
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'The config, the unit, the binary or the wallet differs from what the gateway
+      was last confirmed healthy on'
+      if decdn_gateway_inputs_recorded_sums | length > 0
+      else 'The gateway is running but was never confirmed healthy on its current inputs' }}
+      — restarting decdn-gateway.
+  changed_when: true
+  notify: Restart decdn-gateway
+  when: >-
+    (decdn_gateway_inputs_recorded_sums | length > 0
+     and decdn_gateway_inputs_sums != decdn_gateway_inputs_recorded_sums)
+    or (decdn_gateway_inputs_recorded_sums | length == 0
+        and decdn_gateway_is_active.status.ActiveState | default('') == 'active')
+
+- name: Apply pending gateway changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start decdn-gateway
+  ansible.builtin.systemd:
+    name: decdn-gateway
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# --- Readiness (fatal) ------------------------------------------------------------
+# The gateway binds once its keystore unlocks, its config resolves and its pointers
+# load. Its own listen address is a bare host, so GET / answers 200 without a pull.
+# Retry while nothing answers (-1); any other answer stops at once.
+# KICS flags plain HTTP here; the target is the loopback listener asserted above.
+- name: Wait for the gateway on loopback
+  ansible.builtin.uri:
+    url: "http://{{ decdn_gateway_listen_address }}:{{ decdn_gateway_port }}/"
+    status_code: 200
+    timeout: 5
+  register: decdn_gateway_health
+  retries: "{{ decdn_gateway_readiness_retries }}"
+  delay: "{{ decdn_gateway_readiness_delay }}"
+  until: decdn_gateway_health.status | default(-1) != -1
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Report a gateway that did not come up
+  ansible.builtin.fail:
+    msg: |-
+      The gateway did not answer 200 on
+      http://{{ decdn_gateway_listen_address }}:{{ decdn_gateway_port }}/ within
+      ~{{ (decdn_gateway_readiness_retries | int) * (decdn_gateway_readiness_delay | int) }}s
+      (last status {{ decdn_gateway_health.status | default('none') }}). The usual causes
+      are a keystore its password does not unlock, a config key the binary does not
+      know, or a damaged pointer file under {{ decdn_gateway_data_dir }}/pointers. Read
+      the reason on the host:
+        sudo journalctl -u decdn-gateway -e
+  when:
+    - not ansible_check_mode
+    - decdn_gateway_health.status | default(-1) != 200
+
+# The 200 must come from THIS unit, not another holder of the port.
+- name: Read the decdn-gateway unit state
+  ansible.builtin.systemd_service:
+    name: decdn-gateway
+  register: decdn_gateway_unit_state
+  when: not ansible_check_mode
+
+- name: Read the owner of the gateway listener
+  ansible.builtin.command:
+    argv: [ss, -Hltnp, "sport = :{{ decdn_gateway_port }}"]
+  register: decdn_gateway_listener
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Require the listener to belong to the running decdn-gateway unit
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_unit_state.status.ActiveState == 'active'
+      - decdn_gateway_unit_state.status.SubState == 'running'
+      - ('pid=' ~ decdn_gateway_unit_state.status.MainPID ~ ',') in decdn_gateway_listener.stdout
+    fail_msg: >-
+      Something answered on {{ decdn_gateway_listen_address }}:{{ decdn_gateway_port }},
+      but it is not the decdn-gateway unit (state
+      {{ decdn_gateway_unit_state.status.ActiveState }}/{{ decdn_gateway_unit_state.status.SubState }},
+      MainPID {{ decdn_gateway_unit_state.status.MainPID }}; listeners:
+      {{ decdn_gateway_listener.stdout | default('none', true) }}). Another service
+      holds the port: free it or set decdn_gateway_port.
+  when: not ansible_check_mode
+
+- name: Record the restart-input checksums
+  ansible.builtin.copy:
+    dest: "{{ decdn_gateway_inputs_checksum_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ decdn_gateway_inputs_sums }}\n"
+  when: not ansible_check_mode
+
+# --- TLS front --------------------------------------------------------------------
+- name: Install nginx
+  ansible.builtin.import_tasks: nginx-install.yml
+
+- name: Put the certificate in place
+  ansible.builtin.import_tasks: tls.yml
+
+- name: Put nginx in front of the gateway
+  ansible.builtin.import_tasks: nginx.yml

@@ -1,0 +1,23 @@
+---
+# Facts of the distro nginx package and of lego's storage layout, not operator knobs.
+# The role owns one site, enabled the Debian way; nginx.conf includes sites-enabled/*
+# and conf.d/*.conf inside its http block.
+_decdn_gateway_nginx_site: /etc/nginx/sites-available/decdn-gateway
+_decdn_gateway_nginx_site_link: /etc/nginx/sites-enabled/decdn-gateway
+_decdn_gateway_nginx_marker: MANAGED BY the decdn_gateway role
+
+# lego writes <path>/certificates/<cert.name>.crt (the chain) and .key; the role
+# names the certificate after the role so the paths are fixed.
+_decdn_gateway_lego_cert_name: decdn-gateway
+_decdn_gateway_certs:
+  acme:
+    cert: "{{ decdn_gateway_acme_dir }}/certificates/decdn-gateway.crt"
+    key: "{{ decdn_gateway_acme_dir }}/certificates/decdn-gateway.key"
+  # Named by the domain, so a changed domain gets a certificate of its own.
+  self-signed:
+    cert: "{{ decdn_gateway_etc }}/tls/{{ decdn_gateway_domain }}.crt"
+    key: "{{ decdn_gateway_etc }}/tls/{{ decdn_gateway_domain }}.key"
+
+# The installed-version stamps, beside the binaries.
+_decdn_gateway_stamp: /usr/local/lib/decdn-gateway/installed-version
+_decdn_gateway_lego_stamp: /usr/local/lib/decdn-gateway/lego-installed

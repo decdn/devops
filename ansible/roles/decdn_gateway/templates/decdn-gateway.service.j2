@@ -1,0 +1,73 @@
+# MANAGED BY the decdn_gateway role — do not edit by hand.
+#
+# The deCDN public gateway for https://{{ decdn_gateway_domain }}: it serves decdn: content to
+# anyone, paying from its own pool within a daily allowance. It listens on loopback
+# ({{ decdn_gateway_listen_address }}:{{ decdn_gateway_port }}) behind nginx, and serves /metrics and /_status on
+# {{ decdn_gateway_metrics_address }}:{{ decdn_gateway_metrics_port }}. The chain settings, RPC URL included, are in the
+# 0600 {{ decdn_gateway_config_file }}.
+[Unit]
+Description=deCDN public gateway ({{ decdn_gateway_domain }})
+Documentation=https://github.com/decdn/decdn/blob/main/adr/appendix-gateway.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ decdn_gateway_user }}
+Group={{ decdn_gateway_group }}
+Environment=HOME={{ decdn_gateway_home }}
+Environment=RUST_LOG={{ decdn_gateway_log_level }}
+Environment=NO_COLOR=1
+Environment=DECDN_SELF_UPDATE_CHECK=0
+Environment=DECDN_KEYSTORE_PASSWORD_FILE={{ decdn_gateway_keystore_password_file }}
+
+ExecStart={{ decdn_gateway_bin }} --config {{ decdn_gateway_config_file }} gateway \
+    --public-url https://{{ decdn_gateway_domain }} \
+    --listen {{ decdn_gateway_listen_address }}:{{ decdn_gateway_port }} \
+    --metrics-listen {{ decdn_gateway_metrics_address }}:{{ decdn_gateway_metrics_port }} \
+    --keystore {{ decdn_gateway_keystore_file }} \
+    --data-dir {{ decdn_gateway_data_dir }} \
+{% for ns, size in decdn_gateway_namespace_allowances | dictsort %}
+    --allowance {{ ns }}={{ size }} \
+{% endfor %}
+    --allowance-bytes-per-day {{ decdn_gateway_allowance_bytes_per_day }}
+
+# The gateway shuts down cleanly on SIGINT only: it stops accepting, settles the
+# lane watermarks of the pulls in flight and closes its endpoint. On SIGTERM it
+# would die at once and skip that.
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5
+
+# --- Hardening -------------------------------------------------------------
+# StateDirectory owns {{ decdn_gateway_home }} (the only writable path under
+# ProtectSystem=strict): the keystore, the pool store and the namespace pointers.
+StateDirectory={{ decdn_gateway_home | basename }}
+StateDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+CapabilityBoundingSet=
+# AF_INET/AF_INET6 for the listeners, QUIC to nodes and the RPC; AF_NETLINK for
+# interface discovery; AF_UNIX for the libc resolver.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

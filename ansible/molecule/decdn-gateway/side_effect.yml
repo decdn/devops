@@ -1,0 +1,167 @@
+---
+# What a green converge + idempotence cannot prove:
+#   1. A re-run with nothing changed leaves the gateway alone (a restart forgives the
+#      day's allowance).
+#   2. A changed allowance (the unit) and a password rotated OUT OF BAND each restart
+#      it, and the stop is the clean one: the unit's SIGINT, which the stub records.
+#   3. The readiness gate is FATAL, and a failed run records nothing: the
+#      restart-input record keeps the last healthy inputs until a run succeeds.
+# lego, backup and decommission run in ../decdn-gateway-lifecycle beside this one.
+# The host is left healthy on the inventory's settings, for verify.
+- name: Side effect — restarts, SIGINT and the fatal gate
+  hosts: all
+  become: true
+  vars:
+    _gw_record: /etc/decdn-gateway/.gateway-inputs.sha256
+    # The stub leaves stopped-by-sigint.<pid> when SIGINT stops that process.
+    _gw_stopped: /var/lib/decdn-gateway/gateway/stopped-by-sigint
+  tasks:
+    - name: Read the gateway before anything changes
+      ansible.builtin.systemd_service:
+        name: decdn-gateway
+      register: _gw_before
+
+    - name: Assert the gateway was running cleanly
+      ansible.builtin.assert:
+        that:
+          - _gw_before.status.ActiveState == 'active'
+          - _gw_before.status.MainPID | int > 0
+        fail_msg: "Expected decdn-gateway active: journalctl -u decdn-gateway -e"
+
+    # include_role here, import_playbook in the converge: if the two contexts
+    # resolved any input differently, the gateway would restart for that alone.
+    - name: Re-run the role with nothing changed
+      ansible.builtin.include_role:
+        name: decdn_gateway
+
+    - name: Read the gateway after the no-op run
+      ansible.builtin.systemd_service:
+        name: decdn-gateway
+      register: _gw_noop
+
+    - name: Require the no-op run to have left the gateway alone
+      ansible.builtin.assert:
+        that:
+          - _gw_noop.status.MainPID == _gw_before.status.MainPID
+        fail_msg: A re-run with no input changed restarted decdn-gateway.
+
+    - name: Converge with another daily allowance
+      ansible.builtin.include_role:
+        name: decdn_gateway
+      vars:
+        decdn_gateway_allowance_bytes_per_day: 3GiB
+
+    - name: Read the gateway after the allowance change
+      ansible.builtin.systemd_service:
+        name: decdn-gateway
+      register: _gw_allowance
+
+    - name: Read the stub's clean-stop marker for the old process
+      ansible.builtin.stat:
+        path: "{{ _gw_stopped }}.{{ _gw_before.status.MainPID }}"
+      register: _gw_sigint
+
+    - name: Require a restart onto the new allowance, stopped by SIGINT
+      ansible.builtin.assert:
+        that:
+          - _gw_allowance.status.ActiveState == 'active'
+          - _gw_allowance.status.MainPID != _gw_before.status.MainPID
+          - "'--allowance-bytes-per-day 3GiB' in _gw_allowance.status.ExecStart"
+          - _gw_sigint.stat.exists
+        fail_msg: >-
+          After the allowance changed, the gateway's PID went
+          {{ _gw_before.status.MainPID }} -> {{ _gw_allowance.status.MainPID }} (must
+          change), and the old process must have been stopped with SIGINT (marker
+          {{ _gw_stopped }}.{{ _gw_before.status.MainPID }} present: {{ _gw_sigint.stat.exists }}).
+
+    - name: Rotate the keystore password out of band
+      ansible.builtin.copy:
+        dest: /etc/decdn-gateway/keystore.password
+        content: "rotated-by-molecule\n"
+        owner: decdn-gateway
+        group: decdn-gateway
+        mode: "0600"
+
+    - name: Converge on the inventory's settings after the rotation
+      ansible.builtin.include_role:
+        name: decdn_gateway
+
+    - name: Read the gateway after the rotation converge
+      ansible.builtin.systemd_service:
+        name: decdn-gateway
+      register: _gw_rotated
+
+    - name: Require the rotation to have restarted the gateway
+      ansible.builtin.assert:
+        that:
+          - _gw_rotated.status.ActiveState == 'active'
+          - _gw_rotated.status.MainPID != _gw_allowance.status.MainPID
+          - "'--allowance-bytes-per-day 2GiB' in _gw_rotated.status.ExecStart"
+        fail_msg: >-
+          After the password was rotated, the gateway's PID went
+          {{ _gw_allowance.status.MainPID }} -> {{ _gw_rotated.status.MainPID }} (must change).
+
+    - name: Read the record the healthy gateway left
+      ansible.builtin.slurp:
+        src: "{{ _gw_record }}"
+      register: _gw_record_good
+
+    - name: Stage the stub's refuse-to-start marker
+      ansible.builtin.copy:
+        dest: /etc/decdn-gateway/gateway-stub-unhealthy
+        content: ""
+        mode: "0644"
+
+    - name: Converge against a gateway that never comes up
+      block:
+        - name: Run the role with a changed input and a short readiness window
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_allowance_bytes_per_day: 4GiB
+            decdn_gateway_readiness_retries: 3
+            decdn_gateway_readiness_delay: 1
+
+        - name: Fail — the readiness gate let a dead gateway through
+          ansible.builtin.fail:
+            msg: The role finished although the gateway never answered on loopback.
+      rescue:
+        - name: Require the failure to come from the readiness gate itself
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Report a gateway that did not come up'
+            fail_msg: >-
+              The converge failed at "{{ ansible_failed_task.name }}", not at the
+              readiness gate: {{ ansible_failed_result.msg | default('') }}
+
+    - name: Read the record after the failed run
+      ansible.builtin.slurp:
+        src: "{{ _gw_record }}"
+      register: _gw_record_after
+
+    - name: Require the failed run to have left the record alone
+      ansible.builtin.assert:
+        that:
+          - _gw_record_after.content == _gw_record_good.content
+        fail_msg: A run whose gateway never came up rewrote the restart-input record.
+
+    - name: Remove the refuse-to-start marker
+      ansible.builtin.file:
+        path: /etc/decdn-gateway/gateway-stub-unhealthy
+        state: absent
+
+    - name: Converge on the inventory's settings again
+      ansible.builtin.include_role:
+        name: decdn_gateway
+
+    - name: Read the gateway after the recovery converge
+      ansible.builtin.systemd_service:
+        name: decdn-gateway
+      register: _gw_recovered
+
+    - name: Require the gateway back on the inventory's settings
+      ansible.builtin.assert:
+        that:
+          - _gw_recovered.status.ActiveState == 'active'
+          - "'--allowance-bytes-per-day 2GiB' in _gw_recovered.status.ExecStart"
+        fail_msg: "The gateway did not come back: journalctl -u decdn-gateway -e"

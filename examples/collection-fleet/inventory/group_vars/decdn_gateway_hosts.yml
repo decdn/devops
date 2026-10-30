@@ -1,0 +1,41 @@
+---
+# Shared config for public gateway hosts (playbooks/decdn_gateway.yml, also run by
+# publisher.yml). Uncomment and fill in; per-host values (the domain, at least) go
+# under the host in hosts.yml (as hosts-publisher.yml.example shows) or in
+# host_vars/<host>/main.yml.
+# Full variable list: roles/decdn_gateway/defaults/main.yml and its README.md.
+#
+# On the host, not here: the gateway's wallet (/var/lib/decdn-gateway/keystore.json
+# and /etc/decdn-gateway/keystore.password, or decdn_gateway_generate_keystore: true)
+# and the DNS provider's credentials (/etc/decdn-gateway/acme-dns.env, root 0600).
+# The RPC URL may hold an API key: decdn_gateway_rpc_url in the git-ignored
+# host_vars/<host>/secret.yml.
+
+# --- Binary ------------------------------------------------------------------------
+# "release" (default) installs the decdn CLI of the decdn_node role's release line.
+# To hold the host on one exact release:
+# decdn_gateway_version: "0.3.0"
+
+# --- Public address (REQUIRED) ----------------------------------------------------
+# Per host. <domain> and *.<domain> must resolve to the host; the playbooks open
+# tcp/80 + tcp/443 for nginx.
+# decdn_gateway_domain: gateway.example.org
+
+# --- Certificate (REQUIRED for acme) ------------------------------------------------
+# A wildcard for <domain> and *.<domain> over ACME DNS-01: the lego provider code
+# (https://go-acme.github.io/lego/dns/) whose variables you wrote into
+# /etc/decdn-gateway/acme-dns.env.
+# decdn_gateway_acme_email: ops@example.org
+# decdn_gateway_acme_dns_provider: cloudflare
+# A trial run on Let's Encrypt's staging CA (untrusted certificates):
+# decdn_gateway_acme_server: letsencrypt-staging
+
+# --- Paying for requests ----------------------------------------------------------
+# The chain profile (default: the node's decdn_network, else arbitrum-sepolia).
+# decdn_gateway_network: arbitrum-sepolia
+# Bytes per UTC day over every request, and buckets of their own for namespace
+# pointer hosts:
+# decdn_gateway_allowance_bytes_per_day: 20GiB
+# decdn_gateway_namespace_allowances: {7: 20GiB}
+# Mint a fresh wallet on the host when none exists (then fund its address):
+# decdn_gateway_generate_keystore: true

@@ -51,7 +51,8 @@ SCRIPTS=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 KEYS=ansible/roles/decdn_node/files/decdn-release-KEYS.asc
 # The sponsord roles' byte copies of it (make test-scripts keeps all three equal).
 KEYS_COPIES=(ansible/roles/sponsord/files/decdn-release-KEYS.asc
-             ansible/roles/sponsord_onramp/files/decdn-release-KEYS.asc)
+             ansible/roles/sponsord_onramp/files/decdn-release-KEYS.asc
+             ansible/roles/decdn_gateway/files/decdn-release-KEYS.asc)
 SCHEMA_KEYS=ansible/molecule/schema/files/schema-keys.txt
 # The images whose digests Compose pins, by Dockerfile stage (= the digest file's
 # name and the image's path under ghcr.io/decdn/), with bump_decdn.py's flag.
@@ -253,11 +254,11 @@ if [[ "$KIND" == patch ]] && { [[ -n "$MIRRORS_MOVED" ]] || ! git diff --quiet -
   \`decdn.publisher\` after merging (RELEASING.md)."
 fi
 
-# Step 6: KEYS and the sponsord roles' copies are byte copies of upstream's.
+# Step 6: KEYS and the publisher roles' copies are byte copies of upstream's.
 if ! cmp -s "$UPSTREAM/KEYS" "$KEYS"; then
   cp "$UPSTREAM/KEYS" "$KEYS"
   for copy in "${KEYS_COPIES[@]}"; do cp "$UPSTREAM/KEYS" "$copy"; done
-  need "decdn's \`KEYS\` changed and is copied to \`$KEYS\` and the sponsord roles'
+  need "decdn's \`KEYS\` changed and is copied to \`$KEYS\` and the publisher roles'
   \`files/decdn-release-KEYS.asc\`: update SECURITY.md's fingerprints."
 fi
 

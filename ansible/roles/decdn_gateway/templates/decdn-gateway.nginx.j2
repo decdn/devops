@@ -1,0 +1,89 @@
+# {{ _decdn_gateway_nginx_marker }} — do not edit by hand.
+#
+# nginx in front of the deCDN public gateway, which listens on loopback
+# ({{ decdn_gateway_listen_address }}:{{ decdn_gateway_port }}). It serves {{ decdn_gateway_domain }} and every
+# name under it; the gateway routes by Host (bare, <hash32>., <ns>.) and refuses
+# the rest. nginx passes Host through and adds nothing else: the gateway sets its
+# own CORS headers (a second Access-Control-Allow-Origin makes browsers refuse the
+# answer) and reads no X-Forwarded-* header, so per-client limits live here.
+{% set _http2 = decdn_gateway_nginx_version is version('1.25.1', '>=') %}
+
+# PUT /_pointer per client address; every other method has an empty key, which
+# limit_req does not count.
+map $request_method $decdn_gateway_pointer_key {
+    PUT     $binary_remote_addr;
+    default "";
+}
+limit_req_zone $decdn_gateway_pointer_key zone=decdn_gateway_pointer:10m rate={{ decdn_gateway_pointer_rate }};
+
+upstream decdn_gateway {
+    server {{ decdn_gateway_listen_address }}:{{ decdn_gateway_port }};
+    keepalive 16;
+}
+
+# Any other name: no answer on http, no handshake on https.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ decdn_gateway_domain }} *.{{ decdn_gateway_domain }};
+    server_tokens off;
+    return 301 https://$host$request_uri;
+}
+
+server {
+{% if _http2 %}
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+{% else %}
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+{% endif %}
+    server_name {{ decdn_gateway_domain }} *.{{ decdn_gateway_domain }};
+    server_tokens off;
+
+    ssl_certificate {{ decdn_gateway_cert_file }};
+    ssl_certificate_key {{ decdn_gateway_key_file }};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:decdn_gateway_tls:10m;
+    ssl_session_timeout 1d;
+
+    # Only PUT /_pointer has a body, and the gateway refuses one over 64 KiB.
+    client_max_body_size 64k;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Connection "";
+    # Content streams as the gateway verifies it: no buffering either way.
+    proxy_buffering off;
+    proxy_request_buffering off;
+    # A pull gives up after 120 s before its first byte; a slow stream between
+    # chunks gets as long again.
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+
+    location = /_pointer {
+        limit_req zone=decdn_gateway_pointer burst={{ decdn_gateway_pointer_burst }} nodelay;
+        limit_req_status 429;
+        limit_req_log_level warn;
+        proxy_pass http://decdn_gateway;
+    }
+
+    location / {
+        proxy_pass http://decdn_gateway;
+    }
+}

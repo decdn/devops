@@ -1,0 +1,14 @@
+---
+# Host architecture (ansible_facts['architecture']) -> the upstream release target
+# triple of the decdn CLI (the `builds:` matrix in decdn/decdn's
+# .github/workflows/release.yml), and -> lego's release architecture. The defaults
+# derive decdn_gateway_target from the first map and tasks/main.yml asserts the
+# result is one of its values. Role vars, not defaults: the supported set is a fact
+# about upstream's release matrix, not an operator knob.
+_decdn_gateway_arch_targets:
+  x86_64: x86_64-unknown-linux-gnu
+  aarch64: aarch64-unknown-linux-gnu
+
+_decdn_gateway_lego_arches:
+  x86_64-unknown-linux-gnu: amd64
+  aarch64-unknown-linux-gnu: arm64

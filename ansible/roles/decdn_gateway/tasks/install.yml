@@ -1,0 +1,292 @@
+---
+# Install the decdn CLI the gateway runs, at decdn_gateway_bin. Two methods,
+# selected by decdn_gateway_install_method:
+#   "release" (default): download the decdn tarball from the GitHub Release of
+#     decdn_gateway_version (the decdn/decdn release that also carries the node): an
+#     exact version, or the newest release of a line "X.Y"
+#     (tasks/resolve-release.yml). Verify it against the GPG-signed SHA256SUMS
+#     manifest, then install its one binary. Idempotent and upgrade-aware via a
+#     version stamp.
+#   "manual": copy a binary from the control machine.
+# Never /usr/local/bin/decdn: on a host that also runs a node, that one is the
+# decdn_node role's, pinned and stamped by it. Every method clears the stamp before
+# it replaces the binary, so an interrupted install leaves no stamp vouching for it.
+# The verification steps mirror roles/decdn_node/tasks/install.yml, which carries
+# the full rationale for each (status-parsed gpg, exact manifest entry, private
+# staging dir kept on failure).
+
+# A release line ("X.Y") becomes the newest finished release in it, an exact pin
+# stays as it is; every use below is of the resolved version.
+- name: Resolve the decdn release to install
+  ansible.builtin.include_tasks: resolve-release.yml
+  vars:
+    _rr_spec: "{{ decdn_gateway_version }}"
+    _rr_index: "{{ decdn_gateway_release_index }}"
+    _rr_name: decdn_gateway_version
+    _rr_stamp: "{{ _decdn_gateway_stamp }}"
+  when: decdn_gateway_install_method == "release"
+
+- name: Record the decdn release to install
+  ansible.builtin.set_fact:
+    _decdn_gateway_resolved_version: "{{ _rr_version }}"
+  when: decdn_gateway_install_method == "release"
+
+- name: Ensure the binary directory exists
+  ansible.builtin.file:
+    path: "{{ decdn_gateway_bin | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install from the pinned GitHub Release tarball
+  when: decdn_gateway_install_method == "release"
+  block:
+    - name: Name the release archive
+      ansible.builtin.set_fact:
+        # The archive holds ONE flat binary, decdn, at its root (upstream release.yml).
+        decdn_gateway_release_archive: >-
+          decdn-{{ _decdn_gateway_resolved_version }}-{{ decdn_gateway_target }}.tar.gz
+        decdn_gateway_release_url: "{{ decdn_gateway_release_base }}/v{{ _decdn_gateway_resolved_version }}"
+
+    - name: Read the installed-version stamp
+      ansible.builtin.slurp:
+        src: "{{ _decdn_gateway_stamp }}"
+      register: decdn_gateway_stamp
+      failed_when: false
+      changed_when: false
+
+    - name: Decide whether (re)install is needed
+      ansible.builtin.set_fact:
+        decdn_gateway_need_install: >-
+          {{ (decdn_gateway_stamp.content is not defined)
+             or ((decdn_gateway_stamp.content | b64decode | trim) != _decdn_gateway_resolved_version) }}
+
+    - name: Report that the release download is not simulated in check mode
+      ansible.builtin.debug:
+        msg: >-
+          check mode: skipping the download + signature verification of decdn
+          {{ _decdn_gateway_resolved_version }}. The config and unit below still diff normally.
+      when:
+        - decdn_gateway_need_install
+        - ansible_check_mode
+
+    - name: Install decdn {{ _decdn_gateway_resolved_version }}
+      when:
+        - decdn_gateway_need_install
+        - not ansible_check_mode
+      block:
+        - name: Create a private download staging directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: decdn-gateway-install-
+          register: decdn_gateway_stage
+          changed_when: false
+
+        - name: Restrict the staging directory to root
+          ansible.builtin.file:
+            path: "{{ decdn_gateway_stage.path }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        - name: WARN that release signature verification is DISABLED
+          ansible.builtin.debug:
+            msg: |-
+              decdn_gateway_verify_release_signature is false. SHA256SUMS is fetched
+              UNAUTHENTICATED from {{ decdn_gateway_release_url }}, so the checksum check
+              proves only that the download was not corrupted — NOT that the binary
+              came from deCDN. This binary holds the gateway's wallet.
+          when: not decdn_gateway_verify_release_signature
+
+        - name: Ensure gnupg is available for signature verification
+          ansible.builtin.package:
+            name: gnupg
+            state: present
+          when: decdn_gateway_verify_release_signature
+
+        - name: Download the release tarball
+          ansible.builtin.get_url:
+            url: "{{ decdn_gateway_release_url }}/{{ decdn_gateway_release_archive }}"
+            dest: "{{ decdn_gateway_stage.path }}/{{ decdn_gateway_release_archive }}"
+            owner: root
+            group: root
+            mode: "0600"
+
+        - name: Download the SHA256SUMS manifest and signature
+          ansible.builtin.get_url:
+            url: "{{ decdn_gateway_release_url }}/{{ item }}"
+            dest: "{{ decdn_gateway_stage.path }}/{{ item }}"
+            owner: root
+            group: root
+            mode: "0600"
+          loop: "{{ ['SHA256SUMS', 'SHA256SUMS.asc'] if decdn_gateway_verify_release_signature else ['SHA256SUMS'] }}"
+
+        - name: Create the keyring and extraction directories
+          ansible.builtin.file:
+            path: "{{ decdn_gateway_stage.path }}/{{ item }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+          loop: [keyring, x]
+
+        - name: Stage the release signing keyring
+          ansible.builtin.copy:
+            src: "{{ decdn_gateway_release_keyring }}"
+            dest: "{{ decdn_gateway_stage.path }}/keyring/KEYS.asc"
+            owner: root
+            group: root
+            mode: "0600"
+          when: decdn_gateway_verify_release_signature
+
+        # Isolated GNUPGHOME; VALIDSIG required, an expired/revoked key refused,
+        # --no-autostart so no gpg-agent outlives the task (see decdn_node).
+        - name: Verify the SHA256SUMS signature against the release keyring
+          ansible.builtin.shell:
+            chdir: "{{ decdn_gateway_stage.path }}"
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              export GNUPGHOME="{{ decdn_gateway_stage.path }}/gnupg"
+              mkdir -p "$GNUPGHOME"
+              chmod 700 "$GNUPGHOME"
+              gpg --batch --quiet --no-autostart --import keyring/KEYS.asc
+              gpg --batch --no-autostart --status-fd 3 --verify SHA256SUMS.asc SHA256SUMS \
+                3>gpg-status.txt
+              if grep -qE '^\[GNUPG:\] (EXPKEYSIG|REVKEYSIG|EXPSIG)' gpg-status.txt; then
+                echo "SHA256SUMS carries a good signature from an EXPIRED or REVOKED" >&2
+                echo "release key. Refusing to install. Re-sync" >&2
+                echo "roles/decdn_gateway/files/decdn-release-KEYS.asc from upstream KEYS," >&2
+                echo "or verify this release out of band." >&2
+                exit 1
+              fi
+              grep -q '^\[GNUPG:\] VALIDSIG ' gpg-status.txt
+          register: decdn_gateway_sig_check
+          changed_when: false
+          failed_when: decdn_gateway_sig_check.rc != 0
+          when: decdn_gateway_verify_release_signature
+
+        - name: Verify the tarball against SHA256SUMS
+          ansible.builtin.shell:
+            chdir: "{{ decdn_gateway_stage.path }}"
+            executable: /bin/bash
+            cmd: |
+              set -euo pipefail
+              f={{ decdn_gateway_release_archive | quote }}
+              entry=$(awk -v f="$f" 'substr($0, index($0, " ") + 2) == f' SHA256SUMS)
+              n=$(printf '%s\n' "$entry" | grep -c . || true)
+              if [ "$n" -ne 1 ]; then
+                echo "SHA256SUMS has $n entries for $f (expected exactly 1)." >&2
+                exit 1
+              fi
+              printf '%s\n' "$entry" | sha256sum --check --strict -
+          register: decdn_gateway_sum_check
+          changed_when: false
+          failed_when: decdn_gateway_sum_check.rc != 0
+
+        # Dropped before installing, so a release that then fails the version
+        # check leaves no stamp and the next run downloads again.
+        - name: Clear the install stamp before installing
+          ansible.builtin.file:
+            path: "{{ _decdn_gateway_stamp }}"
+            state: absent
+
+        - name: Extract the release tarball
+          ansible.builtin.unarchive:
+            src: "{{ decdn_gateway_stage.path }}/{{ decdn_gateway_release_archive }}"
+            dest: "{{ decdn_gateway_stage.path }}/x"
+            remote_src: true
+            owner: root
+            group: root
+
+        # Only the one binary leaves the staging directory.
+        - name: Install the binary
+          ansible.builtin.copy:
+            src: "{{ decdn_gateway_stage.path }}/x/decdn"
+            dest: "{{ decdn_gateway_bin }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+
+      always:
+        - name: Report the retained staging directory after a failure
+          ansible.builtin.debug:
+            msg: >-
+              Verification failed; leaving {{ decdn_gateway_stage.path }} in place for
+              inspection (gpg-status.txt, SHA256SUMS, SHA256SUMS.asc, the archive).
+              Remove it by hand once done.
+          when:
+            - decdn_gateway_stage.path is defined
+            - decdn_gateway_sig_check.failed | default(false) or decdn_gateway_sum_check.failed | default(false)
+
+        - name: Remove the download staging directory
+          ansible.builtin.file:
+            path: "{{ decdn_gateway_stage.path }}"
+            state: absent
+          when:
+            - decdn_gateway_stage.path is defined
+            - not (decdn_gateway_sig_check.failed | default(false)
+                   or decdn_gateway_sum_check.failed | default(false))
+
+- name: Install a binary from the control machine
+  when: decdn_gateway_install_method == "manual"
+  block:
+    - name: Clear the install stamp before copying
+      ansible.builtin.file:
+        path: "{{ _decdn_gateway_stamp }}"
+        state: absent
+
+    - name: Copy the decdn binary from the control machine
+      ansible.builtin.copy:
+        src: "{{ decdn_gateway_manual_bin_src }}"
+        dest: "{{ decdn_gateway_bin }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+# Runs every converge, so a binary that drifted from the pin is caught. An exact
+# match on clap's `decdn <version>` line in release mode, so a 0.3.0 pin does not
+# accept 10.3.0 or 0.3.0-rc.1; a liveness check for a manual binary.
+- name: Run the installed decdn --version (version backstop)
+  ansible.builtin.command:
+    argv: ["{{ decdn_gateway_bin }}", --version]
+  environment:
+    DECDN_SELF_UPDATE_CHECK: "0"
+  register: decdn_gateway_installed_version
+  changed_when: false
+  failed_when: false
+  # The binary only exists once the copy/extract above really ran.
+  when: not ansible_check_mode
+
+- name: Require the installed decdn to run and match the pinned version
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_installed_version.rc == 0
+      - >-
+        decdn_gateway_install_method != 'release'
+        or (decdn_gateway_installed_version.stdout | trim) == 'decdn ' ~ _decdn_gateway_resolved_version
+    fail_msg: >-
+      {{ decdn_gateway_bin }} --version exited {{ decdn_gateway_installed_version.rc }} with
+      "{{ decdn_gateway_installed_version.stdout | trim }}"{{
+      (', expected "decdn ' ~ _decdn_gateway_resolved_version ~ '"')
+        if decdn_gateway_install_method == 'release' else '' }}.
+      The binary on the host is broken or is not the pinned release. In release mode,
+      remove {{ _decdn_gateway_stamp }} to force a fresh download.
+  when: not ansible_check_mode
+
+# Written only once the version check passed, so a tarball that installed a wrong
+# or broken binary is fetched again next run instead of being trusted via the stamp.
+- name: Record the installed version
+  ansible.builtin.copy:
+    dest: "{{ _decdn_gateway_stamp }}"
+    content: "{{ _decdn_gateway_resolved_version }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - decdn_gateway_install_method == "release"
+    - decdn_gateway_need_install | default(false)
+    - not ansible_check_mode

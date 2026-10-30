@@ -106,6 +106,9 @@ FORBIDDEN_VARS = {
     "sponsord_treasury_password_file", "sponsord_api_token_file", "sponsord_generate_api_token",
     "sponsord_generate_treasury_wallet", "sponsord_decdn_cli_bin_src",
     "sponsord_onramp_etc", "sponsord_onramp_api_token_file", "sponsord_onramp_turnstile_secret_file",
+    # No gateway host group here, but a role's keyring and secret paths are refused in
+    # any group: a node's inventory could still name them.
+    "decdn_gateway_release_keyring", "decdn_gateway_etc", "decdn_gateway_acme_env_file",
 }
 
 # A key whose NAME suggests it carries a secret. Public-key material is fine

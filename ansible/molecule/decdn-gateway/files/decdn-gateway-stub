@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""Stub `decdn` CLI for the decdn_gateway Molecule scenarios.
+
+Stands in for the real binary so the role can be exercised without a release, a
+funded wallet or a chain:
+
+  * `--version` -> print a version line and exit 0 (the role's version backstop).
+  * `key-gen --output-dir D --keystore-password-file F` -> write a dummy
+    keystore.json and node.secret into D (the role's opt-in wallet generation).
+  * `--config C gateway ...` -> enforce the startup contract the real gateway
+    enforces, then serve until SIGINT:
+      - the config file is readable, holds a [blockchain] section with rpc_url and
+        chain_id, and no key outside the set the role writes (upstream's
+        deny_unknown_fields);
+      - --public-url is an https origin with no path; --listen and
+        --metrics-listen are loopback; --keystore and DECDN_KEYSTORE_PASSWORD_FILE
+        are readable and non-empty; the allowances parse as upstream parses them;
+      - the marker file UNHEALTHY_MARKER makes it exit 1 at start, which is how the
+        scenarios prove the readiness gate is fatal.
+    Routes on --listen, by Host as upstream routes them: the bare host (or the listen
+    address) answers GET / and PUT /_pointer; a <hash32>. or <ns>. host answers GET
+    with an echo of the request (Host and every header, as JSON) and refuses PUT
+    /_pointer with 404; any other Host gets 403. Every answer carries one
+    Access-Control-Allow-Origin, as upstream's does. --metrics-listen answers
+    GET /metrics for a loopback Host only. SIGINT exits 0 and leaves
+    STOPPED_MARKER.<pid> under --data-dir, so a scenario can tell the unit stopped
+    that process the clean way; SIGTERM exits 143 without it.
+  * anything else -> exit 2.
+"""
+import ipaddress
+import json
+import os
+import re
+import signal
+import sys
+import threading
+import tomllib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
+
+VERSION = "decdn 0.0.0-molecule-stub"
+UNHEALTHY_MARKER = "/etc/decdn-gateway/gateway-stub-unhealthy"
+STOPPED_MARKER = "stopped-by-sigint"
+BLOCKCHAIN_KEYS = {
+    "rpc_url", "chain_id", "payment_pool_address", "capacity_bond_address",
+    "slash_judge_address", "publisher_registry_address", "buyer_working_deposit_micro_usdc",
+}
+BYTES = re.compile(r"^[0-9]+([KMG]i?B?|B)?$", re.I)
+HASH32 = re.compile(r"^[a-z2-7]{52}$")
+NS = re.compile(r"^[1-9][0-9]*$")
+
+
+def die(msg, code=1):
+    print(f"decdn-gateway-stub: {msg}", file=sys.stderr, flush=True)
+    sys.exit(code)
+
+
+def opt(args, name, many=False):
+    vals = [args[i + 1] for i, a in enumerate(args[:-1]) if a == name]
+    if many:
+        return vals
+    return vals[-1] if vals else None
+
+
+def loopback(addr, flag):
+    host, _, port = (addr or "").rpartition(":")
+    try:
+        if not ipaddress.ip_address(host.strip("[]")).is_loopback or not port.isdigit():
+            raise ValueError
+    except ValueError:
+        die(f"{flag} {addr!r} is not a loopback address:port")
+    return host.strip("[]"), int(port)
+
+
+def read_nonempty(path, what):
+    try:
+        with open(path, "rb") as f:
+            if not f.read().strip():
+                die(f"{what} {path} is empty")
+    except OSError as e:
+        die(f"{what}: cannot read {path}: {e}")
+
+
+def key_gen(args):
+    out, pw = opt(args, "--output-dir"), opt(args, "--keystore-password-file")
+    if not out or not pw:
+        die("key-gen: --output-dir and --keystore-password-file are required", 2)
+    read_nonempty(pw, "key-gen: password file")
+    os.makedirs(out, exist_ok=True)
+    for name, body in (("keystore.json", '{"molecule": "stub keystore"}\n'), ("node.secret", "stub\n")):
+        path = os.path.join(out, name)
+        if not os.path.exists(path):
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(body)
+    print("NodeId: molecule-stub-node")
+    print("Address: 0x00000000000000000000000000000000000000aa")
+
+
+def check_config(path):
+    if not path:
+        die("--config is required by the role's unit")
+    try:
+        with open(path, "rb") as f:
+            cfg = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        die(f"--config {path}: {e}")
+    if set(cfg) != {"blockchain"}:
+        die(f"--config {path}: unknown section(s) {sorted(set(cfg) - {'blockchain'})}")
+    chain = cfg["blockchain"]
+    unknown = set(chain) - BLOCKCHAIN_KEYS
+    if unknown:
+        die(f"--config {path}: unknown field(s) {sorted(unknown)} in [blockchain]")
+    if not str(chain.get("rpc_url", "")).startswith(("http://", "https://")):
+        die(f"--config {path}: blockchain.rpc_url is not an http(s) URL")
+    if not isinstance(chain.get("chain_id"), int):
+        die(f"--config {path}: blockchain.chain_id is not an integer")
+
+
+def gateway(args, config):
+    if os.path.exists(UNHEALTHY_MARKER):
+        die(f"{UNHEALTHY_MARKER} exists: refusing to start")
+    check_config(config)
+    public = urlsplit(opt(args, "--public-url") or "")
+    if public.scheme != "https" or not public.hostname or public.path not in ("", "/") or public.query:
+        die("--public-url must be an https origin with no path")
+    domain = public.hostname
+    listen = loopback(opt(args, "--listen"), "--listen")
+    metrics = loopback(opt(args, "--metrics-listen"), "--metrics-listen")
+    keystore = opt(args, "--keystore")
+    if not keystore:
+        die("--keystore is required by the role's unit")
+    read_nonempty(keystore, "--keystore")
+    pw = os.environ.get("DECDN_KEYSTORE_PASSWORD_FILE")
+    if not pw:
+        die("DECDN_KEYSTORE_PASSWORD_FILE is not set")
+    read_nonempty(pw, "DECDN_KEYSTORE_PASSWORD_FILE")
+    if not BYTES.match(opt(args, "--allowance-bytes-per-day") or ""):
+        die("--allowance-bytes-per-day does not parse")
+    for a in opt(args, "--allowance", many=True):
+        ns, _, size = a.partition("=")
+        if not NS.match(ns) or not BYTES.match(size):
+            die(f"--allowance {a!r} does not parse")
+    data_dir = opt(args, "--data-dir")
+    if not data_dir:
+        die("--data-dir is required by the role's unit")
+    os.makedirs(os.path.join(data_dir, "pointers"), mode=0o700, exist_ok=True)
+    marker = os.path.join(data_dir, f"{STOPPED_MARKER}.{os.getpid()}")
+    listen_names = {f"{listen[0]}:{listen[1]}", f"localhost:{listen[1]}"}
+
+    class Gateway(BaseHTTPRequestHandler):
+        def route(self):
+            host = (self.headers.get("Host") or "").lower()
+            if host == domain or host in listen_names:
+                return "bare"
+            if host.endswith("." + domain):
+                labels = host[: -len(domain) - 1].split(".")
+                if len(labels) == 1 and (HASH32.match(labels[0]) or NS.match(labels[0])):
+                    return "site"
+                if len(labels) == 2 and NS.match(labels[0]) and HASH32.match(labels[1]):
+                    return "site"
+            return None
+
+        def answer(self, status, body=b"", ctype="text/plain"):
+            self.send_response(status)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def do_GET(self):  # noqa: N802 (stdlib-mandated name)
+            route = self.route()
+            if route is None:
+                return self.answer(403, b"unknown Host\n")
+            if route == "bare" and self.path == "/":
+                return self.answer(200, b"<html>decdn gateway stub</html>\n", "text/html")
+            echo = {"route": route, "path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}}
+            return self.answer(200, json.dumps(echo).encode(), "application/json")
+
+        do_HEAD = do_GET  # noqa: N815
+
+        def do_PUT(self):  # noqa: N802
+            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            route = self.route()
+            if route is None:
+                return self.answer(403, b"unknown Host\n")
+            if self.path != "/_pointer" or route != "bare":
+                return self.answer(404, b"not found\n")
+            if len(body) > 64 * 1024:
+                return self.answer(413, b"too large\n")
+            return self.answer(204)
+
+        def log_message(self, *_args):
+            pass
+
+    class Metrics(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            host = self.headers.get("Host") or ""
+            ok = {f"{metrics[0]}:{metrics[1]}", f"localhost:{metrics[1]}", f"127.0.0.1:{metrics[1]}"}
+            if host not in ok:
+                self.send_response(403)
+                self.end_headers()
+                return
+            body = b"# TYPE decdn_gateway_requests_ok_total counter\ndecdn_gateway_requests_ok_total 0\n"
+            self.send_response(200 if self.path == "/metrics" else 404)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            pass
+
+    servers = [ThreadingHTTPServer(listen, Gateway), ThreadingHTTPServer(metrics, Metrics)]
+    for s in servers:
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+
+    stop = threading.Event()
+
+    def on_sigint(*_):
+        with open(marker, "w") as f:
+            f.write("SIGINT\n")
+        stop.set()
+
+    def on_sigterm(*_):
+        os._exit(143)
+
+    signal.signal(signal.SIGINT, on_sigint)
+    signal.signal(signal.SIGTERM, on_sigterm)
+    print(f"decdn-gateway-stub: serving https://{domain} on {listen[0]}:{listen[1]}", file=sys.stderr, flush=True)
+    stop.wait()
+    sys.exit(0)
+
+
+def main():
+    args = sys.argv[1:]
+    if "--version" in args:
+        print(VERSION)
+        return
+    config = None
+    if args[:1] == ["--config"] and len(args) > 1:
+        config, args = args[1], args[2:]
+    if args[:1] == ["key-gen"]:
+        return key_gen(args[1:])
+    if args[:1] == ["gateway"]:
+        return gateway(args[1:], config)
+    die(f"unexpected arguments: {sys.argv[1:]}", 2)
+
+
+if __name__ == "__main__":
+    main()

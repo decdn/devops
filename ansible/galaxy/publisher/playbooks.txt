@@ -8,5 +8,6 @@ origin.yml
 sponsord.yml
 iroh_relay.yml
 iroh_dns_server.yml
+decdn_gateway.yml
 backup.yml
 decommission.yml

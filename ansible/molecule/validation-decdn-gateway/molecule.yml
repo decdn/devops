@@ -1,0 +1,32 @@
+---
+# The decdn_gateway role's broken-input matrix: converge.yml runs one case per input
+# assert and requires each to be rejected by that assert. No host is left with a
+# gateway: every case stops before the first mutation.
+driver:
+  name: docker
+platforms:
+  - name: gateway-validation
+    # Same digest-pinned image as the other scenarios (repo convention). Re-resolve
+    # all of them together to bump.
+    image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+provisioner:
+  name: ansible
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # Drops a `docker exec` round trip per remote task — see ../validation/molecule.yml.
+    ANSIBLE_PIPELINING: "true"
+scenario:
+  test_sequence:
+    # Leading `destroy` so an orphaned container is never reused — see
+    # ../default/molecule.yml.
+    - destroy
+    - create
+    - converge
+    - destroy

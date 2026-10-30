@@ -9,6 +9,7 @@ all:
       hosts:
         node-only: {}
         dns-node: {}
+        gateway-node: {}
         node-with-origin:
           decdn_cache_origin_kind: http
         origin-ok: {}
@@ -29,20 +30,31 @@ all:
         both: {}
         relay-onramp: {}
         dns-onramp: {}
+        gateway-onramp: {}
     sponsord_onramp_hosts:
       hosts:
         both: {}
         onramp-only: {}
         relay-onramp: {}
         dns-onramp: {}
+        gateway-onramp: {}
     iroh_relay_hosts:
       hosts:
         relay-only: {}
         relay-onramp: {}
         dns-relay: {}
+        gateway-relay: {}
     iroh_dns_server_hosts:
       hosts:
         dns-only: {}
         dns-node: {}
         dns-relay: {}
         dns-onramp: {}
+        gateway-dns: {}
+    decdn_gateway_hosts:
+      hosts:
+        gateway-only: {}
+        gateway-node: {}
+        gateway-onramp: {}
+        gateway-relay: {}
+        gateway-dns: {}

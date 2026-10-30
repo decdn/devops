@@ -1,0 +1,60 @@
+---
+# What decommission removed and what it kept. Runs after side_effect.yml.
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stat what decommission must remove or keep
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: _gw_files
+      loop:
+        - /etc/systemd/system/decdn-gateway.service
+        - /etc/systemd/system/decdn-gateway-certs.service
+        - /etc/systemd/system/decdn-gateway-certs.timer
+        - /etc/decdn-gateway/.gateway-inputs.sha256
+        - /etc/nginx/sites-enabled/decdn-gateway
+        - /var/lib/decdn-gateway/keystore.json
+        - /etc/decdn-gateway/keystore.password
+        - /var/lib/decdn-gateway/gateway/pointers/7.json
+        - /etc/decdn-gateway/gateway.toml
+        - /usr/local/lib/decdn-gateway/decdn
+        - /etc/nginx/sites-available/decdn-gateway
+
+    - name: Require the units and the site link gone, the wallet and state kept
+      vars:
+        _e: "{{ _gw_files.results | map(attribute='stat.exists') | list }}"
+      ansible.builtin.assert:
+        that:
+          - _e[:5] == [false, false, false, false, false]
+          - _e[5:] == [true, true, true, true, true, true]
+        fail_msg: "{{ _gw_files.results | map(attribute='item') | zip(_e) | list | to_json }}"
+
+    - name: Read nginx and the gateway
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+      register: _gw_units
+      loop: [nginx, decdn-gateway]
+
+    - name: Require nginx stopped and disabled, the gateway gone
+      ansible.builtin.assert:
+        that:
+          - _gw_units.results[0].status.ActiveState == 'inactive'
+          - _gw_units.results[0].status.UnitFileState == 'disabled'
+          - _gw_units.results[1].status.LoadState == 'not-found'
+        fail_msg: >-
+          nginx {{ _gw_units.results[0].status.ActiveState }}/{{ _gw_units.results[0].status.UnitFileState }},
+          decdn-gateway {{ _gw_units.results[1].status.LoadState }}
+
+    - name: Read the TCP listeners
+      ansible.builtin.command:
+        argv: [ss, -Hltn]
+      register: _gw_ss
+      changed_when: false
+
+    - name: Require 80, 443 and the gateway's ports free
+      ansible.builtin.assert:
+        that:
+          - _gw_ss.stdout is not search(':(80|443|8484|9094)\s')
+        fail_msg: "{{ _gw_ss.stdout }}"

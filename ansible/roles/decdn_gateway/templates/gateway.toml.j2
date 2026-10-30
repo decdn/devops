@@ -1,0 +1,16 @@
+# MANAGED BY the decdn_gateway role — do not edit by hand.
+#
+# The chain the public gateway pays on and checks namespace owners against. 0600,
+# owned by {{ decdn_gateway_user }}: the RPC URL may embed an API key. Every other
+# setting is on the unit's command line. Keys outside this file take the CLI's
+# defaults; an unknown key stops the gateway at startup.
+[blockchain]
+rpc_url = {{ decdn_gateway_rpc_url | to_json }}
+chain_id = {{ decdn_gateway_chain_id | int }}
+payment_pool_address = {{ decdn_gateway_payment_pool_address | to_json }}
+capacity_bond_address = {{ decdn_gateway_capacity_bond_address | to_json }}
+slash_judge_address = {{ decdn_gateway_slash_judge_address | to_json }}
+publisher_registry_address = {{ decdn_gateway_publisher_registry_address | to_json }}
+{% if decdn_gateway_working_deposit_micro_usdc | string | length > 0 %}
+buyer_working_deposit_micro_usdc = {{ decdn_gateway_working_deposit_micro_usdc | int }}
+{% endif %}

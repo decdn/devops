@@ -49,6 +49,15 @@
     {"proto": "udp", "port": 53, "comment": "iroh-dns-server (dns)"},
     {"proto": "tcp", "port": 53, "comment": "iroh-dns-server (dns over tcp)"}
   ],
+  "gateway": [
+    {"proto": "tcp", "port": 80, "comment": "decdn-gateway (nginx, http)"},
+    {"proto": "tcp", "port": 443, "comment": "decdn-gateway (nginx, https)"}
+  ],
+  "gateway-node": [
+    {"proto": "udp", "port": 4433, "comment": "decdn QUIC"},
+    {"proto": "tcp", "port": 80, "comment": "decdn-gateway (nginx, http)"},
+    {"proto": "tcp", "port": 443, "comment": "decdn-gateway (nginx, https)"}
+  ],
   "origin": [{"proto": "udp", "port": 4433, "comment": "decdn QUIC"}],
   "origin-listed": [{"proto": "udp", "port": 4433, "comment": "decdn QUIC"}],
   "origin-onramp": [

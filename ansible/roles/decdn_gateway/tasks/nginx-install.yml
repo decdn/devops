@@ -1,0 +1,59 @@
+---
+# The distro packages the front needs: nginx, curl (the probes) and openssl (the
+# self-signed certificate). nginx comes from the distribution on purpose: it is the
+# host's internet-facing TLS terminator, and baseline's unattended-upgrades keeps
+# a distro package patched.
+
+# One dpkg query, not package_facts (which loads the whole package database on
+# every run). dpkg-query exits 1 when a package was never installed, and omits it.
+- name: Read whether nginx, curl and openssl are installed
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, "-f=${Package} ${db:Status-Status}\n", nginx, curl, openssl]
+  register: decdn_gateway_packages
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Note whether nginx, and all three, are installed
+  ansible.builtin.set_fact:
+    decdn_gateway_nginx_installed: "{{ 'nginx installed' in _lines }}"
+    decdn_gateway_packages_installed: >-
+      {{ ['nginx installed', 'curl installed', 'openssl installed'] | difference(_lines) | length == 0 }}
+  vars:
+    _lines: "{{ decdn_gateway_packages.stdout_lines }}"
+
+# policy_rc_d 101 stops the package's maintainer scripts from starting nginx on its
+# stock default site: a run that failed after the install would leave that page on
+# 80/443. nginx first starts from nginx.yml, once the role's site has validated.
+- name: Install nginx, curl and openssl from the distribution
+  ansible.builtin.apt:
+    name: [nginx, curl, openssl]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+    policy_rc_d: 101
+  when: not decdn_gateway_packages_installed
+
+- name: Install the site validator
+  ansible.builtin.copy:
+    src: nginx-validate-site
+    dest: /usr/local/lib/decdn-gateway/nginx-validate-site
+    owner: root
+    group: root
+    mode: "0755"
+
+# `nginx -v` prints to stderr. Under --check on a host without nginx there is no
+# binary yet; the template then renders the syntax every version accepts.
+- name: Read the nginx version
+  ansible.builtin.command:
+    argv: [nginx, -v]
+  register: decdn_gateway_nginx_v
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Note the nginx version
+  ansible.builtin.set_fact:
+    decdn_gateway_nginx_version: >-
+      {{ (decdn_gateway_nginx_v.stderr | default('') | regex_search('nginx/([0-9.]+)', '\1') or ['0'])
+         | first }}
