@@ -34,14 +34,16 @@ the iroh relay's in `monitoring/iroh-relay/`):
 - `dashboard-delivery.json` — uid `decdn-delivery`. Serve leg, paying pull leg,
   cache, origin, warming.
 - `dashboard-chain.json` — uid `decdn-chain`. Watcher liveness, registries,
-  seller and buyer payments.
+  seller payments, settlement re-anchor, buyer payments.
 - `dashboard-node.json` — uid `decdn-node`. Single-node drilldown: host,
   process, iroh transport, DHT and probe, logs, traces.
 - `prometheus-alerts.yml` — three groups: `decdn-slash-safety`, `decdn-liveness`,
   `decdn-delivery`. Every rule carries a `component` label. Only rules with a matching
-  section in upstream's `docs/runbook.md` (20 of 54) also carry a `runbook_url`.
+  section in upstream's `docs/runbook.md` (20 of 57) also carry a `runbook_url`.
   `DecdnNodeDown`, `DecdnCapacityBondRegistryResyncFailing`, `DecdnBuyerTopupUnresolved`,
-  `DecdnRedemptionMaybeBroadcast` and `DecdnNodeClockSkew` have promtool unit tests in
+  `DecdnRedemptionMaybeBroadcast`, `DecdnNodeClockSkew`,
+  `DecdnSettlementLedgerWriteFailing`, `DecdnSettlementReanchorStuck` and
+  `DecdnSettlementReanchorLowerDeposit` have promtool unit tests in
   `prometheus-alerts_test.yml` (the chart's `.helmignore` keeps that file out of the
   package): keep them in step.
 

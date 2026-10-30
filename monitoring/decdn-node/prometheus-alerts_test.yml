@@ -3,9 +3,11 @@
 # itself on a series that stops, and the thresholds of
 # DecdnCapacityBondRegistryResyncFailing and DecdnRedemptionMaybeBroadcast only on
 # `increase` extrapolation, none of which promtool check can catch;
-# DecdnBuyerTopupUnresolved pins its for, and DecdnNodeClockSkew its window
-# against its for (a one-off refusal stays quiet). The test clock starts at 0. The
-# chart's .helmignore keeps this file out of the package.
+# DecdnBuyerTopupUnresolved and DecdnSettlementReanchorStuck pin their for,
+# DecdnSettlementLedgerWriteFailing its 1h resolve, and DecdnNodeClockSkew and
+# DecdnSettlementReanchorLowerDeposit their window against their for (a one-off
+# event stays quiet). The test clock starts at 0. The chart's .helmignore keeps
+# this file out of the package.
 #
 # It does not run in place: render-test.sh copies it into a scratch directory as
 # decdn-node-alerts_test.yml, beside a copy of prometheus-alerts.yml with the
@@ -249,3 +251,99 @@ tests:
           - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
           - exp_labels: {job: decdn-node, instance: b, component: node, severity: warning}
           - exp_labels: {job: decdn-node, instance: c, component: node, severity: warning}
+
+  # Settlement ledger writes. a fails one write at 10m and fires then (for 0m);
+  # it is still firing at 1h and resolves once the failure leaves the 1h window
+  # (checked at 1h10m). b reads a flat non-zero counter (failures before this
+  # window) and stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'decdn_settlement_ledger_write_failures_total{job="decdn-node", instance="a"}'
+        values: '0x9 1x80'
+      - series: 'decdn_settlement_ledger_write_failures_total{job="decdn-node", instance="b"}'
+        values: '4x90'
+    alert_rule_test:
+      - eval_time: 9m30s
+        alertname: DecdnSettlementLedgerWriteFailing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DecdnSettlementLedgerWriteFailing
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: settlement, severity: warning}
+      - eval_time: 1h
+        alertname: DecdnSettlementLedgerWriteFailing
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: settlement, severity: warning}
+      - eval_time: 1h10m
+        alertname: DecdnSettlementLedgerWriteFailing
+        exp_alerts: []
+
+  # Re-anchor stuck. a holds 3 pending pools from the start and fires at exactly
+  # the 30m for. b holds 2 for 21 minutes (6m to 26m) and drains, inside the for,
+  # so it never fires. c's pool sticks from 10m and fires at 40m.
+  - interval: 1m
+    input_series:
+      - series: 'decdn_settlement_reanchor_pending_pools{job="decdn-node", instance="a"}'
+        values: '3x60'
+      - series: 'decdn_settlement_reanchor_pending_pools{job="decdn-node", instance="b"}'
+        values: '0x5 2x20 0x34'
+      - series: 'decdn_settlement_reanchor_pending_pools{job="decdn-node", instance="c"}'
+        values: '0x9 1x50'
+    alert_rule_test:
+      - eval_time: 29m30s
+        alertname: DecdnSettlementReanchorStuck
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: DecdnSettlementReanchorStuck
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: settlement, severity: warning}
+      - eval_time: 39m30s
+        alertname: DecdnSettlementReanchorStuck
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: settlement, severity: warning}
+      - eval_time: 40m
+        alertname: DecdnSettlementReanchorStuck
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: settlement, severity: warning}
+          - exp_labels: {job: decdn-node, instance: c, component: settlement, severity: warning}
+
+  # Re-anchor lower deposit. a's reads are skipped once a minute from 0: pending
+  # at 1m, it fires at exactly the 30m for. b is skipped once (10m): pending for
+  # under 15m, it never fires. c is skipped every minute from 10m to 21m and then
+  # anchors (a reorg that healed in 12m): pending until its last skip leaves the
+  # 15m window (35m), short of the for, so it never fires. d's skips start at 20m
+  # and never stop: it fires at 50m. e reads a flat non-zero counter and stays
+  # quiet.
+  - interval: 1m
+    input_series:
+      - series: 'decdn_settlement_reanchor_skipped_lower_deposit_total{job="decdn-node", instance="a"}'
+        values: '0+1x70'
+      - series: 'decdn_settlement_reanchor_skipped_lower_deposit_total{job="decdn-node", instance="b"}'
+        values: '0x9 1x60'
+      - series: 'decdn_settlement_reanchor_skipped_lower_deposit_total{job="decdn-node", instance="c"}'
+        values: '0x9 1+1x11 12x50'
+      - series: 'decdn_settlement_reanchor_skipped_lower_deposit_total{job="decdn-node", instance="d"}'
+        values: '0x19 1+1x50'
+      - series: 'decdn_settlement_reanchor_skipped_lower_deposit_total{job="decdn-node", instance="e"}'
+        values: '7x70'
+    alert_rule_test:
+      - eval_time: 30m30s
+        alertname: DecdnSettlementReanchorLowerDeposit
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: DecdnSettlementReanchorLowerDeposit
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: settlement, severity: warning}
+      - eval_time: 40m
+        alertname: DecdnSettlementReanchorLowerDeposit
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: settlement, severity: warning}
+      - eval_time: 49m30s
+        alertname: DecdnSettlementReanchorLowerDeposit
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: settlement, severity: warning}
+      - eval_time: 50m
+        alertname: DecdnSettlementReanchorLowerDeposit
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: settlement, severity: warning}
+          - exp_labels: {job: decdn-node, instance: d, component: settlement, severity: warning}
