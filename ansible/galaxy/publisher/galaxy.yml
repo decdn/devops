@@ -39,12 +39,13 @@ tags:
 # decdn.node. The dependency is for the playbooks this collection ships
 # (playbooks.txt): a publisher host takes decdn.node.baseline first and
 # decdn.node.grafana_alloy for observability, and its origin and cache nodes are
-# decdn.node.decdn_node. The floor is the decdn.node released with the first
-# shipped playbooks; raise it whenever they need a newer decdn.node role.
-# scripts/release.sh refuses a release of this collection while no node-collection
-# tag satisfies it.
+# decdn.node.decdn_node. The floor is the oldest decdn.node these playbooks work with:
+# raise it whenever they need a newer decdn.node role, and whenever the decdn release
+# line moves, since a publisher's origin nodes, sponsord and onramp must run one line
+# (decdn.node 0.5.0 is the first on decdn 0.3). scripts/release.sh refuses a release
+# of this collection while no node-collection tag satisfies it.
 dependencies:
-  decdn.node: ">=0.2.0"
+  decdn.node: ">=0.5.0"
 repository: https://github.com/decdn/devops
 documentation: https://github.com/decdn/devops/tree/main/ansible
 homepage: https://decdn.org
