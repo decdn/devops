@@ -1,0 +1,255 @@
+---
+# The certificate nginx serves for <domain> and *.<domain>. A wildcard needs ACME
+# DNS-01, which lego answers through the operator's DNS provider; nothing listens
+# for it, so tcp/80 only carries the https redirect. One wildcard level covers the
+# bare host, <hash32>.<domain> and <ns>.<domain>. No certificate covers
+# <ns>.<hash32>.<domain> (a wildcard matches one label), so the gateway's `?ns=`
+# redirect to that form fails TLS: see the README's known limitation.
+
+- name: Name the certificate files
+  ansible.builtin.set_fact:
+    decdn_gateway_cert_file: "{{ _decdn_gateway_certs[decdn_gateway_tls].cert }}"
+    decdn_gateway_key_file: "{{ _decdn_gateway_certs[decdn_gateway_tls].key }}"
+
+# --- self-signed --------------------------------------------------------------------
+- name: Make a self-signed certificate
+  when: decdn_gateway_tls == 'self-signed'
+  block:
+    - name: Ensure the certificate directory exists
+      ansible.builtin.file:
+        path: "{{ decdn_gateway_cert_file | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    # Once per domain (the files are named by it); nginx reads them as root.
+    - name: Generate the self-signed wildcard certificate
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -newkey
+          - ec
+          - -pkeyopt
+          - ec_paramgen_curve:P-256
+          - -nodes
+          - -days
+          - "825"
+          - -subj
+          - "/CN={{ decdn_gateway_domain }}"
+          - -addext
+          - "subjectAltName=DNS:{{ decdn_gateway_domain }},DNS:*.{{ decdn_gateway_domain }}"
+          - -keyout
+          - "{{ decdn_gateway_key_file }}"
+          - -out
+          - "{{ decdn_gateway_cert_file }}"
+        creates: "{{ decdn_gateway_cert_file }}"
+      notify: Reload nginx
+
+    - name: Lock down the self-signed key
+      ansible.builtin.file:
+        path: "{{ decdn_gateway_key_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+      when: not ansible_check_mode
+
+    # A host switched away from acme keeps lego's state, but nothing renews into it.
+    - name: Check for the renewal timer of an earlier acme deploy
+      ansible.builtin.stat:
+        path: /etc/systemd/system/decdn-gateway-certs.timer
+      register: decdn_gateway_stale_timer
+
+    - name: Stop and disable the renewal timer
+      ansible.builtin.systemd:
+        name: decdn-gateway-certs.timer
+        state: stopped
+        enabled: false
+      when: decdn_gateway_stale_timer.stat.exists
+
+# --- acme -------------------------------------------------------------------------
+- name: Obtain the certificate with lego
+  when: decdn_gateway_tls == 'acme'
+  block:
+    - name: Name the lego archive and its digest
+      ansible.builtin.set_fact:
+        decdn_gateway_lego_archive: >-
+          lego_v{{ decdn_gateway_lego_version }}_linux_{{ _lego_arch }}.tar.gz
+        decdn_gateway_lego_digest: "{{ decdn_gateway_lego_sha256[_lego_arch] }}"
+        # The stamp names the pinned archive digest too, so a corrected pin is
+        # downloaded and verified again.
+        decdn_gateway_lego_stamp_want: >-
+          {{ decdn_gateway_lego_version }} {{ decdn_gateway_lego_sha256[_lego_arch] }}
+      vars:
+        _lego_arch: "{{ _decdn_gateway_lego_arches[decdn_gateway_target] }}"
+
+    - name: Read the lego install stamp
+      ansible.builtin.slurp:
+        src: "{{ _decdn_gateway_lego_stamp }}"
+      register: decdn_gateway_lego_stamp
+      failed_when: false
+      changed_when: false
+
+    - name: Check for the lego binary
+      ansible.builtin.stat:
+        path: "{{ decdn_gateway_lego_bin }}"
+      register: decdn_gateway_lego_bin_stat
+
+    # lego publishes no signature, so the archive is trusted on the digest pinned in
+    # defaults alone (as the iroh roles' releases).
+    - name: Install lego {{ decdn_gateway_lego_version }}
+      when:
+        - not ansible_check_mode
+        - >-
+          not decdn_gateway_lego_bin_stat.stat.exists
+          or (decdn_gateway_lego_stamp.content | default('') | b64decode | trim) != decdn_gateway_lego_stamp_want
+      block:
+        - name: Create a private lego staging directory
+          ansible.builtin.tempfile:
+            state: directory
+            prefix: decdn-gateway-lego-
+          register: decdn_gateway_lego_stage
+          changed_when: false
+
+        - name: Restrict the lego staging directory to root
+          ansible.builtin.file:
+            path: "{{ decdn_gateway_lego_stage.path }}/x"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+
+        # get_url verifies the checksum before it keeps the file.
+        - name: Download lego and verify its sha256
+          ansible.builtin.get_url:
+            url: >-
+              {{ decdn_gateway_lego_release_base }}/v{{ decdn_gateway_lego_version }}/{{ decdn_gateway_lego_archive }}
+            dest: "{{ decdn_gateway_lego_stage.path }}/{{ decdn_gateway_lego_archive }}"
+            owner: root
+            group: root
+            mode: "0600"
+            checksum: "sha256:{{ decdn_gateway_lego_digest }}"
+
+        - name: Clear the lego stamp before installing
+          ansible.builtin.file:
+            path: "{{ _decdn_gateway_lego_stamp }}"
+            state: absent
+
+        - name: Extract lego
+          ansible.builtin.unarchive:
+            src: "{{ decdn_gateway_lego_stage.path }}/{{ decdn_gateway_lego_archive }}"
+            dest: "{{ decdn_gateway_lego_stage.path }}/x"
+            remote_src: true
+            owner: root
+            group: root
+
+        - name: Install the lego binary
+          ansible.builtin.copy:
+            src: "{{ decdn_gateway_lego_stage.path }}/x/lego"
+            dest: "{{ decdn_gateway_lego_bin }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Run the installed lego --version
+          ansible.builtin.command:
+            argv: ["{{ decdn_gateway_lego_bin }}", --version]
+          register: decdn_gateway_lego_installed
+          changed_when: false
+
+        - name: Require the pinned lego version
+          ansible.builtin.assert:
+            that:
+              - >-
+                decdn_gateway_lego_installed.stdout
+                is match('^lego version ' ~ (decdn_gateway_lego_version | regex_escape) ~ ' ')
+            fail_msg: >-
+              {{ decdn_gateway_lego_bin }} --version printed
+              "{{ decdn_gateway_lego_installed.stdout | trim }}", not lego
+              {{ decdn_gateway_lego_version }}.
+
+        - name: Record the installed lego
+          ansible.builtin.copy:
+            dest: "{{ _decdn_gateway_lego_stamp }}"
+            content: "{{ decdn_gateway_lego_stamp_want }}\n"
+            owner: root
+            group: root
+            mode: "0644"
+
+      always:
+        - name: Remove the lego staging directory
+          ansible.builtin.file:
+            path: "{{ decdn_gateway_lego_stage.path }}"
+            state: absent
+          when: decdn_gateway_lego_stage.path is defined
+
+    - name: Ensure lego's state directory exists
+      ansible.builtin.file:
+        path: "{{ decdn_gateway_acme_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    # The unit is the one place the lego command line lives: the timer renews
+    # through it, and the first issuance below runs it too.
+    - name: Install the certificate service and its timer
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: [decdn-gateway-certs.service, decdn-gateway-certs.timer]
+      register: decdn_gateway_certs_units
+
+    - name: Enable and start the renewal timer
+      ansible.builtin.systemd:
+        name: decdn-gateway-certs.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+      when: not ansible_check_mode or decdn_gateway_lego_bin_stat.stat.exists
+
+    - name: Check for the certificate
+      ansible.builtin.stat:
+        path: "{{ decdn_gateway_cert_file }}"
+      register: decdn_gateway_cert_stat
+
+    # Synchronous: nginx cannot serve the site before the certificate exists. Also
+    # after a change to the service (a new domain, provider or CA), which lego
+    # applies on its own run (--force-cert-domains re-issues for a new domain list).
+    # systemctl start waits for a oneshot to finish (the timer task above reloaded
+    # systemd); its exit status is the run's.
+    - name: Obtain or update the certificate now
+      ansible.builtin.command:
+        argv: [systemctl, start, decdn-gateway-certs.service]
+      register: decdn_gateway_certs_run
+      changed_when: true
+      failed_when: false
+      when:
+        - not ansible_check_mode
+        - not decdn_gateway_cert_stat.stat.exists or decdn_gateway_certs_units.changed
+
+    - name: Re-check for the certificate
+      ansible.builtin.stat:
+        path: "{{ decdn_gateway_cert_file }}"
+      register: decdn_gateway_cert_post
+      when: decdn_gateway_certs_run is not skipped
+
+    - name: Report a certificate lego could not obtain
+      ansible.builtin.fail:
+        msg: |-
+          lego did not obtain a certificate for {{ decdn_gateway_domain }} and
+          *.{{ decdn_gateway_domain }} (systemctl start exited {{ decdn_gateway_certs_run.rc }}).
+          Check that the {{ decdn_gateway_acme_dns_provider }} credentials in
+          {{ decdn_gateway_acme_env_file }} can edit the zone, and read the reason:
+            sudo journalctl -u decdn-gateway-certs -e
+          Use decdn_gateway_acme_server: letsencrypt-staging while iterating, so failed
+          attempts do not spend the production rate limits.
+      when:
+        - decdn_gateway_certs_run is not skipped
+        - decdn_gateway_certs_run.rc != 0 or not decdn_gateway_cert_post.stat.exists

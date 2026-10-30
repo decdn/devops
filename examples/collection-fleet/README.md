@@ -91,14 +91,15 @@ The docs elsewhere use this repository's make targets. Here, each is one
 | `make deploy-sponsord LIMIT=<host>` | `ansible-playbook decdn.publisher.sponsord -l <host>` |
 | `make deploy-relay LIMIT=<host>` | `ansible-playbook decdn.publisher.iroh_relay -l <host>` |
 | `make deploy-dns LIMIT=<host>` | `ansible-playbook decdn.publisher.iroh_dns_server -l <host>` |
+| `make deploy-gateway LIMIT=<host>` | `ansible-playbook decdn.publisher.decdn_gateway -l <host>` |
 | `make backup LIMIT=<host>` | `ansible-playbook decdn.publisher.backup -l <host>` (with `decdn.node` alone: `decdn.node.backup`, nodes only) |
 | `make decommission LIMIT=<host>` | `ansible-playbook decdn.publisher.decommission -l <host>` (with `decdn.node` alone: `decdn.node.decommission`, for a host that runs only a node) |
 | `make check…` (any) | the same command with `--check --diff` |
 | `INVENTORY=<path>` | `-i <path>` |
 | `ANSIBLE_ARGS='-u root -e x=y'` | `-u root -e x=y`, plain options |
 
-Never use `decdn.node.decommission` on a host that also runs sponsord, a relay or a
-DNS server: it removes the Grafana Alloy agent they share and leaves them running. The
+Never use `decdn.node.decommission` on a host that also runs sponsord, a relay, a
+DNS server or a gateway: it removes the Grafana Alloy agent they share and leaves them running. The
 collection READMEs list every playbook and what it runs.
 
 **What the Makefile checks and a plain `ansible-playbook` does not.** Each of these

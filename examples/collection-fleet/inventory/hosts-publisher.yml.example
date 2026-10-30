@@ -85,3 +85,17 @@ decdn_nodes:
 #     dns-1:
 #       ansible_host: REPLACE_WITH_DNS_VPS_IP_OR_DNS
 #       iroh_dns_server_hostname: dns.example.org
+#
+# OPTIONAL: a public gateway, serving decdn: content to any browser on a domain of
+# your own and paying for it from its own wallet's pool — provisioned by the
+# decdn_gateway.yml playbook and by publisher.yml. nginx terminates TLS in front of
+# it on tcp/80 + tcp/443, so it cannot share a host with sponsord-onramp, an iroh
+# relay or an iroh DNS server (a node beside it is fine). <domain> and *.<domain>
+# must resolve to it. Its knobs are in group_vars/decdn_gateway_hosts.yml; the
+# wallet and the DNS provider's token are provisioned on the host (the
+# decdn_gateway role's README).
+# decdn_gateway_hosts:
+#   hosts:
+#     gateway-1:
+#       ansible_host: REPLACE_WITH_GATEWAY_VPS_IP_OR_DNS
+#       decdn_gateway_domain: gateway.example.org

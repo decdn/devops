@@ -1,0 +1,257 @@
+---
+# What a converged gateway host must look like. Runs after side_effect.yml, which
+# leaves the host healthy on the inventory's settings.
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    _gw_domain: gateway.molecule.test
+    # A <hash32> label: 52 lowercase base32 characters.
+    _gw_site: "{{ 'a' * 52 }}.gateway.molecule.test"
+    _gw_resolve:
+      - --resolve
+      - gateway.molecule.test:443:127.0.0.1
+      - --resolve
+      - "{{ 'a' * 52 }}.gateway.molecule.test:443:127.0.0.1"
+  tasks:
+    - name: Load the gateway's network profile mirror
+      ansible.builtin.include_vars:
+        # Relative to this playbook's directory.
+        file: ../../roles/decdn_gateway/vars/main/networks.yml
+
+    - name: Stat the gateway's files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: _gw_files
+      loop:
+        - /etc/decdn-gateway/gateway.toml
+        - /etc/decdn-gateway/keystore.password
+        - /var/lib/decdn-gateway/keystore.json
+        - /etc/decdn-gateway/.gateway-inputs.sha256
+        - /etc/nginx/sites-available/decdn-gateway
+        - /etc/nginx/sites-enabled/decdn-gateway
+        - /etc/nginx/sites-enabled/default
+        - /etc/decdn-gateway/tls/gateway.molecule.test.key
+        - /usr/local/lib/decdn-gateway/decdn
+        - /usr/local/bin/decdn
+
+    - name: Require the wallet and config private, the site enabled, the default gone
+      vars:
+        _r: "{{ _gw_files.results | map(attribute='stat') | list }}"
+      ansible.builtin.assert:
+        that:
+          - _r[0].isreg and _r[0].mode == '0600' and _r[0].pw_name == 'decdn-gateway'
+          - _r[1].isreg and _r[1].mode == '0600' and _r[1].pw_name == 'decdn-gateway'
+          - _r[2].isreg and _r[2].mode == '0600' and _r[2].pw_name == 'decdn-gateway'
+          - _r[3].isreg and _r[3].mode == '0600' and _r[3].pw_name == 'root'
+          - _r[4].isreg and _r[4].mode == '0644'
+          - _r[5].islnk and _r[5].lnk_source == '/etc/nginx/sites-available/decdn-gateway'
+          - not _r[6].exists
+          - _r[7].isreg and _r[7].mode == '0600' and _r[7].pw_name == 'root'
+          - _r[8].isreg and _r[8].executable
+          # Its own path: /usr/local/bin/decdn is a co-located node's.
+          - not _r[9].exists
+        fail_msg: "{{ _gw_files.results | map(attribute='stat') | map(attribute='mode', default='absent') | list }}"
+
+    - name: Read gateway.toml and the nginx site
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: _gw_text
+      loop:
+        - /etc/decdn-gateway/gateway.toml
+        - /etc/nginx/sites-available/decdn-gateway
+
+    - name: Require gateway.toml to carry the chain and the RPC URL
+      vars:
+        _toml: "{{ _gw_text.results[0].content | b64decode }}"
+        _profile: "{{ _decdn_gateway_network_profiles['arbitrum-sepolia'] }}"
+      ansible.builtin.assert:
+        that:
+          - "'[blockchain]' in _toml"
+          - "'rpc_url = \"https://rpc.example.invalid/v2/molecule-key\"' in _toml"
+          - "('chain_id = ' ~ _profile.chain_id ~ '\n') in _toml"
+          - "('publisher_registry_address = \"' ~ _profile.publisher_registry_address ~ '\"') in _toml"
+          - "'buyer_working_deposit_micro_usdc = 5000000' in _toml"
+        fail_msg: "{{ _toml }}"
+
+    - name: Require the role's site, with the pointer limit and no added headers
+      vars:
+        _site: "{{ _gw_text.results[1].content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - "'MANAGED BY the decdn_gateway role' in _site"
+          - "'server_name gateway.molecule.test *.gateway.molecule.test;' in _site"
+          - "'rate=6r/m;' in _site"
+          - "'burst=2 nodelay;' in _site"
+          - "'proxy_set_header Host $host;' in _site"
+          - "'add_header' not in _site"
+          - "'proxy_set_header X-' not in _site"
+          - "'ssl_reject_handshake on;' in _site"
+        fail_msg: "{{ _site }}"
+
+    - name: Read the gateway unit
+      ansible.builtin.command:
+        argv: [systemctl, cat, decdn-gateway]
+      register: _gw_unit
+      changed_when: false
+
+    - name: Require the unit's SIGINT stop, its flags and its hardening
+      ansible.builtin.assert:
+        that:
+          - "'KillSignal=SIGINT' in _gw_unit.stdout"
+          - "'User=decdn-gateway' in _gw_unit.stdout"
+          - "'StateDirectory=decdn-gateway' in _gw_unit.stdout"
+          - "'ProtectSystem=strict' in _gw_unit.stdout"
+          - "'--public-url https://gateway.molecule.test' in _gw_unit.stdout"
+          - "'--listen 127.0.0.1:8484' in _gw_unit.stdout"
+          - "'--metrics-listen 127.0.0.1:9094' in _gw_unit.stdout"
+          - "'--allowance 7=20GiB' in _gw_unit.stdout"
+          - "'--allowance-bytes-per-day 2GiB' in _gw_unit.stdout"
+          - "'Environment=DECDN_KEYSTORE_PASSWORD_FILE=/etc/decdn-gateway/keystore.password' in _gw_unit.stdout"
+          - "'molecule-key' not in _gw_unit.stdout"
+        fail_msg: "{{ _gw_unit.stdout }}"
+
+    - name: Read the gateway's command line
+      ansible.builtin.shell:
+        cmd: tr '\0' ' ' </proc/"$(systemctl show -P MainPID decdn-gateway)"/cmdline
+      register: _gw_cmdline
+      changed_when: false
+
+    - name: Require the RPC URL off the command line
+      ansible.builtin.assert:
+        that:
+          - "'gateway' in _gw_cmdline.stdout"
+          - "'molecule-key' not in _gw_cmdline.stdout"
+        fail_msg: "{{ _gw_cmdline.stdout }}"
+
+    - name: Read the TCP listeners
+      ansible.builtin.command:
+        argv: [ss, -Hltn]
+      register: _gw_ss
+      changed_when: false
+
+    - name: Require the gateway on loopback only, nginx on 80 and 443
+      ansible.builtin.assert:
+        that:
+          - _gw_ss.stdout is search('127\.0\.0\.1:8484\s')
+          - _gw_ss.stdout is search('127\.0\.0\.1:9094\s')
+          - _gw_ss.stdout is not search('(0\.0\.0\.0|\*|\[::\]):(8484|9094)\s')
+          - _gw_ss.stdout is search('(\*|0\.0\.0\.0|\[::\]):443\s')
+          - _gw_ss.stdout is search('(\*|0\.0\.0\.0|\[::\]):80\s')
+        fail_msg: "{{ _gw_ss.stdout }}"
+
+    - name: Reach a site through nginx, as a browser would
+      ansible.builtin.command:
+        argv: "{{ ['curl', '--silent', '--show-error', '--fail', '--insecure', '--dump-header', '/root/gw-headers']
+                  + _gw_resolve + ['--header', 'X-Forwarded-For: 203.0.113.9']
+                  + ['https://' ~ _gw_site ~ '/index.html'] }}"
+      register: _gw_https
+      changed_when: false
+
+    - name: Read the response headers
+      ansible.builtin.slurp:
+        src: /root/gw-headers
+      register: _gw_headers
+
+    - name: Require Host passed through, and nothing added either way
+      vars:
+        _head: "{{ _gw_headers.content | b64decode }}"
+        _echo: "{{ _gw_https.stdout | from_json }}"
+      ansible.builtin.assert:
+        that:
+          - _echo.route == 'site'
+          - _echo.headers.host == _gw_site
+          # nginx forwards what the client sent and adds no X-Forwarded-* of its own.
+          - _echo.headers['x-forwarded-for'] == '203.0.113.9'
+          - "'x-real-ip' not in _echo.headers"
+          - "'x-forwarded-proto' not in _echo.headers"
+          # One CORS header, the gateway's.
+          - _head | lower | regex_findall('access-control-allow-origin') | length == 1
+        fail_msg: "{{ _head }} {{ _gw_https.stdout }}"
+
+    - name: Ask for the domain over plain http
+      ansible.builtin.uri:
+        url: http://127.0.0.1/some/path
+        headers:
+          Host: "{{ _gw_site }}"
+        follow_redirects: none
+        status_code: 301
+      register: _gw_redirect
+
+    - name: Require the https redirect to keep the host and path
+      ansible.builtin.assert:
+        that:
+          - _gw_redirect.location == 'https://' ~ _gw_site ~ '/some/path'
+        fail_msg: "{{ _gw_redirect.location | default('no Location') }}"
+
+    # ssl_reject_handshake: curl exits 35; return 444 on http: an empty reply, 52.
+    - name: Ask nginx for a name it does not serve
+      ansible.builtin.command:
+        argv: "{{ item }}"
+      register: _gw_unknown
+      changed_when: false
+      failed_when: false
+      loop:
+        - [curl, --silent, --insecure, --resolve, "other.molecule.test:443:127.0.0.1", "https://other.molecule.test/"]
+        - [curl, --silent, --header, "Host: other.molecule.test", "http://127.0.0.1/"]
+
+    - name: Require the unknown name refused on both ports
+      ansible.builtin.assert:
+        that:
+          - _gw_unknown.results[0].rc == 35
+          - _gw_unknown.results[1].rc == 52
+        fail_msg: "curl exited {{ _gw_unknown.results | map(attribute='rc') | list }}, expected [35, 52]"
+
+    # Before the burst below, which spends this client's PUT allowance.
+    - name: PUT a pointer on a site host
+      ansible.builtin.command:
+        argv: "{{ ['curl', '--silent', '--insecure', '--output', '/dev/null', '--write-out', '%{http_code}',
+                   '--request', 'PUT', '--data', '{}'] + _gw_resolve + ['https://' ~ _gw_site ~ '/_pointer'] }}"
+      register: _gw_site_put
+      changed_when: false
+
+    - name: Require the gateway's own 404 for a pointer off the bare host
+      ansible.builtin.assert:
+        that:
+          - _gw_site_put.stdout == '404'
+        fail_msg: "PUT /_pointer on a site host answered {{ _gw_site_put.stdout }}, not the gateway's 404"
+
+    - name: PUT pointers in a burst
+      ansible.builtin.shell:
+        cmd: >-
+          for i in 1 2 3 4 5 6; do
+          curl --silent --insecure --output /dev/null --write-out '%{http_code} '
+          --request PUT --data '{}' --resolve {{ _gw_domain }}:443:127.0.0.1
+          https://{{ _gw_domain }}/_pointer; done
+      register: _gw_burst
+      changed_when: false
+
+    - name: GET the bare host after the burst
+      ansible.builtin.command:
+        argv: [curl, --silent, --insecure, --output, /dev/null, --write-out, '%{http_code}',
+               --resolve, "gateway.molecule.test:443:127.0.0.1", "https://gateway.molecule.test/"]
+      register: _gw_after_burst
+      changed_when: false
+
+    - name: Require the limit to stop the burst, and nothing else
+      ansible.builtin.assert:
+        that:
+          - "'204' in _gw_burst.stdout.split()"
+          - "'429' in _gw_burst.stdout.split()"
+          - _gw_after_burst.stdout == '200'
+        fail_msg: >-
+          The burst answered {{ _gw_burst.stdout }} (want some 204s, then 429s) and a GET
+          after it {{ _gw_after_burst.stdout }} (want 200).
+
+    - name: Read the metrics listener with a loopback Host
+      ansible.builtin.uri:
+        url: http://127.0.0.1:9094/metrics
+        return_content: true
+      register: _gw_metrics
+
+    - name: Require the metrics on loopback
+      ansible.builtin.assert:
+        that:
+          - "'decdn_gateway_' in _gw_metrics.content"
+        fail_msg: "{{ _gw_metrics.content }}"

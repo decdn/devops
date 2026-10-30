@@ -1,0 +1,198 @@
+---
+# decdn_gateway role defaults. `decdn gateway --public-url` is deCDN's public HTTP
+# gateway: it serves `decdn:` content to any browser, at `https://<domain>/<hash>`,
+# as a website at `https://<hash32>.<domain>/`, and at `https://<ns>.<domain>/` once
+# the namespace's owner points it at a bundle (`PUT /_pointer`). It pays for every
+# request from its own pool, funded by its own keystore, within a daily allowance.
+#
+# The gateway listens on loopback. nginx, installed by this role, terminates TLS for
+# <domain> and *.<domain> (a wildcard certificate from lego over ACME DNS-01) and is
+# the only public listener (AGENTS.md hard rule 2). nginx also rate-limits
+# `PUT /_pointer` per client address: the gateway budgets owner lookups globally and
+# reads no X-Forwarded-* header. Upstream: github.com/decdn/decdn
+# (adr/appendix-gateway.md, docker/README.decdn.md § Public gateway).
+
+# --- Install method -----------------------------------------------------------
+# "release" (default): download the decdn CLI tarball from the GitHub Release of
+#   decdn_gateway_version and verify it against the GPG-signed SHA256SUMS. One
+#   decdn/decdn release (vX.Y.Z) ships the node, the CLI, sponsord and the onramp.
+# "manual": copy a binary from the control machine (molecule's stub, or your own
+#   `cargo build --release -p decdn-cli`).
+# The binary lands at decdn_gateway_bin, never /usr/local/bin/decdn, which belongs to
+# a co-located node's decdn_node role.
+decdn_gateway_install_method: release     # "release" | "manual"
+decdn_gateway_manual_bin_src: ""          # manual: control-machine path to the decdn binary
+
+# --- Release to install ("release" mode) ----------------------------------------
+# The decdn/decdn release to install, a line ("X.Y", the newest finished vX.Y.N)
+# or an exact "X.Y.Z": the same one as the decdn_node role's decdn_node_version (one
+# release ships the node and the CLI that runs the gateway).
+decdn_gateway_version: "0.3"
+# Derived from the host's gathered architecture (vars/main/arch.yml).
+decdn_gateway_target: "{{ _decdn_gateway_arch_targets.get(ansible_facts.get('architecture', ''), '') }}"
+decdn_gateway_release_base: "https://github.com/decdn/decdn/releases/download"
+# Where a release line is resolved (GitHub's GET /repos/decdn/decdn/releases
+# shape; 60 unauthenticated requests an hour per address).
+decdn_gateway_release_index: "https://api.github.com/repos/decdn/decdn/releases?per_page=100"
+decdn_gateway_verify_release_signature: true
+# decdn/decdn's KEYS, vendored with this role (a copy of the decdn_node role's;
+# make test-scripts keeps them identical).
+decdn_gateway_release_keyring: decdn-release-KEYS.asc
+
+# --- Public address -----------------------------------------------------------------
+# REQUIRED. The domain the gateway serves, without a scheme: the bare host takes
+# `/<hash>` and `PUT /_pointer`, <hash32>.<domain> a bundle's website and
+# <ns>.<domain> a namespace's. Its A/AAAA records, and a wildcard record for
+# *.<domain>, must point at this host. Register it on the Public Suffix List so the
+# bundles' sites keep their cookies apart (see the README).
+decdn_gateway_domain: ""
+
+# --- Listeners ----------------------------------------------------------------------
+# Both IPv4 loopback (asserted): nginx is the public side. The metrics listener
+# serves Prometheus text at /metrics and the gateway's state at /_status, and
+# answers only a loopback Host.
+decdn_gateway_listen_address: 127.0.0.1
+decdn_gateway_port: 8484
+decdn_gateway_metrics_address: 127.0.0.1
+decdn_gateway_metrics_port: 9094
+
+# --- Allowance ----------------------------------------------------------------------
+# Bytes the gateway delivers per UTC day from its pool, over every request: a count
+# of bytes or a binary size (512MiB, 20GiB; units up to G). A request past it gets
+# 402 with the `decdn:` URI to fetch with a paying client. The counters live in
+# memory, so a restart starts the day's count again.
+decdn_gateway_allowance_bytes_per_day: 1GiB
+# A daily allowance of its own for one namespace's pointer host, <ns>.<domain>, in
+# place of the shared one: {7: 20GiB}. Namespace ids are decimal, never 0.
+decdn_gateway_namespace_allowances: {}
+
+# --- Chain ----------------------------------------------------------------------------
+# The chain the gateway pays on and checks namespace owners against. With a network
+# profile every address comes from upstream's deployment manifest, mirrored into
+# vars/main/networks.yml by scripts/sync-network-profiles.py; an explicit inventory
+# value still wins. Defaults to the decdn_node role's decdn_network on a co-located
+# host.
+decdn_gateway_network: "{{ decdn_network | default('arbitrum-sepolia') }}"
+# Internal: set decdn_gateway_network, not this.
+_decdn_gateway_profile: "{{ _decdn_gateway_network_profiles.get(decdn_gateway_network, {}) }}"
+decdn_gateway_chain_id: "{{ _decdn_gateway_profile.get('chain_id', '') }}"
+decdn_gateway_payment_pool_address: "{{ _decdn_gateway_profile.get('payment_pool_address', '') }}"
+decdn_gateway_capacity_bond_address: "{{ _decdn_gateway_profile.get('capacity_bond_address', '') }}"
+decdn_gateway_slash_judge_address: "{{ _decdn_gateway_profile.get('slash_judge_address', '') }}"
+decdn_gateway_publisher_registry_address: "{{ _decdn_gateway_profile.get('publisher_registry_address', '') }}"
+# REQUIRED. The JSON-RPC endpoint the gateway signs and reads the chain through.
+# SENSITIVE when it embeds an API key: it is written only into the 0600
+# decdn_gateway_config_file, never onto a command line. Set it in the git-ignored
+# host_vars/<host>/secret.yml.
+decdn_gateway_rpc_url: ""
+# The pool's working deposit in micro-USDC (10000000 = 10 USDC); "" = the CLI's
+# default. The keystore's wallet needs at least this much USDC, and ETH for gas.
+decdn_gateway_working_deposit_micro_usdc: ""
+
+# --- Keystore -----------------------------------------------------------------------
+# The gateway pays from its own wallet: give it one of its own, never a node's or
+# sponsord's treasury (the pool store assumes one buyer per wallet).
+decdn_gateway_user: decdn-gateway
+decdn_gateway_group: decdn-gateway
+decdn_gateway_home: /var/lib/decdn-gateway
+decdn_gateway_etc: /etc/decdn-gateway
+decdn_gateway_keystore_file: "{{ decdn_gateway_home }}/keystore.json"
+decdn_gateway_keystore_password_file: "{{ decdn_gateway_etc }}/keystore.password"
+# Opt-in: mint a fresh wallet when neither the keystore nor its password exists (an
+# existing keystore is never touched). The wallet still needs funding.
+decdn_gateway_generate_keystore: false
+
+# --- Files on the host ----------------------------------------------------------------
+# The chain settings, RPC URL included (0600, owned by the gateway's user).
+decdn_gateway_config_file: "{{ decdn_gateway_etc }}/gateway.toml"
+# The pool store (store/) and the namespace pointers (pointers/).
+decdn_gateway_data_dir: "{{ decdn_gateway_home }}/gateway"
+decdn_gateway_bin: /usr/local/lib/decdn-gateway/decdn
+# sha256 record of every restart input (config, unit, binary, keystore password) as
+# of the last converge that saw the gateway healthy.
+decdn_gateway_inputs_checksum_file: "{{ decdn_gateway_etc }}/.gateway-inputs.sha256"
+
+# --- Logging ----------------------------------------------------------------------
+# RUST_LOG for the gateway: a level (info) or target=level pairs (decdn=debug,info).
+# Without it the gateway prints only its startup line.
+decdn_gateway_log_level: info
+
+# --- TLS ------------------------------------------------------------------------------
+# "acme": a publicly trusted wildcard certificate for <domain> and *.<domain>, which
+# lego obtains over ACME DNS-01 through decdn_gateway_acme_dns_provider and renews
+# from a daily timer. "self-signed": a certificate this role makes with openssl, for
+# staging before DNS is ready and for tests; browsers will not trust it.
+decdn_gateway_tls: acme                   # "acme" | "self-signed"
+# acme: REQUIRED. The ACME account contact (Let's Encrypt mails expiry warnings there).
+decdn_gateway_acme_email: ""
+# acme: REQUIRED. The lego DNS provider code that edits the domain's zone
+# (cloudflare, route53, digitalocean, gcloud, dnsupdate, ...; `lego dnshelp` or
+# https://go-acme.github.io/lego/dns/ lists them all, with the variables each reads).
+decdn_gateway_acme_dns_provider: ""
+# acme: the provider's credentials, as KEY=value lines (CLOUDFLARE_DNS_API_TOKEN=...).
+# The operator writes this file on the host (root, 0600); the role never reads its
+# values. Scope the token to the domain's zone.
+decdn_gateway_acme_env_file: "{{ decdn_gateway_etc }}/acme-dns.env"
+# The ACME directory: a URL or a lego shortcode. "letsencrypt-staging" for a trial
+# run that does not spend the production rate limits; its certificates are NOT
+# trusted.
+decdn_gateway_acme_server: letsencrypt
+# lego's account, keys and certificates (root, 0700).
+decdn_gateway_acme_dir: /var/lib/decdn-gateway-acme
+# The lego release that issues and renews the certificate. Bump the version and
+# every digest together: the digests are the release API's per-asset sha256
+# (gh release view v<version> -R go-acme/lego --json assets).
+decdn_gateway_lego_version: "5.5.2"
+decdn_gateway_lego_release_base: "https://github.com/go-acme/lego/releases/download"
+decdn_gateway_lego_sha256:
+  amd64: 2a35505089e7772c92e1e9ac144df91151ef2eca8568630db0ff91fca06d9bef
+  arm64: 15b14ec2ab14fde69cc8396eb0204c5ce4327e31a486953225a6059b26db3e8c
+decdn_gateway_lego_bin: /usr/local/lib/decdn-gateway/lego
+
+# --- Rate limit -------------------------------------------------------------------------
+# PUT /_pointer per client address, in nginx's limit_req terms: a rate (6r/m = one
+# every ten seconds) and the burst it lets through at once. Past it a client gets
+# 429. Every other request is unlimited here; the allowance bounds what they cost.
+decdn_gateway_pointer_rate: 6r/m
+decdn_gateway_pointer_burst: 5
+
+# --- Readiness --------------------------------------------------------------------
+# The gateway binds once its keystore unlocks and its pointers load, so `GET /`
+# answering 200 on loopback is the config gate. A timeout FAILS the deploy. ~60s.
+decdn_gateway_readiness_retries: 30
+decdn_gateway_readiness_delay: 2
+
+# --- Lifecycle: backup + decommission (tasks_from: backup / decommission) -------
+# Only read by those entry points (playbooks/backup.yml, playbooks/decommission.yml);
+# a normal deploy ignores them. See docs/lifecycle.md.
+#
+# A backup is the wallet (the keystore and its password) and the namespace pointers
+# owners have PUT; with decdn_gateway_backup_include_config also the gateway.toml
+# (the RPC URL, maybe an API key). It is taken hot and encrypted on the host to these
+# PUBLIC keys (age1… recipients and/or ssh-ed25519 / ssh-rsa lines), so no plaintext
+# key leaves the host. REQUIRED for a backup; by default the node's list. The pool
+# store is left out: the gateway adopts its live pool from the chain again.
+decdn_gateway_backup_age_recipients: "{{ decdn_backup_age_recipients | default([]) }}"
+decdn_gateway_backup_include_config: false
+decdn_gateway_backup_dir: /var/backups/decdn-gateway   # on the host, root 0700
+decdn_gateway_backup_fetch: true       # copy the ENCRYPTED archive to the control machine
+# On the control machine: backups/ beside this repo's playbooks/, or beside the
+# project's ansible.cfg from a Galaxy collection (as sponsord_backup_local_dir).
+# decdn_backup_local_dir, sponsord_backup_local_dir and this share the expression
+# (make test-scripts checks).
+decdn_gateway_backup_local_dir: >-
+  {{ ((playbook_dir ~ '/..') if playbook_dir is not search('/ansible_collections/')
+      else (ansible_config_file | dirname)
+        if (ansible_config_file | default('', true) | basename) == 'ansible.cfg'
+           and (ansible_config_file | dirname) != '/etc/ansible'
+      else undef(hint='decdn_gateway_backup_local_dir: a collection playbook run without a project'
+                      ~ ' ansible.cfg has no project directory to fetch backups to; set it'))
+     ~ '/backups' }}
+#
+# Shared with decdn_node and sponsord (and identical there, `make test-scripts`
+# checks): one typed confirmation covers every service on the host. A
+# non-interactive run sets
+# decdn_decommission_confirm to the comma-joined, sorted host list (deliberately NOT
+# defaulted here).
+decdn_decommission_max_hosts: 1
+decdn_decommission_prompt_seconds: 300   # an unanswered confirmation prompt fails closed after this

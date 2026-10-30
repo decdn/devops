@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN Ansible project.
 # Always run from the ansible/ directory.
-.PHONY: deps lint check deploy check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns backup decommission molecule molecule-serial molecule-list build build-node build-publisher galaxy-check galaxy-check-node galaxy-check-publisher
+.PHONY: deps lint check deploy check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns check-gateway deploy-gateway backup decommission molecule molecule-serial molecule-list build build-node build-publisher galaxy-check galaxy-check-node galaxy-check-publisher
 SHELL := /bin/bash
 
 # Install the required Galaxy collections (>= constraints in requirements.yml)
@@ -59,15 +59,15 @@ define limit_guard
 endef
 
 # Fail loud on the two ways a run can look scoped but silently be fleet-wide. Scoped to
-# the playbook targets (check/deploy[-node|-origin|-publisher|-sponsord|-relay|-dns]/backup/decommission) via MAKECMDGOALS so an
+# the playbook targets (check/deploy[-node|-origin|-publisher|-sponsord|-relay|-dns|-gateway]/backup/decommission) via MAKECMDGOALS so an
 # unrelated `make lint` is never blocked. A run that selects no host, or skips one LIMIT
 # names, is refused by limit_guard, above. NOTE: neither catches a --tags that is well-formed but
 # selects nothing — a typo (decdn-node vs decdn_node) runs zero tasks and still exits 0.
 # See ansible/README.md.
-ifneq ($(filter check deploy check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns backup decommission,$(MAKECMDGOALS)),)
+ifneq ($(filter check deploy check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns check-gateway deploy-gateway backup decommission,$(MAKECMDGOALS)),)
   # Echo back the goal the operator actually typed, so the hint never nudges a
   # `make check` dry-run toward the mutating `make deploy`.
-  scoped_goal := $(firstword $(filter check deploy check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns backup decommission,$(MAKECMDGOALS)))
+  scoped_goal := $(firstword $(filter check deploy check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns check-gateway deploy-gateway backup decommission,$(MAKECMDGOALS)))
   ifeq ($(origin LIMIT),environment)
     $(error LIMIT is set in your environment ($(LIMIT)) and would silently scope this run. Unset it or pass it on the command line: make $(scoped_goal) LIMIT=<host>)
   endif
@@ -166,6 +166,17 @@ check-dns:
 deploy-dns:
 	$(call limit_guard,playbooks/iroh_dns_server.yml)
 	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/iroh_dns_server.yml $(limit_arg) $(ANSIBLE_ARGS)
+
+# Public gateways alone (playbooks/decdn_gateway.yml, hosts in decdn_gateway_hosts).
+# check/deploy and check/deploy-publisher above already include them; these leave every
+# other host untouched.
+check-gateway:
+	$(call limit_guard,playbooks/decdn_gateway.yml)
+	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/decdn_gateway.yml --check --diff $(limit_arg) $(ANSIBLE_ARGS)
+
+deploy-gateway:
+	$(call limit_guard,playbooks/decdn_gateway.yml)
+	$(strict_inventory) ansible-playbook -i '$(INVENTORY)' playbooks/decdn_gateway.yml $(limit_arg) $(ANSIBLE_ARGS)
 
 # Encrypted backup of each node (identity by default; -e decdn_backup_scope=full for
 # the whole data dir, which stops the node for the copy). One host at a time.

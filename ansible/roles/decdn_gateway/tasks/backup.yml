@@ -1,0 +1,203 @@
+---
+# Encrypted backup of the gateway's wallet and namespace pointers: `include_role:
+# {name: decdn_gateway, tasks_from: backup}` (playbooks/backup.yml, `make backup`).
+# See docs/lifecycle.md for restore.
+#
+# The wallet is the keystore and its password: the pool's owner, holding its funds.
+# The pointers are what namespace owners PUT (<ns>.<domain>); without them those
+# hosts answer 404 until each owner points again. gateway.toml (the RPC URL) only
+# with decdn_gateway_backup_include_config. The pool store is left out: it is
+# written while the gateway serves, and the gateway adopts its live pool from the
+# chain again. Taken hot.
+#
+# As sponsord's backup: the archive is encrypted ON THE HOST to the operator's age
+# recipients (public keys), so plaintext key material never leaves the host and
+# only the encrypted file is fetched.
+
+- name: Refuse to take a backup in check mode
+  ansible.builtin.assert:
+    that:
+      - not ansible_check_mode
+    fail_msg: A backup writes an archive on the host, so it has no dry run. Run it without --check.
+
+- name: Validate the backup settings
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_backup_age_recipients is sequence
+      - decdn_gateway_backup_age_recipients is not string
+      - decdn_gateway_backup_age_recipients is not mapping
+      - decdn_gateway_backup_age_recipients | length > 0
+      - >-
+        decdn_gateway_backup_age_recipients
+        | reject('match', '^(age1[0-9a-z]{58}|ssh-ed25519 [A-Za-z0-9+/=]+|ssh-rsa [A-Za-z0-9+/=]+)( .*)?$')
+        | list | length == 0
+      - decdn_gateway_backup_include_config is boolean
+      - decdn_gateway_backup_fetch is boolean
+    fail_msg: >-
+      decdn_gateway_backup_age_recipients must be a non-empty LIST of public keys to
+      encrypt to: age recipients (age1…, from `age-keygen -y`) or SSH public keys
+      (ssh-ed25519 / ssh-rsa lines), never a private key. It defaults to
+      decdn_backup_age_recipients. decdn_gateway_backup_include_config and
+      decdn_gateway_backup_fetch must be booleans.
+
+- name: Constrain the backup paths (absolute, no traversal, no empty segments)
+  ansible.builtin.assert:
+    that:
+      - item.value is match('^/[A-Za-z0-9._/-]+$')
+      - "'.' not in item.value.split('/')"
+      - "'..' not in item.value.split('/')"
+      - "'' not in item.value.rstrip('/').split('/')[1:]"
+    quiet: true
+    fail_msg: >-
+      {{ item.name }} must be an absolute path whose segments use only
+      [A-Za-z0-9._-], with no '.', '..' or empty segments (got "{{ item.value }}").
+  loop:
+    - {name: decdn_gateway_home, value: "{{ decdn_gateway_home }}"}
+    - {name: decdn_gateway_etc, value: "{{ decdn_gateway_etc }}"}
+    - {name: decdn_gateway_backup_dir, value: "{{ decdn_gateway_backup_dir }}"}
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require the backup dir to stay clear of the gateway and system directories
+  vars:
+    _dir: "{{ decdn_gateway_backup_dir.rstrip('/') ~ '/' }}"
+  ansible.builtin.assert:
+    that:
+      - _dir not in ['/etc/', '/var/', '/var/lib/', '/usr/', '/root/', '/home/', '/opt/', '/srv/', '/boot/', '/tmp/']
+      - not (decdn_gateway_etc.rstrip('/') ~ '/').startswith(_dir)
+      - not _dir.startswith(decdn_gateway_etc.rstrip('/') ~ '/')
+      - not (decdn_gateway_home.rstrip('/') ~ '/').startswith(_dir)
+      - not _dir.startswith(decdn_gateway_home.rstrip('/') ~ '/')
+    quiet: true
+    fail_msg: >-
+      decdn_gateway_backup_dir ({{ decdn_gateway_backup_dir }}) must be a dedicated
+      directory outside {{ decdn_gateway_etc }} and {{ decdn_gateway_home }}, and not a
+      system directory: the role makes it root-only (0700) and writes archives into
+      it. The default is /var/backups/decdn-gateway.
+
+- name: Check for the namespace pointers directory
+  ansible.builtin.stat:
+    path: "{{ decdn_gateway_data_dir }}/pointers"
+  register: _decdn_gateway_backup_pointers
+
+# The pointers directory exists once an owner has pointed a namespace here.
+- name: Build the list of paths to archive
+  ansible.builtin.set_fact:
+    _decdn_gateway_backup_files: >-
+      {{ [decdn_gateway_keystore_file, decdn_gateway_keystore_password_file]
+         + ([decdn_gateway_config_file] if decdn_gateway_backup_include_config | bool else []) }}
+    _decdn_gateway_backup_dirs: >-
+      {{ [decdn_gateway_data_dir ~ '/pointers'] if _decdn_gateway_backup_pointers.stat.isdir | default(false) else [] }}
+    _decdn_gateway_backup_file: >-
+      {{ decdn_gateway_backup_dir }}/{{ inventory_hostname }}-decdn-gateway-{{
+         now(utc=true, fmt='%Y%m%dT%H%M%SZ') }}.tar.age
+
+- name: Check that every file to archive exists
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: _decdn_gateway_backup_stat
+  loop: "{{ _decdn_gateway_backup_files }}"
+
+# Regular files only: tar stores a symlink as the link, not the key it points to.
+- name: Require every file to archive, as a regular file
+  ansible.builtin.assert:
+    that:
+      - _decdn_gateway_backup_stat.results | rejectattr('stat.exists') | list | length == 0
+      - _decdn_gateway_backup_stat.results | selectattr('stat.exists') | rejectattr('stat.isreg') | list | length == 0
+    fail_msg: >-
+      {% set missing = _decdn_gateway_backup_stat.results | rejectattr('stat.exists') | map(attribute='item') | list %}
+      {% set odd = _decdn_gateway_backup_stat.results | selectattr('stat.exists') | rejectattr('stat.isreg')
+         | map(attribute='item') | list %}
+      {{ ('Missing on the host: ' ~ missing | join(', ') ~ '. There is no gateway wallet to
+      back up yet (deploy the gateway first), or a path variable does not match this
+      host. ') if missing else '' }}
+      {{- ('Not a regular file (a symlink or directory): ' ~ odd | join(', ') ~ '. A backup of
+      it would not hold the key; replace it with the file itself.') if odd else '' }}
+
+- name: Install age
+  ansible.builtin.apt:
+    name: age
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the backup directory
+  ansible.builtin.file:
+    path: "{{ decdn_gateway_backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# Recipients go in a file (`age -R`) rather than argv: SSH public keys carry spaces
+# and comments, and a file needs no shell quoting at all.
+- name: Write the recipients file
+  ansible.builtin.copy:
+    dest: "{{ decdn_gateway_backup_dir }}/.recipients"
+    content: "{{ decdn_gateway_backup_age_recipients | join('\n') }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Join the files and directories to archive
+  ansible.builtin.set_fact:
+    _decdn_gateway_backup_paths: "{{ _decdn_gateway_backup_files + _decdn_gateway_backup_dirs }}"
+
+# tar reads the absolute paths relative to / (so a restore is `tar -C /`) and
+# stores numeric owners. Written to a .partial name and renamed, so an interrupted
+# run never leaves a truncated archive behind that looks complete.
+- name: Take the backup
+  block:
+    - name: Write the encrypted archive
+      ansible.builtin.shell:
+        cmd: >-
+          set -euo pipefail;
+          umask 077;
+          tar -C / --numeric-owner
+          -czf - -- {{ _decdn_gateway_backup_paths | map('regex_replace', '^/', '') | map('quote') | join(' ') }}
+          | age -R {{ (decdn_gateway_backup_dir ~ '/.recipients') | quote }}
+          -o {{ (_decdn_gateway_backup_file ~ '.partial') | quote }};
+          mv -- {{ (_decdn_gateway_backup_file ~ '.partial') | quote }} {{ _decdn_gateway_backup_file | quote }}
+        executable: /bin/bash
+      changed_when: true
+  always:
+    - name: Remove a partial archive left by a failed run
+      ansible.builtin.file:
+        path: "{{ _decdn_gateway_backup_file }}.partial"
+        state: absent
+
+- name: Checksum the archive
+  ansible.builtin.stat:
+    path: "{{ _decdn_gateway_backup_file }}"
+    checksum_algorithm: sha256
+  register: _decdn_gateway_backup_result
+
+- name: Create the local backup directory for this host
+  ansible.builtin.file:
+    path: "{{ decdn_gateway_backup_local_dir }}/{{ inventory_hostname }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  when: decdn_gateway_backup_fetch | bool
+
+- name: Fetch the encrypted archive to the control machine
+  ansible.builtin.fetch:
+    src: "{{ _decdn_gateway_backup_file }}"
+    dest: "{{ decdn_gateway_backup_local_dir }}/{{ inventory_hostname }}/"
+    flat: true
+    validate_checksum: true
+  when: decdn_gateway_backup_fetch | bool
+
+- name: Report the backup
+  ansible.builtin.debug:
+    msg: >-
+      Gateway backup written to {{ _decdn_gateway_backup_file }}
+      (sha256 {{ _decdn_gateway_backup_result.stat.checksum }}, {{ _decdn_gateway_backup_result.stat.size }} bytes)
+      {{- (', fetched to ' ~ decdn_gateway_backup_local_dir ~ '/' ~ inventory_hostname ~ '/')
+          if decdn_gateway_backup_fetch | bool
+          else ('. Not fetched; copy it off the host with: ssh ' ~ inventory_hostname
+                ~ ' sudo cat ' ~ _decdn_gateway_backup_file ~ ' > ' ~ (_decdn_gateway_backup_file | basename)) }}.
+      {{ '' if _decdn_gateway_backup_dirs else 'No namespace pointers yet, so none archived. ' -}}
+      It holds the gateway's keystore: whoever decrypts it controls the pool's funds.
+      Prove it restores before you rely on it: `age -d -i <your-identity> <file> | tar -tz`.

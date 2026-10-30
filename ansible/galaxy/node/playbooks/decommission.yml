@@ -4,7 +4,7 @@
 # withdraws the bond) and does NOT touch the chain; the role's last task prints what
 # is left to do. One typed confirmation per run (the sorted host list).
 #   ansible-playbook -i inventory/hosts.yml decdn.node.decommission -l <host>
-# On a host that also runs a publisher service (sponsord, a relay, a DNS server), use
+# On a host that also runs a publisher service (sponsord, a relay, a DNS server, a gateway), use
 # decdn.publisher.decommission: this one would tear down the Alloy agent they share.
 # The node plays of ansible/playbooks/decommission.yml, which decdn.publisher ships
 # whole (with sponsord, its onramp, iroh relays and DNS servers);

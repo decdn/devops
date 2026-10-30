@@ -1,0 +1,91 @@
+---
+# The public gateway, converged through the real playbooks/decdn_gateway.yml (its
+# placement guard, then the gateway play) against a stub decdn CLI
+# (files/decdn-gateway-stub) and the REAL distro nginx, with a self-signed
+# certificate in place of lego's (no DNS provider in a container).
+#
+#   converge     the wallet minted by the stub's key-gen, gateway.toml (0600, the RPC
+#                URL kept off the command line), the hardened unit on loopback, the
+#                readiness gate, the self-signed certificate, nginx's site in place of
+#                the package default, the https probe.
+#   idempotence  an unchanged host must not restart anything.
+#   side_effect  a no-op re-run leaves the gateway alone; a changed allowance and a
+#                rotated password restart it, through SIGINT; a gateway that refuses
+#                to start FAILS the converge and leaves the record alone.
+#   verify       files, modes, the unit, listeners, the https chain with Host passed
+#                through and nothing added, the http redirect, an unknown name
+#                refused, the PUT /_pointer limit.
+#
+# lego's download, verification and units, against an ACME server that does not
+# answer, and backup and decommission run in ../decdn-gateway-lifecycle on the same
+# converge, so the two run side by side. Its inventory must stay identical to this
+# one (`make test-scripts` checks). The broken-input matrix lives in
+# ../validation-decdn-gateway.
+#
+# `baseline` is skipped (real-host-only — see ../default/molecule.yml), so the
+# tcp/80 + tcp/443 holes are covered by tests/firewall-holes instead. The release
+# install is decdn_node's, mirrored here (../cloud-init covers it end to end).
+driver:
+  name: docker
+platforms:
+  - name: gateway-molecule
+    # Same digest-pinned images as ../sponsord (repo convention).
+    image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    groups:
+      - decdn_gateway_hosts
+  # nginx 1.24 renders the `http2 on;` form; Debian 12's 1.22 the `listen … http2` one.
+  - name: gateway-molecule-u2404
+    image: geerlingguy/docker-ubuntu2404-ansible@sha256:3394e335df58c961c00b78ae601ef30cdd7463b112f21b0c5f78674a70526302
+    pre_build_image: true
+    command: /usr/lib/systemd/systemd
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    groups:
+      - decdn_gateway_hosts
+provisioner:
+  name: ansible
+  options:
+    skip-tags: baseline
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/roles"
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/collections"
+    # Same pipelining note as ../default/molecule.yml.
+    ANSIBLE_PIPELINING: "true"
+  inventory:
+    group_vars:
+      decdn_gateway_hosts:
+        decdn_gateway_install_method: manual
+        decdn_gateway_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/decdn-gateway/files/decdn-gateway-stub"
+        # Not the binary's version: proves a manual install is not held to the pin.
+        decdn_gateway_version: "9.9.9-not-the-binary"
+        decdn_gateway_domain: gateway.molecule.test
+        decdn_gateway_rpc_url: "https://rpc.example.invalid/v2/molecule-key"
+        decdn_gateway_generate_keystore: true
+        decdn_gateway_tls: self-signed
+        decdn_gateway_allowance_bytes_per_day: 2GiB
+        decdn_gateway_namespace_allowances: {7: 20GiB}
+        decdn_gateway_working_deposit_micro_usdc: 5000000
+        decdn_gateway_pointer_rate: 6r/m
+        decdn_gateway_pointer_burst: 2
+        decdn_gateway_readiness_retries: 10
+        decdn_gateway_readiness_delay: 1
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    # Leading destroy: see ../default/molecule.yml.
+    - destroy
+    - create
+    - converge
+    - idempotence
+    - side_effect
+    - verify
+    - destroy

@@ -1,0 +1,13 @@
+# MANAGED BY the decdn_gateway role — do not edit by hand.
+#
+# Check the gateway's certificate twice a day; lego renews it only when it is due.
+[Unit]
+Description=Renew the deCDN gateway certificate ({{ decdn_gateway_domain }})
+
+[Timer]
+OnCalendar=*-*-* 00/12:00:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

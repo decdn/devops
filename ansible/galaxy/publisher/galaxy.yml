@@ -1,7 +1,7 @@
 ---
 # Manifest for the `decdn.publisher` Ansible collection — what a publisher runs
 # beside its origin nodes: the sponsord onboarding sponsor and its public onramp, a
-# self-hosted iroh relay and an iroh DNS server. The origin nodes themselves, the
+# self-hosted iroh relay, an iroh DNS server and a public gateway. The origin nodes themselves, the
 # host baseline and observability are `decdn.node` (../node/galaxy.yml).
 #
 # This file is an OVERLAY, not the project root manifest. It is assembled into a
@@ -18,8 +18,8 @@ authors:
   - deCDN Contributors
 description: >-
   Publisher-side services for deCDN: the sponsord onboarding sponsor and its public
-  onramp (each with backup and decommission), a self-hosted iroh relay and an iroh
-  DNS server. Run them beside origin nodes from decdn.node.
+  onramp (each with backup and decommission), a self-hosted iroh relay, an iroh
+  DNS server and a public HTTP gateway. Run them beside origin nodes from decdn.node.
 license:
   - MIT
 # Galaxy tags must match ^[a-z0-9]+$ (no hyphens/underscores).
@@ -35,7 +35,8 @@ tags:
   - dns
   - web3
 # Collection-level dependencies. Every SHIPPED role uses ansible.builtin only
-# (sponsord_onramp's Caddy comes from the distro's apt), and none calls into
+# (sponsord_onramp's Caddy and decdn_gateway's nginx come from the distro's apt,
+# lego from its sha256-pinned GitHub release), and none calls into
 # decdn.node. The dependency is for the playbooks this collection ships
 # (playbooks.txt): a publisher host takes decdn.node.baseline first and
 # decdn.node.grafana_alloy for observability, and its origin and cache nodes are

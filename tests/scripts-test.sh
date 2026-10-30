@@ -34,7 +34,7 @@ expect 2 "decommission refuses an empty LIMIT"              mk decommission LIMI
 expect 2 "decommission refuses LIMIT from the environment"  env LIMIT=h make -s -C "$repo/ansible" -n decommission
 expect 2 "deploy refuses INVENTORY from the environment"    env INVENTORY=x make -s -C "$repo/ansible" -n deploy
 expect 2 "backup refuses ANSIBLE_ARGS from the environment" env ANSIBLE_ARGS=-v make -s -C "$repo/ansible" -n backup
-for t in deploy-relay deploy-dns check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher; do
+for t in deploy-relay deploy-dns deploy-gateway check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher; do
   expect 2 "$t refuses LIMIT from the environment" env LIMIT=h make -s -C "$repo/ansible" -n "$t"
 done
 # Every playbook target, read from the guard block's own list so a new one is covered:
@@ -46,7 +46,8 @@ targets="$(sed -nE 's/^ifneq \(\$\(filter ([a-z -]+),\$\(MAKECMDGOALS\)\),\)$/\1
 declare -A want_pb=([check]=site [deploy]=site [backup]=backup [decommission]=decommission
   [check-node]=node [deploy-node]=node [check-origin]=origin [deploy-origin]=origin
   [check-publisher]=publisher [deploy-publisher]=publisher [check-sponsord]=sponsord [deploy-sponsord]=sponsord
-  [check-relay]=iroh_relay [deploy-relay]=iroh_relay [check-dns]=iroh_dns_server [deploy-dns]=iroh_dns_server)
+  [check-relay]=iroh_relay [deploy-relay]=iroh_relay [check-dns]=iroh_dns_server [deploy-dns]=iroh_dns_server
+  [check-gateway]=decdn_gateway [deploy-gateway]=decdn_gateway)
 for t in $targets; do
   pb="playbooks/${want_pb[$t]:?ansible/Makefile guards $t, which this test does not map to a playbook}.yml"
   check=""; [[ $t == check* ]] && check=" --check --diff"
@@ -199,6 +200,7 @@ if command -v yq >/dev/null; then
       iroh-relay:iroh-relay-certificate iroh-relay:iroh-relay-gate \
       iroh-dns-server:iroh-dns-server-certificate iroh-dns-server:iroh-dns-server-install \
       iroh-dns-server:iroh-dns-server-lifecycle iroh-dns-server:iroh-dns-server-gate \
+      decdn-gateway:decdn-gateway-lifecycle \
       source-build:source-build-rollback source-build:source-build-recovery; do
     a="$repo/ansible/molecule/${pair%%:*}/molecule.yml" b="$repo/ansible/molecule/${pair##*:}/molecule.yml"
     [[ "$(yq -o=json '.provisioner.inventory' "$a")" == "$(yq -o=json '.provisioner.inventory' "$b")" ]] \
@@ -2002,9 +2004,9 @@ cmp -s "$repo/ansible/roles/decdn_node/files/install-build-output.py" \
   || fail "decdn_node and sponsord files/install-build-output.py differ"
 # The release-line resolver is copied into every role that installs a release, and
 # so is decdn's KEYS: one decdn/decdn release ships the node, the CLI, sponsord and
-# the onramp (the sponsord roles ship in the other collection, so each carries its
+# the onramp (the publisher roles ship in the other collection, so each carries its
 # own copy).
-for r in sponsord sponsord_onramp; do
+for r in sponsord sponsord_onramp decdn_gateway; do
   cmp -s "$repo/ansible/roles/decdn_node/tasks/resolve-release.yml" \
          "$repo/ansible/roles/$r/tasks/resolve-release.yml" \
     || fail "decdn_node and $r tasks/resolve-release.yml differ"
@@ -2021,31 +2023,33 @@ backup_dir_default() { # <defaults file> <key>
 want="$(backup_dir_default "$repo/ansible/roles/decdn_node/defaults/main.yml" decdn_backup_local_dir)"
 [[ -n "$want" && "$(backup_dir_default "$repo/ansible/roles/sponsord/defaults/main.yml" sponsord_backup_local_dir)" == "$want" ]] \
   || fail "sponsord_backup_local_dir's default differs from decdn_backup_local_dir's"
+[[ "$(backup_dir_default "$repo/ansible/roles/decdn_gateway/defaults/main.yml" decdn_gateway_backup_local_dir)" == "$want" ]] \
+  || fail "decdn_gateway_backup_local_dir's default differs from decdn_backup_local_dir's"
 pass "source-build and decommission defaults, the backup directory, the installer, the release resolver and decdn's KEYS, identical across roles"
-# iroh_relay and iroh_dns_server have no source build (and their own per-triple
-# sha256 pins), so only their decommission keys are compared.
+# iroh_relay, iroh_dns_server and decdn_gateway have no source build, so only their
+# decommission keys are compared.
 decom_keys() { grep -E '^decdn_decommission_(max_hosts|prompt_seconds):' "$1" || true; }
 want_decom="$(decom_keys "$repo/ansible/roles/decdn_node/defaults/main.yml")"
 [ "$(grep -c . <<<"$want_decom")" -eq 2 ] \
   || fail "decdn_node/defaults/main.yml: expected both decdn_decommission_* keys, found: $want_decom"
-for r in iroh_relay iroh_dns_server; do
+for r in iroh_relay iroh_dns_server decdn_gateway; do
   [ "$(decom_keys "$repo/ansible/roles/$r/defaults/main.yml")" = "$want_decom" ] \
     || fail "$r/defaults/main.yml: decdn_decommission_* differ from decdn_node's"
 done
 # One confirmation names every service the run stops, so each role's prompt must
 # know every group decommission.yml covers.
-for r in decdn_node sponsord sponsord_onramp iroh_relay iroh_dns_server; do
-  for g in decdn_nodes iroh_relay_hosts iroh_dns_server_hosts sponsord_onramp_hosts sponsord_hosts; do
+for r in decdn_node sponsord sponsord_onramp iroh_relay iroh_dns_server decdn_gateway; do
+  for g in decdn_nodes iroh_relay_hosts iroh_dns_server_hosts decdn_gateway_hosts sponsord_onramp_hosts sponsord_hosts; do
     grep -qF "if '$g' in _decom_groups" "$repo/ansible/roles/$r/tasks/decommission.yml" \
       || fail "$r/tasks/decommission.yml: the confirmation prompt does not name $g's service"
   done
 done
-pass "the decommission defaults and the confirmation's service list agree across all five roles"
+pass "the decommission defaults and the confirmation's service list agree across all six roles"
 
 # --- the release pins agree ----------------------------------------------------------
 # One decdn/decdn release ships decdn-node, decdn, sponsord and sponsord-onramp, so
-# the three roles pin one line, and the onramp's installers should hand users the
-# decdn the node role deploys. The pins are copied into
+# the four roles (the gateway's runs decdn) pin one line, and the onramp's installers
+# should hand users the decdn the node role deploys. The pins are copied into
 # compose/sponsord-onramp.env.example and the chart's appVersion; the chart check is
 # here, not in lint-helm, so a PR that bumps only the role still runs it.
 pin() { # <role> <var>: a scalar default, quotes stripped
@@ -2055,7 +2059,8 @@ envpin() { sed -nE "s/^$1=//p" "$repo/compose/sponsord-onramp.env.example"; }
 # A pin is a release line (X.Y: the roles resolve its newest release) or an exact
 # X.Y.Z[-pre].
 pin_re='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?)?$'
-for p in "decdn_node decdn_node_version" "sponsord sponsord_version" "sponsord_onramp sponsord_onramp_version"; do
+for p in "decdn_node decdn_node_version" "sponsord sponsord_version" "sponsord_onramp sponsord_onramp_version" \
+    "decdn_gateway decdn_gateway_version"; do
   # shellcheck disable=SC2086  # "<role> <var>", split on purpose
   [[ "$(pin $p)" =~ $pin_re ]] || fail "${p#* }: the default in roles/${p% *}/defaults/main.yml is not X.Y or X.Y.Z"
 done
@@ -2063,6 +2068,8 @@ done
   || fail "sponsord_version and sponsord_onramp_version differ (one decdn/decdn release ships both)"
 [ "$(pin sponsord sponsord_version)" = "$(pin decdn_node decdn_node_version)" ] \
   || fail "sponsord_version and decdn_node_version differ (one decdn/decdn release ships sponsord and the node)"
+[ "$(pin decdn_gateway decdn_gateway_version)" = "$(pin decdn_node decdn_node_version)" ] \
+  || fail "decdn_gateway_version and decdn_node_version differ (one decdn/decdn release ships the CLI and the node)"
 [ "$(pin sponsord_onramp sponsord_onramp_decdn_release)" = "v$(pin decdn_node decdn_node_version)" ] \
   || fail "sponsord_onramp_decdn_release is not v<decdn_node_version>"
 # Compose has no resolver: its env example names an exact release and digest, which
@@ -2087,7 +2094,7 @@ app="$(sed -nE 's/^appVersion: *"?([^" #]*)"?.*/\1/p' "$repo/charts/decdn-node/C
 # AGENTS.md's "Pinned upstream releases" is the one doc that names the numbers
 # (bump_decdn.py moves decdn's). Joined first: the phrases wrap across lines.
 agents="$(tr '\n' ' ' <"$repo/AGENTS.md")"
-for p in "decdn_node decdn_node_version" "sponsord sponsord_version"; do
+for p in "decdn_node decdn_node_version" "sponsord sponsord_version" "decdn_gateway decdn_gateway_version"; do
   role="${p% *}" var="${p#* }"
   named="$(sed -nE "s/.*\*\*Pinned upstream releases\.\*\*.*\`$var\`[^,]*, +today +\`([0-9][0-9.]*)\`.*/\1/p" <<<"$agents")"
   # Two empty strings agree: a missing number or pin must not.
@@ -2189,7 +2196,7 @@ fi
 # half decommissioned. The role checks again right before its own stop.
 if command -v yq >/dev/null; then
   pb="$repo/ansible/playbooks/decommission.yml"
-  [[ "$(yq '.[0].hosts' "$pb")" == decdn_nodes:sponsord_onramp_hosts:sponsord_hosts:iroh_relay_hosts:iroh_dns_server_hosts \
+  [[ "$(yq '.[0].hosts' "$pb")" == decdn_nodes:sponsord_onramp_hosts:sponsord_hosts:iroh_relay_hosts:iroh_dns_server_hosts:decdn_gateway_hosts \
      && "$(yq '.[0].tasks[0]["ansible.builtin.assert"] | has("that")' "$pb")" == true \
      && "$(yq '.[0].tasks[1]["ansible.builtin.include_role"].tasks_from' "$pb")" == topup-hold ]] \
     || fail "playbooks/decommission.yml: the first play must check the host cap, then sponsord's top-up hold"
@@ -2375,6 +2382,9 @@ if command -v ansible >/dev/null; then
     expect 2 "decommission.yml refuses a node host plus a DNS server host" guard node-only,dns-only
     grep -q "This run decommissions 2 hosts" "$work/out" \
       || { cat "$work/out" >&2; fail "the node + DNS server refusal did not come from the run-wide host cap"; }
+    expect 2 "decommission.yml refuses a node host plus a gateway host" guard node-only,gateway-only
+    grep -q "This run decommissions 2 hosts" "$work/out" \
+      || { cat "$work/out" >&2; fail "the node + gateway refusal did not come from the run-wide host cap"; }
     # playbooks/iroh_relay.yml refuses a relay on an onramp host (both want 80/443).
     yq '[.[] | select(.name == "Refuse an iroh relay on a sponsord-onramp host")]' \
       "$repo/ansible/playbooks/iroh_relay.yml" > "$work/guard.yml"
@@ -2394,6 +2404,19 @@ if command -v ansible >/dev/null; then
     for shape in dns-relay:iroh_relay_hosts dns-onramp:sponsord_onramp_hosts; do
       expect 2 "iroh_dns_server.yml refuses a DNS server also in ${shape##*:}" guard "${shape%%:*}"
       grep -q "is in iroh_dns_server_hosts and also in ${shape##*:}" "$work/out" \
+        || { cat "$work/out" >&2; fail "the ${shape%%:*} refusal did not come from the placement check"; }
+    done
+    # playbooks/decdn_gateway.yml refuses a gateway on an onramp, relay or DNS server
+    # host (its nginx wants 80/443).
+    yq '[.[] | select(.name == "Refuse a gateway on a sponsord-onramp, iroh relay or iroh DNS server host")]' \
+      "$repo/ansible/playbooks/decdn_gateway.yml" > "$work/guard.yml"
+    [[ "$(yq 'length' "$work/guard.yml")" == 1 ]] \
+      || fail "playbooks/decdn_gateway.yml has no single gateway placement play"
+    expect 0 "decdn_gateway.yml accepts a gateway host of its own" guard gateway-only
+    expect 0 "decdn_gateway.yml accepts a gateway beside a deCDN node" guard gateway-node
+    for shape in gateway-onramp:sponsord_onramp_hosts gateway-relay:iroh_relay_hosts gateway-dns:iroh_dns_server_hosts; do
+      expect 2 "decdn_gateway.yml refuses a gateway also in ${shape##*:}" guard "${shape%%:*}"
+      grep -q "is in decdn_gateway_hosts and also in ${shape##*:}" "$work/out" \
         || { cat "$work/out" >&2; fail "the ${shape%%:*} refusal did not come from the placement check"; }
     done
     # The relay's allowlist reads the inventory's deCDN nodes (tasks_from node-ids).

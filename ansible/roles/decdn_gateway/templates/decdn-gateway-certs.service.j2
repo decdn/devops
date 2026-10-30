@@ -1,0 +1,53 @@
+# MANAGED BY the decdn_gateway role — do not edit by hand.
+#
+# Obtain or renew the wildcard certificate nginx serves for {{ decdn_gateway_domain }} and
+# *.{{ decdn_gateway_domain }}, over ACME DNS-01 through the {{ decdn_gateway_acme_dns_provider }} provider. `lego run`
+# issues when there is no certificate and otherwise renews only when one is due,
+# then reloads nginx. Started by decdn-gateway-certs.timer, and by the role on the
+# first deploy.
+[Unit]
+Description=Obtain or renew the deCDN gateway certificate ({{ decdn_gateway_domain }})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The provider's credentials (KEY=value lines), root-only, written by the operator.
+EnvironmentFile={{ decdn_gateway_acme_env_file }}
+Environment=LEGO_LOG_FORMAT=text
+ExecStart={{ decdn_gateway_lego_bin }} run \
+    --accept-tos \
+    --email {{ decdn_gateway_acme_email | replace('%', '%%') }} \
+    --server {{ decdn_gateway_acme_server | replace('%', '%%') }} \
+    --dns {{ decdn_gateway_acme_dns_provider }} \
+    --domains {{ decdn_gateway_domain }} \
+    --domains *.{{ decdn_gateway_domain }} \
+    --force-cert-domains \
+    --cert.name {{ _decdn_gateway_lego_cert_name }} \
+    --path {{ decdn_gateway_acme_dir }} \
+    --deploy-hook "/usr/bin/systemctl try-reload-or-restart nginx.service"
+
+# --- Hardening -------------------------------------------------------------
+# Root, for the root-only key nginx reads and the nginx reload; nothing else on disk
+# is writable.
+ReadWritePaths={{ decdn_gateway_acme_dir }}
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077

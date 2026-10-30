@@ -15,8 +15,8 @@ and every entry point is split along that line:
   chart, the `decdn.node` collection. Front door: `docs/node-operators.md`.
 - **Publishers** own namespaces in `PublisherRegistry` and run **origin nodes** (the
   same daemon with an origin backend, seated on-chain via `OriginAssignment.addOrigin`,
-  ADR 002/011), and optionally `sponsord` + its onramp, iroh relays and an iroh DNS
-  server: `publisher.yml` / `make deploy-publisher`, `cloud-init/user-data-publisher.yaml`,
+  ADR 002/011), and optionally `sponsord` + its onramp, iroh relays, an iroh DNS
+  server and a public gateway: `publisher.yml` / `make deploy-publisher`, `cloud-init/user-data-publisher.yaml`,
   Compose's `origin`/`onramp`/`relay`/`dns` profiles, the chart (an origin node only),
   the `decdn.publisher` collection. Front door: `docs/publishers.md`.
 
@@ -45,6 +45,9 @@ them into inventory or docs.
    exceptions, each public by design and each asserting its metrics onto loopback:
    - `sponsord-onramp` behind the role's Caddy (tcp/80 + tcp/443): Turnstile guards the
      one spending action (`POST /v1/fund`), per-address rate limits cover the rest.
+   - `decdn gateway` behind the role's nginx (tcp/80 + tcp/443): every request spends
+     its pool, bounded by the gateway's own daily allowance; nginx's per-address
+     `limit_req` covers `PUT /_pointer`, since the gateway reads no `X-Forwarded-*`.
    - `iroh-relay` (tcp/80, tcp/443, udp/7842) and `iroh-dns-server` (tcp/443, udp/53 +
      tcp/53) terminate their own TLS (TLS-ALPN-01; QUIC address discovery needs the
      certificate in-process), so no proxy. On Compose they run as uid 0 holding
@@ -67,8 +70,8 @@ them into inventory or docs.
 
 ```
 ansible/                # the deployment project (DevSec-hardened, lean roles); see ansible/README.md
-  playbooks/            # site.yml = node.yml + publisher.yml (origin.yml, sponsord.yml (+ onramp), iroh_relay.yml, iroh_dns_server.yml); backup.yml, decommission.yml
-  roles/                # baseline, decdn_node, grafana_alloy, sponsord, sponsord_onramp, iroh_relay, iroh_dns_server — each with a README
+  playbooks/            # site.yml = node.yml + publisher.yml (origin.yml, sponsord.yml (+ onramp), iroh_relay.yml, iroh_dns_server.yml, decdn_gateway.yml); backup.yml, decommission.yml
+  roles/                # baseline, decdn_node, grafana_alloy, sponsord, sponsord_onramp, iroh_relay, iroh_dns_server, decdn_gateway — each with a README
   inventory/ galaxy/ molecule/
 cloud-init/             # user-data-{node,publisher}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (README.md)
 compose/                # one-host Docker Compose path (README.md)
@@ -86,7 +89,7 @@ scripts/                # upstream mirrors (sync-network-profiles.py, gen-schema
 ```
 
 **Generated — regenerate, never hand-edit.** From upstream, at the tag of the newest
-decdn/decdn release in the line `decdn_node_version` pins: the three
+decdn/decdn release in the line `decdn_node_version` pins: the four
 `roles/*/vars/main/networks.yml` mirrors (`scripts/sync-network-profiles.py`; the file
 carries its upstream commit) and `ansible/molecule/schema/files/schema-keys.txt`
 (`gen-schema-keys.py`). From this repo: `compose/alloy/config.alloy`, the
@@ -96,13 +99,13 @@ fresh render, `make lint-alloy` runs it. The weekly `upstream-drift` workflow fl
 stale mirrors and a new upstream release line.
 
 **Pinned upstream releases.** One decdn/decdn release line is pinned across every
-path, by three role defaults that must agree (`decdn_node_version` = `sponsord_version`
-= `sponsord_onramp_version`, today `0.3`): one decdn/decdn release (`vX.Y.Z`, the whole
-workspace, no per-crate tags) ships `decdn-node`, `decdn`, `sponsord` and
-`sponsord-onramp`, their four images and one `SHA256SUMS`. A line, `X.Y`, is what the
+path, by four role defaults that must agree (`decdn_node_version` = `sponsord_version`
+= `sponsord_onramp_version` = `decdn_gateway_version`, today `0.3`): one decdn/decdn
+release (`vX.Y.Z`, the whole workspace, no per-crate tags) ships `decdn-node`,
+`decdn`, `sponsord` and `sponsord-onramp`, their four images and one `SHA256SUMS`. A line, `X.Y`, is what the
 role defaults, the onramp's installer pin (`sponsord_onramp_decdn_release`, `vX.Y`) and
 the chart's `appVersion` name: the roles install its newest finished `vX.Y.N` on every
-run (`tasks/resolve-release.yml`, copied into all three roles: GitHub's release list,
+run (`tasks/resolve-release.yml`, copied into all four roles: GitHub's release list,
 then the same signed `SHA256SUMS` and exact `--version` check against the resolved
 version; the onramp reads the installers' digest from that release's verified
 `SHA256SUMS`), and the chart's default image tag is the line's floating tag, pulled
@@ -119,7 +122,7 @@ number: besides this paragraph, only the commented examples and the comments bes
 pinned value name a number, and they move with the pin (`bump_decdn.py` moves all of
 them). `make test-scripts` checks the pins agree with each other, the Compose example (a
 release of the line), `appVersion`, the chart's `artifacthub.io/images` tag and this
-paragraph, and that the vendored KEYS (three byte copies of decdn's) hold the keys
+paragraph, and that the vendored KEYS (four byte copies of decdn's) hold the keys
 SECURITY.md publishes; the weekly `upstream-drift` job checks the exact copies and the
 mirrors against the line's newest release and flags a newer upstream line. Bump with
 the checklist in `roles/decdn_node/README.md`; `scripts/open-decdn-bump.sh` opens the
@@ -228,6 +231,27 @@ boundaries or exists nowhere else.
   `delegate_to`, so `LIMIT=<relay>` still needs those hosts reachable; relays deploy
   `serial: 1`.
 
+### `roles/decdn_gateway` (its README)
+
+- It runs the `decdn` CLI (`decdn gateway --public-url`) from its own path,
+  `/usr/local/lib/decdn-gateway/decdn`, never `/usr/local/bin/decdn`, which a
+  co-located node's role pins and stamps. It always passes `--keystore`: the CLI's
+  default lookup (`~/.decdn/client/keystore.json`) is not where `decdn key-gen`
+  writes.
+- The gateway stops cleanly only on SIGINT (`KillSignal=SIGINT`; Compose needs
+  `stop_signal: SIGINT`). A restart forgives the day's allowance (in-memory counters)
+  and drops the pulls in flight, so the restart-inputs comparison is its only restart
+  trigger, as sponsord's: never add `notify: Restart decdn-gateway` to a task.
+- nginx is the distro package, the only internet-facing TLS terminator in this repo
+  that unattended-upgrades patches. Its certificate is a wildcard for `<domain>` and
+  `*.<domain>` from lego over ACME DNS-01 (sha256-pinned per architecture; bump the
+  version and both digests together). Stock nginx cannot issue on demand, so the
+  hint host `<ns>.<hash32>.<domain>`, which the gateway's `?ns=` redirect produces, has
+  no certificate: decdn/decdn#2784 asks upstream for a single-label form.
+- The site adds no header: the gateway sets its own CORS (a second
+  `Access-Control-Allow-Origin` breaks browsers), routes on the exact `Host`, and reads
+  no `X-Forwarded-*`. Per-client limits on `PUT /_pointer` are nginx's `limit_req`.
+
 ### `cloud-init/` (its README)
 
 - The roles are used unchanged, so a role change reaches this path with no edit here —
@@ -302,11 +326,12 @@ make security         # KICS over ansible/, the rendered chart and compose/
 make deps                          # vendor pinned Galaxy collections
 make check / deploy                # site.yml; fleet-wide unless LIMIT=<host>; INVENTORY=<overlay>
 make check-node / deploy-node      # node.yml only (node operators: cache nodes)
-make check-publisher / deploy-publisher # publisher.yml only (origins, sponsord, relays, DNS)
+make check-publisher / deploy-publisher # publisher.yml only (origins, sponsord, relays, DNS, gateways)
 make check-origin / deploy-origin  # origin.yml only (decdn_origin_nodes)
 make check-sponsord / deploy-sponsord   # sponsord.yml only (sponsord_hosts)
 make check-relay / deploy-relay         # iroh_relay.yml only (iroh_relay_hosts)
 make check-dns / deploy-dns             # iroh_dns_server.yml only (iroh_dns_server_hosts)
+make check-gateway / deploy-gateway     # decdn_gateway.yml only (decdn_gateway_hosts)
 make backup / decommission LIMIT=… # lifecycle playbooks (decommission requires LIMIT)
 make build / galaxy-check          # both collections (build-node, galaxy-check-publisher, … for one)
 ```
@@ -317,7 +342,7 @@ not load for an overlay, so anything every host needs lives in
 `ansible/playbooks/group_vars/`: the public holes (`baseline_extra_inbound`: the node's
 udp/4433, tcp/80 + tcp/443 on `sponsord_onramp_hosts` with `sponsord_onramp_proxy: caddy`,
 tcp/80 + tcp/443 + udp/7842 on `iroh_relay_hosts`, tcp/443 + udp/53 + tcp/53 on
-`iroh_dns_server_hosts`) are built from a host's groups in `all.yml`
+`iroh_dns_server_hosts`, tcp/80 + tcp/443 on `decdn_gateway_hosts`) are built from a host's groups in `all.yml`
 (`_baseline_service_inbound`) and every group file sets `baseline_extra_inbound` to that
 list, so a co-located host renders one firewall in every play.
 `ansible/tests/firewall-holes/` (`make test-scripts`) pins the result per host shape. The
@@ -325,9 +350,9 @@ Alloy per-daemon toggles also live in `all.yml`. Don't move any of it back under
 `inventory/`.
 
 **Galaxy collections and releases** (`ansible/README.md` § Packaging, RELEASING.md). The
-seven roles ship as `decdn.node` (`baseline`, `decdn_node`, `grafana_alloy`) and
-`decdn.publisher` (`sponsord`, `sponsord_onramp`, `iroh_relay`, `iroh_dns_server`;
-depends on `decdn.node`). Each overlay is `ansible/galaxy/<collection>/`: `roles.txt` is
+eight roles ship as `decdn.node` (`baseline`, `decdn_node`, `grafana_alloy`) and
+`decdn.publisher` (`sponsord`, `sponsord_onramp`, `iroh_relay`, `iroh_dns_server`,
+`decdn_gateway`; depends on `decdn.node`). Each overlay is `ansible/galaxy/<collection>/`: `roles.txt` is
 the one role list (a new role goes in exactly one; `make test-scripts` checks),
 `playbooks.txt` lists the playbooks it ships (a new playbook goes in at least one, with
 every `import_playbook` target in the same one). There is **no** `galaxy.yml` at the

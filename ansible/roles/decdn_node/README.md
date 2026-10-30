@@ -760,8 +760,9 @@ release, or a new line is out.
 The steps:
 
 1. The line: `decdn_node_version` in `defaults/main.yml`, `sponsord_version` in
-   `roles/sponsord/defaults/main.yml`, and `sponsord_onramp_version` plus
-   `sponsord_onramp_decdn_release` (`vX.Y`) in `roles/sponsord_onramp/defaults/main.yml`.
+   `roles/sponsord/defaults/main.yml`, `sponsord_onramp_version` plus
+   `sponsord_onramp_decdn_release` (`vX.Y`) in `roles/sponsord_onramp/defaults/main.yml`,
+   and `decdn_gateway_version` in `roles/decdn_gateway/defaults/main.yml`.
    If upstream moved `MIN_DECDN_RELEASE` (`crates/sponsord-onramp/src/config.rs`), add
    the new floor to the onramp role's "Refuse a decdn release below the installers'
    floor" assert and a case to `molecule/validation-sponsord`.
@@ -786,11 +787,13 @@ The steps:
    its `artifacthub.io/images` annotation. CI's `helm` job then validates the chart
    against the line's newest `decdn` (`scripts/fetch-decdn-cli.sh`, the same
    resolution and signature check as this role's).
-6. `files/decdn-release-KEYS.asc`, if upstream's `KEYS` changed (the sponsord and
-   sponsord_onramp roles' byte copies with it, and `SECURITY.md`'s fingerprints).
+6. `files/decdn-release-KEYS.asc`, if upstream's `KEYS` changed (the sponsord,
+   sponsord_onramp and decdn_gateway roles' byte copies with it, and `SECURITY.md`'s
+   fingerprints).
 7. The commented exact-pin examples (`decdn_node_version`, `decdn_node_source_ref`,
    `sponsord_version`, `sponsord_source_ref`, `sponsord_onramp_version`,
-   `sponsord_onramp_source_ref` and `sponsord_onramp_decdn_release`, in the inventory
+   `sponsord_onramp_source_ref`, `sponsord_onramp_decdn_release` and
+   `decdn_gateway_version`, in the inventory
    templates, their `examples/collection-fleet` copies and
    `cloud-init/user-data-publisher.yaml`), and for a new line AGENTS.md's "Pinned
    upstream releases". Other docs name the pin,

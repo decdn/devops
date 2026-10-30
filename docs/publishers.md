@@ -25,6 +25,7 @@ should read [`node-operators.md`](node-operators.md) instead.
 | **sponsord** + **sponsord-onramp** | Pays for your users' downloads: the treasury wallet that owns a PaymentPool and signs capped capabilities for clients ([ADR 003 § Capability delegation](https://github.com/decdn/decdn/blob/main/adr/003-payments.md#capability-delegation)), and its public gate (Turnstile, installers) behind Caddy | `sponsord_hosts`, `sponsord_onramp_hosts`; `decdn.publisher.sponsord` | cloud-init `user-data-publisher.yaml`; Compose `sponsord`, `onramp`, `caddy` profiles |
 | **iroh relay** | NAT-traversal fallback for peers that cannot hole-punch. Relays are operational infrastructure, not an incentivized role ([Architecture § Trust Assumptions](https://github.com/decdn/decdn/blob/main/adr/architecture.md#trust-assumptions)) | `iroh_relay_hosts`; `decdn.publisher.iroh_relay` | Compose `relay` profile |
 | **iroh DNS server** | The pkarr relay and DNS server nodes publish and resolve their address records through, in place of n0's ([ADR 001 § Node Discovery](https://github.com/decdn/decdn/blob/main/adr/001-network.md#node-discovery-registry)) | `iroh_dns_server_hosts`; `decdn.publisher.iroh_dns_server` | Compose `dns` profile |
+| **Public gateway** | `decdn gateway --public-url` on your own domain: serves `decdn:` content to any browser and pays for it from its own pool, within a daily allowance ([`adr/appendix-gateway.md`](https://github.com/decdn/decdn/blob/main/adr/appendix-gateway.md)), behind nginx with a wildcard certificate | `decdn_gateway_hosts`; `decdn.publisher.decdn_gateway` | none yet |
 
 Only the origin is required.
 
@@ -40,7 +41,7 @@ changes:
 
 - Start `inventory/hosts.yml` from `hosts-publisher.yml.example`. Only the origin
   (`origin-1`) is live in it: uncomment the groups you run (sponsord and its onramp,
-  iroh relays, the DNS server).
+  iroh relays, the DNS server, a public gateway).
 - Edit `host_vars/origin-1/` rather than `decdn-node-1/`: `decdn_region`, the origin
   backend, and `decdn_node_generate_keystore: true` if the node should make its wallet.
 
@@ -54,7 +55,8 @@ ansible-playbook decdn.publisher.origin -l <host>             # or one service: 
 ansible-playbook decdn.publisher.sponsord -l <host>           #   sponsord and its onramp
 ansible-playbook decdn.publisher.iroh_relay -l <host>         #   an iroh relay
 ansible-playbook decdn.publisher.iroh_dns_server -l <host>    #   the iroh DNS server
-ansible-playbook decdn.publisher.backup -l <host>             # node identity and sponsord credentials (relays and DNS servers hold nothing to back up)
+ansible-playbook decdn.publisher.decdn_gateway -l <host>      #   a public gateway
+ansible-playbook decdn.publisher.backup -l <host>             # node identity, sponsord credentials and a gateway's wallet (relays and DNS servers hold nothing to back up)
 ansible-playbook decdn.publisher.decommission -l <host>       # asks you to type the host; removes every service on it, keeps the keys
 ```
 
@@ -63,8 +65,8 @@ turns root login off. That matters for a relay, whose full run logs into every n
 the inventory to read its ID and would try those nodes as root too. Drop `-l` to cover
 every host in the inventory. The playbooks open each service's firewall holes and refuse
 a host in the wrong groups. From a clone of this repository, the same runs are
-`make deploy-publisher`, `deploy-origin`, `deploy-sponsord`, `deploy-relay` and
-`deploy-dns` in `ansible/`;
+`make deploy-publisher`, `deploy-origin`, `deploy-sponsord`, `deploy-relay`,
+`deploy-dns` and `deploy-gateway` in `ansible/`;
 [From `make` to `ansible-playbook`](../examples/collection-fleet/README.md#from-make-to-ansible-playbook)
 maps every target and lists what the Makefile checks that a plain `ansible-playbook`
 run does not.
@@ -110,11 +112,39 @@ point of failure for pkarr lookups. Give every node and client that uses it the 
 details: [`iroh_relay`](../ansible/roles/iroh_relay/README.md),
 [`iroh_dns_server`](../ansible/roles/iroh_dns_server/README.md).
 
+## Public gateway
+
+A public gateway serves your namespace, and any other `decdn:` content, to browsers
+that run no deCDN client: `https://<domain>/<hash>`, a bundle as a website at
+`https://<hash32>.<domain>/`, and a namespace at `https://<ns>.<domain>/` once its
+owner points it there with `decdn publish point`. It pays for every request from a
+pool its own wallet funds, so give it a wallet of its own, fund it with USDC and ETH
+for gas, and size `decdn_gateway_allowance_bytes_per_day` to what you will pay for. A
+request past the allowance gets `402` with the `decdn:` URI to fetch with a paying
+client ([`adr/appendix-gateway.md` § Payment and allowance](https://github.com/decdn/decdn/blob/main/adr/appendix-gateway.md#payment-and-allowance)).
+
+Before the first deploy:
+
+- **DNS.** Point `<domain>` and `*.<domain>` at the host.
+- **DNS-01 token.** nginx serves a wildcard certificate that lego obtains over ACME
+  DNS-01. Write your DNS provider's token, scoped to the zone, into
+  `/etc/decdn-gateway/acme-dns.env` on the host, and name the provider's lego code in
+  `decdn_gateway_acme_dns_provider`.
+- **Public Suffix List.** Register `<domain>` on the PSL, so each bundle's site keeps
+  its own cookies. Inclusion takes weeks, so start early.
+
+A wildcard covers one label, so the namespace-hint host the gateway's `?ns=`
+redirect produces, `<ns>.<hash32>.<domain>`, has no certificate (decdn/decdn#2784).
+The gateway needs tcp/80 and tcp/443 to itself: `decdn_gateway_hosts` refuses a
+sponsord-onramp, relay or DNS server host, but a node beside it is fine. The role's
+README has the variables:
+[`decdn_gateway`](../ansible/roles/decdn_gateway/README.md).
+
 ## Day 2
 
 Upgrades: the roles pin one decdn/decdn release line (`decdn_node_version` =
-`sponsord_version` = `sponsord_onramp_version`: one release ships the node, sponsord and
-the onramp), and each deploy installs the line's newest release; the onramp also serves its installers the newest decdn of
+`sponsord_version` = `sponsord_onramp_version` = `decdn_gateway_version`: one release
+ships the node, the CLI the gateway runs, sponsord and the onramp), and each deploy installs the line's newest release; the onramp also serves its installers the newest decdn of
 the line (`sponsord_onramp_decdn_release`). Set an exact `"X.Y.Z"` (for the installers,
 a `vX.Y.Z` tag with its `SHA256SUMS` digest) to hold a host on one release. Origin nodes
 on the chart and Compose follow the node operators' notes

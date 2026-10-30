@@ -28,7 +28,8 @@ the commented examples, keyed by a variable name, and AGENTS.md. Docs name the p
 never its number, so no rewrite here has to tell which pin a bare "0.0.2" names.
 One decdn/decdn release ships sponsord and its onramp with the node, so the sponsord
 roles' lines (sponsord_version, sponsord_onramp_version), their commented examples
-and Compose's two sponsord image digests move here too.
+and Compose's two sponsord image digests move here too; so does the gateway role's
+line (decdn_gateway_version, the CLI it runs) and its commented example.
 
 Every edit is anchored on a pattern that must match exactly once, and the result is
 read back, so a reshaped file fails the command instead of reporting a bump. Files
@@ -58,6 +59,7 @@ LINE_RE = r"[0-9]+\.[0-9]+"
 NODE_DEFAULTS = "ansible/roles/decdn_node/defaults/main.yml"
 SPONSORD_DEFAULTS = "ansible/roles/sponsord/defaults/main.yml"
 ONRAMP_DEFAULTS = "ansible/roles/sponsord_onramp/defaults/main.yml"
+GATEWAY_DEFAULTS = "ansible/roles/decdn_gateway/defaults/main.yml"
 ONRAMP_ENV = "compose/sponsord-onramp.env.example"
 COMPOSE_ENV = "compose/.env.example"
 CHART = "charts/decdn-node/Chart.yaml"
@@ -87,11 +89,15 @@ EXAMPLES = [
             (r"^# sponsord_onramp_decdn_release: *v", "$"),
         )
     ),
+    *(
+        (f"{tree}/group_vars/decdn_gateway_hosts.yml", r'^# decdn_gateway_version: *"', '"')
+        for tree in ("ansible/inventory", "examples/collection-fleet/inventory")
+    ),
     ("cloud-init/user-data-publisher.yaml", r'^ *# sponsord_onramp_decdn_release: *"v', '"'),
 ]
 # The one place prose names the pinned line (its line may wrap inside the phrase): the
-# three role pins in one parenthesis, the number after the last.
-AGENTS = ("AGENTS.md", r"`sponsord_onramp_version`, today\s+`", "`")
+# four role pins in one parenthesis, the number after the last.
+AGENTS = ("AGENTS.md", r"`decdn_gateway_version`, today\s+`", "`")
 # Compose's image digests: the env key and the flag that carries the new one (each
 # from the release's <stage>-image-digest.txt, which open-decdn-bump.sh verifies).
 IMAGE_DIGESTS = (
@@ -135,11 +141,13 @@ def pinned(root: Path) -> str:
     return current
 
 
-# The sponsord roles' pins, which the same release ships: (file, variable).
+# The sponsord roles' and the gateway's pins, which the same release ships: (file,
+# variable).
 LINE_PINS = (
     (NODE_DEFAULTS, "decdn_node_version"),
     (SPONSORD_DEFAULTS, "sponsord_version"),
     (ONRAMP_DEFAULTS, "sponsord_onramp_version"),
+    (GATEWAY_DEFAULTS, "decdn_gateway_version"),
 )
 
 

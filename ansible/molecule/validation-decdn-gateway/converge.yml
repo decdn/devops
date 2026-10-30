@@ -1,0 +1,600 @@
+---
+# NEGATIVE-path scenario for decdn_gateway: proves the role's fail-loud input
+# validation REJECTS bad values (AGENTS.md hard-rule 4), so a regression that
+# weakens an assert fails CI. Same shape as ../validation-iroh-relay: each case runs
+# the role with a VALID baseline (the play vars) plus ONE broken input, wrapped in
+# block/rescue, and the rescue records a tag ONLY when the failing task is the exact
+# assert that case targets (matched on ansible_failed_task.name). A bad value that
+# slipped past validation fails later at a differently-named task, is NOT counted,
+# and the final assert catches the miss.
+#
+# Every case aborts before any host mutation. The two host-side cases (no ACME
+# credentials file, a foreign nginx site) look at files on the host; the second
+# stages its fixture and removes it again in `always:`.
+- name: Converge decdn_gateway (expect validation failures)
+  hosts: all
+  become: true
+  vars:
+    # Valid baseline; each case overrides exactly one input. manual, because the
+    # release download is not wanted here.
+    decdn_gateway_install_method: manual
+    decdn_gateway_manual_bin_src: >-
+      {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/decdn-gateway/files/decdn-gateway-stub
+    decdn_gateway_domain: gateway.molecule.test
+    decdn_gateway_rpc_url: https://rpc.example.invalid/v2/molecule-key
+    decdn_gateway_tls: self-signed
+  tasks:
+    - name: Initialize the rejected-by-validation tracker
+      ansible.builtin.set_fact:
+        decdn_rejected: []
+
+    - name: "Case install-method — an unknown install method"
+      block:
+        - name: Run decdn_gateway with an unknown install method
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_install_method: "source"
+      rescue:
+        - name: Record install-method rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['install-method'] }}"
+          when: ansible_failed_task.name == "Require a valid install method"
+
+    - name: "Case release-version — release mode with a malformed version"
+      block:
+        - name: Run decdn_gateway with release mode with a malformed version
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_install_method: "release"
+            decdn_gateway_version: "0.3.x"
+      rescue:
+        - name: Record release-version rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['release-version'] }}"
+          when: ansible_failed_task.name == "Require a pinned release version"
+
+    - name: "Case release-signature — release mode with a string for the signature switch"
+      block:
+        - name: Run decdn_gateway with release mode with a string for the signature switch
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_install_method: "release"
+            decdn_gateway_verify_release_signature: "yes"
+      rescue:
+        - name: Record release-signature rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['release-signature'] }}"
+          when: ansible_failed_task.name == "Require a pinned release version"
+
+    - name: "Case manual-src — manual mode with no binary"
+      block:
+        - name: Run decdn_gateway with manual mode with no binary
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_manual_bin_src: ""
+      rescue:
+        - name: Record manual-src rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['manual-src'] }}"
+          when: ansible_failed_task.name == "Require a manual binary source"
+
+    - name: "Case target — a target upstream does not release"
+      block:
+        - name: Run decdn_gateway with a target upstream does not release
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_target: "riscv64gc-unknown-linux-gnu"
+      rescue:
+        - name: Record target rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['target'] }}"
+          when: ansible_failed_task.name == "Require a supported target triple"
+
+    - name: "Case domain-scheme — a domain with a scheme"
+      block:
+        - name: Run decdn_gateway with a domain with a scheme
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_domain: "https://gateway.molecule.test"
+      rescue:
+        - name: Record domain-scheme rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['domain-scheme'] }}"
+          when: ansible_failed_task.name == "Require the domain the gateway serves"
+
+    - name: "Case domain-upper — a domain in upper case"
+      block:
+        - name: Run decdn_gateway with a domain in upper case
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_domain: "Gateway.Molecule.Test"
+      rescue:
+        - name: Record domain-upper rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['domain-upper'] }}"
+          when: ansible_failed_task.name == "Require the domain the gateway serves"
+
+    - name: "Case domain-label — a single-label domain"
+      block:
+        - name: Run decdn_gateway with a single-label domain
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_domain: "localhost"
+      rescue:
+        - name: Record domain-label rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['domain-label'] }}"
+          when: ansible_failed_task.name == "Require the domain the gateway serves"
+
+    - name: "Case listen-public — a public gateway listener"
+      block:
+        - name: Run decdn_gateway with a public gateway listener
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_listen_address: "0.0.0.0"
+      rescue:
+        - name: Record listen-public rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['listen-public'] }}"
+          when: ansible_failed_task.name == "Require both listeners on loopback"
+
+    - name: "Case metrics-public — a public metrics listener"
+      block:
+        - name: Run decdn_gateway with a public metrics listener
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_metrics_address: "10.0.0.1"
+      rescue:
+        - name: Record metrics-public rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['metrics-public'] }}"
+          when: ansible_failed_task.name == "Require both listeners on loopback"
+
+    - name: "Case port-zero — port 0"
+      block:
+        - name: Run decdn_gateway with port 0
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_port: 0
+      rescue:
+        - name: Record port-zero rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['port-zero'] }}"
+          when: ansible_failed_task.name == "Require both listeners on loopback"
+
+    - name: "Case ports-equal — both listeners on one port"
+      block:
+        - name: Run decdn_gateway with both listeners on one port
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_metrics_port: 8484
+      rescue:
+        - name: Record ports-equal rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['ports-equal'] }}"
+          when: ansible_failed_task.name == "Require the two listeners on different ports"
+
+    - name: "Case home-outside — a home outside /var/lib"
+      block:
+        - name: Run decdn_gateway with a home outside /var/lib
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_home: "/opt/decdn-gateway"
+      rescue:
+        - name: Record home-outside rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['home-outside'] }}"
+          when: ansible_failed_task.name == "Require the home and data directories under /var/lib"
+
+    - name: "Case data-outside — a data dir outside the home"
+      block:
+        - name: Run decdn_gateway with a data dir outside the home
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_data_dir: "/srv/gateway"
+      rescue:
+        - name: Record data-outside rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['data-outside'] }}"
+          when: ansible_failed_task.name == "Require the home and data directories under /var/lib"
+
+    - name: "Case allowance-unit — an allowance in TiB"
+      block:
+        - name: Run decdn_gateway with an allowance in TiB
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_allowance_bytes_per_day: "1TiB"
+      rescue:
+        - name: Record allowance-unit rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['allowance-unit'] }}"
+          when: ansible_failed_task.name == "Validate the allowances"
+
+    - name: "Case allowance-space — an allowance with a space"
+      block:
+        - name: Run decdn_gateway with an allowance with a space
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_allowance_bytes_per_day: "1 GiB"
+      rescue:
+        - name: Record allowance-space rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['allowance-space'] }}"
+          when: ansible_failed_task.name == "Validate the allowances"
+
+    - name: "Case ns-zero — namespace 0"
+      block:
+        - name: Run decdn_gateway with namespace 0
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_namespace_allowances: {"0": "1GiB"}
+      rescue:
+        - name: Record ns-zero rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['ns-zero'] }}"
+          when: ansible_failed_task.name == "Validate the allowances"
+
+    - name: "Case ns-leading-zero — a namespace id with a leading zero"
+      block:
+        - name: Run decdn_gateway with a namespace id with a leading zero
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_namespace_allowances: {"07": "1GiB"}
+      rescue:
+        - name: Record ns-leading-zero rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['ns-leading-zero'] }}"
+          when: ansible_failed_task.name == "Validate the allowances"
+
+    - name: "Case ns-size — a namespace allowance that is not a size"
+      block:
+        - name: Run decdn_gateway with a namespace allowance that is not a size
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_namespace_allowances: {"7": "lots"}
+      rescue:
+        - name: Record ns-size rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['ns-size'] }}"
+          when: ansible_failed_task.name == "Validate the allowances"
+
+    - name: "Case ns-list — namespace allowances as a list"
+      block:
+        - name: Run decdn_gateway with namespace allowances as a list
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_namespace_allowances: [7]
+      rescue:
+        - name: Record ns-list rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['ns-list'] }}"
+          when: ansible_failed_task.name == "Validate the allowances"
+
+    - name: "Case network-unknown — an unknown network"
+      block:
+        - name: Run decdn_gateway with an unknown network
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_network: "mainnet"
+      rescue:
+        - name: Record network-unknown rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['network-unknown'] }}"
+          when: ansible_failed_task.name == "Require a known decdn_gateway_network"
+
+    - name: "Case address-zero — a zero PublisherRegistry"
+      block:
+        - name: Run decdn_gateway with a zero PublisherRegistry
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_publisher_registry_address: "0x0000000000000000000000000000000000000000"
+      rescue:
+        - name: Record address-zero rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['address-zero'] }}"
+          when: ansible_failed_task.name == "Require the chain id and the contract addresses"
+
+    - name: "Case chain-id — no network and no chain id"
+      block:
+        - name: Run decdn_gateway with no network and no chain id
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_network: ""
+      rescue:
+        - name: Record chain-id rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['chain-id'] }}"
+          when: ansible_failed_task.name == "Require the chain id and the contract addresses"
+
+    - name: "Case rpc-missing — no RPC URL"
+      block:
+        - name: Run decdn_gateway with no RPC URL
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_rpc_url: ""
+      rescue:
+        - name: Record rpc-missing rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['rpc-missing'] }}"
+          when: ansible_failed_task.name == "Require an http(s) RPC URL"
+
+    - name: "Case rpc-quote — an RPC URL with a double quote"
+      block:
+        - name: Run decdn_gateway with an RPC URL with a double quote
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_rpc_url: "https://rpc.example.invalid/\""
+      rescue:
+        - name: Record rpc-quote rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['rpc-quote'] }}"
+          when: ansible_failed_task.name == "Require an http(s) RPC URL"
+
+    - name: "Case deposit-zero — a zero working deposit"
+      block:
+        - name: Run decdn_gateway with a zero working deposit
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_working_deposit_micro_usdc: 0
+      rescue:
+        - name: Record deposit-zero rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['deposit-zero'] }}"
+          when: ansible_failed_task.name == "Validate the working deposit"
+
+    - name: "Case log-space — a log level with a space"
+      block:
+        - name: Run decdn_gateway with a log level with a space
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_log_level: "info debug"
+      rescue:
+        - name: Record log-space rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['log-space'] }}"
+          when: ansible_failed_task.name == "Validate decdn_gateway_log_level"
+
+    - name: "Case log-empty — an empty log level"
+      block:
+        - name: Run decdn_gateway with an empty log level
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_log_level: ""
+      rescue:
+        - name: Record log-empty rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['log-empty'] }}"
+          when: ansible_failed_task.name == "Validate decdn_gateway_log_level"
+
+    - name: "Case tls-unknown — an unknown TLS mode"
+      block:
+        - name: Run decdn_gateway with an unknown TLS mode
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_tls: "internal"
+      rescue:
+        - name: Record tls-unknown rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['tls-unknown'] }}"
+          when: ansible_failed_task.name == "Validate the TLS settings"
+
+    - name: "Case generate-string — a string for the keystore switch"
+      block:
+        - name: Run decdn_gateway with a string for the keystore switch
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_generate_keystore: "yes"
+      rescue:
+        - name: Record generate-string rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['generate-string'] }}"
+          when: ansible_failed_task.name == "Validate the TLS settings"
+
+    - name: "Case acme-email — acme without an email"
+      block:
+        - name: Run decdn_gateway with acme without an email
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_tls: "acme"
+            decdn_gateway_acme_email: ""
+            decdn_gateway_acme_dns_provider: "cloudflare"
+      rescue:
+        - name: Record acme-email rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['acme-email'] }}"
+          when: ansible_failed_task.name == "Require the ACME settings"
+
+    - name: "Case acme-provider — acme with a malformed provider"
+      block:
+        - name: Run decdn_gateway with acme with a malformed provider
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_tls: "acme"
+            decdn_gateway_acme_email: "ops@molecule.test"
+            decdn_gateway_acme_dns_provider: "Cloud Flare"
+      rescue:
+        - name: Record acme-provider rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['acme-provider'] }}"
+          when: ansible_failed_task.name == "Require the ACME settings"
+
+    - name: "Case acme-server — acme with a plain-http directory"
+      block:
+        - name: Run decdn_gateway with acme with a plain-http directory
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_tls: "acme"
+            decdn_gateway_acme_email: "ops@molecule.test"
+            decdn_gateway_acme_dns_provider: "cloudflare"
+            decdn_gateway_acme_server: "http://ca.example.invalid/dir"
+      rescue:
+        - name: Record acme-server rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['acme-server'] }}"
+          when: ansible_failed_task.name == "Require the ACME settings"
+
+    - name: "Case lego-sha256 — acme with no lego digest for the host"
+      block:
+        - name: Run decdn_gateway with acme with no lego digest for the host
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_tls: "acme"
+            decdn_gateway_acme_email: "ops@molecule.test"
+            decdn_gateway_acme_dns_provider: "cloudflare"
+            decdn_gateway_lego_sha256: {}
+      rescue:
+        - name: Record lego-sha256 rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['lego-sha256'] }}"
+          when: ansible_failed_task.name == "Require the ACME settings"
+
+    - name: "Case pointer-rate — a rate without its unit"
+      block:
+        - name: Run decdn_gateway with a rate without its unit
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_pointer_rate: "6/m"
+      rescue:
+        - name: Record pointer-rate rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['pointer-rate'] }}"
+          when: ansible_failed_task.name == "Validate the PUT /_pointer rate limit"
+
+    - name: "Case pointer-burst — a negative burst"
+      block:
+        - name: Run decdn_gateway with a negative burst
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_pointer_burst: -1
+      rescue:
+        - name: Record pointer-burst rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['pointer-burst'] }}"
+          when: ansible_failed_task.name == "Validate the PUT /_pointer rate limit"
+
+    - name: "Case acme-env-missing — acme with no credentials file on the host"
+      block:
+        - name: Run decdn_gateway with acme with no credentials file on the host
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_tls: "acme"
+            decdn_gateway_acme_email: "ops@molecule.test"
+            decdn_gateway_acme_dns_provider: "cloudflare"
+      rescue:
+        - name: Record acme-env-missing rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['acme-env-missing'] }}"
+          when: ansible_failed_task.name == "Require the ACME DNS credentials file"
+
+    - name: "Case nginx-foreign — nginx already serving a site the role did not enable"
+      block:
+        - name: Create nginx's sites-enabled (nginx itself is never installed here)
+          ansible.builtin.file:
+            path: /etc/nginx/sites-enabled
+            state: directory
+            mode: "0755"
+
+        - name: Stage a foreign nginx site
+          ansible.builtin.copy:
+            dest: /etc/nginx/sites-enabled/someone-else
+            content: "server { listen 8081; }\n"
+            mode: "0644"
+
+        - name: Run decdn_gateway beside a foreign nginx site
+          ansible.builtin.include_role:
+            name: decdn_gateway
+      rescue:
+        - name: Record nginx-foreign rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['nginx-foreign'] }}"
+          when: ansible_failed_task.name == "Refuse nginx sites this role did not enable"
+      always:
+        - name: Remove the staged nginx directory
+          ansible.builtin.file:
+            path: /etc/nginx
+            state: absent
+
+    - name: Require every case to have been rejected by its own assert
+      vars:
+        _decdn_expected:
+          - install-method
+          - release-version
+          - release-signature
+          - manual-src
+          - target
+          - domain-scheme
+          - domain-upper
+          - domain-label
+          - listen-public
+          - metrics-public
+          - port-zero
+          - ports-equal
+          - home-outside
+          - data-outside
+          - allowance-unit
+          - allowance-space
+          - ns-zero
+          - ns-leading-zero
+          - ns-size
+          - ns-list
+          - network-unknown
+          - address-zero
+          - chain-id
+          - rpc-missing
+          - rpc-quote
+          - deposit-zero
+          - log-space
+          - log-empty
+          - tls-unknown
+          - generate-string
+          - acme-email
+          - acme-provider
+          - acme-server
+          - lego-sha256
+          - pointer-rate
+          - pointer-burst
+          - acme-env-missing
+          - nginx-foreign
+      ansible.builtin.assert:
+        that:
+          - decdn_rejected | sort == _decdn_expected | sort
+        fail_msg: >-
+          Not rejected by their own assert: {{ _decdn_expected | difference(decdn_rejected) }}.
+          Rejected but not expected: {{ decdn_rejected | difference(_decdn_expected) }}.

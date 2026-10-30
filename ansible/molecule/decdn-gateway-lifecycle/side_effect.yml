@@ -1,0 +1,192 @@
+---
+# lego, backup and decommission; see molecule.yml.
+- name: Side effect — lego against an ACME server that does not answer
+  hosts: all
+  become: true
+  tasks:
+    # The exec provider would run EXEC_PATH for the TXT record; the ACME server is
+    # unreachable, so lego fails before it gets that far.
+    - name: Write the DNS provider's credentials file
+      ansible.builtin.copy:
+        dest: /etc/decdn-gateway/acme-dns.env
+        content: "EXEC_PATH=/bin/false\n"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Converge on acme
+      block:
+        - name: Run the role with lego and a dead ACME server
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_tls: acme
+            decdn_gateway_acme_email: ops@molecule.test
+            decdn_gateway_acme_dns_provider: exec
+            decdn_gateway_acme_server: https://127.0.0.1:14000/dir
+
+        - name: Fail — the role finished without a certificate
+          ansible.builtin.fail:
+            msg: The acme converge succeeded although no ACME server answered.
+      rescue:
+        - name: Require the failure to come from the issuance check
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Report a certificate lego could not obtain'
+            fail_msg: >-
+              The acme converge failed at "{{ ansible_failed_task.name }}", not at the
+              issuance check: {{ ansible_failed_result.msg | default('') }}
+
+    - name: Run the installed lego
+      ansible.builtin.command:
+        argv: [/usr/local/lib/decdn-gateway/lego, --version]
+      register: _gw_lego
+      changed_when: false
+
+    - name: Read the lego stamp and the certificate service
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: _gw_lego_files
+      loop:
+        - /usr/local/lib/decdn-gateway/lego-installed
+        - /etc/systemd/system/decdn-gateway-certs.service
+
+    - name: Read the renewal timer
+      ansible.builtin.systemd_service:
+        name: decdn-gateway-certs.timer
+      register: _gw_timer
+
+    - name: Require the pinned lego, its units, and the timer armed
+      vars:
+        _stamp: "{{ _gw_lego_files.results[0].content | b64decode }}"
+        _svc: "{{ _gw_lego_files.results[1].content | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - _gw_lego.stdout is match('^lego version 5\.5\.2 ')
+          - _stamp is match('^5\.5\.2 [0-9a-f]{64}\n$')
+          - "'--dns exec' in _svc"
+          - "'--domains gateway.molecule.test' in _svc"
+          - "'--domains *.gateway.molecule.test' in _svc"
+          - "'--server https://127.0.0.1:14000/dir' in _svc"
+          - "'EnvironmentFile=/etc/decdn-gateway/acme-dns.env' in _svc"
+          - "'try-reload-or-restart nginx.service' in _svc"
+          - _gw_timer.status.ActiveState == 'active'
+        fail_msg: "{{ _gw_lego.stdout }} / {{ _stamp }} / {{ _svc }}"
+
+    - name: Reach the gateway through nginx after the failed issuance
+      ansible.builtin.command:
+        argv: [curl, --silent, --show-error, --fail, --insecure, --output, /dev/null,
+               --resolve, "gateway.molecule.test:443:127.0.0.1", "https://gateway.molecule.test/"]
+      changed_when: false
+
+    - name: Converge back on self-signed
+      ansible.builtin.include_role:
+        name: decdn_gateway
+
+    - name: Read the renewal timer again
+      ansible.builtin.systemd_service:
+        name: decdn-gateway-certs.timer
+      register: _gw_timer_off
+
+    - name: Require the timer stopped and disabled off acme
+      ansible.builtin.assert:
+        that:
+          - _gw_timer_off.status.ActiveState == 'inactive'
+          - _gw_timer_off.status.UnitFileState == 'disabled'
+        fail_msg: "{{ _gw_timer_off.status.ActiveState }} / {{ _gw_timer_off.status.UnitFileState }}"
+
+    - name: Install age
+      ansible.builtin.apt:
+        name: age
+        state: present
+        update_cache: true
+
+    - name: Generate the backup recipient's key
+      ansible.builtin.command:
+        cmd: age-keygen -o /root/molecule-age.key
+        creates: /root/molecule-age.key
+
+    - name: Read the backup recipient's public key
+      ansible.builtin.command:
+        cmd: age-keygen -y /root/molecule-age.key
+      register: _gw_age_pub
+      changed_when: false
+
+    - name: Encrypt the backup to it
+      ansible.builtin.set_fact:
+        decdn_backup_age_recipients: ["{{ _gw_age_pub.stdout | trim }}"]
+        decdn_gateway_backup_fetch: false
+
+    - name: Point a namespace, so there is a pointer to back up
+      ansible.builtin.copy:
+        dest: /var/lib/decdn-gateway/gateway/pointers/7.json
+        content: '{"molecule": "pointer"}'
+        owner: decdn-gateway
+        group: decdn-gateway
+        mode: "0600"
+
+- name: Back up the gateway
+  ansible.builtin.import_playbook: ../../playbooks/backup.yml
+
+- name: Side effect — the backup restores, then decommission
+  hosts: all
+  become: true
+  tasks:
+    - name: List the backup's contents
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          f=$(ls -1 /var/backups/decdn-gateway/*-decdn-gateway-*.tar.age | tail -n1);
+          age -d -i /root/molecule-age.key "$f" | tar -tz
+        executable: /bin/bash
+      register: _gw_backup
+      changed_when: false
+
+    - name: Require the wallet and the pointers, and not the pool store
+      ansible.builtin.assert:
+        that:
+          - "'var/lib/decdn-gateway/keystore.json' in _gw_backup.stdout_lines"
+          - "'etc/decdn-gateway/keystore.password' in _gw_backup.stdout_lines"
+          - "'var/lib/decdn-gateway/gateway/pointers/7.json' in _gw_backup.stdout_lines"
+          - "'etc/decdn-gateway/gateway.toml' not in _gw_backup.stdout_lines"
+        fail_msg: "{{ _gw_backup.stdout }}"
+
+    - name: Decommission with a wrong confirmation
+      block:
+        - name: Run the decommission with a wrong host list
+          ansible.builtin.include_role:
+            name: decdn_gateway
+            tasks_from: decommission
+          vars:
+            decdn_decommission_confirm: not-this-host
+
+        - name: Fail — a wrong confirmation went through
+          ansible.builtin.fail:
+            msg: Decommission ran on a confirmation that did not match.
+      rescue:
+        - name: Require the refusal to come from the confirmation check
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require the typed confirmation to match the targeted hosts'
+            fail_msg: "Failed at {{ ansible_failed_task.name }}"
+
+    - name: Read the gateway after the refusal
+      ansible.builtin.systemd_service:
+        name: decdn-gateway
+      register: _gw_refused
+
+    - name: Require the refusal to have touched nothing
+      ansible.builtin.assert:
+        that:
+          - _gw_refused.status.ActiveState == 'active'
+        fail_msg: A refused decommission stopped the gateway.
+
+    - name: Confirm the decommission for this run
+      ansible.builtin.set_fact:
+        decdn_decommission_confirm: "{{ inventory_hostname }}"
+
+- name: Decommission the gateway
+  ansible.builtin.import_playbook: ../../playbooks/decommission.yml
+
+- name: Decommission again, a no-op
+  ansible.builtin.import_playbook: ../../playbooks/decommission.yml

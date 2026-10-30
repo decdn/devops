@@ -1,0 +1,41 @@
+---
+# deCDN public gateways: `decdn gateway --public-url` on a publisher's own domain,
+# serving decdn: content to any browser and paying for it from its own pool.
+#   decdn_gateway_hosts: baseline -> grafana_alloy (opt-in, off by default) ->
+#                        decdn_gateway (+ nginx in front, with lego's certificate)
+# Standalone entry point (`make deploy-gateway`), also imported by publisher.yml. The
+# gateway listens on loopback; nginx is its public side (tcp/80 + tcp/443, opened by
+# playbooks/group_vars/all.yml). Funding its wallet, the DNS records and the DNS
+# provider token are operator steps — see roles/decdn_gateway/README.md.
+# Before the gateway play: the onramp's Caddy, an iroh relay and an iroh DNS server
+# need tcp/443 too, and only one service can have it. (Under site.yml their plays
+# run first, so on a host in both groups the other service is already up when this
+# refuses; either way the deploy fails loudly.) tests/scripts-test.sh runs this play
+# by its name.
+- name: Refuse a gateway on a sponsord-onramp, iroh relay or iroh DNS server host
+  hosts: decdn_gateway_hosts
+  gather_facts: false
+  tasks:
+    - name: Require the host outside the other groups that serve tcp/443
+      ansible.builtin.assert:
+        that:
+          - "'sponsord_onramp_hosts' not in group_names"
+          - "'iroh_relay_hosts' not in group_names"
+          - "'iroh_dns_server_hosts' not in group_names"
+        fail_msg: >-
+          {{ inventory_hostname }} is in decdn_gateway_hosts and also in
+          {{ group_names | select('in', ['sponsord_onramp_hosts', 'iroh_relay_hosts', 'iroh_dns_server_hosts'])
+             | join(' and ') }}. The gateway's nginx takes tcp/80 and tcp/443, which
+          that service needs as well: give the gateway a host of its own (a deCDN
+          node beside it is fine).
+
+- name: Provision public gateways
+  hosts: decdn_gateway_hosts
+  become: true
+  roles:
+    - role: baseline
+      tags: [baseline]
+    - role: grafana_alloy
+      tags: [observability, decdn_gateway, gateway]
+    - role: decdn_gateway
+      tags: [decdn_gateway, gateway]

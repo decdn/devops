@@ -1,0 +1,99 @@
+---
+# nginx in front of the gateway: the host's only public HTTP listener (tcp/80 for
+# the https redirect, tcp/443). This repo's playbooks/group_vars/all.yml opens both
+# in the baseline firewall for hosts in decdn_gateway_hosts. main.yml has already
+# refused sites this role does not own.
+
+# Validated on its own (files/nginx-validate-site) before it replaces the live one,
+# so a site that does not load never lands. The certificate is in place by now.
+- name: Template the gateway's nginx site
+  ansible.builtin.template:
+    src: decdn-gateway.nginx.j2
+    dest: "{{ _decdn_gateway_nginx_site }}"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/local/lib/decdn-gateway/nginx-validate-site %s
+  notify: Reload nginx
+
+- name: Enable the gateway's nginx site
+  ansible.builtin.file:
+    src: "{{ _decdn_gateway_nginx_site }}"
+    dest: "{{ _decdn_gateway_nginx_site_link }}"
+    state: link
+    # Under --check on a fresh host the site above is only simulated.
+    force: true
+  notify: Reload nginx
+
+# The package's own site is a default_server on tcp/80 too, which nginx refuses
+# beside the role's. main.yml checked that this link is still the package's.
+- name: Disable the package's default site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+# The whole configuration, as nginx will load it, before a reload or first start.
+- name: Check the whole nginx configuration
+  ansible.builtin.command:
+    argv: [nginx, -t, -q]
+  changed_when: false
+  when: not ansible_check_mode or decdn_gateway_nginx_installed
+
+- name: Apply pending nginx changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start nginx
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started
+  when: not ansible_check_mode or decdn_gateway_nginx_installed
+
+# nginx serves the domain at all: plain http answers with its https redirect.
+# KICS flags plain HTTP here; it is the redirect, on loopback.
+- name: Probe nginx's http redirect for the domain
+  ansible.builtin.uri:
+    url: http://127.0.0.1/
+    headers:
+      Host: "{{ decdn_gateway_domain }}"
+    follow_redirects: none
+    status_code: 301
+    timeout: 5
+  register: decdn_gateway_redirect
+  retries: "{{ decdn_gateway_readiness_retries }}"
+  delay: "{{ decdn_gateway_readiness_delay }}"
+  until: decdn_gateway_redirect.status | default(-1) == 301
+  changed_when: false
+  when: not ansible_check_mode
+
+# The whole chain, as a browser would reach it but pinned to this host: TLS for the
+# domain, nginx, the gateway. The certificate verifies unless it is self-signed or
+# from a staging CA.
+- name: Probe the gateway through nginx
+  ansible.builtin.command:
+    argv: >-
+      {{ ['curl', '--silent', '--show-error', '--fail', '--max-time', '5',
+          '--output', '/dev/null',
+          '--retry', decdn_gateway_readiness_retries | string,
+          '--retry-delay', decdn_gateway_readiness_delay | string,
+          '--retry-max-time', '60', '--retry-all-errors',
+          '--resolve', decdn_gateway_domain ~ ':443:127.0.0.1']
+         + (['--insecure'] if decdn_gateway_tls == 'self-signed' or 'staging' in decdn_gateway_acme_server else [])
+         + ['https://' ~ decdn_gateway_domain ~ '/'] }}
+  register: decdn_gateway_https_probe
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Report a gateway that is not reachable through nginx
+  ansible.builtin.fail:
+    msg: |-
+      https://{{ decdn_gateway_domain }}/ did not answer through nginx on this host
+      (curl exit {{ decdn_gateway_https_probe.rc }}: {{ decdn_gateway_https_probe.stderr | trim }}).
+      The gateway itself is healthy on loopback, so the fault is in nginx or the
+      certificate:
+        sudo journalctl -u nginx -e; sudo tail /var/log/nginx/error.log
+  when:
+    - not ansible_check_mode
+    - decdn_gateway_https_probe.rc != 0

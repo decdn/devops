@@ -1,14 +1,15 @@
 # Node lifecycle: backup, restore, migration, decommission
 
-Day-2 procedures for a running deCDN node, and for sponsord in
-[its own section](#sponsord-the-onboarding-sponsor). The Ansible targets run from
+Day-2 procedures for a running deCDN node, and for sponsord and the public gateway in
+their own sections ([sponsord](#sponsord-the-onboarding-sponsor),
+[public gateway](#public-gateway)). The Ansible targets run from
 `ansible/`; the manual commands work for any deploy path.
 
 Deploying from the Galaxy collections instead of a clone? Each `make` target below is
 an `ansible-playbook` command run from your inventory project:
 
 ```bash
-ansible-playbook decdn.publisher.backup -l <host>         # make backup: nodes, and sponsord's credentials
+ansible-playbook decdn.publisher.backup -l <host>         # make backup: nodes, sponsord's credentials, a gateway's wallet
 ansible-playbook decdn.publisher.decommission -l <host>   # make decommission: every service on the host
 ansible-playbook decdn.node.backup -l <host>              # with decdn.node alone: a node's backup
 ansible-playbook decdn.node.decommission -l <host>        # with decdn.node alone: a host that runs only a node
@@ -376,6 +377,35 @@ and certificate, which a new host re-issues for itself.
   config and the state directory. tcp/443 and udp+tcp/53 stay open until the host leaves
   `iroh_dns_server_hosts` and baseline runs again. Remove the delegation (NS and glue)
   at the parent zone afterwards.
+
+## Public gateway
+
+A public gateway ([`roles/decdn_gateway`](../ansible/roles/decdn_gateway/README.md))
+pays from a wallet of its own: the keystore `/var/lib/decdn-gateway/keystore.json` and
+its password `/etc/decdn-gateway/keystore.password`. That wallet owns the gateway's
+pool and the USDC in it. Its other state, under `/var/lib/decdn-gateway/gateway`, is
+the pool store (the pool and its lanes) and the namespace pointers owners have
+`PUT`.
+
+- **Backup:** `make backup LIMIT=<host>` archives the wallet and the pointers,
+  encrypted on the host to `decdn_gateway_backup_age_recipients` (by default
+  `decdn_backup_age_recipients`). It is taken hot. The pool store is left out: on a
+  new host the gateway adopts the wallet's live pool from the chain again. Set
+  `decdn_gateway_backup_include_config: true` to add `gateway.toml` (the RPC URL).
+- **Restore and migration:** on the new host, restore the archive with `tar -C /`
+  before the first deploy, so the role finds the wallet and does not ask for (or
+  mint) another. Then deploy with the same `decdn_gateway_domain` and move `<domain>`
+  and `*.<domain>` to the new host. The certificate does not move: lego issues one on
+  the new host over DNS-01, which needs no DNS change first. Without the pointers,
+  each `<ns>.<domain>` answers 404 until its owner runs `decdn publish point` again.
+- **Decommission:** `make decommission LIMIT=<host>` stops the gateway (SIGINT, so
+  its pulls in flight settle), disables it and removes its units, including the
+  certificate's renewal timer. It also disables the role's nginx site, and stops
+  nginx if it serves nothing else. It keeps the wallet, the state, the config, the
+  certificate and the binaries. tcp/80 and tcp/443 stay open until the host leaves
+  `decdn_gateway_hosts` and baseline runs again. The pool still holds the wallet's
+  USDC: with the gateway's keystore, `decdn pool close` it, and once its grace window
+  has passed, `decdn pool reclaim` the rest. Move or remove `<domain>`'s DNS records.
 
 ## Compose and Kubernetes
 

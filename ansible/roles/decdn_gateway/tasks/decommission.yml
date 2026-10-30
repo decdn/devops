@@ -1,0 +1,171 @@
+---
+# Take the gateway out of service: `include_role: {name: decdn_gateway,
+# tasks_from: decommission}` (playbooks/decommission.yml, `make decommission
+# LIMIT=<host>`).
+#
+# What it does: stop the gateway and disable and remove its systemd unit, stop and
+# disable the certificate renewal timer, and stop and disable nginx when the only
+# site it serves is this role's (a site someone else enabled keeps nginx running,
+# minus the role's). What it KEEPS: the wallet (the keystore and its password, which
+# still own the pool and its funds: `decdn pool close`, then `reclaim`), the pointers and
+# the pool store under decdn_gateway_home, the config, the certificate and lego's
+# account, the binaries and the nginx package. The tcp/80 + tcp/443 firewall holes
+# stay until the host leaves decdn_gateway_hosts and baseline runs again.
+
+- name: Refuse to decommission in check mode
+  ansible.builtin.assert:
+    that:
+      - not ansible_check_mode
+    fail_msg: Decommissioning has no dry run; run it without --check once you mean it.
+
+- name: Refuse to decommission more hosts than allowed at once
+  ansible.builtin.assert:
+    that:
+      - decdn_decommission_max_hosts | int > 0
+      - ansible_play_hosts_all | length <= decdn_decommission_max_hosts | int
+      - decdn_decommission_prompt_seconds | int > 0
+    fail_msg: >-
+      This run targets {{ ansible_play_hosts_all | length }} hosts
+      ({{ ansible_play_hosts_all | sort | join(', ') }}), more than
+      decdn_decommission_max_hosts ({{ decdn_decommission_max_hosts }}). Scope it
+      with LIMIT, or raise decdn_decommission_max_hosts deliberately.
+      decdn_decommission_prompt_seconds must be a positive number of seconds.
+
+# Typed confirmation (AGENTS.md hard rule 4), as the other roles'; a host that
+# already confirmed in an earlier play of this run is not asked again.
+- name: Ask for typed confirmation
+  ansible.builtin.pause:
+    prompt: >-
+      About to STOP {{ _decom_services | join(', ') }}, REMOVE their systemd units
+      and tear down this repo's Grafana Alloy on:
+      {{ ansible_play_hosts_all | sort | join(',') }}.
+      This one confirmation covers all of them. Nothing on-chain is done.
+      Type the host list above exactly to continue
+      (times out after {{ decdn_decommission_prompt_seconds }} s)
+    seconds: "{{ decdn_decommission_prompt_seconds | int }}"
+  register: _decdn_gateway_decommission_typed
+  run_once: true
+  vars:
+    # Every service this repo's playbooks/decommission.yml stops on these hosts, by
+    # their groups, so the one confirmation names all it covers (a later play does
+    # not ask again). This role's own service is always listed.
+    _decom_groups: "{{ ansible_play_hosts_all | map('extract', hostvars, 'group_names') | flatten | unique }}"
+    _decom_services: >-
+      {{ ((['decdn-node'] if 'decdn_nodes' in _decom_groups else [])
+          + (['iroh-relay'] if 'iroh_relay_hosts' in _decom_groups else [])
+          + (['iroh-dns-server'] if 'iroh_dns_server_hosts' in _decom_groups else [])
+          + (['decdn-gateway and its nginx'] if 'decdn_gateway_hosts' in _decom_groups else [])
+          + (['sponsord-onramp and its Caddy'] if 'sponsord_onramp_hosts' in _decom_groups else [])
+          + (['sponsord'] if 'sponsord_hosts' in _decom_groups else [])
+          + ['decdn-gateway and its nginx']) | unique }}
+  when:
+    - decdn_decommission_confirm is not defined
+    - not (_decdn_decommission_confirmed | default(false) | bool)
+
+- name: Require the typed confirmation to match the targeted hosts
+  ansible.builtin.assert:
+    that:
+      - (decdn_decommission_confirm | default(_decdn_gateway_decommission_typed.user_input | default('')) | trim)
+        == (ansible_play_hosts_all | sort | join(','))
+    fail_msg: >-
+      Confirmation did not match "{{ ansible_play_hosts_all | sort | join(',') }}".
+      Nothing was changed.
+  when: not (_decdn_decommission_confirmed | default(false) | bool)
+
+- name: Remember the confirmation for the rest of this run
+  ansible.builtin.set_fact:
+    _decdn_decommission_confirmed: true
+
+- name: Check for the gateway's units
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ item }}"
+  register: _decdn_gateway_decommission_units
+  loop: [decdn-gateway.service, decdn-gateway-certs.timer]
+
+# SIGINT (the unit's KillSignal) lets the gateway settle its pulls in flight.
+- name: Stop and disable the gateway and the renewal timer
+  ansible.builtin.systemd_service:
+    name: "{{ item.item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ _decdn_gateway_decommission_units.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Remove the gateway's units and its restart-inputs record
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/decdn-gateway.service
+    - /etc/systemd/system/decdn-gateway-certs.service
+    - /etc/systemd/system/decdn-gateway-certs.timer
+    - "{{ decdn_gateway_inputs_checksum_file }}"
+
+# Unconditional: cheap, and right even after an earlier run removed the files but
+# failed before reloading.
+- name: Reload systemd after removing the units
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# With the backend gone nginx would answer every request with a 502 on the public
+# ports. Only the role's site is disabled; nginx stops only when nothing else is
+# enabled.
+- name: Check the nginx site for this role's marker
+  ansible.builtin.command:
+    argv: [grep, -qF, "{{ _decdn_gateway_nginx_marker }}", "{{ _decdn_gateway_nginx_site }}"]
+  register: _decdn_gateway_decommission_site
+  changed_when: false
+  # 1 = no marker, 2 = no file (or unreadable): neither is the role's site.
+  failed_when: false
+
+- name: Disable the role's nginx site
+  ansible.builtin.file:
+    path: "{{ _decdn_gateway_nginx_site_link }}"
+    state: absent
+  when: _decdn_gateway_decommission_site.rc == 0
+
+- name: List what else nginx serves
+  ansible.builtin.find:
+    paths: [/etc/nginx/sites-enabled, /etc/nginx/conf.d]
+    file_type: any
+    hidden: true
+  register: _decdn_gateway_decommission_others
+  when: _decdn_gateway_decommission_site.rc == 0
+
+- name: Stop and disable nginx
+  ansible.builtin.systemd_service:
+    name: nginx
+    state: stopped
+    enabled: false
+  when:
+    - _decdn_gateway_decommission_site.rc == 0
+    - _decdn_gateway_decommission_others.matched == 0
+
+- name: Reload nginx without the role's site
+  ansible.builtin.systemd_service:
+    name: nginx
+    state: reloaded
+  when:
+    - _decdn_gateway_decommission_site.rc == 0
+    - _decdn_gateway_decommission_others.matched > 0
+
+- name: Report what is left to do
+  ansible.builtin.debug:
+    msg:
+      - >-
+        The gateway is stopped and its units removed on {{ inventory_hostname }}
+        {{- "; the role's nginx site is disabled" if _decdn_gateway_decommission_site.rc == 0
+            else "; no nginx site of this role's was found" }}.
+      - >-
+        Kept: the wallet ({{ decdn_gateway_keystore_file }} and
+        {{ decdn_gateway_keystore_password_file }}), which still owns the gateway's pool
+        and its funds — with that keystore, `decdn pool close` the pool and, after its
+        grace window, `decdn pool reclaim` them; the
+        pointers and pool store under {{ decdn_gateway_data_dir }}; the files under
+        {{ decdn_gateway_etc }}; the certificate under {{ decdn_gateway_acme_dir }}; the
+        binaries and the nginx package.
+      - >-
+        tcp/80 and tcp/443 stay open until you take the host out of
+        decdn_gateway_hosts and re-run baseline. Point the domain's DNS records
+        elsewhere, or remove them.

@@ -1,0 +1,18 @@
+---
+galaxy_info:
+  role_name: decdn_gateway
+  author: deCDN Contributors
+  description: >-
+    deCDN public gateway (decdn gateway --public-url) — signed release-tarball or
+    manual install of the decdn CLI, hardened systemd unit on loopback, behind the
+    distro's nginx with a wildcard certificate from lego (ACME DNS-01) and a per-IP
+    rate limit on PUT /_pointer.
+  license: MIT
+  min_ansible_version: "2.15"
+  galaxy_tags: [decdn, gateway, nginx, acme, systemd, web3, debian]
+  platforms:
+    - name: Debian
+      versions: [bookworm, trixie]
+    - name: Ubuntu
+      versions: [noble, resolute]
+dependencies: []
