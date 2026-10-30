@@ -219,11 +219,62 @@
         path: "{{ decdn_gateway_cert_file }}"
       register: decdn_gateway_cert_stat
 
-    # Synchronous: nginx cannot serve the site before the certificate exists. Also
-    # after a change to the service (a new domain, provider or CA), which lego
-    # applies on its own run (--force-cert-domains re-issues for a new domain list).
-    # systemctl start waits for a oneshot to finish (the timer task above reloaded
-    # systemd); its exit status is the run's.
+    # "<server> <domain>", recorded after the last run that issued it. A record that
+    # differs (a new domain or ACME server, or a run that failed after either
+    # changed) keeps the certificate pending until a run succeeds: the unit file
+    # alone cannot tell, since it no longer changes on the run after a failure.
+    - name: Read what the certificate was last issued for
+      ansible.builtin.slurp:
+        src: "{{ _decdn_gateway_issued_for }}"
+      register: decdn_gateway_issued_for
+      failed_when: false
+      changed_when: false
+
+    # A certificate from before the record existed: adopted when its names are the
+    # wanted ones (its CA cannot be read back reliably, so it is taken as the
+    # configured one), reissued otherwise.
+    - name: Read the existing certificate's names
+      ansible.builtin.command:
+        argv: [openssl, x509, -in, "{{ decdn_gateway_cert_file }}", -noout, -ext, subjectAltName]
+      register: decdn_gateway_cert_names
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when:
+        - decdn_gateway_cert_stat.stat.exists
+        - decdn_gateway_issued_for.content is not defined
+
+    - name: Decide whether the certificate must be issued again
+      ansible.builtin.set_fact:
+        decdn_gateway_issue_for: "{{ _want }}"
+        decdn_gateway_need_issue: >-
+          {{ not decdn_gateway_cert_stat.stat.exists
+             or (decdn_gateway_issued_for.content is defined
+                 and (decdn_gateway_issued_for.content | b64decode | trim) != _want)
+             or (decdn_gateway_issued_for.content is not defined
+                 and (decdn_gateway_cert_names.stdout | default('')
+                      | regex_findall('DNS:([^,\\s]+)') | sort)
+                     != ([decdn_gateway_domain, '*.' ~ decdn_gateway_domain] | sort)) }}
+      vars:
+        _want: "{{ decdn_gateway_acme_server }} {{ decdn_gateway_domain }}"
+
+    # An existing certificate that is not due would be kept: force the reissue,
+    # until a run succeeds (the file is removed below), including timer runs.
+    - name: Force the next issuance
+      ansible.builtin.copy:
+        dest: "{{ _decdn_gateway_force_env }}"
+        content: "LEGO_RENEW_FORCE=true\n"
+        owner: root
+        group: root
+        mode: "0600"
+      when:
+        - decdn_gateway_need_issue
+        - decdn_gateway_cert_stat.stat.exists
+
+    # Synchronous: nginx cannot serve the site before the certificate exists, and a
+    # changed domain or CA must not wait for the timer. systemctl start waits for a
+    # oneshot to finish (the timer task above reloaded systemd); its exit status is
+    # the run's.
     - name: Obtain or update the certificate now
       ansible.builtin.command:
         argv: [systemctl, start, decdn-gateway-certs.service]
@@ -232,7 +283,7 @@
       failed_when: false
       when:
         - not ansible_check_mode
-        - not decdn_gateway_cert_stat.stat.exists or decdn_gateway_certs_units.changed
+        - decdn_gateway_need_issue or decdn_gateway_certs_units.changed
 
     - name: Re-check for the certificate
       ansible.builtin.stat:
@@ -253,3 +304,19 @@
       when:
         - decdn_gateway_certs_run is not skipped
         - decdn_gateway_certs_run.rc != 0 or not decdn_gateway_cert_post.stat.exists
+
+    # Only now, after a run that succeeded (or a certificate adopted as it is).
+    - name: Record what the certificate is issued for
+      ansible.builtin.copy:
+        dest: "{{ _decdn_gateway_issued_for }}"
+        content: "{{ decdn_gateway_issue_for }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+      when: not ansible_check_mode
+
+    - name: Stop forcing issuance
+      ansible.builtin.file:
+        path: "{{ _decdn_gateway_force_env }}"
+        state: absent
+      when: not ansible_check_mode

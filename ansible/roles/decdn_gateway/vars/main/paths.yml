@@ -18,6 +18,13 @@ _decdn_gateway_certs:
     cert: "{{ decdn_gateway_etc }}/tls/{{ decdn_gateway_domain }}.crt"
     key: "{{ decdn_gateway_etc }}/tls/{{ decdn_gateway_domain }}.key"
 
+# What the certificate in decdn_gateway_acme_dir was last issued for ("<server>
+# <domain>"), written only after a run that succeeded; and the env file that forces
+# the next lego run to reissue (LEGO_RENEW_FORCE) while that record is not the
+# wanted one. Both in lego's root-only state directory.
+_decdn_gateway_issued_for: "{{ decdn_gateway_acme_dir }}/.issued-for"
+_decdn_gateway_force_env: "{{ decdn_gateway_acme_dir }}/force.env"
+
 # The installed-version stamps, beside the binaries.
 _decdn_gateway_stamp: /usr/local/lib/decdn-gateway/installed-version
 _decdn_gateway_lego_stamp: /usr/local/lib/decdn-gateway/lego-installed

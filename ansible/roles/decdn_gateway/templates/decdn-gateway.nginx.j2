@@ -77,7 +77,8 @@ server {
     proxy_send_timeout 300s;
 
     location = /_pointer {
-        limit_req zone=decdn_gateway_pointer burst={{ decdn_gateway_pointer_burst }} nodelay;
+        # burst=0 is not a value nginx takes: leaving it out is no burst.
+        limit_req zone=decdn_gateway_pointer{% if decdn_gateway_pointer_burst | int > 0 %} burst={{ decdn_gateway_pointer_burst }}{% endif %} nodelay;
         limit_req_status 429;
         limit_req_log_level warn;
         proxy_pass http://decdn_gateway;

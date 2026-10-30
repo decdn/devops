@@ -1,0 +1,42 @@
+---
+# One acme converge against the dead ACME server, with a certificate already in
+# place (side_effect.yml loops it twice): the issuance must be attempted and fail
+# both times, the forcing env file must stay, and the record must keep naming the
+# staging CA. A second run that passed would mean the failed reissue was dropped.
+- name: Converge on acme, attempt {{ _gw_attempt }}
+  block:
+    - name: Run the role against the dead ACME server
+      ansible.builtin.include_role:
+        name: decdn_gateway
+      vars:
+        decdn_gateway_tls: acme
+        decdn_gateway_acme_email: ops@molecule.test
+        decdn_gateway_acme_dns_provider: exec
+        decdn_gateway_acme_server: https://127.0.0.1:14000/dir
+
+    - name: Fail — the reissue was skipped
+      ansible.builtin.fail:
+        msg: Attempt {{ _gw_attempt }} finished without reissuing for the new CA.
+  rescue:
+    - name: Require the failure to come from the issuance check
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name == 'Report a certificate lego could not obtain'
+        fail_msg: >-
+          Attempt {{ _gw_attempt }} failed at "{{ ansible_failed_task.name }}", not at
+          the issuance check: {{ ansible_failed_result.msg | default('') }}
+
+- name: Read the forcing env file and the record, attempt {{ _gw_attempt }}
+  ansible.builtin.slurp:
+    src: "{{ item }}"
+  register: _gw_pending
+  loop:
+    - /var/lib/decdn-gateway-acme/force.env
+    - /var/lib/decdn-gateway-acme/.issued-for
+
+- name: Require the reissue still pending, attempt {{ _gw_attempt }}
+  ansible.builtin.assert:
+    that:
+      - (_gw_pending.results[0].content | b64decode) == 'LEGO_RENEW_FORCE=true\n'
+      - (_gw_pending.results[1].content | b64decode | trim) == 'letsencrypt-staging gateway.molecule.test'
+    fail_msg: "{{ _gw_pending.results | map(attribute='content') | map('b64decode') | list }}"

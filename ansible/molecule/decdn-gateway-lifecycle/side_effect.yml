@@ -92,9 +92,50 @@
                --resolve, "gateway.molecule.test:443:127.0.0.1", "https://gateway.molecule.test/"]
       changed_when: false
 
+    # An existing certificate the role did not issue for this CA (a host moved off
+    # letsencrypt-staging): the reissue is forced, and stays pending after a failed
+    # run instead of being dropped because the unit no longer changes.
+    - name: Plant a certificate for the domain, as issued by the staging CA
+      ansible.builtin.shell:
+        cmd: >-
+          set -euo pipefail;
+          d=/var/lib/decdn-gateway-acme/certificates; mkdir -p "$d";
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30
+          -subj /CN=gateway.molecule.test
+          -addext "subjectAltName=DNS:gateway.molecule.test,DNS:*.gateway.molecule.test"
+          -keyout "$d/decdn-gateway.key" -out "$d/decdn-gateway.crt" 2>/dev/null;
+          echo "letsencrypt-staging gateway.molecule.test" > /var/lib/decdn-gateway-acme/.issued-for
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Converge on acme twice, the ACME server still dead
+      ansible.builtin.include_tasks: includes/acme-retry.yml
+      loop: [1, 2]
+      loop_control:
+        loop_var: _gw_attempt
+
+    # A restore as root leaves the state root's; the converge gives it back.
+    - name: Give the gateway's state to root, as a restore would
+      ansible.builtin.file:
+        path: /var/lib/decdn-gateway/gateway
+        owner: root
+        group: root
+        recurse: true
+
     - name: Converge back on self-signed
       ansible.builtin.include_role:
         name: decdn_gateway
+
+    - name: Stat the gateway's state after the converge
+      ansible.builtin.stat:
+        path: /var/lib/decdn-gateway/gateway/pointers
+      register: _gw_pointers_owner
+
+    - name: Require the state back with the gateway's account
+      ansible.builtin.assert:
+        that:
+          - _gw_pointers_owner.stat.pw_name == 'decdn-gateway'
+        fail_msg: "/var/lib/decdn-gateway/gateway/pointers is {{ _gw_pointers_owner.stat.pw_name }}'s"
 
     - name: Read the renewal timer again
       ansible.builtin.systemd_service:

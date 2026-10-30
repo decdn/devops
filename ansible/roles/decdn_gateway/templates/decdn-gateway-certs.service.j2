@@ -14,6 +14,10 @@ Wants=network-online.target
 Type=oneshot
 # The provider's credentials (KEY=value lines), root-only, written by the operator.
 EnvironmentFile={{ decdn_gateway_acme_env_file }}
+# LEGO_RENEW_FORCE=true while the certificate is not the one the role wants (a new
+# domain or ACME server): lego otherwise keeps a certificate that is not due. The
+# role writes it, and removes it once a run has issued the wanted one.
+EnvironmentFile=-{{ _decdn_gateway_force_env }}
 Environment=LEGO_LOG_FORMAT=text
 ExecStart={{ decdn_gateway_lego_bin }} run \
     --accept-tos \
