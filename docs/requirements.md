@@ -80,9 +80,11 @@ On Ubuntu 25.10 and later, `sudo` is sudo-rs; see the `ansible_become_exe` note 
   on one address (the host's default IPv4), so systemd-resolved's stub listener can
   stay. It cannot share a host with an iroh relay or sponsord-onramp (all want 443).
   See [`roles/iroh_dns_server`](../ansible/roles/iroh_dns_server/README.md).
-- **A public gateway host (Ansible) needs inbound tcp/80 and tcp/443** for nginx, from
-  anywhere: 443 serves the gateway, 80 redirects to https. `baseline` opens both for
-  hosts in `decdn_gateway_hosts`; open them in the provider's firewall too. Point both
+- **A public gateway host needs inbound tcp/80 and tcp/443** for its TLS proxy, from
+  anywhere: 443 serves the gateway, 80 redirects to https. On Ansible the proxy is
+  the role's nginx, and `baseline` opens both for hosts in `decdn_gateway_hosts`; on
+  Compose's `gateway` profile it is your own, and you open them in the host firewall.
+  Either way, open them in the provider's firewall too. Point both
   `<domain>` and `*.<domain>` at the host. Its certificate comes over ACME DNS-01, so
   it needs outbound HTTPS to Let's Encrypt and to your DNS provider's API, plus the
   RPC endpoint and QUIC/UDP to the nodes it pays. It cannot share a host with

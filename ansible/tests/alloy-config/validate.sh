@@ -385,6 +385,7 @@ assert_has compose.alloy 'targets         = discovery.relabel.decdn_node_targets
 assert_has compose.alloy 'targets         = discovery.relabel.sponsord_targets.output' "the profile-gated sponsord scrape"
 assert_has compose.alloy 'targets         = discovery.relabel.iroh_relay_targets.output' "the profile-gated relay scrape"
 assert_has compose.alloy 'targets         = discovery.relabel.iroh_dns_server_targets.output' "the profile-gated DNS server scrape"
+assert_has compose.alloy 'targets         = discovery.relabel.decdn_gateway_targets.output' "the profile-gated gateway scrape"
 # shellcheck disable=SC2016  # literal backticks: Alloy's raw-string syntax
 assert_has compose.alloy 'regex         = `.*,\s*(?:node|origin|\*)\s*,.*`' "the node's profiles"
 # shellcheck disable=SC2016
@@ -393,9 +394,11 @@ assert_has compose.alloy 'regex         = `.*,\s*(?:sponsord|onramp|\*)\s*,.*`' 
 assert_has compose.alloy 'regex         = `.*,\s*(?:relay|\*)\s*,.*`' "the relay's profile"
 # shellcheck disable=SC2016
 assert_has compose.alloy 'regex         = `.*,\s*(?:dns|\*)\s*,.*`' "the DNS server's profile"
+# shellcheck disable=SC2016
+assert_has compose.alloy 'regex         = `.*,\s*(?:gateway|\*)\s*,.*`' "the gateway's profile"
 # Containers' lines get their role's unit, and the exemption reads that unit.
 assert_has compose.alloy 'source_labels = ["__journal_container_name"]' "the container-name mapping"
-assert_has compose.alloy 'regex         = "decdn-(decdn-node|sponsord|sponsord-onramp|caddy|iroh-relay|iroh-dns-server|alloy)-[0-9]+"' "this project's containers"
+assert_has compose.alloy 'regex         = "decdn-(decdn-node|sponsord|sponsord-onramp|caddy|iroh-relay|iroh-dns-server|decdn-gateway|alloy)-[0-9]+"' "this project's containers"
 # shellcheck disable=SC2016  # a literal ${1}: the relabel replacement
 assert_has compose.alloy 'replacement   = "${1}.service"' "the container's unit"
 echo "ok: the Compose runtime renders what it claims"
@@ -804,7 +807,7 @@ runtime="$work/runtime"
 mkdir -p "$runtime"
 sed -e 's|"/host/proc"|"/proc"|; s|"/host/sys"|"/sys"|; s|"/host/root"|"/"|; s|"/host/root/|"/|' "$committed" >"$runtime/config.alloy"
 grep -qF '"/host/' "$runtime/config.alloy" && fail "could not point compose/alloy/config.alloy at this host"
-compose_runtime() { # COMPOSE_PROFILES value, then the targets expected for the node, sponsord, the relay, the DNS server
+compose_runtime() { # COMPOSE_PROFILES value, then the targets expected for the node, sponsord, the relay, the DNS server, the gateway
   local http_port port log="$runtime/run.log" components got pid
   http_port="$(python3 -c '
 import socket
@@ -837,7 +840,7 @@ print(s.getsockname()[1])')" || fail "could not pick a free port (python3 is req
     || fail "could not read Alloy's component list"
   got="$(jq -r '[.[] | select(.health.state != "healthy") | "\(.localID): \(.health.message)"] | join("; ")' <<<"$components")"
   [ -z "$got" ] || { cat "$log" >&2; fail "COMPOSE_PROFILES=$1: unhealthy components: $got"; }
-  for t in "decdn_node $2" "sponsord $3" "iroh_relay $4" "iroh_dns_server $5"; do
+  for t in "decdn_node $2" "sponsord $3" "iroh_relay $4" "iroh_dns_server $5" "decdn_gateway $6"; do
     got="$(curl -fsS "http://127.0.0.1:$http_port/api/v0/web/components/discovery.relabel.${t% *}_targets" \
       | jq '[.exports[] | select(.name == "output") | .value.value[]] | length')"
     [ "$got" = "${t#* }" ] \
@@ -846,14 +849,15 @@ print(s.getsockname()[1])')" || fail "could not pick a free port (python3 is req
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   trap cleanup EXIT
-  echo "ok: COMPOSE_PROFILES=$1 scrapes the node $2x, sponsord $3x, the relay $4x, the DNS server $5x; every component healthy"
+  echo "ok: COMPOSE_PROFILES=$1 scrapes the node $2x, sponsord $3x, the relay $4x, the DNS server $5x, the gateway $6x; every component healthy"
 }
-compose_runtime "node,alloy" 1 0 0 0
-compose_runtime "origin, onramp,caddy,alloy" 1 1 0 0
-compose_runtime "sponsord,alloy" 0 1 0 0
-compose_runtime "relay,alloy" 0 0 1 0
-compose_runtime "dns,alloy" 0 0 0 1
-compose_runtime "alloy" 0 0 0 0
+compose_runtime "node,alloy" 1 0 0 0 0
+compose_runtime "origin, onramp,caddy,alloy" 1 1 0 0 0
+compose_runtime "sponsord,alloy" 0 1 0 0 0
+compose_runtime "relay,alloy" 0 0 1 0 0
+compose_runtime "dns,alloy" 0 0 0 1 0
+compose_runtime "node,gateway,alloy" 1 0 0 0 1
+compose_runtime "alloy" 0 0 0 0 0
 
 # --- Gate 2: every ExecStart flag exists -------------------------------------
 # `alloy run` ignores nothing: an unknown flag exits non-zero, i.e. a systemd

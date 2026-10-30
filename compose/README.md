@@ -15,11 +15,12 @@ Compose cannot make by itself.
 | `caddy` | Caddy, TLS in front of the onramp; leave it out to bring your own proxy | `caddy` (official) | `sponsord_onramp_proxy: caddy` |
 | `relay` | `iroh-relay`, a self-hosted iroh relay ([below](#an-iroh-relay-publishers)) | `n0computer/iroh-relay` (official) | `iroh_relay` ([`playbooks/iroh_relay.yml`](../ansible/playbooks/iroh_relay.yml)) |
 | `dns` | `iroh-dns-server`, a self-hosted iroh DNS server ([below](#an-iroh-dns-server-publishers)) | `n0computer/iroh-dns-server` (official) | `iroh_dns_server` ([`playbooks/iroh_dns_server.yml`](../ansible/playbooks/iroh_dns_server.yml)) |
+| `gateway` | `decdn-gateway`, a public deCDN gateway on loopback, behind your own TLS proxy ([below](#a-public-gateway-publishers)) | `ghcr.io/decdn/decdn-node` (its `decdn` CLI) | `decdn_gateway` ([`playbooks/decdn_gateway.yml`](../ansible/playbooks/decdn_gateway.yml)), which also installs nginx and its certificate |
 | `alloy` | Grafana Alloy: this host's metrics and logs to Grafana Cloud ([below](#grafana-cloud-alloy)) | `grafana/alloy` (official) | `grafana_alloy` (`decdn_grafana_cloud_enabled`) |
 
 A **node operator** runs `node`. A **publisher** runs `origin` for an origin node,
-`onramp caddy` for a sponsor, or all three on one host, and `relay` and `dns` on hosts
-of their own. The sponsor is independent of the node. `node` and `origin` start the
+`onramp caddy` for a sponsor, or all three on one host, `relay` and `dns` on hosts
+of their own, and `gateway` for a public gateway. The sponsor is independent of the node. `node` and `origin` start the
 same service, so a host runs one or the other; `relay` and `dns` cannot share a host
 with each other, `onramp` or `caddy`, which want the same ports. Any host adds
 `alloy` to ship its metrics and logs to Grafana Cloud.
@@ -602,6 +603,101 @@ no longer insists on the pinned version).
   `127.0.0.1:9117/metrics`, which the [`alloy` profile](#grafana-cloud-alloy) on the
   same host scrapes as `job="iroh-dns-server"`.
 
+## A public gateway (publishers)
+
+`decdn gateway --public-url` serves `decdn:` content to any browser on a domain of your
+own: `https://<domain>/<hash>`, a bundle as a website at `https://<hash32>.<domain>/`,
+and a namespace's at `https://<ns>.<domain>/` once its owner points it there. It pays
+for every request from a pool its own wallet funds, within a daily allowance
+([`adr/appendix-gateway.md`](https://github.com/decdn/decdn/blob/main/adr/appendix-gateway.md)).
+The [`decdn_gateway` role's README](../ansible/roles/decdn_gateway/README.md) explains
+it in depth; this section covers the Compose side.
+
+The profile runs **the gateway only**, on loopback (`127.0.0.1:8484`, metrics on
+`127.0.0.1:9094`). TLS is your own proxy's: the Ansible role puts the distro's nginx in
+front with a wildcard certificate, but stock nginx cannot bind tcp/80 and tcp/443 as a
+non-root account on the host network, and this file runs no service as root but the
+iroh ones ([Security notes](#security-notes)).
+
+### Set up
+
+1. **Prepare the host:**
+
+   ```bash
+   sudo compose/decdn-compose init gateway --gateway-domain gateway.example.org
+   ```
+
+   This creates the `decdn-gateway` account, `/var/lib/decdn-gateway` and
+   `/etc/decdn-gateway`, generates the wallet's password and **the gateway's own
+   wallet** (`decdn key-gen`, from the node image; it prints the eth address), writes
+   `/etc/decdn-gateway/gateway.toml` with the chain's contract addresses
+   (`--chain`, from this repo's
+   [generated mirror](../ansible/roles/decdn_gateway/vars/main/networks.yml)), and
+   installs [`decdn-gateway.env.example`](decdn-gateway.env.example) to
+   `/etc/decdn-gateway/gateway.env`. The gateway runs on the node image's `decdn`, so
+   `.env` needs `DECDN_IMAGE_DIGEST` even on a host without a node.
+
+2. **The RPC URL and the wallet.** Set `DECDN_GATEWAY_RPC_URL` in
+   `/etc/decdn-gateway/gateway.env` (`sudoedit`); `gateway.toml` reads it as
+   `${DECDN_GATEWAY_RPC_URL}`, so the URL stays in the root-only file. Fund the
+   wallet's address with USDC (at least the working deposit, 10 USDC) and ETH for
+   gas. Set `DECDN_GATEWAY_ALLOWANCE_BYTES_PER_DAY` in `.env` to what you will pay
+   for.
+
+3. **Your TLS proxy.** Point `<domain>` and `*.<domain>` at the host, and terminate
+   TLS for both in a proxy of your own that forwards to `http://127.0.0.1:8484`. It
+   must:
+   - pass `Host` through unchanged: the gateway routes by it;
+   - add no CORS headers: the gateway sets its own, and a second
+     `Access-Control-Allow-Origin` makes browsers refuse the answer;
+   - stream: no response buffering;
+   - limit `PUT /_pointer` per client address: the gateway budgets owner lookups
+     globally and reads no `X-Forwarded-*` header.
+
+   The Ansible role's
+   [nginx site](../ansible/roles/decdn_gateway/templates/decdn-gateway.nginx.j2) is
+   a complete example, and its
+   [certificate unit](../ansible/roles/decdn_gateway/templates/decdn-gateway-certs.service.j2)
+   shows the lego command for the wildcard over ACME DNS-01. A wildcard covers one
+   label, so the `?ns=` redirect's `<ns>.<hash32>.<domain>` has no certificate
+   (decdn/decdn#2784).
+
+4. **Start it:**
+
+   ```bash
+   sudo compose/decdn-compose up
+   sudo compose/decdn-compose health
+   ```
+
+   `health` asks the gateway's loopback listener for `/` and its metrics listener for
+   `/metrics`.
+
+### How it is laid out
+
+| Host path | Owner, mode | In the container | Holds |
+|-----------|-------------|------------------|-------|
+| `/etc/decdn-gateway/` | `decdn-gateway`, `0750` | same, read-only | `keystore.password` (`0600`) and `gateway.toml` (`0644`, nothing secret) |
+| `/etc/decdn-gateway/gateway.env` | `root`, `0600` | its environment | `DECDN_GATEWAY_RPC_URL`, `RUST_LOG` |
+| `/var/lib/decdn-gateway/` | `decdn-gateway`, `0700` | same, read-write | `keystore.json` (the wallet), `gateway/store/` (the pool and its lanes), `gateway/pointers/` (namespace pointers) |
+
+`check` refuses a missing or readable wallet or password, an unset RPC URL, the
+example domain, and the gateway's loopback ports held by anything else.
+
+### Operate
+
+- **Logs:** `sudo compose/decdn-compose logs -f decdn-gateway`.
+- **Stop:** `stop decdn-gateway` sends SIGINT, the only signal it shuts down
+  gracefully on: it settles the pulls in flight. A restart forgives the day's
+  allowance (the counters live in memory).
+- **Per-namespace allowances** (`--allowance <ns>=<bytes>`): add them to the
+  service's `command` in a `compose.override.yaml`.
+- **Backup:** `backup` takes the wallet, its password, `gateway.toml`, the env file
+  and the namespace pointers. Leave the pool store: the gateway adopts its live pool
+  from the chain again.
+- **Monitoring:** the [`alloy` profile](#grafana-cloud-alloy) on the same host scrapes
+  `127.0.0.1:9094/metrics` as `job="decdn-gateway"`; the dashboard and alert rules are
+  in [`monitoring/decdn-gateway/`](../monitoring/decdn-gateway/).
+
 ## Grafana Cloud (alloy)
 
 The `alloy` profile runs [Grafana Alloy](https://grafana.com/docs/alloy/), the agent
@@ -763,7 +859,7 @@ is given.
 ## Security notes
 
 - Every container runs as a dedicated host account (`decdn`, `sponsord`, `caddy`,
-  `alloy`) with a read-only root filesystem, every capability dropped and
+  `decdn-gateway`, `alloy`) with a read-only root filesystem, every capability dropped and
   `no-new-privileges`, from one shared block (`x-hardened`). Caddy keeps
   `NET_BIND_SERVICE` and nothing else, for tcp/80 and tcp/443. Alloy gets the host's
   `systemd-journal` group and read-only views of the host (`/proc`, `/sys`, `/`, the
@@ -789,7 +885,7 @@ is given.
   each, from a host file only (never an environment source), so a container sees only
   its own. A missing secret file fails the start; Docker never creates one in its
   place. The secrets that are environment variables (`DECDN_RPC_URL`,
-  `SPONSORD_RPC_URL`) live in root-only files on disk; Compose copies them into the
+  `SPONSORD_RPC_URL`, `DECDN_GATEWAY_RPC_URL`) live in root-only files on disk; Compose copies them into the
   container's config when it creates it.
 - The wrapper never prints a secret: a failed `config validate` is shown with every
   URL cut to its scheme and host.

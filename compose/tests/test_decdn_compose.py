@@ -627,7 +627,7 @@ class OriginDir(TmpDir):
     def test_init_refuses_an_empty_or_protected_file_origin(self) -> None:
         for origin in ("file://", "file:///var/lib", "file:///"):
             args = argparse.Namespace(
-                profiles=["origin"], origin=origin, region="DE", domain=None, chain="x", generate_treasury=False
+                profiles=["origin"], origin=origin, region="DE", domain=None, gateway_domain=None, chain="x", generate_treasury=False
             )
             with (
                 self.subTest(origin=origin),
@@ -707,6 +707,7 @@ def init_args(profiles: list[str], **kw: object) -> argparse.Namespace:
         origin=None,
         region="DE",
         domain=None,
+        gateway_domain=None,
         chain="x",
         generate_treasury=False,
         hostname=None,
@@ -1131,7 +1132,119 @@ class SecretFileChecks(unittest.TestCase):
         self.assertTrue(any("CADDY_UID=0" in f for f in found))
 
 
+class GatewayChecks(unittest.TestCase):
+    """problems() for the gateway profile: its wallet private, its env file root's,
+    the RPC URL set, a real domain."""
+
+    def test_the_wallet_and_env_file_are_checked_private(self) -> None:
+        seen: dict[str, tuple] = {}
+
+        def record(path, uid, *, private=True, nonempty=True, what=""):
+            seen[str(path)] = (uid, private)
+            return None
+
+        project = dc.Project(
+            {
+                "COMPOSE_PROFILES": "gateway",
+                "DECDN_GATEWAY_UID": "5",
+                "DECDN_GATEWAY_GID": "5",
+                "DECDN_GATEWAY_DOMAIN": "gw.decdn.org",
+            }
+        )
+        with (
+            mock.patch.object(dc, "file_problem", side_effect=record),
+            mock.patch.object(dc, "rendered_environments", return_value={}),
+            mock.patch.object(dc.pwd, "getpwnam", side_effect=KeyError),
+        ):
+            dc.problems(project, files_only=True)
+        for p in (dc.GATEWAY_PASSWORD, dc.GATEWAY_KEYSTORE):
+            self.assertEqual(seen[str(p)], (5, True), p)
+        self.assertEqual(seen[dc.DEFAULT_ENV_FILES["DECDN_GATEWAY_ENV_FILE"]], (0, True))
+        self.assertEqual(seen[str(dc.GATEWAY_TOML)], (None, False))
+
+    def run_problems(self, env: dict[str, str], rendered: dict) -> list[str]:
+        project = dc.Project({"COMPOSE_PROFILES": "gateway", "DECDN_GATEWAY_UID": "5", "DECDN_GATEWAY_GID": "5"} | env)
+        with (
+            mock.patch.object(dc, "file_problem", return_value=None),
+            mock.patch.object(dc, "rendered_environments", return_value=rendered),
+            mock.patch.object(dc.pwd, "getpwnam", side_effect=KeyError),
+            mock.patch.object(Path, "exists", return_value=True),
+            mock.patch.object(dc, "parse_env", return_value={}),
+        ):
+            return dc.problems(project, files_only=True)
+
+    def test_the_domain_and_rpc_url_are_required(self) -> None:
+        for dom, ok in (("", False), ("gateway.example.org", False), ("Gw.Decdn.Org", False), ("gw.decdn.org", True)):
+            with self.subTest(domain=dom):
+                found = self.run_problems({"DECDN_GATEWAY_DOMAIN": dom}, {})
+                self.assertEqual(not any("DECDN_GATEWAY_DOMAIN" in f for f in found), ok, found)
+        found = self.run_problems({"DECDN_GATEWAY_DOMAIN": "gw.decdn.org"}, {"decdn-gateway": {"DECDN_GATEWAY_RPC_URL": ""}})
+        self.assertTrue(any("set DECDN_GATEWAY_RPC_URL" in f for f in found), found)
+
+    def test_it_needs_the_node_image_digest(self) -> None:
+        project = dc.Project({"COMPOSE_PROFILES": "gateway", "DECDN_GATEWAY_DOMAIN": "gw.decdn.org"})
+        with (
+            mock.patch.object(dc, "file_problem", return_value=None),
+            mock.patch.object(dc, "rendered_environments", return_value={}),
+            mock.patch.object(dc.pwd, "getpwnam", side_effect=KeyError),
+        ):
+            found = dc.problems(project)
+        self.assertTrue(any("DECDN_IMAGE_DIGEST" in f for f in found), found)
+
+
+class GatewayInit(TmpDir):
+    def test_gateway_toml_comes_from_the_mirror_and_holds_no_secret(self) -> None:
+        text = dc.render_gateway_toml("arbitrum-sepolia")
+        prof = dc.network_profile("decdn_gateway", "arbitrum-sepolia")
+        self.assertIn('rpc_url = "${DECDN_GATEWAY_RPC_URL}"\n', text)
+        self.assertIn(f"chain_id = {prof['chain_id']}\n", text)
+        self.assertIn(f'publisher_registry_address = "{prof["publisher_registry_address"]}"\n', text)
+        # The keys the role's gateway.toml.j2 writes, and only them.
+        keys = set(re.findall(r"(?m)^([a-z_]+) = ", text))
+        role = (HERE.parent.parent / "ansible/roles/decdn_gateway/templates/gateway.toml.j2").read_text()
+        self.assertEqual(keys, set(re.findall(r"(?m)^([a-z_]+) = ", role)) - {"buyer_working_deposit_micro_usdc"})
+
+    def test_an_unknown_chain_is_refused(self) -> None:
+        with self.assertRaises(dc.Refused):
+            dc.render_gateway_toml("no-such-chain")
+
+    def test_key_gen_runs_as_the_account_without_the_nodes_mounts(self) -> None:
+        etc, var = self.tmp / "etc", self.tmp / "var"
+        env = self.tmp / "gateway.env"
+        project = dc.Project({"DECDN_GATEWAY_UID": str(os.getuid()), "DECDN_GATEWAY_GID": str(os.getgid()),
+                              "DECDN_GATEWAY_ENV_FILE": str(env)})
+        with (
+            mock.patch.object(dc, "ETC_GATEWAY", etc),
+            mock.patch.object(dc, "VAR_GATEWAY", var),
+            mock.patch.object(dc, "GATEWAY_PASSWORD", etc / "keystore.password"),
+            mock.patch.object(dc, "GATEWAY_KEYSTORE", var / "keystore.json"),
+            mock.patch.object(dc, "GATEWAY_TOML", etc / "gateway.toml"),
+            mock.patch.object(dc, "decdn_cli") as cli,
+            # install_template writes root:root, which a test run as a user cannot.
+            mock.patch.object(dc, "install_template") as template,
+        ):
+            dc.init_gateway(project, init_args(["gateway"], chain="arbitrum-sepolia"))
+        (_, args), kw = cli.call_args
+        self.assertEqual(args[0], "key-gen")
+        self.assertFalse(kw["node_mounts"])
+        self.assertEqual(kw["user"], f"{os.getuid()}:{os.getgid()}")
+        self.assertEqual(kw["extra_mounts"], [f"{etc}:{etc}:ro", f"{var}:{var}"])
+        self.assertEqual((etc / "keystore.password").stat().st_mode & 0o777, 0o600)
+        template.assert_called_once_with("decdn-gateway.env.example", env, 0o600)
+        self.assertIn("${DECDN_GATEWAY_RPC_URL}", (etc / "gateway.toml").read_text())
+
+
 class Backup(TmpDir):
+    def test_covers_the_gateway_wallet_and_pointers(self) -> None:
+        pointers = self.tmp / "pointers"
+        pointers.mkdir()
+        (pointers / "7.json").write_text("{}")
+        with mock.patch.object(dc, "GATEWAY_POINTERS", pointers):
+            paths = set(map(str, dc.backup_paths(dc.Project({"COMPOSE_PROFILES": "gateway"}))))
+        for p in (dc.GATEWAY_KEYSTORE, dc.GATEWAY_PASSWORD, dc.GATEWAY_TOML, pointers / "7.json"):
+            self.assertIn(str(p), paths)
+        self.assertIn(dc.DEFAULT_ENV_FILES["DECDN_GATEWAY_ENV_FILE"], paths)
+
     def test_covers_every_key_and_secret(self) -> None:
         project = dc.Project({"COMPOSE_PROFILES": "node,onramp"})
         paths = set(map(str, dc.backup_paths(project)))
@@ -1447,6 +1560,7 @@ class AlloyConfig(unittest.TestCase):
             ("sponsord", "sponsord"),
             ("iroh_relay", "iroh-relay"),
             ("iroh_dns_server", "iroh-dns-server"),
+            ("decdn_gateway", "decdn-gateway"),
         ):
             starts = {p for p, svcs in dc.PROFILES.items() if service in svcs}
             for profile in dc.PROFILES:

@@ -67,6 +67,7 @@ PROFILES: dict[str, tuple[str, ...]] = {
     "caddy": ("caddy",),
     "relay": ("iroh-relay",),
     "dns": ("iroh-dns-server",),
+    "gateway": ("decdn-gateway",),
     "alloy": ("alloy",),
 }
 # Profiles that cannot share a host: each pair wants the same public ports (the
@@ -110,6 +111,15 @@ RELAY_CERT_DIR = VAR_RELAY / "acme"
 ETC_DNS = Path("/etc/iroh-dns-server")
 VAR_DNS = Path("/var/lib/iroh-dns-server")
 DNS_TOML = ETC_DNS / "config.toml"
+ETC_GATEWAY = Path("/etc/decdn-gateway")
+VAR_GATEWAY = Path("/var/lib/decdn-gateway")
+GATEWAY_TOML = ETC_GATEWAY / "gateway.toml"
+GATEWAY_PASSWORD = ETC_GATEWAY / "keystore.password"
+GATEWAY_KEYSTORE = VAR_GATEWAY / "keystore.json"
+GATEWAY_POINTERS = VAR_GATEWAY / "gateway" / "pointers"
+# Its listener and metrics: loopback, compose.yaml's command.
+GATEWAY_LISTEN = "http://127.0.0.1:8484/"
+GATEWAY_METRICS = "http://127.0.0.1:9094/metrics"
 BINDV6ONLY = Path("/proc/sys/net/ipv6/bindv6only")
 # Never an origin's content: the hosts' secrets and state.
 NOT_ORIGIN = (
@@ -119,6 +129,8 @@ NOT_ORIGIN = (
     "/var/lib/caddy",
     str(VAR_RELAY),
     str(VAR_DNS),
+    str(ETC_GATEWAY),
+    str(VAR_GATEWAY),
     str(VAR_ALLOY),
     "/etc",
     "/root",
@@ -135,6 +147,7 @@ DEFAULT_ENV_FILES = {
     "SPONSORD_SECRET_ENV_FILE": "/etc/sponsord/secret.env",
     "SPONSORD_ONRAMP_ENV_FILE": "/etc/sponsord/sponsord-onramp.env",
     "ALLOY_ENV_FILE": "/etc/grafana-alloy.env",
+    "DECDN_GATEWAY_ENV_FILE": "/etc/decdn-gateway/gateway.env",
 }
 
 # What /etc/grafana-alloy.env must set for the Compose configuration, which has no
@@ -179,6 +192,7 @@ PORTS: dict[str, tuple[tuple[str, int], ...]] = {
     "iroh-relay": (("tcp", 80), ("tcp", 443), ("udp", 7842), ("tcp", 9092)),
     # Port 53 counts only on the DNS bind address (or a wildcard): dns_port_problems.
     "iroh-dns-server": (("tcp", 443), ("udp", 53), ("tcp", 53), ("tcp", 9117), ("tcp", 9118)),
+    "decdn-gateway": (("tcp", 8484), ("tcp", 9094)),
     "alloy": (("tcp", 12345), ("tcp", 4317), ("tcp", 4318)),
 }
 
@@ -500,6 +514,7 @@ def decdn_cli(
     extra_mounts: list[str] | None = None,
     cli_env: dict[str, str] | None = None,
     user: str | None = None,
+    node_mounts: bool = True,
     quiet: bool = False,
     capture: bool = False,
     check: bool = True,
@@ -508,7 +523,8 @@ def decdn_cli(
 
     `env_values` (the daemon's environment, node_environment()) reach the container
     through a root-only copy: never on an argv that `ps` or a sudo log shows, and
-    never in the docker client's environment."""
+    never in the docker client's environment. `node_mounts=False` leaves out the
+    node's directories, for a host without a node (the gateway's key-gen)."""
     uid, gid = project.env.get("DECDN_UID", ""), project.env.get("DECDN_GID", "")
     argv = [
         "docker",
@@ -527,11 +543,9 @@ def decdn_cli(
         user or f"{uid}:{gid}",
         "-e",
         "HOME=/tmp",
-        "-v",
-        f"{ETC_DECDN}:{ETC_DECDN}{'' if etc_rw else ':ro'}",
-        "-v",
-        f"{VAR_DECDN}:{VAR_DECDN}",
     ]
+    if node_mounts:
+        argv += ["-v", f"{ETC_DECDN}:{ETC_DECDN}{'' if etc_rw else ':ro'}", "-v", f"{VAR_DECDN}:{VAR_DECDN}"]
     for m in extra_mounts or []:
         argv += ["-v", m]
     for k, v in (cli_env or {}).items():
@@ -638,6 +652,8 @@ def init(args: argparse.Namespace) -> None:
         raise Refused(f"--region {args.region!r} is not an ISO 3166-1 alpha-2 code (e.g. DE)")
     if args.domain and not re.fullmatch(DOMAIN_RE, args.domain):
         raise Refused(f"--domain {args.domain!r} is not a lower-case DNS name")
+    if args.gateway_domain and not re.fullmatch(DOMAIN_RE, args.gateway_domain):
+        raise Refused(f"--gateway-domain {args.gateway_domain!r} is not a lower-case DNS name")
     refuse_conflicts(wanted)
     if "relay" in wanted:
         relay_args_problem = check_relay_args(args)
@@ -672,6 +688,9 @@ def init(args: argparse.Namespace) -> None:
     if "caddy" in wanted:
         uid, gid = ensure_account("caddy")
         updates |= {"CADDY_UID": str(uid), "CADDY_GID": str(gid)}
+    if "gateway" in wanted:
+        uid, gid = ensure_account("decdn-gateway", home=VAR_GATEWAY)
+        updates |= {"DECDN_GATEWAY_UID": str(uid), "DECDN_GATEWAY_GID": str(gid)}
     if "alloy" in wanted:
         try:
             journal_gid = grp.getgrnam("systemd-journal").gr_gid
@@ -681,6 +700,8 @@ def init(args: argparse.Namespace) -> None:
         updates |= {"ALLOY_UID": str(uid), "ALLOY_GID": str(gid), "ALLOY_JOURNAL_GID": str(journal_gid)}
     if args.domain:
         updates["SPONSORD_ONRAMP_DOMAIN"] = args.domain
+    if args.gateway_domain:
+        updates["DECDN_GATEWAY_DOMAIN"] = args.gateway_domain
     origin_url = args.origin
     if origin_url and origin_url.startswith("file://"):
         host_dir = origin_url.removeprefix("file://")
@@ -703,6 +724,8 @@ def init(args: argparse.Namespace) -> None:
         init_relay(args)
     if "dns" in wanted:
         init_dns(args)
+    if "gateway" in wanted:
+        init_gateway(project, args)
     if "alloy" in wanted:
         init_alloy(project, args)
         project = Project(parse_env(DOTENV))
@@ -752,6 +775,58 @@ def init_node(project: Project, args: argparse.Namespace, origin_url: str | None
         edit_node_toml(args.region)
         say(f"wrote {NODE_TOML} ({args.chain}, region {args.region})")
     install_template("decdn.env.example", project.env_file("DECDN_ENV_FILE"), 0o600)
+
+
+def render_gateway_toml(chain: str) -> str:
+    """gateway.toml: the chain from the decdn_gateway role's mirror of upstream's
+    manifest, and the RPC URL from the 0600 env file, which the CLI expands at start
+    (blockchain.rpc_url takes `${VAR}`), so this file holds no secret."""
+    prof = network_profile("decdn_gateway", chain)
+    keys = ("chain_id", "payment_pool_address", "capacity_bond_address", "slash_judge_address",
+            "publisher_registry_address")
+    if not all(prof.get(k) for k in keys):
+        raise Refused(f"--chain {chain!r} is not a chain the decdn_gateway role's networks mirror knows")
+    lines = [
+        "# Written by decdn-compose init gateway. The chain the public gateway pays on and",
+        "# checks namespace owners against (the decdn_gateway role's mirror of upstream's",
+        "# deployment manifest). The RPC URL comes from DECDN_GATEWAY_RPC_URL in the 0600",
+        "# env file: the CLI expands it at start. An unknown key stops the gateway.",
+        "[blockchain]",
+        'rpc_url = "${DECDN_GATEWAY_RPC_URL}"',
+        f"chain_id = {int(prof['chain_id'])}",
+    ]
+    lines += [f'{key} = "{prof[key]}"' for key in keys[1:]]
+    return "\n".join(lines) + "\n"
+
+
+def init_gateway(project: Project, args: argparse.Namespace) -> None:
+    uid, gid = int(project.env["DECDN_GATEWAY_UID"]), int(project.env["DECDN_GATEWAY_GID"])
+    ensure_dir(VAR_GATEWAY, 0o700, uid, gid)
+    ensure_dir(ETC_GATEWAY, 0o750, uid, gid)
+    # The password first: key-gen reads it, never creates it.
+    if write_new(GATEWAY_PASSWORD, base64.b64encode(secrets.token_bytes(32)) + b"\n", 0o600, uid, gid):
+        say(f"generated {GATEWAY_PASSWORD} (0600)")
+    if GATEWAY_KEYSTORE.exists():
+        say(f"kept the existing gateway wallet {GATEWAY_KEYSTORE}")
+    else:
+        say("generating the gateway's own wallet (decdn key-gen, from the node image)")
+        decdn_cli(
+            project,
+            ["key-gen", "--output-dir", str(VAR_GATEWAY), "--keystore-password-file", str(GATEWAY_PASSWORD)],
+            user=f"{uid}:{gid}",
+            node_mounts=False,
+            extra_mounts=[f"{ETC_GATEWAY}:{ETC_GATEWAY}:ro", f"{VAR_GATEWAY}:{VAR_GATEWAY}"],
+        )
+        say(
+            f"fund the eth address above with USDC and ETH for gas, and back up {GATEWAY_KEYSTORE} "
+            f"and {GATEWAY_PASSWORD} now: `decdn-compose backup`"
+        )
+    if GATEWAY_TOML.exists():
+        say(f"kept the existing {GATEWAY_TOML}")
+    else:
+        write_atomic(GATEWAY_TOML, render_gateway_toml(args.chain), mode=0o644)
+        say(f"wrote {GATEWAY_TOML} ({args.chain})")
+    install_template("decdn-gateway.env.example", project.env_file("DECDN_GATEWAY_ENV_FILE"), 0o600)
 
 
 def edit_node_toml(region: str) -> None:
@@ -1141,6 +1216,15 @@ def next_steps(wanted: list[str], project: Project) -> str:
             "  - delegate the hostname to this host at the parent zone (NS + glue A, README.md); "
             "open tcp/443, udp/53 and tcp/53"
         )
+    if "gateway" in wanted:
+        steps.append(
+            f"  - set DECDN_GATEWAY_RPC_URL: sudoedit {project.env_file('DECDN_GATEWAY_ENV_FILE')}; fund the "
+            "gateway's wallet (USDC and ETH for gas)"
+        )
+        steps.append(
+            "  - point <domain> and *.<domain> at this host and put your TLS proxy in front of "
+            "127.0.0.1:8484 (README.md, A public gateway); open tcp/80 and tcp/443 for it"
+        )
     if "alloy" in wanted:
         steps.append(
             f"  - fill in the Grafana Cloud token and endpoints: sudoedit {project.env_file('ALLOY_ENV_FILE')}"
@@ -1297,6 +1381,23 @@ def problems(project: Project, files_only: bool = False) -> list[str]:
             out.append(f"{VAR_CADDY} is missing (`init caddy`)")
         elif uid is not None and VAR_CADDY.stat().st_uid != uid:
             out.append(f"{VAR_CADDY} is not owned by the caddy account")
+    if "decdn-gateway" in svcs:
+        uid = uid_of("DECDN_GATEWAY", "decdn-gateway")
+        out += filter(None, [file_problem(GATEWAY_PASSWORD, uid, what="`init gateway`")])
+        out += filter(None, [file_problem(GATEWAY_KEYSTORE, uid, what="the gateway's wallet; `init gateway`")])
+        out += filter(None, [file_problem(GATEWAY_TOML, None, private=False, what="`init gateway`")])
+        gw_env = project.env_file("DECDN_GATEWAY_ENV_FILE")
+        out += filter(None, [file_problem(gw_env, 0, nonempty=False)])
+        out += env_problems(gw_env, values("decdn-gateway", gw_env), ["DECDN_GATEWAY_RPC_URL"], "the RPC endpoint")
+        dom = env.get("DECDN_GATEWAY_DOMAIN", "")
+        if not dom or dom == "gateway.example.org":
+            out.append(".env: set DECDN_GATEWAY_DOMAIN, the domain the gateway serves")
+        elif not re.fullmatch(DOMAIN_RE, dom):
+            out.append(f".env: DECDN_GATEWAY_DOMAIN {dom!r} is not a lower-case DNS name")
+        if not VAR_GATEWAY.is_dir():
+            out.append(f"{VAR_GATEWAY} is missing (`init gateway`)")
+        elif uid is not None and (VAR_GATEWAY.stat().st_uid != uid or VAR_GATEWAY.stat().st_mode & 0o077):
+            out.append(f"{VAR_GATEWAY} must be the decdn-gateway account's, mode 0700 (it holds the wallet)")
     out += conflicts(project.profiles)
     for svc, key, conf, var, problems_of in (
         ("iroh-relay", "IROH_RELAY_IMAGE_DIGEST", RELAY_TOML, VAR_RELAY, relay_problems),
@@ -1318,6 +1419,7 @@ def problems(project: Project, files_only: bool = False) -> list[str]:
         for svc in sorted(svcs):
             key = {
                 "decdn-node": "DECDN_IMAGE_DIGEST",
+                "decdn-gateway": "DECDN_IMAGE_DIGEST",
                 "sponsord": "SPONSORD_IMAGE_DIGEST",
                 "sponsord-onramp": "SPONSORD_ONRAMP_IMAGE_DIGEST",
             }.get(svc)
@@ -2251,6 +2353,12 @@ def cmd_health(args: argparse.Namespace) -> None:
         url = sponsord_metrics_url(container_id("sponsord"))
         reason = hold_state(*fetch(url), url) if url else "its SPONSORD_BIND is not a loopback host:port"
         report("sponsord top-up hold", reason is None, reason or "none")
+    if "decdn-gateway" in svcs:
+        # Its own listen address is a bare host: GET / answers 200 without a pull.
+        status, _ = fetch(GATEWAY_LISTEN)
+        report("decdn-gateway", status == 200, f"{GATEWAY_LISTEN} status {status}")
+        status, _ = fetch(GATEWAY_METRICS)
+        report("decdn-gateway metrics", status == 200, f"{GATEWAY_METRICS} status {status}")
     if "caddy" in svcs:
         dom = project.env.get("SPONSORD_ONRAMP_DOMAIN", "")
         res = tls_healthz(dom)
@@ -2433,6 +2541,11 @@ def backup_paths(project: Project) -> list[Path]:
     if "iroh-dns-server" in svcs:
         # The config only, likewise: nodes republish their records every 5 minutes.
         paths += [DNS_TOML]
+    if "decdn-gateway" in svcs:
+        # The wallet, its config and the namespace pointers owners PUT; the pool
+        # store is left out (the gateway adopts its live pool from the chain).
+        paths += [GATEWAY_KEYSTORE, GATEWAY_PASSWORD, GATEWAY_TOML, project.env_file("DECDN_GATEWAY_ENV_FILE")]
+        paths += sorted(GATEWAY_POINTERS.glob("*.json")) if GATEWAY_POINTERS.is_dir() else []
     if "alloy" in svcs:
         paths += [project.env_file("ALLOY_ENV_FILE")]
     return paths
@@ -2511,10 +2624,11 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--chain",
         default="arbitrum-sepolia",
-        help="the chain: `decdn config init --chain`, and the sponsor's contract addresses",
+        help="the chain: `decdn config init --chain`, and the sponsor's and the gateway's contract addresses",
     )
     p.add_argument("--origin", help="origin: the backend, https://…, s3://bucket or file:///host/path")
     p.add_argument("--domain", help="onramp/caddy: the onramp's public host name")
+    p.add_argument("--gateway-domain", help="gateway: the domain the public gateway serves")
     p.add_argument(
         "--generate-treasury", action="store_true", help="sponsord/onramp: generate the treasury wallet on this host"
     )

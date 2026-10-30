@@ -35,5 +35,8 @@ def fixed_user: ["iroh-relay", "iroh-dns-server"];
   # scrape address as its instance). decdn-compose refuses it.
   check("alloy"; "instance id renders a placeholder";
     ($all.alloy.environment.ALLOY_INSTANCE_ID // "") | test("^unset-[A-Z_]+$")),
+  check("decdn-gateway"; "domain renders an unparsable --public-url";
+    (($all["decdn-gateway"].command // []) | index("--public-url")) as $i
+    | $i != null and (($all["decdn-gateway"].command[$i + 1] // "") | test("^https://unset-[A-Z_]+:[^0-9]"))),
   check("caddy"; "domain renders an unparsable site address";
     ($all.caddy.environment.SPONSORD_ONRAMP_DOMAIN // "") | test("^unset-[A-Z_]+:[^0-9]"))

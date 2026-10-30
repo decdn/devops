@@ -17,7 +17,7 @@ and every entry point is split along that line:
   same daemon with an origin backend, seated on-chain via `OriginAssignment.addOrigin`,
   ADR 002/011), and optionally `sponsord` + its onramp, iroh relays, an iroh DNS
   server and a public gateway: `publisher.yml` / `make deploy-publisher`, `cloud-init/user-data-publisher.yaml`,
-  Compose's `origin`/`onramp`/`relay`/`dns` profiles, the chart (an origin node only),
+  Compose's `origin`/`onramp`/`relay`/`dns`/`gateway` profiles, the chart (an origin node only),
   the `decdn.publisher` collection. Front door: `docs/publishers.md`.
 
 Four deploy paths: **Ansible** (`ansible/`, VMs/bare metal and fleets; with cloud-init
@@ -75,7 +75,7 @@ ansible/                # the deployment project (DevSec-hardened, lean roles); 
   inventory/ galaxy/ molecule/
 cloud-init/             # user-data-{node,publisher}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (README.md)
 compose/                # one-host Docker Compose path (README.md)
-  compose.yaml          # profiles: node / origin (one decdn-node), sponsord, onramp (+ sponsord), caddy, relay, dns, alloy
+  compose.yaml          # profiles: node / origin (one decdn-node), sponsord, onramp (+ sponsord), caddy, relay, dns, gateway, alloy
   alloy/config.alloy    # GENERATED from roles/grafana_alloy's config.alloy.j2 (scripts/render-compose-alloy.sh)
   decdn-compose         # the operator's wrapper: init, check, guarded up/stop/restart/down, health, cli, backup
   Caddyfile             # hand-kept copy of roles/sponsord_onramp/templates/Caddyfile.j2: change one, change both
@@ -253,6 +253,11 @@ boundaries or exists nowhere else.
 - The site adds no header: the gateway sets its own CORS (a second
   `Access-Control-Allow-Origin` breaks browsers), routes on the exact `Host`, and reads
   no `X-Forwarded-*`. Per-client limits on `PUT /_pointer` are nginx's `limit_req`.
+- Compose's `gateway` profile runs the gateway only, on the node image's `decdn`
+  (`DECDN_IMAGE_DIGEST`, so no fourth decdn digest), with the operator's own TLS proxy:
+  stock nginx cannot bind 80/443 as non-root on the host network, and `root_allowed`
+  is not extended for it. Its `gateway.toml` holds `rpc_url = "${DECDN_GATEWAY_RPC_URL}"`
+  (the CLI expands it), the URL itself in the root-only env file.
 
 ### `cloud-init/` (its README)
 

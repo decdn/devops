@@ -19,6 +19,8 @@
 #             all of them want tcp/80 and tcp/443
 #   dns       a self-hosted iroh DNS server (publishers); not with relay, onramp or
 #             caddy, which want tcp/443 too
+#   gateway   a public deCDN gateway (publishers), on loopback behind your own TLS
+#             proxy
 #   alloy     Grafana Alloy shipping this host's metrics and logs to Grafana Cloud
 #             (the Ansible grafana_alloy role's agent and configuration)
 #
@@ -43,7 +45,7 @@ name: decdn
 # host journal like the systemd units (`journalctl CONTAINER_NAME=decdn-decdn-node-1`;
 # `docker compose logs` reads them back). A service overrides a key only to add to
 # it (Caddy's one capability) or for a documented exception (the iroh services' uid
-# 0 and SIGINT); tests/invariants.jq checks the rendered result.
+# 0 and SIGINT, the gateway's SIGINT); tests/invariants.jq checks the rendered result.
 x-hardened: &hardened
   network_mode: host
   read_only: true
@@ -351,6 +353,68 @@ services:
       nofile: 65536
     # No healthcheck: `decdn-compose health` reads its loopback /healthz, asks each
     # origin's SOA and checks its certificate from the host.
+
+  decdn-gateway:
+    <<: *hardened
+    # The public gateway (publishers), on loopback only. TLS for <domain> and
+    # *.<domain>, and the per-client limit on PUT /_pointer, are your own proxy's
+    # (README.md, A public gateway): stock nginx cannot bind tcp/80 and tcp/443 as a
+    # non-root account on the host network.
+    profiles: [gateway]
+    # The decdn CLI from the node image: one release ships both, so it runs on the
+    # node's digest.
+    image: ${DECDN_IMAGE_REPO:-ghcr.io/decdn/decdn-node}@${DECDN_IMAGE_DIGEST:-sha256:unset-set-DECDN_IMAGE_DIGEST-in-.env}
+    # The host's `decdn-gateway` account, which owns the wallet below.
+    user: "${DECDN_GATEWAY_UID:-unset-DECDN_GATEWAY_UID}:${DECDN_GATEWAY_GID:-unset-DECDN_GATEWAY_GID}"
+    # Mirrors the decdn_gateway role's ExecStart, both listeners on loopback. The
+    # wallet is named explicitly: the CLI's default lookup is not where `key-gen`
+    # writes. An unset domain renders a public URL the gateway refuses.
+    entrypoint: [decdn]
+    command:
+      - --config
+      - /etc/decdn-gateway/gateway.toml
+      - gateway
+      - --public-url
+      - https://${DECDN_GATEWAY_DOMAIN:-unset-DECDN_GATEWAY_DOMAIN:set-in-.env}
+      - --listen
+      - 127.0.0.1:8484
+      - --metrics-listen
+      - 127.0.0.1:9094
+      - --keystore
+      - /var/lib/decdn-gateway/keystore.json
+      - --data-dir
+      - /var/lib/decdn-gateway/gateway
+      - --allowance-bytes-per-day
+      - ${DECDN_GATEWAY_ALLOWANCE_BYTES_PER_DAY:-1GiB}
+    # DECDN_GATEWAY_RPC_URL (gateway.toml reads it as ${DECDN_GATEWAY_RPC_URL}; it
+    # may embed an API key) and RUST_LOG, in a root-owned 0600 file on the host.
+    env_file:
+      - path: ${DECDN_GATEWAY_ENV_FILE:-/etc/decdn-gateway/gateway.env}
+        required: true
+    environment:
+      HOME: /var/lib/decdn-gateway
+      NO_COLOR: "1"
+      DECDN_SELF_UPDATE_CHECK: "0"
+      DECDN_KEYSTORE_PASSWORD_FILE: /etc/decdn-gateway/keystore.password
+    volumes:
+      - type: bind
+        source: /etc/decdn-gateway
+        target: /etc/decdn-gateway
+        read_only: true
+        bind: {create_host_path: false}
+      # The wallet, the pool store and the namespace pointers.
+      - type: bind
+        source: /var/lib/decdn-gateway
+        target: /var/lib/decdn-gateway
+        bind: {create_host_path: false}
+    tmpfs:
+      - /tmp
+    # The gateway settles its pulls in flight on SIGINT only (the unit's
+    # KillSignal); on SIGTERM it would die at once.
+    stop_signal: SIGINT
+    stop_grace_period: 30s
+    # No healthcheck: the image has no HTTP client. `decdn-compose health` probes
+    # http://127.0.0.1:8484/ from the host.
 
   alloy:
     <<: *hardened
