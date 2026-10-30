@@ -1025,6 +1025,20 @@
             decdn_rejected: "{{ decdn_rejected + ['onramp-decdn-floor'] }}"
           when: ansible_failed_task.name == "Refuse a decdn release below the installers' floor"
 
+    - name: "Case onramp-decdn-floor — a pre-release of sponsord-onramp 0.3's floor"
+      block:
+        - name: Run sponsord_onramp 0.3 with the decdn tag v0.3.0-rc.1
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_version: "0.3"
+            sponsord_onramp_decdn_release: v0.3.0-rc.1
+      rescue:
+        - name: Record onramp-decdn-floor rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-decdn-floor'] }}"
+          when: ansible_failed_task.name == "Refuse a decdn release below the installers' floor"
+
     # Accepted: a line at the floor (v0.3, compared as v0.3.0) passes it and fails at
     # the next assert (the bad limit) instead.
     - name: "Case onramp-decdn-floor-line-ok — the decdn line at sponsord-onramp 0.3's floor"
@@ -1407,7 +1421,7 @@
            "onramp-domain", "onramp-public-url", "onramp-public-url", "onramp-rpc",
            "onramp-rpc", "onramp-rpc", "onramp-rpc", "onramp-public-url", "onramp-sitekey", "onramp-pin",
            "onramp-pin", "onramp-pin-pair", "onramp-pin-pair", "onramp-decdn-floor",
-           "onramp-decdn-floor", "onramp-decdn-floor-line-ok",
+           "onramp-decdn-floor", "onramp-decdn-floor", "onramp-decdn-floor-line-ok",
            "onramp-limit", "onramp-ip-header", "onramp-token",
            "onramp-turnstile", "onramp-turnstile", "onramp-turnstile-empty",
            "onramp-turnstile-inventory",

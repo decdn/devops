@@ -420,13 +420,17 @@
 # (GHSA-rff9-95mx-xpw9). Caught here, before the install, instead of by the fatal
 # /healthz gate after it. An exact sponsord_onramp_version below 0.2 keeps the old
 # installers and is exempt. A line (vX.Y) compares as vX.Y.0, its lowest release:
-# the version test orders "0.3" below "0.3.0".
+# the version test orders "0.3" below "0.3.0". A tag compares by its numeric core,
+# and a pre-release of the floor itself is below it, as upstream counts it (the
+# version test orders "0.3.0-rc.1" above "0.3.0").
 - name: Refuse a decdn release below the installers' floor
   ansible.builtin.assert:
     that:
       - >-
         sponsord_onramp_version | string is not version('0.2', '>=')
-        or _onramp_decdn_release_floor_cmp is version(_onramp_decdn_release_floor, '>=')
+        or (_onramp_decdn_release_floor_cmp is version(_onramp_decdn_release_floor, '>=')
+            and not (sponsord_onramp_decdn_release is search('-')
+                     and _onramp_decdn_release_floor_cmp is version(_onramp_decdn_release_floor, '==')))
     fail_msg: >-
       sponsord_onramp_decdn_release={{ sponsord_onramp_decdn_release }} is below
       v{{ _onramp_decdn_release_floor }}, and sponsord-onramp {{ sponsord_onramp_version }}
@@ -438,7 +442,7 @@
     _onramp_decdn_release_floor: >-
       {{ '0.3.0' if sponsord_onramp_version | string is version('0.3', '>=') else '0.2.0' }}
     _onramp_decdn_release_floor_cmp: >-
-      {{ (sponsord_onramp_decdn_release | regex_replace('^v', ''))
+      {{ (sponsord_onramp_decdn_release | regex_replace('^v', '') | regex_replace('-.*$', ''))
          ~ ('.0' if sponsord_onramp_decdn_release is match('^v?[0-9]+\.[0-9]+$') else '') }}
 
 - name: Validate the onramp's limits
