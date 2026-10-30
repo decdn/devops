@@ -39,7 +39,7 @@
         "uid": "${DS_PROMETHEUS}"
       },
       "title": "decdn-gateway",
-      "description": "Whether Prometheus can scrape the gateway (`up`, its loopback metrics listener). Down: browsers get 502 from nginx, or nothing at all.",
+      "description": "Whether Prometheus can scrape the gateway (`up`, its loopback metrics listener). Down: browsers get 502 from nginx, or nothing at all. An instant query: with the host or its agent gone it shows no data, never a stale UP.",
       "type": "stat",
       "targets": [
         {
@@ -49,7 +49,9 @@
           },
           "expr": "up{job=\"decdn-gateway\", instance=~\"$instance\"}",
           "refId": "A",
-          "legendFormat": "{{instance}}"
+          "legendFormat": "{{instance}}",
+          "instant": true,
+          "range": false
         }
       ],
       "fieldConfig": {
