@@ -912,6 +912,118 @@
       "id": 9
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "Clock skew refusals",
+      "type": "timeseries",
+      "description": "Requests refused because their timestamp and the receiver's clock differ by more than 30 s (TIMESTAMP_SKEW, decdn v0.3). `refused by upstreams` is this node's probes and pulls that upstream peers refused; the inbound lines are probes and streams this node refused. When this node's clock is off, they rise against every peer and every upstream pull and probe it sends fails: check chrony or systemd-timesyncd on the host (DecdnNodeClockSkew alerts on it). If the throttled warn! lines name one peer, that peer's clock is off instead.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_node_upstream_timestamp_rejected_total{instance=~\"$node\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "refused by upstreams"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_probe_timestamp_skew_refusals_total{instance=~\"$node\"}[$__rate_interval]))",
+          "refId": "B",
+          "legendFormat": "inbound probes refused"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_stream_rejected_timestamp_skew_total{instance=~\"$node\"}[$__rate_interval]))",
+          "refId": "C",
+          "legendFormat": "inbound streams refused"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 15
+      },
+      "id": 54
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -3155,6 +3267,240 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
+      "title": "Serve rate-limit rejections",
+      "type": "timeseries",
+      "description": "cdn/client/v1 streams reset with RATE_LIMITED before their request is read (ADR 005 § Request rate limiting, decdn v0.3). Sibling counters, one per layer, set under [serve.rate_limit]; a refused stream counts on the first layer that refused it. A per-peer shed is one node ID over its bucket, a per-IP shed catches one host cycling node IDs (relay-only connections skip that layer), and a global shed while per peer and per IP stay flat means aggregate load, or one source cycling node IDs over the relay. Each one ends an inbound stream as failed, so they also show in Serve refusals by reason on the delivery dashboard.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_rate_limit_rejected_per_peer_total{instance=~\"$node\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "serve — per peer"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_rate_limit_rejected_per_ip_total{instance=~\"$node\"}[$__rate_interval]))",
+          "refId": "B",
+          "legendFormat": "serve — per ip"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_rate_limit_rejected_global_total{instance=~\"$node\"}[$__rate_interval]))",
+          "refId": "C",
+          "legendFormat": "serve — global"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 78
+      },
+      "id": 52
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "title": "Serve rate-limit buckets tracked",
+      "type": "timeseries",
+      "description": "The serve path's per-IP and per-peer request buckets (decdn v0.3), and the sweeps that expire idle ones. Bucket counts climbing while the sweep rate stays flat is the memory-exhaustion shape.",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "decdn_serve_rate_limit_tracked_per_ip{instance=~\"$node\"}",
+          "refId": "A",
+          "legendFormat": "serve — per ip"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "decdn_serve_rate_limit_tracked_per_peer{instance=~\"$node\"}",
+          "refId": "B",
+          "legendFormat": "serve — per peer"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_rate_limit_prune_sweeps_per_ip_total{instance=~\"$node\"}[$__rate_interval]))",
+          "refId": "C",
+          "legendFormat": "serve ip sweeps"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(rate(decdn_serve_rate_limit_prune_sweeps_per_peer_total{instance=~\"$node\"}[$__rate_interval]))",
+          "refId": "D",
+          "legendFormat": "serve peer sweeps"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "last",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 78
+      },
+      "id": 53
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "title": "Probe serving and probe cache",
       "type": "timeseries",
       "targets": [
@@ -3266,7 +3612,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 78
+        "y": 85
       },
       "id": 32
     },
@@ -3368,7 +3714,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 78
+        "y": 85
       },
       "id": 33
     },
@@ -3513,7 +3859,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 85
+        "y": 92
       },
       "id": 45,
       "description": "Lookups this node ran and STORE records peers accepted from it. A round timeout is a lookup round whose peers did not all answer in time. A dial timeout is a lookup FIND_VALUE RPC whose QUIC dial missed the 2 s dial budget; the lookup then skips that peer for a cooldown, so a steady rate of about one per cooldown names an offline bonded peer, and round timeouts should stay near zero (ADR 022 § Routing Table). A refresh failure is a FindNode error, an invalid peer key or a panicked refresh task; a bootstrap failure is a FindNode against a seed that failed."
@@ -3614,7 +3960,7 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 85
+        "y": 92
       },
       "id": 46,
       "description": "Distinct peers in the local Kademlia routing table, set after bootstrap and on every bucket-refresh tick."
@@ -3727,7 +4073,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 92
+        "y": 99
       },
       "id": 48,
       "description": "p50, p95 and p99 duration of one probe collection window on the cache-miss path, from the start of the concurrent probes (dials included) to the end of collection (ADR 001 §Probe response collection). Collection stops early once enough holders answer, or when every probe resolves; the 1 s probe timeout bounds each probe. A p95 near 1 s means rounds wait on a slow or unreachable peer before enough holders answer. A probe-cache hit sends no probe and is not in these series."
@@ -3738,7 +4084,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 99
+        "y": 106
       },
       "id": 34,
       "panels": [],
@@ -3836,7 +4182,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 100
+        "y": 107
       },
       "id": 35
     },
@@ -3930,7 +4276,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 100
+        "y": 107
       },
       "id": 36
     },
@@ -4022,7 +4368,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 100
+        "y": 107
       },
       "id": 37
     },
@@ -4063,7 +4409,7 @@
         "h": 11,
         "w": 24,
         "x": 0,
-        "y": 107
+        "y": 114
       },
       "id": 38
     },
@@ -4073,7 +4419,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 118
+        "y": 125
       },
       "id": 39,
       "panels": [],
@@ -4171,7 +4517,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 119
+        "y": 126
       },
       "id": 40
     },
@@ -4266,7 +4612,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 127
+        "y": 134
       },
       "id": 42
     },
@@ -4299,7 +4645,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 127
+        "y": 134
       },
       "id": 43
     },
@@ -4394,7 +4740,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 135
+        "y": 142
       },
       "id": 44
     },
@@ -4404,7 +4750,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 143
+        "y": 150
       },
       "id": 49,
       "panels": [],
@@ -4481,7 +4827,7 @@
         "h": 8,
         "w": 4,
         "x": 0,
-        "y": 144
+        "y": 151
       },
       "id": 50
     },
@@ -4534,7 +4880,7 @@
         "h": 8,
         "w": 20,
         "x": 4,
-        "y": 144
+        "y": 151
       },
       "id": 51
     }

@@ -3,8 +3,9 @@
 # itself on a series that stops, and the thresholds of
 # DecdnCapacityBondRegistryResyncFailing and DecdnRedemptionMaybeBroadcast only on
 # `increase` extrapolation, none of which promtool check can catch;
-# DecdnBuyerTopupUnresolved pins its for. The test clock starts at 0. The chart's .helmignore keeps this file out of
-# the package.
+# DecdnBuyerTopupUnresolved pins its for, and DecdnNodeClockSkew its window
+# against its for (a one-off refusal stays quiet). The test clock starts at 0. The
+# chart's .helmignore keeps this file out of the package.
 #
 # It does not run in place: render-test.sh copies it into a scratch directory as
 # decdn-node-alerts_test.yml, beside a copy of prometheus-alerts.yml with the
@@ -195,3 +196,56 @@ tests:
         exp_alerts:
           - exp_labels: {job: decdn-node, instance: b, component: payments, severity: warning}
           - exp_labels: {job: decdn-node, instance: c, component: payments, severity: warning}
+
+  # Clock skew. a's upstreams refuse it once a minute from 0: pending at 1m, it
+  # fires at exactly the 30m for. b's upstream counter is flat and it refuses an
+  # inbound probe a minute from 20m: the second arm alone fires it at 50m. c is
+  # refused once every 14m: every 15m window holds one, so it goes pending at the
+  # first (14m) and fires at 44m. d is refused once (10m): pending for under 15m,
+  # it never fires. e reads flat non-zero counters on both arms and stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'decdn_node_upstream_timestamp_rejected_total{job="decdn-node", instance="a"}'
+        values: '0+1x70'
+      - series: 'decdn_probe_timestamp_skew_refusals_total{job="decdn-node", instance="a"}'
+        values: '0x70'
+      - series: 'decdn_node_upstream_timestamp_rejected_total{job="decdn-node", instance="b"}'
+        values: '0x70'
+      - series: 'decdn_probe_timestamp_skew_refusals_total{job="decdn-node", instance="b"}'
+        values: '0x19 1+1x50'
+      - series: 'decdn_node_upstream_timestamp_rejected_total{job="decdn-node", instance="c"}'
+        values: '0x13 1x13 2x13 3x13 4x13 5x5'
+      - series: 'decdn_node_upstream_timestamp_rejected_total{job="decdn-node", instance="d"}'
+        values: '0x9 1x60'
+      - series: 'decdn_node_upstream_timestamp_rejected_total{job="decdn-node", instance="e"}'
+        values: '7x70'
+      - series: 'decdn_probe_timestamp_skew_refusals_total{job="decdn-node", instance="e"}'
+        values: '3x70'
+    alert_rule_test:
+      - eval_time: 30m30s
+        alertname: DecdnNodeClockSkew
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: DecdnNodeClockSkew
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
+      - eval_time: 43m30s
+        alertname: DecdnNodeClockSkew
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
+      - eval_time: 44m
+        alertname: DecdnNodeClockSkew
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: c, component: node, severity: warning}
+      - eval_time: 49m30s
+        alertname: DecdnNodeClockSkew
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: c, component: node, severity: warning}
+      - eval_time: 50m
+        alertname: DecdnNodeClockSkew
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: b, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: c, component: node, severity: warning}
