@@ -174,6 +174,16 @@ config:
       global_burst: 1000
       max_tracked_per_ip: 1024
       max_tracked_per_peer: 1024
+  serve:
+    rate_limit:
+      per_peer_rate_per_sec: 50.0
+      per_peer_burst: 200
+      per_ip_rate_per_sec: 100.0
+      per_ip_burst: 400
+      global_rate_per_sec: 1000.0
+      global_burst: 2500
+      max_tracked_per_ip: 2048
+      max_tracked_per_peer: 2048
   receipts:
     max_file_bytes: 67108864
     retained_files: 8

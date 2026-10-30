@@ -399,7 +399,7 @@ max_concurrent_serves_low = {{ decdn_load_shed_max_concurrent_serves_low | int }
 per_client_serve_cap = {{ decdn_load_shed_per_client_serve_cap | int }}
 {% endif %}
 {% endif %}
-{% for _sec, _rl in [("dht", decdn_dht_rate_limit), ("probe", decdn_probe_rate_limit)] %}
+{% for _sec, _rl in [("dht", decdn_dht_rate_limit), ("probe", decdn_probe_rate_limit), ("serve", decdn_serve_rate_limit)] %}
 {% if _rl is not none and _rl | length > 0 %}
 
 [{{ _sec }}.rate_limit]
