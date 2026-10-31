@@ -1,0 +1,102 @@
+---
+# What a green converge + idempotence cannot prove, on ../iroh-relay's converge (split
+# from ../iroh-relay-gate so the two run side by side):
+#   5. 0.0.0.0 and a specific IPv4 address: rendered, bound, and probed there (the
+#      certificate check is "fail" in this inventory).
+#   6. The allowlist: every relay reads every platform's node ID; a node with no
+#      identity, a failing `whoami`, an unreachable node, a host outside the
+#      inventory and two nodes sharing an ID each fail tasks_from node-ids; the
+#      read works in check mode; with the inventory read off only the listed IDs
+#      render; the "everyone" and "denylist" modes render as such. (A role run that
+#      skipped the read is refused: ../validation-iroh-relay.) Two nodes sharing an
+#      ID needs two hosts, hence this scenario's two platforms.
+# The include files are ../iroh-relay's. The host is left as converged, with the
+# molecule CA trusted, for verify (../iroh-relay's).
+- name: Side effect — bind addresses, access modes
+  hosts: all
+  become: true
+  tasks:
+    # As playbooks/iroh_relay.yml does before the role: facts the converge run set
+    # do not carry over to this run.
+    - name: Read the inventory nodes' endpoint IDs, as the playbook does
+      ansible.builtin.include_role:
+        name: iroh_relay
+        tasks_from: node-ids
+
+    # --- 5. non-wildcard bind addresses ------------------------------------------------
+    # The certificate check is "fail" in this inventory, so a probe aimed at the
+    # wrong address fails these converges.
+    - name: Converge on each IPv4 bind address
+      ansible.builtin.include_tasks: ../iroh-relay/includes/bind-address.yml
+      loop:
+        - 0.0.0.0
+        - "{{ ansible_facts['default_ipv4']['address'] }}"
+      loop_control:
+        loop_var: _ir_bind
+
+    # --- 6. the access modes -----------------------------------------------------------
+    - name: Read the node IDs while one stand-in node misbehaves
+      ansible.builtin.include_tasks: ../iroh-relay/includes/node-ids-fail.yml
+      loop:
+        - {marker: molecule-no-identity, failed_at: Require an endpoint ID from every deCDN node}
+        - {marker: molecule-whoami-fails, failed_at: Require an endpoint ID from every deCDN node}
+        - {marker: molecule-shared-id, failed_at: Refuse deCDN nodes that share an endpoint ID}
+      loop_control:
+        loop_var: _ir_case
+
+    # A node that cannot be reached is reported by name, not as the relay host.
+    - name: Add a deCDN node nobody can reach
+      ansible.builtin.add_host:
+        name: molecule-unreachable-node
+        ansible_connection: ssh
+        ansible_host: 127.0.0.1
+        ansible_port: 1
+        ansible_ssh_common_args: -o ConnectTimeout=3
+
+    - name: Read the node IDs of an unreachable node and of a host outside the inventory
+      ansible.builtin.include_tasks: ../iroh-relay/includes/node-ids-fail.yml
+      loop:
+        - hosts: [molecule-unreachable-node]
+          failed_at: Require an endpoint ID from every deCDN node
+        - hosts: [molecule-not-an-inventory-host]
+          failed_at: Validate iroh_relay_allowlist_node_hosts
+      loop_control:
+        loop_var: _ir_case
+
+    - name: Read the inventory nodes' IDs in check mode
+      ansible.builtin.include_role:
+        name: iroh_relay
+        tasks_from: node-ids
+        apply:
+          check_mode: true
+
+    - name: Require the check-mode read to have read every node
+      ansible.builtin.assert:
+        that:
+          - _iroh_relay_inventory_node_ids_read
+          - _iroh_relay_inventory_node_ids | sort == groups['iroh_relay_hosts'] | map('hash', 'sha256') | sort
+        fail_msg: "Check mode read {{ _iroh_relay_inventory_node_ids }}."
+
+    - name: Converge in each other access mode
+      ansible.builtin.include_tasks: ../iroh-relay/includes/access-mode.yml
+      loop:
+        - {access: everyone, allowlist: [], denylist: [], want: '"everyone"'}
+        # The inventory read off: only the listed ID, none of the nodes'.
+        - access: allowlist
+          allowlist: [81d82536cb4c96ddbeab1f6bf4495d126c1942fb90b9ffb433d91d23314801e7]
+          denylist: []
+          from_inventory: false
+          want: '{ allowlist = ["81d82536cb4c96ddbeab1f6bf4495d126c1942fb90b9ffb433d91d23314801e7"] }'
+        - access: denylist
+          allowlist: []
+          denylist: [08ebd644cd0bd76975a53e7ff96b1eacd14dd4f61672f3f54c7c8bb19fbf2a08]
+          want: '{ denylist = ["08ebd644cd0bd76975a53e7ff96b1eacd14dd4f61672f3f54c7c8bb19fbf2a08"] }'
+      loop_control:
+        loop_var: _ir_mode
+
+    - name: Converge back on the inventory's settings
+      ansible.builtin.include_role:
+        name: iroh_relay
+
+    - name: Check the relay is back on a current record
+      ansible.builtin.include_tasks: ../iroh-relay/includes/record-is-current.yml

@@ -480,21 +480,24 @@ itself is Debian 12), `lifecycle` (a `decdn_network` profile with an override, b
 backup scopes decrypted and checked, a rejected and a real decommission),
 `sponsord` (`playbooks/sponsord.yml` on a host with no node: generated token, credential
 rotation restart, the fatal `/healthz` gate, the top-up hold guard, Alloy scraping sponsord and not the node;
-`grafana-cloud` covers sponsord co-located with a node), `sponsord-install` (the same
-converge, then release mode against a signed loopback mirror, treasury wallet
-generation and the `secret.env` provenance guards), `sponsord-onramp` (the onramp beside its daemon, behind the real distro
+`grafana-cloud` covers sponsord co-located with a node), `sponsord-install` and
+`sponsord-wallet` (the same converge, then release mode against a signed loopback
+mirror; and treasury wallet generation and the `secret.env` provenance guards),
+`sponsord-onramp` (the onramp beside its daemon, behind the real distro
 nginx with a self-signed certificate: the https chain, the client address nginx passes
 on, a Turnstile rotation restart, the fatal gates), `sponsord-onramp-nginx` (the same
 converge, then `none` mode, a broken upstream behind nginx, a refused foreign nginx
 site, the retirement of the role's earlier Caddy, ACME against an ACME server that
-does not answer, a custom gate page and the Turnstile secret from inventory),
+does not answer), `sponsord-onramp-turnstile` (the same converge, then a custom gate
+page and the Turnstile secret from inventory),
 `sponsord-onramp-source` (the same converge, then both sponsord roles built from a
 fixture repo with `install_method: source`), `sponsord-onramp-lifecycle` (the same converge, then
 sponsord's backup decrypted and checked, decommission refused for a held top-up and a
 bad confirmation, then a real one), `iroh-relay` (the relay against a stub: restarts,
-the fatal gate, the port guard), `iroh-relay-certificate` and `iroh-relay-gate` (the
-same converge, then the certificate check; and the other gate refusals, QAD off, the
-bind addresses and the access modes), `iroh-relay-install` and `iroh-relay-lifecycle`
+the fatal gate, the port guard), `iroh-relay-certificate`, `iroh-relay-gate` and
+`iroh-relay-access` (the same converge, then the certificate check; the other gate
+refusals and QAD off; and the bind addresses and the access modes),
+`iroh-relay-install` and `iroh-relay-lifecycle`
 (the same converge, then the release install and decommission), `iroh-dns-server`
 (the DNS server against a stub: restarts, the fatal gate, the port guard by address),
 `iroh-dns-server-certificate`, `iroh-dns-server-gate`, `iroh-dns-server-install` and

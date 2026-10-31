@@ -8,8 +8,8 @@
 #      healthy on its inputs), and a daemon restart brings the onramp back by
 #      itself (PartOf=, Restart=on-failure, no start limit).
 # The proxy side effects (proxy "none", a foreign nginx site, the earlier Caddy
-# retired, ACME), a custom gate page and the Turnstile secret from inventory run in
-# ../sponsord-onramp-nginx, the
+# retired, ACME) run in ../sponsord-onramp-nginx, a custom gate page and the
+# Turnstile secret from inventory in ../sponsord-onramp-turnstile, the
 # source install in ../sponsord-onramp-source, and backup and decommission in
 # ../sponsord-onramp-lifecycle, beside this scenario.
 # The host is left healthy on the role's own nginx site, self-signed, for verify.

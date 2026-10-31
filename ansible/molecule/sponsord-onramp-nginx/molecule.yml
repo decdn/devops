@@ -7,8 +7,8 @@
 #   role did not enable (refused, left untouched), the role's earlier Caddy retired
 #   (a marked Caddyfile and a stand-in caddy unit, gone after a converge), ACME
 #   against a server that does not answer (the issuance fails the run, nginx keeps
-#   serving http); then a custom gate page, and the Turnstile secret
-#   from inventory (both from ../sponsord-onramp, to keep the two jobs short).
+#   serving http). The custom gate page and the Turnstile secret from inventory run
+#   in ../sponsord-onramp-turnstile.
 # No idempotence step: ../sponsord-onramp runs it on the identical converge.
 #
 # The inventory below must stay identical to ../sponsord-onramp/molecule.yml's

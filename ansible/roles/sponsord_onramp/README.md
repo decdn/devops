@@ -252,7 +252,9 @@ else warns before the certificate expires. nginx's access logs are not shipped.
 - `molecule/sponsord-onramp-nginx` runs beside it on the same converge. It checks
   proxy `none`, a broken upstream behind nginx, the refusal of a foreign nginx site,
   the retirement of the role's earlier Caddy, and ACME against an ACME server that
-  does not answer; then a custom gate page, and the Turnstile secret from inventory.
+  does not answer.
+- `molecule/sponsord-onramp-turnstile` runs beside both on the same converge. It
+  checks a custom gate page, and the Turnstile secret from inventory.
 - `molecule/validation-sponsord` holds the negative cases.
 - `tests/firewall-holes` (`make test-scripts`) pins the tcp/80 and tcp/443 holes.
 - `tests/alloy-config` (`make lint-alloy`) runs the onramp's log lines through the
