@@ -9,9 +9,12 @@
 #
 # Inputs, from the environment (the Makefile passes them through):
 #   SCENARIOS             space-separated scenario names, or `all` (the default)
-#   JOBS                  parallel width; empty means one slot per selected scenario
+#   JOBS                  parallel width; empty means as many as the host's inotify
+#                         limit fits (see jobs_width), at most one per scenario
 #   SLOW_FIRST            scenarios to start first, longest first; the rest follow by name
 #   MOLECULE_LOCK_PREFIX  lock path prefix (default /tmp/decdn-devops-molecule)
+#   MOLECULE_INOTIFY_LIMIT  the limit file jobs_width reads (default
+#                         /proc/sys/fs/inotify/max_user_instances; the tests point it elsewhere)
 #
 # Fail loud (hard rule 4), because a harness that passes when it did not run is
 # worse than a slow one:
@@ -140,8 +143,31 @@ select_scenarios() {
   selected+=("${rest[@]}")
 }
 
+# The default width is set by the kernel, not the CPU count. Every privileged systemd
+# container's systemd takes inotify instances from one pool, root's
+# fs.inotify.max_user_instances, which is 128 on a stock host. Past it, systemd in the
+# next container dies at boot ("Failed to create control group inotify object: Too
+# many open files"), and the scenario fails at its first task with "container ... is
+# not running". 128 fitted about 15 containers on a 16-core host (October 2026), where
+# every scenario at once (39, ~54 containers) failed 21 and JOBS=8 failed 16. A
+# scenario runs up to three containers, so the default allows one per 32 instances
+# (4 at 128), and an unreadable limit (no /proc: Docker Desktop's VM) counts as 128.
+# Other Docker users on the host draw on the same pool. An explicit JOBS wins.
 jobs_width() {
-  local jobs="${JOBS:-${#selected[@]}}"
+  local limit_file="${MOLECULE_INOTIFY_LIMIT:-/proc/sys/fs/inotify/max_user_instances}"
+  local limit fit jobs="${JOBS:-}"
+  if [[ -z "$jobs" ]]; then
+    limit="$(cat "$limit_file" 2>/dev/null || true)"
+    [[ "$limit" =~ ^[0-9]+$ ]] || limit=128
+    fit=$((limit / 32)); [[ $fit -ge 1 ]] || fit=1
+    jobs=${#selected[@]}
+    if [[ $fit -lt $jobs ]]; then
+      jobs=$fit
+      [[ "$mode" != parallel ]] \
+        || echo "JOBS defaults to $jobs, one scenario per 32 of fs.inotify.max_user_instances=$limit;" \
+          "raise that (sysctl -w fs.inotify.max_user_instances=1024) or set JOBS for more" >&2
+    fi
+  fi
   case "$jobs" in
     ''|*[!0-9]*) die "JOBS must be a positive integer (got '$jobs')" ;;
   esac

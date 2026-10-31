@@ -327,6 +327,7 @@ drives deploys (its targets must run from `ansible/`). The full target list is i
 make lint             # every pre-commit hook, every file (also the CI `pre-commit` job)
 make lint-ansible     # vendor collections + ansible-lint (production profile)
 make molecule         # every ansible/molecule/*/ scenario in parallel (Docker; JOBS=<n>, SCENARIOS='a b')
+make molecule-changed # only those your branch can affect, as CI picks them (CHANGED_FROM=origin/main)
 make lint-helm        # chart: lint + render tests + kubeconform + promtool + schema keys
 make lint-alloy       # grafana_alloy config against the real pinned Alloy binary
 make lint-compose     # compose/ invariants (the file as written + three renders, compose/tests/*.jq)
@@ -382,15 +383,23 @@ file name are its cosign identity: never rename them.
 **CI.** `ci.yml` is the blocking gate: `pre-commit`, `scripts` and `actionlint` on every
 PR, the Ansible, chart, compose and cloud-init jobs path-filtered, KICS on the first
 three; `pr-title.yml` checks PR titles; `molecule.yml` runs one runner per scenario
-(matrix from `make molecule-list`) with the `molecule` job as the aggregate check.
+(matrix from `make molecule-list`) with the `molecule` job as the aggregate check: every
+scenario on a push to main, on a PR only those its changes can affect
+(`scripts/molecule-affected.py`, which derives scenario -> file/role/playbook
+dependencies from the tree, so a new scenario, include or stub needs no edit there; a
+path it does not recognise selects them all).
 `ansible-lint` is **not** a per-commit hook (it needs collections vendored): run
 `make lint-ansible`.
 
 **Molecule runs share the host's Docker daemon.** Scenario container names are fixed, so
 `scripts/molecule.sh` (behind `make molecule`) takes a host-wide lock per scenario: a
 *different* scenario does not block you, the *same* one refuses to start (exit 75). Run
-what you changed with `make molecule SCENARIOS='…'` rather than bare `molecule test -s`,
-which skips the lock. A scenario that grows slow is split along its side effects into a
+what you changed with `make molecule-changed` or `make molecule SCENARIOS='…'` rather
+than bare `molecule test -s`, which skips the lock. They also share one kernel pool,
+root's `fs.inotify.max_user_instances` (128 stock): past it the next container's systemd
+dies at boot and the scenario fails with "container … is not running", which is no
+role bug. The default `JOBS` is sized to it (`jobs_width`), but runs side by side add
+up. A scenario that grows slow is split along its side effects into a
 sibling that reuses its prepare/converge/verify by path, with an identical inventory
 (`make test-scripts` checks the pairs); add the sibling to `SLOW_FIRST` in
 `ansible/Makefile` when it is among the slowest.

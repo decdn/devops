@@ -8,14 +8,15 @@ name: Molecule
 # This file is in `paths` alongside ansible/ so a change to the jobs themselves (their
 # cache wiring, the matrix, the timeouts) is exercised by the PR that makes it.
 # cloud-init/ is in `paths` because the `cloud-init` scenarios boot
-# cloud-init/user-data*.yaml and run cloud-init/bootstrap.sh, and scripts/molecule.sh
-# because every scenario runs through it (`make molecule`).
+# cloud-init/user-data*.yaml and run cloud-init/bootstrap.sh, scripts/molecule.sh
+# because every scenario runs through it (`make molecule`), and
+# scripts/molecule-affected.py because it picks them.
 on:
   pull_request:
-    paths: ['ansible/**', 'cloud-init/**', 'scripts/molecule.sh', '.github/workflows/molecule.yml']
+    paths: ['ansible/**', 'cloud-init/**', 'scripts/molecule.sh', 'scripts/molecule-affected.py', '.github/workflows/molecule.yml']
   push:
     branches: [main]
-    paths: ['ansible/**', 'cloud-init/**', 'scripts/molecule.sh', '.github/workflows/molecule.yml']
+    paths: ['ansible/**', 'cloud-init/**', 'scripts/molecule.sh', 'scripts/molecule-affected.py', '.github/workflows/molecule.yml']
 
 permissions:
   contents: read
@@ -28,6 +29,11 @@ jobs:
   # The matrix comes from the same discovery `make molecule` uses, so a new scenario
   # directory is picked up with no edit here, and a directory without a molecule.yml
   # fails the run instead of silently dropping out of it (scripts/molecule.sh).
+  # A push to main runs every scenario. A pull request runs the ones its changes can
+  # affect (scripts/molecule-affected.py, the same selection as `make molecule-changed`):
+  # ~2h40m of runner time for all of them against ~15-30m for a one-role change.
+  # A path the selector does not recognise selects every scenario, and main re-runs
+  # them all after the merge, so a missed dependency surfaces there, one merge late.
   discover:
     runs-on: ubuntu-latest
     timeout-minutes: 5          # seconds in practice
@@ -35,13 +41,38 @@ jobs:
       scenarios: ${{ steps.list.outputs.scenarios }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0        # the selector diffs against the base's merge base
       - name: List the scenarios
         id: list
         working-directory: ansible
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          scenarios="$(make -s molecule-list)"
+          why="$RUNNER_TEMP/why"
+          if [[ "$EVENT" == pull_request ]]; then
+            sel="$(python3 -I ../scripts/molecule-affected.py --explain --since "$BASE_SHA" 2>"$why")" \
+              || { cat "$why"; exit 1; }
+          else
+            sel=all
+            echo "$EVENT: every scenario" >"$why"
+          fi
+          case "$sel" in
+            all) scenarios="$(make -s molecule-list)" ;;
+            none) scenarios='[]' ;;
+            *) scenarios="$(make -s molecule-list SCENARIOS="$sel")" ;;
+          esac
+          cat "$why"
           echo "$scenarios"
           echo "scenarios=$scenarios" >>"$GITHUB_OUTPUT"
+          {
+            echo "### Molecule scenarios: $sel"
+            echo
+            echo '```'
+            cat "$why"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
 
   # One runner per scenario. They were one job at JOBS=3 on one 4-vCPU runner: ~31m
   # for 14 scenarios, CPU-bound (per-task overhead roughly doubled under contention),
@@ -57,6 +88,8 @@ jobs:
   scenario:
     name: molecule (${{ matrix.scenario }})
     needs: discover
+    # An empty matrix is an error, not a skip: a change no scenario reads runs none.
+    if: needs.discover.outputs.scenarios != '[]'
     runs-on: ubuntu-latest      # Docker is preinstalled
     # A bound, not a target: without one a wedged privileged systemd container burns
     # the 360-minute default, and with cancel-in-progress above, some branch-protection
@@ -160,7 +193,8 @@ jobs:
   # The one stable check name for branch protection: a matrix leg's name changes with
   # the scenario list. `always()` so it reports even when discovery or a leg failed
   # (skipped dependants otherwise leave the check skipped, which reads as passing),
-  # and it passes only when every leg succeeded.
+  # and it passes only when every leg succeeded, or when discovery selected none and
+  # the matrix was skipped for that reason alone.
   molecule:
     needs: [discover, scenario]
     if: always()
@@ -171,6 +205,8 @@ jobs:
         env:
           DISCOVER: ${{ needs.discover.result }}
           SCENARIOS: ${{ needs.scenario.result }}
+          SELECTED: ${{ needs.discover.outputs.scenarios }}
         run: |
-          echo "discover: $DISCOVER, scenarios: $SCENARIOS"
-          test "$DISCOVER" = success && test "$SCENARIOS" = success
+          echo "discover: $DISCOVER, scenarios: $SCENARIOS, selected: $SELECTED"
+          test "$DISCOVER" = success
+          test "$SCENARIOS" = success || { test "$SCENARIOS" = skipped && test "$SELECTED" = '[]'; }

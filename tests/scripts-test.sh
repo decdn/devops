@@ -79,7 +79,7 @@ prefix="$work/mol"
 mol() {
   local vars=()
   while [[ "$1" == *=* ]]; do vars+=("$1"); shift; done
-  (cd "$fake" && env -u SCENARIOS -u JOBS -u SLOW_FIRST MOLECULE_LOCK_PREFIX="$prefix" \
+  (cd "$fake" && env -u SCENARIOS -u JOBS -u SLOW_FIRST -u MOLECULE_INOTIFY_LIMIT MOLECULE_LOCK_PREFIX="$prefix" \
     "${vars[@]}" "$repo/scripts/molecule.sh" "$@")
 }
 # said <description> <pattern>: the last command's output must contain the pattern.
@@ -117,6 +117,19 @@ for mode in parallel serial; do
   said "$mode lock refusal" "another molecule run holds scenario b ($prefix.b.lock)"
   no_deps "$mode lock refusal"
 done
+# The default width comes from the inotify limit (one scenario per 32 instances), and
+# is worked out before the lock refusal, so these cases stop there too.
+echo 64 >"$work/inotify"
+expect 75 "molecule's default JOBS follows the inotify limit" mol MOLECULE_INOTIFY_LIMIT="$work/inotify" parallel
+said "the inotify cap" "JOBS defaults to 2, one scenario per 32 of fs.inotify.max_user_instances=64"
+for quiet in "JOBS=3 parallel" "serial"; do
+  # shellcheck disable=SC2086 # word-split on purpose: optional VAR=value, then the mode
+  expect 75 "molecule $quiet says nothing of the inotify cap" mol MOLECULE_INOTIFY_LIMIT="$work/inotify" $quiet
+  ! grep -q "JOBS defaults" "$work/out" || { cat "$work/out" >&2; fail "molecule $quiet named the inotify cap"; }
+done
+echo 1024 >"$work/inotify"
+expect 75 "molecule runs every scenario at once when the inotify limit fits them" mol MOLECULE_INOTIFY_LIMIT="$work/inotify" parallel
+! grep -q "JOBS defaults" "$work/out" || { cat "$work/out" >&2; fail "a 1024 limit capped three scenarios"; }
 kill "$holder"; wait "$holder" 2>/dev/null || true
 
 # deps beside a running scenario (shared collections lock held): it never rewrites
@@ -1545,8 +1558,9 @@ expect 0 "decdn-compose unit tests pass" \
   env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$repo/compose/tests" -p 'test_*.py'
 expect 2 "decdn-compose refuses an unknown command" "$repo/compose/decdn-compose" deploy
 
-# --- scripts/bump_decdn.py: the decdn bump's file rewrites, on copies of the pin files --
-expect 0 "bump_decdn unit tests pass" \
+# --- scripts/bump_decdn.py (the decdn bump's file rewrites, on copies of the pin files)
+# and scripts/molecule-affected.py (the scenarios a PR runs, against the real tree) --
+expect 0 "bump_decdn and molecule-affected unit tests pass" \
   env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$repo/scripts/tests" -p 'test_*.py'
 expect 2 "open-decdn-bump refuses an unknown argument" "$repo/scripts/open-decdn-bump.sh" --execute
 
