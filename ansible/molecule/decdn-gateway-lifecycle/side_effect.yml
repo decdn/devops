@@ -81,8 +81,12 @@
           - "'--domains gateway.molecule.test' in _svc"
           - "'--domains *.gateway.molecule.test' in _svc"
           - "'--server https://127.0.0.1:14000/dir' in _svc"
+          # The timer randomizes; lego's own sleep would only lengthen the role's wait.
+          - "'--no-random-sleep' in _svc"
           - "'EnvironmentFile=/etc/decdn-gateway/acme-dns.env' in _svc"
-          - "'try-reload-or-restart nginx.service' in _svc"
+          - >-
+            '--deploy-hook "/usr/local/lib/decdn-gateway/certs-deployed https://127.0.0.1:14000/dir'
+            in _svc
           - _gw_timer.status.ActiveState == 'active'
         fail_msg: "{{ _gw_lego.stdout }} / {{ _stamp }} / {{ _svc }}"
 
@@ -92,9 +96,257 @@
                --resolve, "gateway.molecule.test:443:127.0.0.1", "https://gateway.molecule.test/"]
       changed_when: false
 
+    # An existing certificate the role did not issue for this CA (a host moved off
+    # letsencrypt-staging): the reissue is forced, and stays pending after a failed
+    # run instead of being dropped because the unit no longer changes.
+    - name: Plant a certificate for the domain, as issued by the staging CA
+      ansible.builtin.shell:
+        cmd: >-
+          set -euo pipefail;
+          d=/var/lib/decdn-gateway-acme/certificates; mkdir -p "$d";
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30
+          -subj /CN=gateway.molecule.test
+          -addext "subjectAltName=DNS:gateway.molecule.test,DNS:*.gateway.molecule.test"
+          -keyout "$d/decdn-gateway.key" -out "$d/decdn-gateway.crt" 2>/dev/null;
+          echo "letsencrypt-staging gateway.molecule.test" > /var/lib/decdn-gateway-acme/.issued-for
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Converge on acme twice, the ACME server still dead
+      ansible.builtin.include_tasks: includes/acme-retry.yml
+      loop: [1, 2]
+      loop_control:
+        loop_var: _gw_attempt
+
+    # Timer runs, with the reissue still pending from the failed converges above,
+    # and no converge after them. lego is swapped for stand-ins (the ACME server is
+    # still dead) and the real one put back after. First a run that exits 0 but
+    # renews nothing, as lego does for a certificate that is not due: nothing may
+    # count as issued. Then one that issues, i.e. runs its deploy hook: that run
+    # must record the new CA and stop forcing by itself.
+    - name: Keep the real lego aside
+      ansible.builtin.copy:
+        src: /usr/local/lib/decdn-gateway/lego
+        dest: /root/lego.real
+        remote_src: true
+        mode: "0755"
+
+    - name: Put a lego that renews nothing in its place
+      ansible.builtin.copy:
+        dest: /usr/local/lib/decdn-gateway/lego
+        content: "#!/bin/sh\nexit 0\n"
+        mode: "0755"
+
+    - name: Run the certificate service as the timer would, nothing renewed
+      ansible.builtin.command:
+        argv: [systemctl, start, decdn-gateway-certs.service]
+      changed_when: true
+
+    - name: Read the record and the forcing env file after the empty run
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: _gw_after_empty
+      loop:
+        - /var/lib/decdn-gateway-acme/.issued-for
+        - /var/lib/decdn-gateway-acme/force.env
+
+    - name: Require the empty run to have acknowledged nothing
+      ansible.builtin.assert:
+        that:
+          - (_gw_after_empty.results[0].content | b64decode | trim) == 'letsencrypt-staging gateway.molecule.test'
+          - (_gw_after_empty.results[1].content | b64decode) is search('LEGO_RENEW_FORCE=true')
+        fail_msg: "{{ _gw_after_empty.results | map(attribute='content') | map('b64decode') | list }}"
+
+    # A run already under way for another CA finishes after the role forced this
+    # one: its hook must leave this force alone.
+    - name: Run the deploy hook as a run for another CA would
+      ansible.builtin.command:
+        argv:
+          - /usr/local/lib/decdn-gateway/certs-deployed
+          - letsencrypt
+          - gateway.molecule.test
+          - /root/other-ca.issued-for
+          - /var/lib/decdn-gateway-acme/force.env
+      changed_when: true
+
+    - name: Stat the force after the other CA's hook
+      ansible.builtin.stat:
+        path: /var/lib/decdn-gateway-acme/force.env
+      register: _gw_force_other
+
+    - name: Require the other CA's hook to have left this force alone
+      ansible.builtin.assert:
+        that:
+          - _gw_force_other.stat.exists
+        fail_msg: A deploy hook for another CA removed the pending force for this one.
+
+    # lego runs --deploy-hook's value split on whitespace, with no shell.
+    - name: Put a lego that issues, running its deploy hook, in its place
+      ansible.builtin.copy:
+        dest: /usr/local/lib/decdn-gateway/lego
+        content: |
+          #!/usr/bin/env python3
+          import subprocess, sys
+          a = sys.argv
+          subprocess.run(a[a.index("--deploy-hook") + 1].split(), check=True)
+        mode: "0755"
+
+    - name: Run the certificate service as the timer would, a certificate issued
+      ansible.builtin.command:
+        argv: [systemctl, start, decdn-gateway-certs.service]
+      changed_when: true
+
+    - name: Read what the issuing run left
+      ansible.builtin.stat:
+        path: /var/lib/decdn-gateway-acme/force.env
+      register: _gw_force_after
+
+    - name: Read the record after the issuing run
+      ansible.builtin.slurp:
+        src: /var/lib/decdn-gateway-acme/.issued-for
+      register: _gw_record_after
+
+    - name: Require the issuing run to have recorded the new CA and stopped forcing
+      ansible.builtin.assert:
+        that:
+          - not _gw_force_after.stat.exists
+          - (_gw_record_after.content | b64decode) == 'https://127.0.0.1:14000/dir gateway.molecule.test\n'
+        fail_msg: >-
+          force.env {{ 'is still there' if _gw_force_after.stat.exists else 'is gone' }}, and the
+          record is {{ _gw_record_after.content | b64decode | to_json }}.
+
+    # A failed switch to another CA, then a revert to the one the certificate is
+    # from: the other CA's force must go, or every timer run would reissue from
+    # this one. The certificate needs no run, so the converge goes on to nginx,
+    # whose https probe then fails on the planted, untrusted certificate.
+    - name: Leave a force behind for another CA, as a failed switch would
+      ansible.builtin.copy:
+        dest: /var/lib/decdn-gateway-acme/force.env
+        content: |
+          LEGO_RENEW_FORCE=true
+          LEGO_ARI_DISABLE=true
+          DECDN_GATEWAY_FORCE_FOR=letsencrypt gateway.molecule.test
+        mode: "0600"
+
+    # A renewal in flight when the converge starts: the role must wait it out
+    # before it reads anything (the lego stand-in takes 90 s, then issues).
+    - name: Put a slow lego that issues in its place
+      ansible.builtin.copy:
+        dest: /usr/local/lib/decdn-gateway/lego
+        content: |
+          #!/usr/bin/env python3
+          import subprocess, sys, time
+          time.sleep(90)
+          a = sys.argv
+          subprocess.run(a[a.index("--deploy-hook") + 1].split(), check=True)
+        mode: "0755"
+
+    - name: Start a renewal without waiting for it, as the timer would
+      ansible.builtin.command:
+        argv: [systemctl, start, --no-block, decdn-gateway-certs.service]
+      changed_when: true
+
+    - name: Converge back on the CA the certificate is from
+      block:
+        - name: Run the role on the recorded CA
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_tls: acme
+            decdn_gateway_acme_email: ops@molecule.test
+            decdn_gateway_acme_dns_provider: exec
+            decdn_gateway_acme_server: https://127.0.0.1:14000/dir
+
+        - name: Fail — nginx accepted the planted certificate
+          ansible.builtin.fail:
+            msg: The https probe passed on an untrusted certificate.
+      rescue:
+        - name: Require the failure to come from the https probe, past issuance
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Report a gateway that is not reachable through nginx'
+            fail_msg: >-
+              The revert failed at "{{ ansible_failed_task.name }}", not at the https
+              probe: {{ ansible_failed_result.msg | default('') }}
+
+    - name: Stat the force after the revert
+      ansible.builtin.stat:
+        path: /var/lib/decdn-gateway-acme/force.env
+      register: _gw_force_reverted
+
+    - name: Require the other CA's force removed, after the run in flight
+      ansible.builtin.assert:
+        that:
+          - not _gw_force_reverted.stat.exists
+          - decdn_gateway_certs_state.attempts | default(1) > 1
+        fail_msg: >-
+          force.env {{ 'survived' if _gw_force_reverted.stat.exists else 'is gone' }}; the
+          role checked for a run in flight {{ decdn_gateway_certs_state.attempts | default(1) }}
+          time(s) (it must have waited for the slow one).
+
+    - name: Put the real lego back
+      ansible.builtin.copy:
+        src: /root/lego.real
+        dest: /usr/local/lib/decdn-gateway/lego
+        remote_src: true
+        mode: "0755"
+
+    # A restore as root leaves the state root's; the converge gives it back. A link
+    # the gateway's account planted there must not hand root's file to it.
+    - name: Give the gateway's state to root, as a restore would
+      ansible.builtin.file:
+        path: /var/lib/decdn-gateway/gateway
+        owner: root
+        group: root
+        recurse: true
+
+    - name: Write a root-only canary outside the state
+      ansible.builtin.copy:
+        dest: /root/molecule-canary
+        content: "root's\n"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Plant a link to it in the state, as a compromised gateway could
+      ansible.builtin.file:
+        src: /root/molecule-canary
+        dest: /var/lib/decdn-gateway/gateway/pointers/escape.json
+        state: link
+        owner: root
+        group: root
+
     - name: Converge back on self-signed
       ansible.builtin.include_role:
         name: decdn_gateway
+
+    - name: Stat the gateway's state after the converge
+      ansible.builtin.stat:
+        path: /var/lib/decdn-gateway/gateway/pointers
+      register: _gw_pointers_owner
+
+    - name: Stat the canary and the link to it
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      register: _gw_canary
+      loop: [/root/molecule-canary, /var/lib/decdn-gateway/gateway/pointers/escape.json]
+
+    - name: Require the state back with the gateway's account, and the canary root's
+      ansible.builtin.assert:
+        that:
+          - _gw_pointers_owner.stat.pw_name == 'decdn-gateway'
+          - _gw_canary.results[0].stat.pw_name == 'root'
+          - _gw_canary.results[1].stat.islnk and _gw_canary.results[1].stat.pw_name == 'decdn-gateway'
+        fail_msg: >-
+          pointers is {{ _gw_pointers_owner.stat.pw_name }}'s, the canary
+          {{ _gw_canary.results[0].stat.pw_name }}'s, the link
+          {{ _gw_canary.results[1].stat.pw_name }}'s: the chown followed the link.
+
+    - name: Remove the planted link
+      ansible.builtin.file:
+        path: /var/lib/decdn-gateway/gateway/pointers/escape.json
+        state: absent
 
     - name: Read the renewal timer again
       ansible.builtin.systemd_service:

@@ -186,6 +186,14 @@
             state: absent
           when: decdn_gateway_lego_stage.path is defined
 
+    - name: Install lego's deploy hook
+      ansible.builtin.copy:
+        src: certs-deployed
+        dest: "{{ _decdn_gateway_certs_deployed }}"
+        owner: root
+        group: root
+        mode: "0755"
+
     - name: Ensure lego's state directory exists
       ansible.builtin.file:
         path: "{{ decdn_gateway_acme_dir }}"
@@ -194,62 +202,202 @@
         group: root
         mode: "0700"
 
-    # The unit is the one place the lego command line lives: the timer renews
-    # through it, and the first issuance below runs it too.
-    - name: Install the certificate service and its timer
-      ansible.builtin.template:
-        src: "{{ item }}.j2"
-        dest: "/etc/systemd/system/{{ item }}"
-        owner: root
-        group: root
-        mode: "0644"
-      loop: [decdn-gateway-certs.service, decdn-gateway-certs.timer]
-      register: decdn_gateway_certs_units
-
-    - name: Enable and start the renewal timer
-      ansible.builtin.systemd:
-        name: decdn-gateway-certs.timer
-        enabled: true
-        state: started
-        daemon_reload: true
-      when: not ansible_check_mode or decdn_gateway_lego_bin_stat.stat.exists
-
-    - name: Check for the certificate
+    - name: Check for the renewal timer of an earlier run
       ansible.builtin.stat:
-        path: "{{ decdn_gateway_cert_file }}"
-      register: decdn_gateway_cert_stat
+        path: /etc/systemd/system/decdn-gateway-certs.timer
+      register: decdn_gateway_timer_unit
 
-    # Synchronous: nginx cannot serve the site before the certificate exists. Also
-    # after a change to the service (a new domain, provider or CA), which lego
-    # applies on its own run (--force-cert-domains re-issues for a new domain list).
-    # systemctl start waits for a oneshot to finish (the timer task above reloaded
-    # systemd); its exit status is the run's.
-    - name: Obtain or update the certificate now
-      ansible.builtin.command:
-        argv: [systemctl, start, decdn-gateway-certs.service]
-      register: decdn_gateway_certs_run
-      changed_when: true
-      failed_when: false
-      when:
-        - not ansible_check_mode
-        - not decdn_gateway_cert_stat.stat.exists or decdn_gateway_certs_units.changed
+    # Serialized with the timer, before anything is read or written: a renewal under
+    # way for the previous server or domain could otherwise replace the certificate
+    # after the decision below (on a revert, while the record already names the
+    # wanted CA), or clear a newer force between its hook's check and delete. The
+    # timer is stopped and any run in flight waited for (a DNS-01 run can take
+    # minutes to propagate); it comes back whatever happens (always:).
+    - name: Settle the certificate with the timer paused
+      block:
+        - name: Pause the renewal timer
+          ansible.builtin.systemd:
+            name: decdn-gateway-certs.timer
+            state: stopped
+          when:
+            - decdn_gateway_timer_unit.stat.exists
+            - not ansible_check_mode
 
-    - name: Re-check for the certificate
-      ansible.builtin.stat:
-        path: "{{ decdn_gateway_cert_file }}"
-      register: decdn_gateway_cert_post
-      when: decdn_gateway_certs_run is not skipped
+        - name: Wait for a certificate run already under way
+          ansible.builtin.command:
+            argv: [systemctl, show, -P, ActiveState, decdn-gateway-certs.service]
+          register: decdn_gateway_certs_state
+          changed_when: false
+          until: decdn_gateway_certs_state.stdout | trim in ['inactive', 'failed']
+          retries: 180
+          delay: 5
+          when:
+            - decdn_gateway_timer_unit.stat.exists
+            - not ansible_check_mode
 
-    - name: Report a certificate lego could not obtain
-      ansible.builtin.fail:
-        msg: |-
-          lego did not obtain a certificate for {{ decdn_gateway_domain }} and
-          *.{{ decdn_gateway_domain }} (systemctl start exited {{ decdn_gateway_certs_run.rc }}).
-          Check that the {{ decdn_gateway_acme_dns_provider }} credentials in
-          {{ decdn_gateway_acme_env_file }} can edit the zone, and read the reason:
-            sudo journalctl -u decdn-gateway-certs -e
-          Use decdn_gateway_acme_server: letsencrypt-staging while iterating, so failed
-          attempts do not spend the production rate limits.
-      when:
-        - decdn_gateway_certs_run is not skipped
-        - decdn_gateway_certs_run.rc != 0 or not decdn_gateway_cert_post.stat.exists
+        # The unit is the one place the lego command line lives: the timer renews
+        # through it, and the first issuance below runs it too.
+        - name: Install the certificate service and its timer
+          ansible.builtin.template:
+            src: "{{ item }}.j2"
+            dest: "/etc/systemd/system/{{ item }}"
+            owner: root
+            group: root
+            mode: "0644"
+          loop: [decdn-gateway-certs.service, decdn-gateway-certs.timer]
+          register: decdn_gateway_certs_units
+
+        - name: Load the certificate units
+          ansible.builtin.systemd:
+            daemon_reload: true
+          when: decdn_gateway_certs_units.changed and not ansible_check_mode
+
+        - name: Check for the certificate
+          ansible.builtin.stat:
+            path: "{{ decdn_gateway_cert_file }}"
+          register: decdn_gateway_cert_stat
+
+        # "<server> <domain>", recorded after the last run that issued it. A record that
+        # differs (a new domain or ACME server, or a run that failed after either
+        # changed) keeps the certificate pending until a run succeeds: the unit file
+        # alone cannot tell, since it no longer changes on the run after a failure.
+        - name: Read what the certificate was last issued for
+          ansible.builtin.slurp:
+            src: "{{ _decdn_gateway_issued_for }}"
+          register: decdn_gateway_issued_for
+          failed_when: false
+          changed_when: false
+
+        # A certificate from before the record existed: adopted when its names are the
+        # wanted ones (its CA cannot be read back reliably, so it is taken as the
+        # configured one), reissued otherwise.
+        - name: Read the existing certificate's names
+          ansible.builtin.command:
+            argv: [openssl, x509, -in, "{{ decdn_gateway_cert_file }}", -noout, -ext, subjectAltName]
+          register: decdn_gateway_cert_names
+          changed_when: false
+          failed_when: false
+          check_mode: false
+          when:
+            - decdn_gateway_cert_stat.stat.exists
+            - decdn_gateway_issued_for.content is not defined
+
+        - name: Decide whether the certificate must be issued again
+          ansible.builtin.set_fact:
+            decdn_gateway_issue_for: "{{ _want }}"
+            decdn_gateway_need_issue: >-
+              {{ not decdn_gateway_cert_stat.stat.exists
+                 or (decdn_gateway_issued_for.content is defined
+                     and (decdn_gateway_issued_for.content | b64decode | trim) != _want)
+                 or (decdn_gateway_issued_for.content is not defined
+                     and (decdn_gateway_cert_names.stdout | default('')
+                          | regex_findall('DNS:([^,\\s]+)') | sort)
+                         != ([decdn_gateway_domain, '*.' ~ decdn_gateway_domain] | sort)) }}
+          vars:
+            _want: "{{ decdn_gateway_acme_server }} {{ decdn_gateway_domain }}"
+
+        # An existing certificate that is not due would be kept: force the reissue,
+        # until a run succeeds (the file is removed below), including timer runs.
+        - name: Force the next issuance
+          ansible.builtin.copy:
+            dest: "{{ _decdn_gateway_force_env }}"
+            # The last line names what it forces, so a run already under way for another
+            # server or domain does not clear it (files/certs-deployed).
+            content: |
+              LEGO_RENEW_FORCE=true
+              LEGO_ARI_DISABLE=true
+              DECDN_GATEWAY_FORCE_FOR={{ decdn_gateway_issue_for }}
+            owner: root
+            group: root
+            mode: "0600"
+          when:
+            - decdn_gateway_need_issue
+            - decdn_gateway_cert_stat.stat.exists
+
+        # The certificate is already the wanted one (e.g. reverted to its CA after a
+        # failed switch): a force left for another server or domain would make every
+        # timer run reissue from this one, and its deploy hook would never clear it.
+        - name: Remove a force the wanted certificate no longer needs
+          ansible.builtin.file:
+            path: "{{ _decdn_gateway_force_env }}"
+            state: absent
+          when: not decdn_gateway_need_issue
+
+        # Synchronous: nginx cannot serve the site before the certificate exists, and a
+        # changed domain or CA must not wait for the timer. systemctl start waits for a
+        # oneshot to finish (the units were loaded above); its exit status is the
+        # run's.
+        - name: Obtain or update the certificate now
+          ansible.builtin.command:
+            argv: [systemctl, start, decdn-gateway-certs.service]
+          register: decdn_gateway_certs_run
+          changed_when: true
+          failed_when: false
+          when:
+            - not ansible_check_mode
+            - decdn_gateway_need_issue or decdn_gateway_certs_units.changed
+
+        - name: Re-check for the certificate
+          ansible.builtin.stat:
+            path: "{{ decdn_gateway_cert_file }}"
+          register: decdn_gateway_cert_post
+          when: decdn_gateway_certs_run is not skipped
+
+        - name: Report a certificate lego could not obtain
+          ansible.builtin.fail:
+            msg: |-
+              lego did not obtain a certificate for {{ decdn_gateway_domain }} and
+              *.{{ decdn_gateway_domain }} (systemctl start exited {{ decdn_gateway_certs_run.rc }}).
+              Check that the {{ decdn_gateway_acme_dns_provider }} credentials in
+              {{ decdn_gateway_acme_env_file }} can edit the zone, and read the reason:
+                sudo journalctl -u decdn-gateway-certs -e
+              Use decdn_gateway_acme_server: letsencrypt-staging while iterating, so failed
+              attempts do not spend the production rate limits.
+          when:
+            - decdn_gateway_certs_run is not skipped
+            - decdn_gateway_certs_run.rc != 0 or not decdn_gateway_cert_post.stat.exists
+
+        # A pending reissue counts as done only when the deploy hook recorded it: lego
+        # exits 0 after a run that issued nothing too.
+        - name: Read the record after the run
+          ansible.builtin.slurp:
+            src: "{{ _decdn_gateway_issued_for }}"
+          register: decdn_gateway_issued_after
+          failed_when: false
+          when:
+            - decdn_gateway_certs_run is not skipped
+            - decdn_gateway_need_issue
+
+        - name: Report a run that issued nothing
+          ansible.builtin.fail:
+            msg: |-
+              lego exited 0 but issued no certificate for {{ decdn_gateway_issue_for }}
+              (the deploy hook did not record one). Read why:
+                sudo journalctl -u decdn-gateway-certs -e
+          when:
+            - decdn_gateway_certs_run is not skipped
+            - decdn_gateway_need_issue
+            - (decdn_gateway_issued_after.content | default('') | b64decode | trim) != decdn_gateway_issue_for
+
+        # A certificate from before the record existed, adopted as it is: no run issued
+        # it, so the role records it itself.
+        - name: Record an adopted certificate
+          ansible.builtin.copy:
+            dest: "{{ _decdn_gateway_issued_for }}"
+            content: "{{ decdn_gateway_issue_for }}\n"
+            owner: root
+            group: root
+            mode: "0600"
+          when:
+            - not ansible_check_mode
+            - not decdn_gateway_need_issue
+            - decdn_gateway_issued_for.content is not defined
+
+      always:
+        - name: Enable and start the renewal timer
+          ansible.builtin.systemd:
+            name: decdn-gateway-certs.timer
+            enabled: true
+            state: started
+            daemon_reload: true
+          when: not ansible_check_mode or decdn_gateway_lego_bin_stat.stat.exists

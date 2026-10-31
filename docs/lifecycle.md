@@ -392,9 +392,11 @@ the pool store (the pool and its lanes) and the namespace pointers owners have
   `decdn_backup_age_recipients`). It is taken hot. The pool store is left out: on a
   new host the gateway adopts the wallet's live pool from the chain again. Set
   `decdn_gateway_backup_include_config: true` to add `gateway.toml` (the RPC URL).
-- **Restore and migration:** on the new host, restore the archive with `tar -C /`
-  before the first deploy, so the role finds the wallet and does not ask for (or
-  mint) another. Then deploy with the same `decdn_gateway_domain` and move `<domain>`
+- **Restore and migration:** on the new host, restore the archive as root with
+  `tar -C /` before the first deploy, so the role finds the wallet and does not ask
+  for (or mint) another. The archive carries the old host's numeric owners; the
+  deploy gives the wallet, the password and everything under
+  `/var/lib/decdn-gateway/gateway` back to the `decdn-gateway` account. Then deploy with the same `decdn_gateway_domain` and move `<domain>`
   and `*.<domain>` to the new host. The certificate does not move: lego issues one on
   the new host over DNS-01, which needs no DNS change first. Without the pointers,
   each `<ns>.<domain>` answers 404 until its owner runs `decdn publish point` again.

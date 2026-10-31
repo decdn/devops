@@ -45,6 +45,27 @@
           - _gw_noop.status.MainPID == _gw_before.status.MainPID
         fail_msg: A re-run with no input changed restarted decdn-gateway.
 
+    # nginx takes no burst=0; the role leaves the parameter out instead.
+    - name: Converge with no PUT /_pointer burst
+      ansible.builtin.include_role:
+        name: decdn_gateway
+      vars:
+        decdn_gateway_pointer_burst: 0
+
+    - name: Read the nginx site without a burst
+      ansible.builtin.slurp:
+        src: /etc/nginx/sites-available/decdn-gateway
+      register: _gw_site_noburst
+
+    - name: Require the limit without a burst parameter
+      ansible.builtin.assert:
+        that:
+          - "'limit_req zone=decdn_gateway_pointer nodelay;' in _site"
+          - _site is not search('limit_req [^\n]*burst=')
+        fail_msg: "{{ _site }}"
+      vars:
+        _site: "{{ _gw_site_noburst.content | b64decode }}"
+
     - name: Converge with another daily allowance
       ansible.builtin.include_role:
         name: decdn_gateway
