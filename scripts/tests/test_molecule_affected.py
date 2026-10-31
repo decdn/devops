@@ -96,9 +96,29 @@ class Dependencies(unittest.TestCase):
         got = names("ansible/roles/sponsord/files/install-build-output.py")
         self.assertIn("sponsord-onramp-source", got)
 
+    def test_a_stub_under_a_templated_root_is_a_dependency(self):
+        # cloud-init-publisher's mirror copies `{{ stubs }}/sponsord/files/sponsord-stub`.
+        for stub in ("sponsord/files/sponsord-stub", "sponsord-onramp/files/sponsord-onramp-stub"):
+            with self.subTest(stub):
+                self.assertIn("cloud-init-publisher", names(f"ansible/molecule/{stub}"))
+
     def test_a_deleted_file_selects_every_reader_of_its_scenario(self):
         got = names("ansible/molecule/default/files/no-such-file")
         self.assertLessEqual({"default", "os-matrix", "sponsord-install"}, got)
+
+    def test_a_deleted_file_alone_in_its_directory_keeps_its_readers(self):
+        # Simulate deleting grafana-cloud's alloy-stub, the only file in files/:
+        # its readers' references then resolve to nothing on disk.
+        stub = REPO / "ansible/molecule/grafana-cloud/files/alloy-stub"
+        tree = ma.Tree()
+        tree.files["grafana-cloud"] = [f for f in tree.files["grafana-cloud"] if f != stub.resolve()]
+        real_is_file = Path.is_file
+        Path.is_file = lambda p: p.resolve() != stub.resolve() and real_is_file(p)
+        try:
+            got = ma.select(tree, "ansible/molecule/grafana-cloud/files/alloy-stub")
+        finally:
+            Path.is_file = real_is_file
+        self.assertLessEqual({"grafana-cloud", "iroh-relay", "sponsord"}, got)
 
     def test_cloud_init_and_the_collection(self):
         self.assertEqual(set(ma.CLOUD_INIT), names("cloud-init/bootstrap.sh"))

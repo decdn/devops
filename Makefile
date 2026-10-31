@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN DevOps monorepo.
 # Run from the repo root. Ansible-specific work is delegated to ansible/Makefile.
-.PHONY: help hooks lint lint-ansible lint-helm lint-alloy lint-compose lint-cloud-init test-scripts security security-ansible security-helm security-compose molecule molecule-serial galaxy-build galaxy-check
+.PHONY: help hooks lint lint-ansible lint-helm lint-alloy lint-compose lint-cloud-init test-scripts security security-ansible security-helm security-compose molecule molecule-serial molecule-changed galaxy-build galaxy-check
 SHELL := /bin/bash
 
 # KICS runs straight from the engine image, pinned by digest. This target IS the
@@ -197,6 +197,9 @@ molecule:            ## containerised converge/verify of the roles, scenarios in
 
 molecule-serial:     ## same selection, one scenario at a time (readable output on failure)
 	$(MAKE) -C ansible molecule-serial
+
+molecule-changed:    ## only the scenarios your branch can affect, as CI picks them for a PR (CHANGED_FROM=origin/main)
+	$(MAKE) -C ansible molecule-changed
 
 galaxy-build:        ## stage + build the decdn.node and decdn.publisher Galaxy collection artifacts
 	$(MAKE) -C ansible build

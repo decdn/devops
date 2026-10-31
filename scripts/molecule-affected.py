@@ -198,15 +198,26 @@ class Tree:
                     todo.append(u)
         return frozenset(seen)
 
+    @cache
+    def names(self, u: str) -> frozenset[str]:
+        """Every scenario u's files (and the files they read) name by path, whether
+        or not the name still resolves to a file."""
+        return frozenset(
+            t
+            for f in self.scenario_files(u)
+            for t, _ in _SCENARIO_REF.findall(_code(f))
+            if t in self.files
+        )
+
     def using_file(self, s: str, path: Path) -> set[str]:
         """Scenarios that read path, a file under scenario s. One no longer on disk
-        (deleted, or renamed away) selects s and every scenario reading any of s's
-        files: whatever named it now names nothing, and resolved to the directory."""
+        (deleted, or renamed away) cannot be traced to its readers, whose names for it
+        now resolve to nothing: it selects s and every scenario naming any path
+        under s."""
         path = path.resolve()
         if path.is_file():
             return {u for u in self.scenarios if path in self.scenario_files(u)}
-        mine = set(self.files[s])
-        return {s} | {u for u in self.scenarios if self.scenario_files(u) & mine}
+        return {s} | {u for u in self.scenarios if s in self.names(u)}
 
     def using_roles(self, roles: frozenset[str]) -> set[str]:
         return {u for u in self.scenarios if self.scenario_roles(u) & roles}
@@ -218,9 +229,15 @@ class Tree:
         return {u for u in self.scenarios if self.scenario_playbooks(u)}
 
 
-# `../<scenario>/<rest>` or `molecule/<scenario>/<rest>`: a provisioner playbook
-# override, an include, `${MOLECULE_PROJECT_DIRECTORY}/molecule/<s>/files/<stub>`.
-_SCENARIO_REF = re.compile(r"(?:\.\./|molecule/)([\w.-]+)/([\w./-]*)")
+# `../<scenario>/<rest>`, `molecule/<scenario>/<rest>` or `}}/<scenario>/<rest>`: a
+# provisioner playbook override, an include,
+# `${MOLECULE_PROJECT_DIRECTORY}/molecule/<s>/files/<stub>`, or a stub under a
+# variable holding ansible/molecule (`{{ stubs }}/sponsord/files/sponsord-stub`).
+# Matched as a lookahead, so the matches overlap: `{{ x }}/molecule/default/…` is read
+# both as a scenario called `molecule` (not one, so dropped) and as `default`. The
+# name starts with a word character, so `{{ playbook_dir }}/../default/` is not a
+# scenario called `..`.
+_SCENARIO_REF = re.compile(r"(?=(?:\.\./|molecule/|\}\}/)(\w[\w.-]*)/([\w./-]*))")
 _COMMENT = re.compile(r"(?:^|\s)#(?!!).*$", re.MULTILINE)
 
 
