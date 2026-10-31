@@ -37,6 +37,6 @@
 - name: Require the reissue still pending, attempt {{ _gw_attempt }}
   ansible.builtin.assert:
     that:
-      - (_gw_pending.results[0].content | b64decode) == 'LEGO_RENEW_FORCE=true\n'
+      - (_gw_pending.results[0].content | b64decode) == 'LEGO_RENEW_FORCE=true\nLEGO_ARI_DISABLE=true\n'
       - (_gw_pending.results[1].content | b64decode | trim) == 'letsencrypt-staging gateway.molecule.test'
     fail_msg: "{{ _gw_pending.results | map(attribute='content') | map('b64decode') | list }}"

@@ -1,0 +1,14 @@
+#!/bin/sh
+# MANAGED BY the decdn_gateway role — do not edit by hand.
+#
+# lego's deploy hook (decdn-gateway-certs.service): lego runs it only after it has
+# created or renewed the certificate, never after a run that found nothing due. So
+# this is where a certificate counts as issued for <server> <domain>: record that,
+# stop forcing a reissue, and reload nginx onto the new certificate.
+#   certs-deployed <server> <domain> <record file> <force env file>
+set -eu
+umask 077
+printf '%s %s\n' "$1" "$2" >"$3.new"
+mv -f -- "$3.new" "$3"
+rm -f -- "$4"
+exec /usr/bin/systemctl try-reload-or-restart nginx.service

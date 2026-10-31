@@ -24,6 +24,8 @@ _decdn_gateway_certs:
 # wanted one. Both in lego's root-only state directory.
 _decdn_gateway_issued_for: "{{ decdn_gateway_acme_dir }}/.issued-for"
 _decdn_gateway_force_env: "{{ decdn_gateway_acme_dir }}/force.env"
+# lego's deploy hook: records an issuance, stops forcing, reloads nginx.
+_decdn_gateway_certs_deployed: /usr/local/lib/decdn-gateway/certs-deployed
 
 # The installed-version stamps, beside the binaries.
 _decdn_gateway_stamp: /usr/local/lib/decdn-gateway/installed-version

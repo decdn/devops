@@ -186,6 +186,14 @@
             state: absent
           when: decdn_gateway_lego_stage.path is defined
 
+    - name: Install lego's deploy hook
+      ansible.builtin.copy:
+        src: certs-deployed
+        dest: "{{ _decdn_gateway_certs_deployed }}"
+        owner: root
+        group: root
+        mode: "0755"
+
     - name: Ensure lego's state directory exists
       ansible.builtin.file:
         path: "{{ decdn_gateway_acme_dir }}"
@@ -263,7 +271,7 @@
     - name: Force the next issuance
       ansible.builtin.copy:
         dest: "{{ _decdn_gateway_force_env }}"
-        content: "LEGO_RENEW_FORCE=true\n"
+        content: "LEGO_RENEW_FORCE=true\nLEGO_ARI_DISABLE=true\n"
         owner: root
         group: root
         mode: "0600"
@@ -305,19 +313,38 @@
         - decdn_gateway_certs_run is not skipped
         - decdn_gateway_certs_run.rc != 0 or not decdn_gateway_cert_post.stat.exists
 
-    # Only now, after a run that succeeded (or a certificate adopted as it is). The
-    # unit's ExecStartPost= does the same after a timer run that succeeds.
-    - name: Record what the certificate is issued for
+    # A pending reissue counts as done only when the deploy hook recorded it: lego
+    # exits 0 after a run that issued nothing too.
+    - name: Read the record after the run
+      ansible.builtin.slurp:
+        src: "{{ _decdn_gateway_issued_for }}"
+      register: decdn_gateway_issued_after
+      failed_when: false
+      when:
+        - decdn_gateway_certs_run is not skipped
+        - decdn_gateway_need_issue
+
+    - name: Report a run that issued nothing
+      ansible.builtin.fail:
+        msg: |-
+          lego exited 0 but issued no certificate for {{ decdn_gateway_issue_for }}
+          (the deploy hook did not record one). Read why:
+            sudo journalctl -u decdn-gateway-certs -e
+      when:
+        - decdn_gateway_certs_run is not skipped
+        - decdn_gateway_need_issue
+        - (decdn_gateway_issued_after.content | default('') | b64decode | trim) != decdn_gateway_issue_for
+
+    # A certificate from before the record existed, adopted as it is: no run issued
+    # it, so the role records it itself.
+    - name: Record an adopted certificate
       ansible.builtin.copy:
         dest: "{{ _decdn_gateway_issued_for }}"
         content: "{{ decdn_gateway_issue_for }}\n"
         owner: root
         group: root
         mode: "0600"
-      when: not ansible_check_mode
-
-    - name: Stop forcing issuance
-      ansible.builtin.file:
-        path: "{{ _decdn_gateway_force_env }}"
-        state: absent
-      when: not ansible_check_mode
+      when:
+        - not ansible_check_mode
+        - not decdn_gateway_need_issue
+        - decdn_gateway_issued_for.content is not defined

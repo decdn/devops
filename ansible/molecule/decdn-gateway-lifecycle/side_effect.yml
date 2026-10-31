@@ -82,7 +82,9 @@
           - "'--domains *.gateway.molecule.test' in _svc"
           - "'--server https://127.0.0.1:14000/dir' in _svc"
           - "'EnvironmentFile=/etc/decdn-gateway/acme-dns.env' in _svc"
-          - "'try-reload-or-restart nginx.service' in _svc"
+          - >-
+            '--deploy-hook "/usr/local/lib/decdn-gateway/certs-deployed https://127.0.0.1:14000/dir'
+            in _svc
           - _gw_timer.status.ActiveState == 'active'
         fail_msg: "{{ _gw_lego.stdout }} / {{ _stamp }} / {{ _svc }}"
 
@@ -114,10 +116,12 @@
       loop_control:
         loop_var: _gw_attempt
 
-    # A timer run that succeeds, with the reissue still pending from the failed
-    # converges above, must clear it itself: no converge follows to do it. lego is
-    # swapped for one that succeeds (the ACME server is still dead) and the real
-    # one put back after.
+    # Timer runs, with the reissue still pending from the failed converges above,
+    # and no converge after them. lego is swapped for stand-ins (the ACME server is
+    # still dead) and the real one put back after. First a run that exits 0 but
+    # renews nothing, as lego does for a certificate that is not due: nothing may
+    # count as issued. Then one that issues, i.e. runs its deploy hook: that run
+    # must record the new CA and stop forcing by itself.
     - name: Keep the real lego aside
       ansible.builtin.copy:
         src: /usr/local/lib/decdn-gateway/lego
@@ -125,28 +129,59 @@
         remote_src: true
         mode: "0755"
 
-    - name: Put a lego that succeeds in its place
+    - name: Put a lego that renews nothing in its place
       ansible.builtin.copy:
         dest: /usr/local/lib/decdn-gateway/lego
         content: "#!/bin/sh\nexit 0\n"
         mode: "0755"
 
-    - name: Run the certificate service as the timer would
+    - name: Run the certificate service as the timer would, nothing renewed
       ansible.builtin.command:
         argv: [systemctl, start, decdn-gateway-certs.service]
       changed_when: true
 
-    - name: Read what the successful run left
+    - name: Read the record and the forcing env file after the empty run
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: _gw_after_empty
+      loop:
+        - /var/lib/decdn-gateway-acme/.issued-for
+        - /var/lib/decdn-gateway-acme/force.env
+
+    - name: Require the empty run to have acknowledged nothing
+      ansible.builtin.assert:
+        that:
+          - (_gw_after_empty.results[0].content | b64decode | trim) == 'letsencrypt-staging gateway.molecule.test'
+          - (_gw_after_empty.results[1].content | b64decode) is search('LEGO_RENEW_FORCE=true')
+        fail_msg: "{{ _gw_after_empty.results | map(attribute='content') | map('b64decode') | list }}"
+
+    # lego runs --deploy-hook's value split on whitespace, with no shell.
+    - name: Put a lego that issues, running its deploy hook, in its place
+      ansible.builtin.copy:
+        dest: /usr/local/lib/decdn-gateway/lego
+        content: |
+          #!/usr/bin/env python3
+          import subprocess, sys
+          a = sys.argv
+          subprocess.run(a[a.index("--deploy-hook") + 1].split(), check=True)
+        mode: "0755"
+
+    - name: Run the certificate service as the timer would, a certificate issued
+      ansible.builtin.command:
+        argv: [systemctl, start, decdn-gateway-certs.service]
+      changed_when: true
+
+    - name: Read what the issuing run left
       ansible.builtin.stat:
         path: /var/lib/decdn-gateway-acme/force.env
       register: _gw_force_after
 
-    - name: Read the record after the successful run
+    - name: Read the record after the issuing run
       ansible.builtin.slurp:
         src: /var/lib/decdn-gateway-acme/.issued-for
       register: _gw_record_after
 
-    - name: Require the timer run to have recorded the new CA and stopped forcing
+    - name: Require the issuing run to have recorded the new CA and stopped forcing
       ansible.builtin.assert:
         that:
           - not _gw_force_after.stat.exists
