@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN Ansible project.
 # Always run from the ansible/ directory.
-.PHONY: deps lint check deploy check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns check-gateway deploy-gateway backup decommission molecule molecule-serial molecule-list build build-node build-publisher galaxy-check galaxy-check-node galaxy-check-publisher
+.PHONY: deps lint check deploy check-node deploy-node check-origin deploy-origin check-publisher deploy-publisher check-sponsord deploy-sponsord check-relay deploy-relay check-dns deploy-dns check-gateway deploy-gateway backup decommission molecule molecule-serial molecule-list molecule-changed build build-node build-publisher galaxy-check galaxy-check-node galaxy-check-publisher
 SHELL := /bin/bash
 
 # Install the required Galaxy collections (>= constraints in requirements.yml)
@@ -231,6 +231,13 @@ decommission:
 #   make molecule JOBS=2                        narrower fan-out on a small machine
 #   make molecule-serial                        one at a time, stops at the first failure
 #   make molecule-list                          the selection as JSON (CI's matrix)
+#   make molecule-changed                       the scenarios your branch can affect
+#   make molecule-changed CHANGED_FROM=<ref>    ...against <ref> (default origin/main)
+#
+# molecule-changed selects as CI does on a pull request: ../scripts/molecule-affected.py
+# reads what changed since the merge base with CHANGED_FROM (commits, the working tree
+# and untracked files) and prints what each path selected. A push to main still runs
+# every scenario.
 #
 # The scenarios run concurrently: distinct container names, no published host ports,
 # per-scenario ephemeral dirs, and what they share on the control machine (the
@@ -272,6 +279,14 @@ molecule-serial:
 
 molecule-list:
 	@$(molecule_env) ../scripts/molecule.sh list
+
+CHANGED_FROM ?= origin/main
+molecule-changed:
+	@sel="$$(python3 -I ../scripts/molecule-affected.py --explain --since '$(CHANGED_FROM)')" || exit 1; \
+	case "$$sel" in \
+	  none) echo "no molecule scenario is affected by the changes since $(CHANGED_FROM)" ;; \
+	  *) $(molecule_env) SCENARIOS="$$sel" ../scripts/molecule.sh parallel ;; \
+	esac
 
 # --- Galaxy collections (decdn.node, decdn.publisher) -------------------------
 # Stage each collection's roles (galaxy/<collection>/roles.txt) and playbooks

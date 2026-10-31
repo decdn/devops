@@ -169,10 +169,11 @@ lint-cloud-init:     ## schema-check the cloud-init/ user-data templates and the
 # The guard rails nothing else exercises: ansible/Makefile's scoping guards, the
 # release gate, the lint-compose and lint-cloud-init negative cases, compose/'s
 # decdn-compose unit tests (compose/tests/test_decdn_compose.py), scripts/bump_decdn.py's
-# (scripts/tests/test_bump_decdn.py), the cloud-init
+# (scripts/tests/test_bump_decdn.py) and scripts/molecule-affected.py's
+# (scripts/tests/test_molecule_affected.py), the cloud-init
 # bootstrap's baseline guard and template contracts, and (with UPSTREAM=<decdn
 # checkout>) the upstream-mirror generators' exit codes. CI job `scripts`.
-test-scripts:        ## test the Makefile and molecule-driver guards, release gate, lint-compose and lint-cloud-init negatives, decdn-compose and bump_decdn unit tests (needs docker, jq, python3>=3.11, cloud-init, yq)
+test-scripts:        ## test the Makefile and molecule-driver guards, release gate, lint-compose and lint-cloud-init negatives, decdn-compose, bump_decdn and molecule-affected unit tests (needs docker, jq, python3>=3.11, cloud-init, yq)
 	tests/scripts-test.sh
 
 lint-helm:           ## helm lint + render tests + kubeconform + promtool + shared schema-key check (needs helm, yq, python3>=3.11, docker)
