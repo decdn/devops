@@ -229,17 +229,45 @@
         mode: "0600"
 
     # A renewal in flight when the converge starts: the role must wait it out
-    # before it reads anything (the lego stand-in takes 90 s, then issues).
+    # before it reads anything. The lego stand-in stays in flight until the role
+    # pauses the renewal timer, which it does just before it starts waiting
+    # (tasks/tls.yml), and then 10 s more: the role's first look, one task later,
+    # finds it running even on a loaded runner, and the role waits two polls. A
+    # fixed sleep would have to outlast the whole converge up to that point.
+    # Stopping the timer does not stop the service it already started. The 300 s
+    # cap turns a timer that never stops into a failed issuance, not a hang, and
+    # the assertion after the converge requires the run to have finished cleanly.
     - name: Put a slow lego that issues in its place
       ansible.builtin.copy:
         dest: /usr/local/lib/decdn-gateway/lego
         content: |
           #!/usr/bin/env python3
           import subprocess, sys, time
-          time.sleep(90)
+          def timer_active():
+              state = subprocess.run(
+                  ["systemctl", "is-active", "decdn-gateway-certs.timer"],
+                  capture_output=True, text=True,
+              ).stdout.strip()
+              if state not in ("active", "deactivating", "inactive"):
+                  sys.exit(f"cannot read decdn-gateway-certs.timer: {state!r}")
+              return state != "inactive"
+          deadline = time.monotonic() + 300
+          while timer_active():
+              if time.monotonic() > deadline:
+                  sys.exit("the role never paused decdn-gateway-certs.timer")
+              time.sleep(0.5)
+          time.sleep(10)
           a = sys.argv
           subprocess.run(a[a.index("--deploy-hook") + 1].split(), check=True)
         mode: "0755"
+
+    # The stand-in hands off on the timer stopping, so the timer must be running.
+    - name: Read the renewal timer before the renewal in flight
+      ansible.builtin.command:
+        argv: [systemctl, is-active, decdn-gateway-certs.timer]
+      register: _gw_timer_before_slow
+      changed_when: false
+      failed_when: _gw_timer_before_slow.stdout | trim != 'active'
 
     - name: Start a renewal without waiting for it, as the timer would
       ansible.builtin.command:
@@ -279,10 +307,13 @@
         that:
           - not _gw_force_reverted.stat.exists
           - decdn_gateway_certs_state.attempts | default(1) > 1
+          # `failed` also ends the role's wait: a stand-in that gave up on the timer.
+          - decdn_gateway_certs_state.stdout | trim == 'inactive'
         fail_msg: >-
           force.env {{ 'survived' if _gw_force_reverted.stat.exists else 'is gone' }}; the
           role checked for a run in flight {{ decdn_gateway_certs_state.attempts | default(1) }}
-          time(s) (it must have waited for the slow one).
+          time(s) (it must have waited for the slow one), which ended
+          {{ decdn_gateway_certs_state.stdout | trim }}.
 
     - name: Put the real lego back
       ansible.builtin.copy:

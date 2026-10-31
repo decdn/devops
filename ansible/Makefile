@@ -258,7 +258,8 @@ SCENARIOS ?= all
 JOBS ?=
 SLOW_FIRST ?= sponsord-onramp-source sponsord-install cloud-init source-build-recovery \
 	iroh-relay-gate cloud-init-publisher sponsord source-build sponsord-onramp \
-	sponsord-onramp-nginx iroh-relay source-build-rollback iroh-relay-certificate \
+	sponsord-onramp-nginx decdn-gateway-lifecycle iroh-relay source-build-rollback \
+	iroh-relay-certificate \
 	validation iroh-relay-install os-matrix grafana-cloud
 MOLECULE_LOCK_PREFIX ?= /tmp/decdn-devops-molecule
 molecule_env = SCENARIOS='$(SCENARIOS)' JOBS='$(JOBS)' SLOW_FIRST='$(SLOW_FIRST)' \
