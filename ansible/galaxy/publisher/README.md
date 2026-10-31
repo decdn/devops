@@ -25,7 +25,7 @@ them and `decdn.node`'s (see [Usage](#usage)):
   sudo user. Facts must be gathered (each role derives its release target from the
   host architecture).
 - Collection dependencies (installed automatically with this collection):
-  `decdn.node (>=0.5.0)`, for the host baseline, observability and the origin and
+  `decdn.node (>=0.6.0)`, for the host baseline, observability and the origin and
   cache nodes. None of this collection's roles calls into it: its playbooks do.
 
 ## Install
