@@ -1,0 +1,77 @@
+# {{ _sponsord_onramp_nginx_marker }} — do not edit by hand.
+#
+# nginx in front of sponsord-onramp, which listens on loopback
+# ({{ sponsord_onramp_bind_address }}:{{ sponsord_onramp_port }}). It serves {{ sponsord_onramp_domain }} only: plain http
+# answers the ACME HTTP-01 challenge from {{ sponsord_onramp_acme_webroot }} and redirects
+# everything else to https. X-Forwarded-For is SET to the client nginx saw, never
+# appended to, so a client cannot choose the address the onramp rate limits and
+# gates by.
+{% set _http2 = sponsord_onramp_nginx_version is version('1.25.1', '>=') %}
+
+upstream sponsord_onramp {
+    server {{ sponsord_onramp_bind_address }}:{{ sponsord_onramp_port }};
+    keepalive 16;
+}
+
+# Any other name: no answer on http, no handshake on https.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ sponsord_onramp_domain }};
+    server_tokens off;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root {{ sponsord_onramp_acme_webroot }};
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+{% if _sponsord_onramp_https %}
+
+server {
+{% if _http2 %}
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+{% else %}
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+{% endif %}
+    server_name {{ sponsord_onramp_domain }};
+    server_tokens off;
+
+    ssl_certificate {{ sponsord_onramp_cert_file }};
+    ssl_certificate_key {{ sponsord_onramp_key_file }};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:sponsord_onramp_tls:10m;
+    ssl_session_timeout 1d;
+
+    location / {
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Connection "";
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_pass http://sponsord_onramp;
+    }
+}
+{% else %}
+# No certificate yet: the https server is added once lego has issued one.
+{% endif %}

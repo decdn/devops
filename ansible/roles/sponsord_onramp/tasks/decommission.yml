@@ -4,10 +4,13 @@
 # LIMIT=<host>`). It runs before sponsord's own decommission: the onramp needs the
 # daemon.
 #
-# What it does: stop the onramp and disable and remove its systemd unit, and stop
-# and disable the role's Caddy (only when /etc/caddy/Caddyfile carries the role's
-# marker; a foreign Caddy is never touched). What it KEEPS: the Turnstile secret
-# and the other files under sponsord_onramp_etc, the binary and the caddy package.
+# What it does: stop the onramp and the certificate renewal timer and remove their
+# systemd units, disable the role's nginx site and stop
+# nginx when that was the only site it served (a site someone else enabled keeps
+# nginx running, minus the role's), and retire a Caddy the role ran before nginx.
+# What it KEEPS: the Turnstile secret and the other files under
+# sponsord_onramp_etc, the certificate and lego's account, the binaries and the
+# nginx package.
 # The tcp/80 + tcp/443 firewall holes stay until the host leaves
 # sponsord_onramp_hosts and baseline runs again.
 
@@ -54,9 +57,9 @@
           + (['iroh-relay'] if 'iroh_relay_hosts' in _decom_groups else [])
           + (['iroh-dns-server'] if 'iroh_dns_server_hosts' in _decom_groups else [])
           + (['decdn-gateway and its nginx'] if 'decdn_gateway_hosts' in _decom_groups else [])
-          + (['sponsord-onramp and its Caddy'] if 'sponsord_onramp_hosts' in _decom_groups else [])
+          + (['sponsord-onramp and its nginx'] if 'sponsord_onramp_hosts' in _decom_groups else [])
           + (['sponsord'] if 'sponsord_hosts' in _decom_groups else [])
-          + ['sponsord-onramp and its Caddy']) | unique }}
+          + ['sponsord-onramp and its nginx']) | unique }}
   when:
     - decdn_decommission_confirm is not defined
     - not (_decdn_decommission_confirmed | default(false) | bool)
@@ -75,60 +78,97 @@
   ansible.builtin.set_fact:
     _decdn_decommission_confirmed: true
 
-- name: Check for the sponsord-onramp unit
+- name: Check for the sponsord-onramp unit and the renewal timer
   ansible.builtin.stat:
-    path: /etc/systemd/system/sponsord-onramp.service
-  register: _sponsord_onramp_decommission_unit
+    path: "/etc/systemd/system/{{ item }}"
+  register: _sponsord_onramp_decommission_units
+  loop: [sponsord-onramp.service, sponsord-onramp-certs.timer]
 
-- name: Stop and disable sponsord-onramp
+- name: Stop and disable sponsord-onramp and the renewal timer
   ansible.builtin.systemd_service:
-    name: sponsord-onramp
+    name: "{{ item.item }}"
     state: stopped
     enabled: false
-  when: _sponsord_onramp_decommission_unit.stat.exists
+  loop: "{{ _sponsord_onramp_decommission_units.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
 
-- name: Remove the sponsord-onramp unit and its restart-inputs record
+- name: Remove the onramp's units and its restart-inputs record
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
   loop:
     - /etc/systemd/system/sponsord-onramp.service
+    - /etc/systemd/system/sponsord-onramp-certs.service
+    - /etc/systemd/system/sponsord-onramp-certs.timer
     - "{{ sponsord_onramp_inputs_checksum_file }}"
 
-# Unconditional: cheap, and right even after an earlier run removed the file but
+# Unconditional: cheap, and right even after an earlier run removed the files but
 # failed before reloading.
-- name: Reload systemd after removing the unit
+- name: Reload systemd after removing the units
   ansible.builtin.systemd_service:
     daemon_reload: true
 
-# Only a Caddy serving this role's Caddyfile: with the backend gone it would answer
-# every request with a 502 on the public ports.
-- name: Check the Caddyfile for this role's marker
+# With the backend gone nginx would answer every request with a 502 on the public
+# ports. Only the role's site is disabled; nginx stops only when nothing else is
+# enabled.
+- name: Check the nginx site for this role's marker
   ansible.builtin.command:
-    argv: [grep, -qF, "MANAGED BY the sponsord_onramp role", "{{ _sponsord_onramp_caddyfile }}"]
-  register: _sponsord_onramp_decommission_caddy
+    argv: [grep, -qF, "{{ _sponsord_onramp_nginx_marker }}", "{{ _sponsord_onramp_nginx_site }}"]
+  register: _sponsord_onramp_decommission_site
   changed_when: false
-  # 1 = no marker, 2 = no file (or unreadable): neither is the role's Caddy.
+  # 1 = no marker, 2 = no file (or unreadable): neither is the role's site.
   failed_when: false
 
-- name: Stop and disable the role's Caddy
+- name: Disable the role's nginx site
+  ansible.builtin.file:
+    path: "{{ _sponsord_onramp_nginx_site_link }}"
+    state: absent
+  when: _sponsord_onramp_decommission_site.rc == 0
+
+- name: List what else nginx serves
+  ansible.builtin.find:
+    paths: [/etc/nginx/sites-enabled, /etc/nginx/conf.d]
+    file_type: any
+    hidden: true
+  register: _sponsord_onramp_decommission_others
+  when: _sponsord_onramp_decommission_site.rc == 0
+
+- name: Stop and disable nginx
   ansible.builtin.systemd_service:
-    name: caddy
+    name: nginx
     state: stopped
     enabled: false
-  when: _sponsord_onramp_decommission_caddy.rc == 0
+  when:
+    - _sponsord_onramp_decommission_site.rc == 0
+    - _sponsord_onramp_decommission_others.matched == 0
+
+- name: Reload nginx without the role's site
+  ansible.builtin.systemd_service:
+    name: nginx
+    state: reloaded
+  when:
+    - _sponsord_onramp_decommission_site.rc == 0
+    - _sponsord_onramp_decommission_others.matched > 0
+
+# A host never converged since the move to nginx still runs the role's Caddy.
+- name: Retire the role's earlier Caddy
+  ansible.builtin.include_tasks: caddy-remove.yml
+  vars:
+    _sponsord_onramp_caddy_purge: true
 
 - name: Report what is left to do
   ansible.builtin.debug:
     msg:
       - >-
-        sponsord-onramp is stopped and its unit removed on {{ inventory_hostname }}
-        {{- "; the role's Caddy is stopped and disabled" if _sponsord_onramp_decommission_caddy.rc == 0
-            else "; no Caddy of this role's was found" }}.
+        sponsord-onramp is stopped and its units removed on {{ inventory_hostname }}
+        {{- "; the role's nginx site is disabled" if _sponsord_onramp_decommission_site.rc == 0
+            else "; no nginx site of this role's was found" }}
+        {{- "; the role's earlier Caddy is removed" if sponsord_onramp_legacy_caddy.rc | default(1) == 0 else "" }}.
       - >-
         Kept: {{ sponsord_onramp_turnstile_secret_file }} and the other files under
-        {{ sponsord_onramp_etc }}, {{ sponsord_onramp_bin }}, the caddy package and
-        {{ _sponsord_onramp_caddyfile }}.
+        {{ sponsord_onramp_etc }}, the certificate under {{ sponsord_onramp_acme_dir }},
+        {{ sponsord_onramp_bin }}, lego and the nginx package.
       - >-
         tcp/80 and tcp/443 stay open until you take the host out of
         sponsord_onramp_hosts and re-run baseline.

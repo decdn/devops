@@ -1,0 +1,13 @@
+#!/bin/sh
+# MANAGED BY the sponsord_onramp role — do not edit by hand.
+#
+# nginx-validate-site <file>: `nginx -t` on one site file alone, inside an http
+# block, so the role's template step can refuse a site that does not load before it
+# replaces the live one. The real nginx.conf is not read: the site needs no
+# http-level directive from it.
+set -eu
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+printf 'pid %s/nginx.pid;\nerror_log stderr;\nevents {}\nhttp {\n  include /etc/nginx/mime.types;\n  include %s;\n}\n' \
+  "$d" "$1" >"$d/nginx.conf"
+nginx -t -q -c "$d/nginx.conf"

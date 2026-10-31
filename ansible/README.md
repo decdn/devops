@@ -21,7 +21,7 @@ the collections are built:
 | `origin.yml` | Harden the host and deploy a publisher's **origin node**: `decdn-node` with an origin backend, on hosts in `decdn_origin_nodes` (a child of `decdn_nodes`). Refuses an origin outside `decdn_nodes` or without a backend. | `make check-origin` / `make deploy-origin` |
 | `backup.yml` | Encrypted backup of a node's identity or full state, of sponsord's credentials and of a gateway's wallet and namespace pointers. | `make backup` |
 | `decommission.yml` | Stop a node, an iroh relay, an iroh DNS server, a public gateway, the onramp and sponsord and remove their services (keeps the keys; no on-chain steps). | `make decommission` |
-| `sponsord.yml` | Harden the host and deploy **sponsord**, the onboarding sponsor, on hosts in `sponsord_hosts`, with or without a node; then its public **sponsord-onramp** (behind Caddy) on hosts in `sponsord_onramp_hosts`. Also run by `publisher.yml`. | `make check-sponsord` / `make deploy-sponsord` |
+| `sponsord.yml` | Harden the host and deploy **sponsord**, the onboarding sponsor, on hosts in `sponsord_hosts`, with or without a node; then its public **sponsord-onramp** (behind nginx) on hosts in `sponsord_onramp_hosts`. Also run by `publisher.yml`. | `make check-sponsord` / `make deploy-sponsord` |
 | `iroh_relay.yml` | Harden the host and deploy a self-hosted **iroh relay** (`iroh-relay`), the fallback path for peers that cannot hole-punch, on hosts in `iroh_relay_hosts`. Also run by `publisher.yml`. | `make check-relay` / `make deploy-relay` |
 | `iroh_dns_server.yml` | Harden the host and deploy a self-hosted **iroh DNS server** (`iroh-dns-server`), the pkarr relay and DNS server nodes are discovered through, on hosts in `iroh_dns_server_hosts`. Also run by `publisher.yml`. | `make check-dns` / `make deploy-dns` |
 | `decdn_gateway.yml` | Harden the host and deploy a **public gateway** (`decdn gateway --public-url`) on a domain of your own, behind nginx with a wildcard certificate, on hosts in `decdn_gateway_hosts`. Also run by `publisher.yml`. | `make check-gateway` / `make deploy-gateway` |
@@ -35,7 +35,7 @@ baseline        host hardening: DevSec os/ssh, nftables default-deny inbound,
    ├─ sponsord        treasury signer + PaymentPool keeper; loopback API; DynamicUser
    │  │               unit with systemd credentials; standalone or beside a node
    │  └─ sponsord_onramp  the public gate + installers on sponsord's host; loopback
-   │                      listener behind Caddy (ACME TLS, tcp/80 + tcp/443)
+   │                      listener behind nginx (lego HTTP-01 TLS, tcp/80 + tcp/443)
    ├─ iroh_relay      self-hosted iroh relay; its own Let's Encrypt TLS on tcp/80 +
    │                  tcp/443, QUIC address discovery udp/7842; loopback metrics
    ├─ iroh_dns_server self-hosted pkarr relay + DNS server for node discovery; its own
@@ -50,7 +50,7 @@ The repo-wide model is in the [root README](../README.md#security-model). What i
 specific to this path:
 
 - **nftables is the firewall.** SSH plus the node's **udp/4433** (via
-  `baseline_extra_inbound`) are the only holes, plus **tcp/80 + tcp/443** for Caddy on a
+  `baseline_extra_inbound`) are the only holes, plus **tcp/80 + tcp/443** for nginx on a
   `sponsord_onramp_hosts` host, **tcp/80, tcp/443 + udp/7842** for the relay on an
   `iroh_relay_hosts` host and **tcp/443, udp/53 + tcp/53** for the DNS server on an
   `iroh_dns_server_hosts` host and **tcp/80 + tcp/443** for nginx on a
@@ -146,7 +146,7 @@ of your own when hosts differ by group (disk size, an egress cap on metered band
 with a `group_vars/<group>.yml`. Origins go in `decdn_origin_nodes`, as a child of
 `decdn_nodes` (see `inventory/hosts-publisher.yml.example`). Settings every host needs regardless of
 inventory, currently the public firewall holes (the node's udp/4433, tcp/80 + tcp/443
-for Caddy on `sponsord_onramp_hosts` with `sponsord_onramp_proxy: caddy`, tcp/80 +
+for nginx on `sponsord_onramp_hosts` with `sponsord_onramp_proxy: nginx`, tcp/80 +
 tcp/443 on `iroh_relay_hosts` plus udp/7842 unless
 `iroh_relay_enable_quic_addr_discovery` is false, tcp/443 + udp/53 + tcp/53 on
 `iroh_dns_server_hosts`), live in
@@ -337,8 +337,10 @@ as well; `make deploy-sponsord` runs it after the daemon.
 - **The Turnstile secret** comes from `sponsord_onramp_turnstile_secret` in the
   git-ignored `host_vars/<host>/secret.yml`, or from a file you write on the host. The
   onramp reads the daemon's own API token.
-- **Caddy** (the default) terminates TLS for `sponsord_onramp_domain` and opens tcp/80
-  and tcp/443. Set `sponsord_onramp_proxy: none` to bring your own proxy.
+- **nginx** (the default) terminates TLS for `sponsord_onramp_domain`, with a
+  certificate lego obtains over ACME HTTP-01 (`sponsord_onramp_acme_email` required),
+  and opens tcp/80 and tcp/443. Set `sponsord_onramp_proxy: none` to bring your own
+  proxy. A Caddy the role ran before is retired on the next converge.
 - **The RPC URL it gets is public**: it is handed to every user, so it must hold no key.
 
 Setup and variables: [`roles/sponsord_onramp/README.md`](roles/sponsord_onramp/README.md).
@@ -480,10 +482,11 @@ rotation restart, the fatal `/healthz` gate, the top-up hold guard, Alloy scrapi
 `grafana-cloud` covers sponsord co-located with a node), `sponsord-install` (the same
 converge, then release mode against a signed loopback mirror, treasury wallet
 generation and the `secret.env` provenance guards), `sponsord-onramp` (the onramp beside its daemon, behind the real distro
-Caddy with `tls internal`: the https chain, the client address Caddy passes on, a
-Turnstile rotation restart, the fatal gates), `sponsord-onramp-caddy` (the same
-converge, then ACME and `none` modes, a refused foreign Caddyfile, a custom gate page
-and the Turnstile secret from inventory),
+nginx with a self-signed certificate: the https chain, the client address nginx passes
+on, a Turnstile rotation restart, the fatal gates), `sponsord-onramp-nginx` (the same
+converge, then `none` mode, a broken upstream behind nginx, a refused foreign nginx
+site, the retirement of the role's earlier Caddy, ACME against an ACME server that
+does not answer, a custom gate page and the Turnstile secret from inventory),
 `sponsord-onramp-source` (the same converge, then both sponsord roles built from a
 fixture repo with `install_method: source`), `sponsord-onramp-lifecycle` (the same converge, then
 sponsord's backup decrypted and checked, decommission refused for a held top-up and a

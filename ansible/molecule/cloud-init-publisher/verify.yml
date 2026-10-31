@@ -1,7 +1,7 @@
 ---
 # After the secrets: the host moved to the pinned tag, the origin node and both sponsor
 # services came from their (mirrored, signed) releases and are running, with the
-# origin backend in node.toml, sponsord generated its own API token, and Caddy serves
+# origin backend in node.toml, sponsord generated its own API token, and nginx serves
 # the onramp over https. The toolchain pins are ../cloud-init's check.
 - name: Verify
   hosts: all
@@ -72,7 +72,7 @@
       ansible.builtin.service_facts:
 
     # The role probes the same; this proves the chain still answers after the run.
-    - name: Fetch the onramp's /healthz through Caddy
+    - name: Fetch the onramp's /healthz through nginx
       ansible.builtin.command:
         argv: [curl, -fsSk, --max-time, '10', --resolve, 'onramp.molecule.test:443:127.0.0.1',
                'https://onramp.molecule.test/healthz']
@@ -88,7 +88,7 @@
 
     - name: Assert every service is installed from its release and running
       vars:
-        services: ['caddy.service', 'decdn-node.service', 'sponsord-onramp.service', 'sponsord.service']
+        services: ['decdn-node.service', 'nginx.service', 'sponsord-onramp.service', 'sponsord.service']
         origin: "{{ node_origin.stdout | from_json }}"
         # A unit that is absent drops out here, rather than failing the template.
         units: "{{ ansible_facts.services | dict2items | selectattr('key', 'in', services) }}"

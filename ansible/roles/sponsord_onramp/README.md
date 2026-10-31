@@ -61,27 +61,50 @@ is unreachable.
 - **Restarts on out-of-band changes.** As in the `sponsord` role, a hash record of
   every restart input (the token, the Turnstile secret, the env file, the gate page,
   the unit, the binary) restarts the onramp when one changes outside the role.
-- **Puts Caddy in front** (`sponsord_onramp_proxy: caddy`, the default):
-  - Installs the distribution's `caddy` package (Debian main; on Ubuntu it is in
-    **universe**, which must be enabled). No third-party apt repository is added.
-    The package is not allowed to start Caddy on its stock config: Caddy first
-    starts once the role's Caddyfile has validated.
-  - Writes `/etc/caddy/Caddyfile`: TLS for `sponsord_onramp_domain`, then a reverse
-    proxy to the onramp on loopback. The file is validated with `caddy validate`
-    before it lands. The admin API is off, so nothing on the host can reconfigure
-    the running proxy over its admin endpoint (:2019), and HTTP/3 is off, so udp/443
-    stays closed.
+- **Puts nginx in front** (`sponsord_onramp_proxy: nginx`, the default):
+  - Installs the distribution's `nginx`, `curl` and `openssl` packages. No
+    third-party apt repository is added, so baseline's unattended-upgrades keeps the
+    internet-facing TLS terminator patched. The package is not allowed to start
+    nginx on its stock default site: nginx first starts once the role's site has
+    validated.
+  - Writes one site, `/etc/nginx/sites-available/sponsord-onramp` (enabled in
+    `sites-enabled/`, replacing the package's `default`): `sponsord_onramp_domain` on
+    tcp/80 serves the ACME HTTP-01 challenge and redirects everything else to https;
+    on tcp/443 it terminates TLS and proxies to the onramp on loopback, **setting**
+    `X-Forwarded-For` to the client address (never appending a client-sent one).
+    Other names get no answer on 80 and no TLS handshake on 443. The site is
+    validated on its own before it lands, then `nginx -t` checks the whole
+    configuration before a reload.
+  - Gets the certificate from **lego** over **ACME HTTP-01**
+    (`sponsord_onramp_tls: acme`, the default): no DNS credentials, only the domain's
+    A/AAAA records pointing at the host and tcp/80 reaching it. lego is a pinned
+    release, verified against its per-architecture sha256 (the same pin as the
+    `decdn_gateway` role's). The first deploy serves http only, has lego issue the
+    certificate, then adds the https server; `sponsord-onramp-certs.timer` renews
+    twice a day, and its deploy hook reloads nginx. A changed domain or ACME server
+    reissues on the next run. `self-signed` makes an openssl certificate instead,
+    for staging and tests.
   - Needs tcp/80 (ACME challenge, https redirect) and tcp/443 open. This repo's
     playbooks open both (`playbooks/group_vars/all.yml`); from your own playbook, add
     them to `baseline_extra_inbound` yourself.
-  - Probes the domain through Caddy on the host. Plain http must answer with Caddy's
-    https redirect, and `https://<domain>/healthz` must answer through TLS; both
-    failures are fatal. One exception: with ACME, a certificate that is not issued
-    yet (the TLS handshake fails, or the certificate cannot be verified) only warns,
-    since it can lag DNS.
-  - Refuses to replace a `/etc/caddy/Caddyfile` that it did not write and that is
-    not the caddy package's untouched default, unless you set
-    `sponsord_onramp_caddy_overwrite_config: true`.
+  - Probes the domain through nginx on the host. Plain http must answer with the
+    https redirect, and `https://<domain>/healthz` must answer through TLS. A
+    certificate lego cannot obtain fails the deploy, with the reason in
+    `journalctl -u sponsord-onramp-certs`.
+  - Refuses to deploy while nginx serves a site it did not enable (other than the
+    package's untouched `default`): the role's site is the default server on 80 and
+    443. The `decdn_gateway` role refuses the same way, so the two need separate
+    hosts.
+- **Retires the Caddy it ran before nginx.** Up to `decdn.publisher` 0.4 the role
+  put Caddy in front. On the first converge since, a Caddy serving the role's
+  `/etc/caddy/Caddyfile` (its marker line) is stopped and disabled before nginx
+  takes tcp/80, and purged with `/var/lib/caddy` only once the onramp answers over
+  https through nginx: until then a failed first issuance can go back to it
+  (`sudo systemctl disable --now nginx && sudo systemctl enable --now caddy`). A
+  Caddy someone else runs is never touched; the role names whatever else holds
+  tcp/80 or tcp/443 before nginx starts. The retired `sponsord_onramp_caddy_tls` and
+  `sponsord_onramp_caddy_overwrite_config`, and `sponsord_onramp_proxy: caddy`, fail
+  preflight with what replaces them.
 
 ## Before the first deploy
 
@@ -100,8 +123,10 @@ is unreachable.
      sudo chmod 600 /etc/sponsord/turnstile-secret
      ```
 
-4. **Point DNS** for the domain (A/AAAA) at the host, so Caddy can get a
-   certificate.
+4. **Point DNS** for the domain (A/AAAA) at the host, and make sure tcp/80 reaches
+   it, so lego can get a certificate over HTTP-01. Use
+   `sponsord_onramp_acme_server: letsencrypt-staging` while iterating, so failed
+   attempts do not spend the production rate limits.
 5. **The `decdn` release the installers install** defaults to the release line this
    repo pins (`sponsord_onramp_decdn_release`, the `v` form of the decdn_node role's
    default `decdn_node_version`): every run serves the line's newest finished release,
@@ -110,8 +135,8 @@ is unreachable.
    A new decdn patch release therefore reaches new installs on the next run. To serve
    one exact release, set its tag (`vX.Y.Z`) together with that digest: the role
    refuses a tag without a digest, and a line with one.
-6. **Set inventory** (`group_vars/sponsord_onramp_hosts.yml`): the domain, the
-   public RPC URL and the sitekey. The contracts come from `sponsord_network`.
+6. **Set inventory** (`group_vars/sponsord_onramp_hosts.yml`): the domain, the ACME
+   contact email, the public RPC URL and the sitekey. The contracts come from `sponsord_network`.
 
 Then run `make deploy-sponsord` from `ansible/`.
 
@@ -129,13 +154,15 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | `sponsord_onramp_network` | `sponsord_network` | Supplies CapacityBond and SlashJudge. Must match the daemon's network. |
 | `sponsord_onramp_capacity_bond_address`, `_slash_judge_address` | from profile | Explicit values win. SlashJudge may be `""`. |
 | `sponsord_onramp_rpc_url` | `""` | **Required. Public**: served to every user. No credentials, query or API key. |
-| `sponsord_onramp_proxy` | `caddy` | `caddy` or `none`. Set it in inventory: the firewall holes read it. |
-| `sponsord_onramp_domain` | `""` | Required with Caddy. |
+| `sponsord_onramp_proxy` | `nginx` | `nginx` or `none`. Set it in inventory: the firewall holes read it. |
+| `sponsord_onramp_domain` | `""` | Required with nginx. |
 | `sponsord_onramp_public_url` | `https://<domain>` | Required with `none`: the https URL your proxy serves. |
-| `sponsord_onramp_caddy_tls` | `acme` | `internal` uses Caddy's local CA (staging, tests). |
-| `sponsord_onramp_acme_email` | `""` | Optional ACME contact. |
-| `sponsord_onramp_caddy_overwrite_config` | `false` | Let the role take over a Caddyfile it did not write. |
-| `sponsord_onramp_client_ip_header` | `X-Forwarded-For` with Caddy, else `""` | With your own proxy, set it only if that proxy is the only way in. |
+| `sponsord_onramp_tls` | `acme` | `acme` (lego, HTTP-01) or `self-signed` (staging, tests). |
+| `sponsord_onramp_acme_email` | `""` | **Required with `acme`**: the ACME account contact. |
+| `sponsord_onramp_acme_server` | `letsencrypt` | A lego shortcode or an https directory URL; `letsencrypt-staging` while iterating. |
+| `sponsord_onramp_acme_dir` / `_acme_webroot` | `/var/lib/sponsord-onramp-acme` / `/var/www/sponsord-onramp-acme` | lego's state (root, 0700) and the challenge directory nginx serves. |
+| `sponsord_onramp_lego_version` / `_lego_sha256` | the pinned lego release | Bump with `decdn_gateway_lego_*`: `make test-scripts` checks they agree. |
+| `sponsord_onramp_client_ip_header` | `X-Forwarded-For` with nginx, else `""` | With your own proxy, set it only if that proxy is the only way in. |
 | `sponsord_onramp_turnstile_sitekey` | `""` | **Required.** |
 | `sponsord_onramp_turnstile_secret` | `""` | **Sensitive.** Leave empty to provision `turnstile-secret` on the host. |
 | `sponsord_onramp_turnstile_secret_overwrite_host_file` | `false` | Confirm that the inventory secret may replace a file the role did not write. |
@@ -151,14 +178,16 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 
 ## Bringing your own proxy
 
-With `sponsord_onramp_proxy: none` the role installs no Caddy and opens no port.
+With `sponsord_onramp_proxy: none` the role installs no nginx and opens no port.
 Your proxy must terminate TLS for `sponsord_onramp_public_url` and forward to
 `127.0.0.1:8080`. Set `sponsord_onramp_client_ip_header` only if the proxy is the
 only way to reach the onramp: `CF-Connecting-IP` behind Cloudflare, or
-`X-Forwarded-For` if your proxy appends the client address. Otherwise clients can
-choose their own address and get around the rate limits. Switching from `caddy`
-to `none` closes the firewall holes but leaves the Caddy package installed and
-running on 80/443; the role warns about it on every run until you remove it.
+`X-Forwarded-For` if your proxy sets or appends the client address (the onramp
+reads the right-most entry; with nginx, `proxy_set_header X-Forwarded-For
+$remote_addr`). Otherwise clients can choose their own address and get around the
+rate limits. Switching from `nginx` to `none` closes the firewall holes but leaves
+the role's nginx site enabled on 80/443; the role warns about it on every run until
+you remove it.
 
 ## Observability
 
@@ -166,8 +195,10 @@ With `decdn_grafana_cloud_enabled: true`, the `grafana_alloy` role ships the
 onramp's journal with `service_name="sponsord-onramp"` and a `level` parsed from each
 line (it has no `/metrics`). This repo's playbooks turn that on for hosts in
 `sponsord_onramp_hosts`. From your own playbook, set
-`grafana_alloy_sponsord_onramp_enabled`. Caddy's unit state is in the systemd
-collector; its access logs are not shipped.
+`grafana_alloy_sponsord_onramp_enabled`. nginx's unit state is in the systemd
+collector, and so is `sponsord-onramp-certs.service`, lego's renewal: alert on it
+being `failed`, or run a blackbox check of `https://<domain>/healthz`, since nothing
+else warns before the certificate expires. nginx's access logs are not shipped.
 
 ## Day 2
 
@@ -177,23 +208,27 @@ collector; its access logs are not shipped.
 - **Ship a new `decdn`:** with a release line, re-run the role once the release is
   out; with an exact tag, point `sponsord_onramp_decdn_release` /
   `_decdn_sums_sha256` at the new release and re-run. New installs get it.
-- **Certificate trouble:** `sudo journalctl -u caddy -e`. Check that the domain
-  resolves to the host and that tcp/80 and tcp/443 reach it.
+- **Certificate trouble:** `sudo journalctl -u sponsord-onramp-certs -e` (lego) and
+  `sudo journalctl -u nginx -e`. Check that the domain resolves to the host and that
+  tcp/80 reaches it from the internet; `sudo systemctl start sponsord-onramp-certs`
+  retries at once.
 - **Logs:** `journalctl -u sponsord-onramp`, at info by default. `sponsord_onramp_log_level`
   sets `RUST_LOG`: a level or `target=level` pairs only. The release is built without
   tracing's env-filter, so a span or field filter makes it log nothing at all.
 - **Removal:** `make decommission LIMIT=<host>` (`tasks_from: decommission`, run
-  before sponsord's) asks for the typed host list, stops the onramp and removes its
-  unit, and stops and disables the role's Caddy (only when `/etc/caddy/Caddyfile`
-  carries the role's marker). It keeps the files under `/etc/sponsord`, the binary
-  and the caddy package. To remove those by hand afterwards:
+  before sponsord's) asks for the typed host list, stops the onramp and the renewal
+  timer and removes their units, disables the role's nginx site, and stops nginx if
+  that was all it served. It keeps the files under `/etc/sponsord`, the certificate,
+  the binaries and the nginx package. To remove those by hand afterwards:
 
   ```bash
   sudo rm -f /usr/local/bin/sponsord-onramp /etc/sponsord/sponsord-onramp.env \
     /etc/sponsord/onramp-gate.html /etc/sponsord/turnstile-secret \
     /etc/sponsord/.turnstile-secret.sha256
-  sudo rm -rf /usr/local/lib/sponsord-onramp
-  sudo apt-get remove caddy
+  sudo rm -rf /usr/local/lib/sponsord-onramp /var/lib/sponsord-onramp-acme \
+    /var/www/sponsord-onramp-acme /etc/sponsord/tls
+  sudo rm -f /etc/nginx/sites-available/sponsord-onramp
+  sudo apt-get remove nginx   # if nothing else on the host uses it
   ```
 
   Then take the host out of `sponsord_onramp_hosts`, so the next deploy closes
@@ -205,24 +240,20 @@ collector; its access logs are not shipped.
 ## Testing
 
 - `molecule/sponsord-onramp` runs `playbooks/sponsord.yml` (daemon, then onramp) on
-  Debian 12 and Ubuntu 24.04, against stub binaries and the real distro Caddy with
-  `tls internal`. It checks:
+  Debian 12 and Ubuntu 24.04, against stub binaries and the real distro nginx with a
+  self-signed certificate. It checks:
   - idempotence;
-  - the `https://` chain through Caddy, and that a client-sent `X-Forwarded-For`
+  - the `https://` chain through nginx, and that a client-sent `X-Forwarded-For`
     cannot choose the address the onramp sees;
   - that a Turnstile rotation restarts the onramp and not the daemon;
   - that the `/healthz` gate fails the deploy when the onramp will not start;
   - that a running onramp with no record restarts, and a daemon restart brings it
     back.
-- `molecule/sponsord-onramp-caddy` runs beside it on the same converge. It checks
-  proxy `none`, ACME mode, a broken upstream behind Caddy, the refusal of a foreign
-  Caddyfile, and the confirmed takeover; then a custom gate page, and the Turnstile
-  secret from inventory.
+- `molecule/sponsord-onramp-nginx` runs beside it on the same converge. It checks
+  proxy `none`, a broken upstream behind nginx, the refusal of a foreign nginx site,
+  the retirement of the role's earlier Caddy, and ACME against an ACME server that
+  does not answer; then a custom gate page, and the Turnstile secret from inventory.
 - `molecule/validation-sponsord` holds the negative cases.
 - `tests/firewall-holes` (`make test-scripts`) pins the tcp/80 and tcp/443 holes.
 - `tests/alloy-config` (`make lint-alloy`) runs the onramp's log lines through the
   real Alloy.
-- `molecule/cloud-init-publisher` boots `cloud-init/user-data-publisher.yaml`, which
-  installs both services in release mode from a locally signed mirror, and checks the
-  https chain through Caddy. It is the only test of this role's release mode, whose
-  tasks mirror the `sponsord` role's (`molecule/sponsord-install` tests those in more depth).

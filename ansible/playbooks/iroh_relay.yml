@@ -10,7 +10,7 @@
 # and binds tcp/80 and udp/7842, opened by playbooks/group_vars/all.yml; its
 # metrics stay on loopback. Point nodes at it with decdn_relay_urls — see
 # roles/iroh_relay/README.md.
-# Before the relay play: the onramp's Caddy needs tcp/80 and tcp/443 too, and only
+# Before the relay play: the onramp's nginx needs tcp/80 and tcp/443 too, and only
 # one of them can have them. (Under site.yml, sponsord.yml runs first, so on a host
 # in both groups the onramp is already up when this refuses; either way the deploy
 # fails loudly.) The role itself refuses ports another process holds, so a playbook

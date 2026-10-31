@@ -1,0 +1,67 @@
+---
+# The certificate nginx serves for sponsord_onramp_domain: its file names, and the
+# self-signed one. An ACME certificate is obtained in acme.yml, once nginx serves
+# the HTTP-01 challenge on tcp/80 (tasks/front.yml orders the two).
+
+- name: Name the certificate files
+  ansible.builtin.set_fact:
+    sponsord_onramp_cert_file: "{{ _sponsord_onramp_certs[sponsord_onramp_tls].cert }}"
+    sponsord_onramp_key_file: "{{ _sponsord_onramp_certs[sponsord_onramp_tls].key }}"
+
+# --- self-signed --------------------------------------------------------------------
+- name: Make a self-signed certificate
+  when: sponsord_onramp_tls == 'self-signed'
+  block:
+    - name: Ensure the certificate directory exists
+      ansible.builtin.file:
+        path: "{{ sponsord_onramp_cert_file | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    # Once per domain (the files are named by it); nginx reads them as root.
+    - name: Generate the self-signed certificate
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -newkey
+          - ec
+          - -pkeyopt
+          - ec_paramgen_curve:P-256
+          - -nodes
+          - -days
+          - "825"
+          - -subj
+          - "/CN={{ sponsord_onramp_domain }}"
+          - -addext
+          - "subjectAltName=DNS:{{ sponsord_onramp_domain }}"
+          - -keyout
+          - "{{ sponsord_onramp_key_file }}"
+          - -out
+          - "{{ sponsord_onramp_cert_file }}"
+        creates: "{{ sponsord_onramp_cert_file }}"
+      notify: Reload nginx
+
+    - name: Lock down the self-signed key
+      ansible.builtin.file:
+        path: "{{ sponsord_onramp_key_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+      when: not ansible_check_mode
+
+    # A host switched away from acme keeps lego's state, but nothing renews into it.
+    - name: Check for the renewal timer of an earlier acme deploy
+      ansible.builtin.stat:
+        path: /etc/systemd/system/sponsord-onramp-certs.timer
+      register: sponsord_onramp_stale_timer
+
+    - name: Stop and disable the renewal timer
+      ansible.builtin.systemd:
+        name: sponsord-onramp-certs.timer
+        state: stopped
+        enabled: false
+      when: sponsord_onramp_stale_timer.stat.exists

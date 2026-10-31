@@ -269,7 +269,7 @@ assert_has sponsordonly.alloy 'forward_to      = [prometheus.relabel.sponsord_id
 assert_has sponsordonly.alloy 'replacement  = "sponsord"' "the sponsord metric service_name"
 assert_has sponsordonly.alloy 'regex         = "sponsord\\.service"' "the sponsord log-stream unit match"
 assert_has sponsordonly.alloy 'replacement   = "sponsord"' "the sponsord log-stream service_name"
-assert_has sponsordonly.alloy '(decdn-node|sponsord|sponsord-onramp|iroh-relay|iroh-dns-server|caddy|alloy|ssh|sshd)' "sponsord, the onramp, iroh-relay, iroh-dns-server and Caddy in the systemd collector's unit list"
+assert_has sponsordonly.alloy '(decdn-node|sponsord|sponsord-onramp|sponsord-onramp-certs|iroh-relay|iroh-dns-server|nginx|alloy|ssh|sshd)' "sponsord, the onramp and its certificate renewal, iroh-relay, iroh-dns-server and nginx in the systemd collector's unit list"
 assert_has colocated.alloy 'prometheus.scrape "decdn_node"' "the node scrape on a co-located host"
 assert_has colocated.alloy 'prometheus.scrape "sponsord"' "the sponsord scrape on a co-located host"
 assert_has colocated.alloy '"__address__" = "127.0.0.1:8090"' "the default sponsord listener"
@@ -398,7 +398,7 @@ assert_has compose.alloy 'regex         = `.*,\s*(?:dns|\*)\s*,.*`' "the DNS ser
 assert_has compose.alloy 'regex         = `.*,\s*(?:gateway|\*)\s*,.*`' "the gateway's profile"
 # Containers' lines get their role's unit, and the exemption reads that unit.
 assert_has compose.alloy 'source_labels = ["__journal_container_name"]' "the container-name mapping"
-assert_has compose.alloy 'regex         = "decdn-(decdn-node|sponsord|sponsord-onramp|caddy|iroh-relay|iroh-dns-server|decdn-gateway|alloy)-[0-9]+"' "this project's containers"
+assert_has compose.alloy 'regex         = "decdn-(decdn-node|sponsord|sponsord-onramp|iroh-relay|iroh-dns-server|decdn-gateway|alloy)-[0-9]+"' "this project's containers"
 # shellcheck disable=SC2016  # a literal ${1}: the relabel replacement
 assert_has compose.alloy 'replacement   = "${1}.service"' "the container's unit"
 echo "ok: the Compose runtime renders what it claims"
@@ -765,8 +765,8 @@ compose_samples_json() { # nanosecond timestamp
   {"stream":{"journal__systemd_unit":"docker.service","journal_container_name":"decdn-iroh-relay-1","journal_priority_keyword":"info"},"values":[
     ["$1","2026-10-09T05:30:21.000001Z DEBUG iroh_relay::server::client: c-ir-debug"],
     ["$1","2026-10-09T05:30:21.000003Z  WARN iroh_relay::server::http_server: c-ir-warn"]]},
-  {"stream":{"journal__systemd_unit":"docker.service","journal_container_name":"decdn-caddy-1","journal_priority_keyword":"info"},"values":[
-    ["$1","{\"level\":\"info\",\"msg\":\"c-caddy\"}"]]},
+  {"stream":{"journal__systemd_unit":"docker.service","journal_container_name":"decdn-decdn-gateway-1","journal_priority_keyword":"info"},"values":[
+    ["$1","2026-10-05T07:59:12.000003Z  WARN decdn::gateway: c-gw-warn"]]},
   {"stream":{"journal__systemd_unit":"docker.service","journal_container_name":"other-app-1","journal_priority_keyword":"info"},"values":[
     ["$1","c-other-info"]]},
   {"stream":{"journal__systemd_unit":"ssh.service","journal_priority_keyword":"info"},"values":[
@@ -787,7 +787,7 @@ kept_as c-sd-warn 'container="decdn-sponsord-1", level="warning", unit="sponsord
 kept_as c-sd-raw 'container="decdn-sponsord-1", level="error", unit="sponsord.service"'
 kept_as c-ro-warn 'container="decdn-sponsord-onramp-1", level="warning", unit="sponsord-onramp.service"'
 kept_as c-ir-warn 'container="decdn-iroh-relay-1", level="warning", unit="iroh-relay.service"'
-kept_as c-caddy 'container="decdn-caddy-1", level="info", unit="caddy.service"'
+kept_as c-gw-warn 'container="decdn-decdn-gateway-1", level="warning", unit="decdn-gateway.service"'
 kept_as c-other-info 'container="other-app-1", level="info", unit="docker.service"'
 kept_as c-ssh-info 'level="info", unit="ssh.service"'
 dropped c-node-debug
@@ -852,7 +852,7 @@ print(s.getsockname()[1])')" || fail "could not pick a free port (python3 is req
   echo "ok: COMPOSE_PROFILES=$1 scrapes the node $2x, sponsord $3x, the relay $4x, the DNS server $5x, the gateway $6x; every component healthy"
 }
 compose_runtime "node,alloy" 1 0 0 0 0
-compose_runtime "origin, onramp,caddy,alloy" 1 1 0 0 0
+compose_runtime "origin, onramp,alloy" 1 1 0 0 0
 compose_runtime "sponsord,alloy" 0 1 0 0 0
 compose_runtime "relay,alloy" 0 0 1 0 0
 compose_runtime "dns,alloy" 0 0 0 1 0

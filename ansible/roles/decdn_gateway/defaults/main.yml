@@ -123,7 +123,7 @@ decdn_gateway_log_level: info
 # from a daily timer. "self-signed": a certificate this role makes with openssl, for
 # staging before DNS is ready and for tests; browsers will not trust it.
 decdn_gateway_tls: acme                   # "acme" | "self-signed"
-# acme: REQUIRED. The ACME account contact (Let's Encrypt mails expiry warnings there).
+# acme: REQUIRED. The ACME account contact lego registers with.
 decdn_gateway_acme_email: ""
 # acme: REQUIRED. The lego DNS provider code that edits the domain's zone
 # (cloudflare, route53, digitalocean, gcloud, dnsupdate, ...; `lego dnshelp` or
@@ -140,7 +140,8 @@ decdn_gateway_acme_server: letsencrypt
 # lego's account, keys and certificates (root, 0700).
 decdn_gateway_acme_dir: /var/lib/decdn-gateway-acme
 # The lego release that issues and renews the certificate. Bump the version and
-# every digest together: the digests are the release API's per-asset sha256
+# every digest together, here and in roles/sponsord_onramp (make test-scripts checks
+# they agree): the digests are the release API's per-asset sha256
 # (gh release view v<version> -R go-acme/lego --json assets).
 decdn_gateway_lego_version: "5.5.2"
 decdn_gateway_lego_release_base: "https://github.com/go-acme/lego/releases/download"

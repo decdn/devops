@@ -31,10 +31,12 @@ grafana_alloy_decdn_gateway_enabled: "{{ 'decdn_gateway_hosts' in group_names }}
 #     are decdn_nodes too; origin.yml refuses one that is not). decdn_bind_port is a decdn_node role
 #     default, which a play without that role (sponsord.yml) does not load; the
 #     fallback must match roles/decdn_node/defaults/main.yml.
-#   sponsord_onramp_hosts: Caddy, the onramp's TLS front (80 for the ACME challenge
-#     and the https redirect, 443), unless sponsord_onramp_proxy is "none" (your
-#     own proxy, which opens its own ports). Same fallback rule: "caddy" is
-#     roles/sponsord_onramp/defaults/main.yml's default.
+#   sponsord_onramp_hosts: nginx, the onramp's TLS front (80 for the ACME HTTP-01
+#     challenge and the https redirect, 443), unless sponsord_onramp_proxy is "none"
+#     (your own proxy, which opens its own ports). Same fallback rule: "nginx" is
+#     roles/sponsord_onramp/defaults/main.yml's default. The retired "caddy" keeps
+#     the holes too: the role refuses it, but only in a play after baseline, so
+#     closing them here would take the role's running Caddy offline first.
 #   iroh_relay_hosts: the relay, which terminates its own TLS (80 for iroh's
 #     captive-portal probe, 443 for the relay and its ACME challenge) and, unless
 #     iroh_relay_enable_quic_addr_discovery is false, QUIC address discovery on
@@ -53,10 +55,10 @@ grafana_alloy_decdn_gateway_enabled: "{{ 'decdn_gateway_hosts' in group_names }}
 _baseline_service_inbound: >-
   {{ ([{'proto': 'udp', 'port': decdn_bind_port | default(4433), 'comment': 'decdn QUIC'}]
       if 'decdn_nodes' in group_names else [])
-     + ([{'proto': 'tcp', 'port': 80, 'comment': 'sponsord-onramp (Caddy, http)'},
-         {'proto': 'tcp', 'port': 443, 'comment': 'sponsord-onramp (Caddy, https)'}]
+     + ([{'proto': 'tcp', 'port': 80, 'comment': 'sponsord-onramp (nginx, http)'},
+         {'proto': 'tcp', 'port': 443, 'comment': 'sponsord-onramp (nginx, https)'}]
         if 'sponsord_onramp_hosts' in group_names
-           and sponsord_onramp_proxy | default('caddy') == 'caddy' else [])
+           and sponsord_onramp_proxy | default('nginx') in ['nginx', 'caddy'] else [])
      + ([{'proto': 'tcp', 'port': 80, 'comment': 'iroh-relay (http)'},
          {'proto': 'tcp', 'port': 443, 'comment': 'iroh-relay (https, ACME)'}]
         if 'iroh_relay_hosts' in group_names else [])

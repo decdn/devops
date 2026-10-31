@@ -2,10 +2,10 @@
 # sponsord: the deCDN onboarding sponsor (treasury signer + PaymentPool keeper),
 # and its public onramp.
 #   sponsord_hosts:        baseline -> grafana_alloy (opt-in, off by default) -> sponsord
-#   sponsord_onramp_hosts: sponsord_onramp (+ Caddy in front, unless turned off)
+#   sponsord_onramp_hosts: sponsord_onramp (+ nginx in front, unless turned off)
 # Standalone entry point (`make deploy-sponsord`), also imported by publisher.yml. The
 # daemon needs no decdn-node on the host and listens on loopback only, for the
-# onramp on the same host. The onramp listens on loopback too; Caddy is its public
+# onramp on the same host. The onramp listens on loopback too; nginx is its public
 # side (tcp/80 + tcp/443, opened by playbooks/group_vars/all.yml). A host in both
 # decdn_nodes and sponsord_hosts runs baseline and Alloy once per play; both
 # converge to the same state, because the firewall holes and Alloy's per-daemon
@@ -14,7 +14,7 @@
 # roles/sponsord/README.md; the Turnstile widget and the release pins are too —
 # see roles/sponsord_onramp/README.md.
 # Before anything runs: an onramp host outside sponsord_hosts would skip the play
-# below (baseline hardening included) and get no firewall holes for Caddy, which
+# below (baseline hardening included) and get no firewall holes for nginx, which
 # playbooks/group_vars/ derive from sponsord_hosts. The role itself checks no group
 # name, so a playbook of your own that runs it is not held to this repo's groups.
 # tests/scripts-test.sh runs this play by its name.

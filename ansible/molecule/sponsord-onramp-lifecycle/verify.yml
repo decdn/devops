@@ -67,31 +67,34 @@
         - /etc/systemd/system/alloy.service
         - /etc/sponsord/.inputs.sha256
         - /etc/sponsord/.onramp-inputs.sha256
+        - /etc/nginx/sites-enabled/sponsord-onramp
+        - /etc/systemd/system/sponsord-onramp-certs.service
+        - /etc/systemd/system/sponsord-onramp-certs.timer
         - /etc/sponsord/treasury-keystore.json
         - /etc/sponsord/treasury-password
         - /etc/sponsord/api-token
         - /etc/sponsord/turnstile-secret
-        - /etc/caddy/Caddyfile
+        - /etc/nginx/sites-available/sponsord-onramp
       register: _after
 
     - name: Require the units gone and every credential kept
       ansible.builtin.assert:
         that:
-          - _after.results[0:5] | map(attribute='stat.exists') | unique == [false]
-          - _after.results[5:] | map(attribute='stat.exists') | unique == [true]
+          - _after.results[0:8] | map(attribute='stat.exists') | unique == [false]
+          - _after.results[8:] | map(attribute='stat.exists') | unique == [true]
         fail_msg: >-
-          Decommission must remove the sponsord, onramp and Alloy units and both
-          restart-input records, and keep the treasury files, the API token, the
-          Turnstile secret and the Caddyfile:
+          Decommission must remove the sponsord, onramp, certificate-renewal and Alloy
+          units, both restart-input records and the onramp's nginx site link, and keep the
+          treasury files, the API token, the Turnstile secret and the site itself:
           {{ _after.results | map(attribute='item') | zip(_after.results | map(attribute='stat.exists')) | list }}
 
     - name: Read the services' state
       ansible.builtin.systemd_service:
         name: "{{ item }}"
       register: _units
-      loop: [sponsord, sponsord-onramp, caddy]
+      loop: [sponsord, sponsord-onramp, nginx, sponsord-onramp-certs.timer]
 
-    - name: Require sponsord, the onramp and the role's Caddy stopped, Caddy disabled
+    - name: Require sponsord, the onramp, nginx and the renewal timer stopped, nginx disabled
       ansible.builtin.assert:
         that:
           - _units.results | map(attribute='status.ActiveState') | select('equalto', 'active') | list | length == 0

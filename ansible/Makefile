@@ -205,9 +205,9 @@ decommission:
 # backup + decommission), sponsord and sponsord-install (the sponsord role on a host
 # with no node, through playbooks/sponsord.yml, on Debian 12 and Ubuntu 24.04; the
 # install-method, wallet and secret.env provenance side effects run in
-# sponsord-install), sponsord-onramp and sponsord-onramp-caddy (the onramp beside its
-# daemon, behind the real distro Caddy; the proxy, gate-page and inventory Turnstile
-# side effects run in sponsord-onramp-caddy), sponsord-onramp-source
+# sponsord-install), sponsord-onramp and sponsord-onramp-nginx (the onramp beside its
+# daemon, behind the real distro nginx; the proxy, Caddy retirement, ACME, gate-page and
+# inventory Turnstile side effects run in sponsord-onramp-nginx), sponsord-onramp-source
 # (that converge, then both sponsord roles built from source), sponsord-onramp-lifecycle
 # (that converge, then sponsord's backup and decommission), iroh-relay,
 # iroh-relay-certificate, iroh-relay-gate, iroh-relay-lifecycle and
@@ -258,7 +258,7 @@ SCENARIOS ?= all
 JOBS ?=
 SLOW_FIRST ?= sponsord-onramp-source sponsord-install cloud-init source-build-recovery \
 	iroh-relay-gate cloud-init-publisher sponsord source-build sponsord-onramp \
-	sponsord-onramp-caddy iroh-relay source-build-rollback iroh-relay-certificate \
+	sponsord-onramp-nginx iroh-relay source-build-rollback iroh-relay-certificate \
 	validation iroh-relay-install os-matrix grafana-cloud
 MOLECULE_LOCK_PREFIX ?= /tmp/decdn-devops-molecule
 molecule_env = SCENARIOS='$(SCENARIOS)' JOBS='$(JOBS)' SLOW_FIRST='$(SLOW_FIRST)' \

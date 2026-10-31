@@ -2,7 +2,7 @@
 # deCDN publisher host bootstrap: an origin node (the deCDN node with an origin backend,
 # the canonical source of your namespace's content), sponsord (the onboarding sponsor's
 # treasury signer and PaymentPool keeper) and sponsord-onramp (its public gate, behind
-# Caddy), for a fresh Debian 12/13 or Ubuntu 24.04/26.04 VM (x86_64 or aarch64). Paste
+# nginx), for a fresh Debian 12/13 or Ubuntu 24.04/26.04 VM (x86_64 or aarch64). Paste
 # this into your provider's "user data" / "cloud-init" field when creating the server.
 # The full walkthrough is in cloud-init/README.md of github.com/decdn/devops
 # ("Publisher host"). To run fewer of them, delete the groups you do not want: an origin
@@ -23,7 +23,7 @@
 #
 # On first boot the host clones github.com/decdn/devops at DEVOPS_REF, installs a pinned
 # Ansible, and hardens itself (SSH, firewall with udp/4433 open for the node and tcp/80
-# and tcp/443 for Caddy, automatic patching). It then stops and waits for its secrets
+# and tcp/443 for nginx, automatic patching). It then stops and waits for its secrets
 # under /etc/decdn and /etc/sponsord. `cloud-init status --wait` returns when it is done.
 ---
 package_update: true
@@ -130,11 +130,12 @@ write_files:
           sponsord_onramp_install_method: release
           # Optional: a mirror, as above, for v<version>/sponsord-onramp-<version>-<target>.tar.gz.
           # sponsord_onramp_release_base: "https://mirror.example/decdn/decdn/releases/download"
-          # Caddy terminates TLS with a certificate from ACME. The domain's A/AAAA records
-          # must point at this VM, and tcp/80 and tcp/443 must reach it.
-          sponsord_onramp_proxy: caddy
+          # nginx terminates TLS with a certificate lego obtains over ACME HTTP-01. The
+          # domain's A/AAAA records must point at this VM, and tcp/80 and tcp/443 must
+          # reach it.
+          sponsord_onramp_proxy: nginx
           sponsord_onramp_domain: "CHANGE_ME"        # MUST-EDIT: e.g. "downloads.example.org"
-          # sponsord_onramp_acme_email: "ops@example.org"
+          sponsord_onramp_acme_email: "CHANGE_ME"    # MUST-EDIT: the ACME contact, e.g. "ops@example.org"
           # MUST-EDIT: the PUBLIC JSON-RPC endpoint users' decdn reads the chain through.
           # It is served to every user, so never the keyed URL sponsord uses.
           sponsord_onramp_rpc_url: "CHANGE_ME"

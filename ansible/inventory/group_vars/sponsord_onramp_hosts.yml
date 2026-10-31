@@ -21,10 +21,12 @@
 # sponsord_onramp_install_method: manual
 
 # --- Public address ----------------------------------------------------------------
-# Caddy terminates TLS for this name (ACME). Its A/AAAA records must point at the
-# host; the playbooks open tcp/80 + tcp/443. To bring your own proxy instead, set
-# sponsord_onramp_proxy: none (HERE, not in a play: the firewall holes read it) and
-# sponsord_onramp_public_url.
+# nginx terminates TLS for this name, with a certificate lego obtains over ACME
+# HTTP-01. Its A/AAAA records must point at the host and tcp/80 must reach it before
+# the first deploy; the playbooks open tcp/80 + tcp/443. The ACME contact is
+# REQUIRED with sponsord_onramp_tls: acme (the default). To bring your own proxy
+# instead, set sponsord_onramp_proxy: none (HERE, not in a play: the firewall holes
+# read it) and sponsord_onramp_public_url.
 # sponsord_onramp_domain: downloads.example.org
 # sponsord_onramp_acme_email: ops@example.org
 

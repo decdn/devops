@@ -5,10 +5,10 @@
 # capability. It holds no wallet. It calls the sponsord daemon on the same host with the daemon's
 # API token, so a host in sponsord_onramp_hosts must also be in sponsord_hosts.
 #
-# The onramp listens on loopback. Caddy, installed by this role unless you turn it
-# off, terminates TLS for sponsord_onramp_domain and is the only public listener
-# (AGENTS.md hard rule 2). Upstream: github.com/decdn/decdn (crates/sponsord-onramp),
-# docs/sponsord/operator.md.
+# The onramp listens on loopback. nginx, installed by this role unless you turn it
+# off, terminates TLS for sponsord_onramp_domain (a certificate from lego over ACME
+# HTTP-01) and is the only public listener (AGENTS.md hard rule 2). Upstream:
+# github.com/decdn/decdn (crates/sponsord-onramp), docs/sponsord/operator.md.
 
 # --- Install method -----------------------------------------------------------
 # "release" (default): download the pinned v<version> GitHub Release tarball and
@@ -85,7 +85,7 @@ sponsord_onramp_slash_judge_address: "{{ _sponsord_onramp_profile.get('slash_jud
 sponsord_onramp_rpc_url: ""
 
 # --- Listener -------------------------------------------------------------------
-# IPv4 loopback only (asserted): Caddy, or your own proxy, is the public side.
+# IPv4 loopback only (asserted): nginx, or your own proxy, is the public side.
 sponsord_onramp_bind_address: 127.0.0.1
 sponsord_onramp_port: 8080
 # The daemon, on this host. Follows the sponsord role's listener when inventory
@@ -94,34 +94,52 @@ sponsord_onramp_daemon_url: >-
   http://{{ sponsord_bind_address | default('127.0.0.1') }}:{{ sponsord_port | default(8090) }}
 
 # --- Public address + TLS front -------------------------------------------------
-# "caddy": install Caddy from the distro and let it terminate TLS for
-# sponsord_onramp_domain (ACME by default), opening tcp/80 and tcp/443.
-# "none": bring your own proxy (nginx, a Cloudflare Tunnel, ...); no package, no
-# firewall hole, and sponsord_onramp_public_url is required.
+# "nginx": install nginx from the distro and let it terminate TLS for
+# sponsord_onramp_domain, opening tcp/80 and tcp/443.
+# "none": bring your own proxy (a Cloudflare Tunnel, a shared nginx, ...); no
+# package, no firewall hole, and sponsord_onramp_public_url is required.
 # playbooks/group_vars/all.yml reads this to open the ports, so set it in
 # inventory, not in a play's vars.
-sponsord_onramp_proxy: caddy              # "caddy" | "none"
-sponsord_onramp_domain: ""                # caddy: REQUIRED, e.g. downloads.example.org
+sponsord_onramp_proxy: nginx              # "nginx" | "none"
+sponsord_onramp_domain: ""                # nginx: REQUIRED, e.g. downloads.example.org
 # The base URL users reach, baked into the installers and the gate links. https
-# only. Derived from the domain in caddy mode.
+# only. Derived from the domain in nginx mode.
 sponsord_onramp_public_url: >-
-  {{ ('https://' ~ sponsord_onramp_domain) if sponsord_onramp_proxy == 'caddy' else '' }}
-# "acme": a publicly trusted certificate (Let's Encrypt / ZeroSSL). The domain's
-# A/AAAA records must point at this host and tcp/80 + tcp/443 must reach it.
-# "internal": Caddy's own local CA, for staging and tests; browsers will not trust it.
-sponsord_onramp_caddy_tls: acme           # "acme" | "internal"
-sponsord_onramp_acme_email: ""            # optional ACME account contact
-# The role owns /etc/caddy/Caddyfile. If that file exists without the role's marker
-# and is not the package's untouched default, it belongs to someone else, and the
-# role refuses to replace it unless this is true.
-sponsord_onramp_caddy_overwrite_config: false
-# The header Caddy (or your proxy) puts the client address in; the onramp rate
-# limits and gates by it. Caddy (without trusted_proxies) sets X-Forwarded-For to
-# the client it saw, discarding any client-sent value, and the onramp uses the
-# right-most entry, so clients cannot choose their address. With your own
-# proxy, set it only if that proxy is the ONLY way in (CF-Connecting-IP behind
-# Cloudflare); otherwise clients pick their own address. "" = the TCP peer.
-sponsord_onramp_client_ip_header: "{{ 'X-Forwarded-For' if sponsord_onramp_proxy == 'caddy' else '' }}"
+  {{ ('https://' ~ sponsord_onramp_domain) if sponsord_onramp_proxy == 'nginx' else '' }}
+# "acme": a publicly trusted certificate, which lego obtains over ACME HTTP-01
+# (nginx serves the challenge on tcp/80) and renews from a twice-daily timer. The
+# domain's A/AAAA records must point at this host and tcp/80 must reach it before
+# the first deploy. "self-signed": a certificate this role makes with openssl, for
+# staging and tests; browsers will not trust it.
+sponsord_onramp_tls: acme                 # "acme" | "self-signed"
+# acme: REQUIRED. The ACME account contact lego registers with.
+sponsord_onramp_acme_email: ""
+# The ACME directory: a URL or a lego shortcode. "letsencrypt-staging" for a trial
+# run that does not spend the production rate limits; its certificates are NOT
+# trusted.
+sponsord_onramp_acme_server: letsencrypt
+# lego's account, keys and certificates (root, 0700).
+sponsord_onramp_acme_dir: /var/lib/sponsord-onramp-acme
+# Where lego writes the HTTP-01 challenge and nginx serves it from
+# (/.well-known/acme-challenge/ on tcp/80). World-readable: nginx's workers read it.
+sponsord_onramp_acme_webroot: /var/www/sponsord-onramp-acme
+# The lego release that issues and renews the certificate. Bump the version and
+# every digest together, here and in roles/decdn_gateway (make test-scripts checks
+# they agree): the digests are the release API's per-asset sha256
+# (gh release view v<version> -R go-acme/lego --json assets).
+sponsord_onramp_lego_version: "5.5.2"
+sponsord_onramp_lego_release_base: "https://github.com/go-acme/lego/releases/download"
+sponsord_onramp_lego_sha256:
+  amd64: 2a35505089e7772c92e1e9ac144df91151ef2eca8568630db0ff91fca06d9bef
+  arm64: 15b14ec2ab14fde69cc8396eb0204c5ce4327e31a486953225a6059b26db3e8c
+sponsord_onramp_lego_bin: /usr/local/lib/sponsord-onramp/lego
+# The header nginx (or your proxy) puts the client address in; the onramp rate
+# limits and gates by it. The role's nginx sets X-Forwarded-For to the client it
+# saw, discarding any client-sent value, and the onramp uses the right-most entry,
+# so clients cannot choose their address. With your own proxy, set it only if that
+# proxy is the ONLY way in (CF-Connecting-IP behind Cloudflare); otherwise clients
+# pick their own address. "" = the TCP peer.
+sponsord_onramp_client_ip_header: "{{ 'X-Forwarded-For' if sponsord_onramp_proxy == 'nginx' else '' }}"
 
 # --- Gate -----------------------------------------------------------------------
 # Cloudflare Turnstile: create a widget for sponsord_onramp_domain in the

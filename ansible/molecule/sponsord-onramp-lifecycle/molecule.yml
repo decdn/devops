@@ -7,7 +7,7 @@
 #                              throwaway age key and fetched;
 #   decommission refusals      a held pool top-up (the stub's hold marker), a
 #                              missing confirmation, a wrong one: nothing touched;
-#   playbooks/decommission.yml for real: the onramp, its Caddy and sponsord stopped
+#   playbooks/decommission.yml for real: the onramp, its nginx and sponsord stopped
 #                              and removed, Alloy torn down, every credential kept;
 #                              then once more, which must be a safe no-op.
 # verify.yml here decrypts the archive and checks what decommission removed and kept.
@@ -70,8 +70,8 @@ provisioner:
         # sponsord_onramp_network follows sponsord_network (arbitrum-sepolia).
         sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc
         sponsord_onramp_domain: onramp.molecule.test
-        sponsord_onramp_caddy_tls: internal
-        # Renders (and so validates) the Caddyfile's global email option.
+        sponsord_onramp_tls: self-signed
+        # Read only under acme, which ../sponsord-onramp-nginx's side effects switch to.
         sponsord_onramp_acme_email: ops@molecule.test
         sponsord_onramp_turnstile_sitekey: 1x00000000000000000000AA
         # Must equal EXPECTED_BRAND in ../sponsord-onramp/files/sponsord-onramp-stub:

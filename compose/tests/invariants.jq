@@ -16,7 +16,6 @@ def allowed_keys: {
   "decdn-node": (base_keys + ["healthcheck", "stop_grace_period", "tmpfs"]),
   "sponsord": (base_keys + ["secrets", "stop_grace_period"]),
   "sponsord-onramp": (base_keys + ["depends_on", "secrets", "stop_grace_period"]),
-  "caddy": (base_keys + ["cap_add", "tmpfs"]),
   "iroh-relay": (base_keys + ["cap_add", "stop_grace_period", "ulimits"]),
   "iroh-dns-server": (base_keys + ["cap_add", "stop_grace_period", "ulimits"]),
   "decdn-gateway": (base_keys + ["stop_grace_period", "tmpfs"]),
@@ -38,13 +37,13 @@ def stop_signal($n): {"iroh-relay": "SIGINT", "iroh-dns-server": "SIGINT", "decd
 # Every mount, exactly: [source, target, read-only?], volumes and secrets alike (a
 # secret is a read-only bind of its host file, listed as "secret:<file>"). Each
 # container sees only its own files; the only writable ones are the node's data
-# dir, the state of Caddy and the iroh services, and Alloy's WAL. Alloy sees the
-# host read-only (/proc, /sys and / for host metrics, the journal for logs).
+# dir, the state of the iroh services, and Alloy's WAL. Alloy sees the host
+# read-only (/proc, /sys and / for host metrics, the journal for logs).
 # Whether Docker may create a missing source (create_host_path) is checked on the
 # file as written (tests/bind-sources.jq): Compose releases render it differently.
-# The Caddyfile's and config.alloy's sources are absolute (compose.yaml's
-# directory), so they are matched by name; the origin content's source is the
-# operator's DECDN_ORIGIN_DIR, so only its target and mode are pinned.
+# config.alloy's source is absolute (compose.yaml's directory), so it is matched by
+# name; the origin content's source is the operator's DECDN_ORIGIN_DIR, so only its
+# target and mode are pinned.
 def allowed_mounts: {
   "decdn-node": [["/etc/decdn", "/etc/decdn", true], ["/var/lib/decdn", "/var/lib/decdn", false],
                  ["DECDN_ORIGIN_DIR", "/srv/decdn-origin", true]],
@@ -54,7 +53,6 @@ def allowed_mounts: {
   "sponsord-onramp": [["/etc/sponsord/onramp-gate", "/etc/sponsord/onramp-gate", true],
                       ["secret:/etc/sponsord/api-token", "/run/secrets/api-token", true],
                       ["secret:/etc/sponsord/turnstile-secret", "/run/secrets/turnstile-secret", true]],
-  "caddy": [["Caddyfile", "/etc/caddy/Caddyfile", true], ["/var/lib/caddy", "/data", false]],
   "iroh-relay": [["/etc/iroh-relay/iroh-relay.toml", "/etc/iroh-relay/iroh-relay.toml", true],
                  ["/var/lib/iroh-relay", "/var/lib/iroh-relay", false]],
   "iroh-dns-server": [["/etc/iroh-dns-server/config.toml", "/etc/iroh-dns-server/config.toml", true],
@@ -70,8 +68,7 @@ def allowed_mounts: {
 };
 def mounts($secrets): [((.volumes // [])[]
     | [(if .type == "bind" then .source else "\(.type):\(.source)" end
-        | if endswith("/Caddyfile") then "Caddyfile"
-          elif endswith("/alloy/config.alloy") then "alloy/config.alloy" else . end),
+        | if endswith("/alloy/config.alloy") then "alloy/config.alloy" else . end),
        .target, (.read_only == true)]
     | if .[1] == "/srv/decdn-origin" then .[0] = "DECDN_ORIGIN_DIR" else . end),
   ((.secrets // [])[] | ["secret:\($secrets[.source].file // "?")", (.target // "/run/secrets/\(.source)"), true])]
@@ -112,7 +109,7 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
 
 .services as $all
 | (.secrets // {}) as $secrets
-| (["alloy", "caddy", "decdn-gateway", "decdn-node", "iroh-dns-server", "iroh-relay", "sponsord", "sponsord-onramp"] as $want
+| (["alloy", "decdn-gateway", "decdn-node", "iroh-dns-server", "iroh-relay", "sponsord", "sponsord-onramp"] as $want
    | check("compose.yaml"; "services are exactly \($want | join(", "))"; ($all | keys) == $want)),
 
   # Every service: host networking and nothing published, so loopback listeners
@@ -146,9 +143,8 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
   check("decdn-node"; "healthcheck is `decdn node health`";
     ($all["decdn-node"].healthcheck.test // [])[0:4] == ["CMD", "decdn", "node", "health"]),
 
-  # Caddy keeps only the capability for :80/:443 (the daemons may not set cap_add
-  # at all: allowed_keys).
-  check("caddy"; "cap_add is exactly [NET_BIND_SERVICE]"; $all.caddy.cap_add == ["NET_BIND_SERVICE"]),
+  # The iroh services keep only the capability for their low ports (the daemons
+  # may not set cap_add at all: allowed_keys).
   check("iroh-relay"; "cap_add is exactly [NET_BIND_SERVICE]"; $all["iroh-relay"].cap_add == ["NET_BIND_SERVICE"]),
   check("iroh-dns-server"; "cap_add is exactly [NET_BIND_SERVICE]"; $all["iroh-dns-server"].cap_add == ["NET_BIND_SERVICE"]),
 
@@ -236,7 +232,6 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
   check("decdn-node"; "profiles are [node, origin]"; $all["decdn-node"].profiles == ["node", "origin"]),
   check("sponsord"; "profiles are [sponsord, onramp]"; $all.sponsord.profiles == ["sponsord", "onramp"]),
   check("sponsord-onramp"; "profiles are [onramp]"; $all["sponsord-onramp"].profiles == ["onramp"]),
-  check("caddy"; "profiles are [caddy]"; $all.caddy.profiles == ["caddy"]),
   check("iroh-relay"; "profiles are [relay]"; $all["iroh-relay"].profiles == ["relay"]),
   check("iroh-dns-server"; "profiles are [dns]"; $all["iroh-dns-server"].profiles == ["dns"]),
   check("decdn-gateway"; "profiles are [gateway]"; $all["decdn-gateway"].profiles == ["gateway"]),

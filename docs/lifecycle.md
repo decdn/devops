@@ -318,13 +318,14 @@ pool.
 3. Deploy the new host.
 
 **Decommission.** On a host in `sponsord_onramp_hosts`, `make decommission` stops and
-removes the onramp's unit and stops and disables the role's Caddy (only when
-`/etc/caddy/Caddyfile` carries the role's marker). On a host in `sponsord_hosts`, it
+removes the onramp's unit and its certificate renewal timer, disables the role's
+nginx site and stops nginx if that was all it served (and retires a Caddy the role
+ran before it moved to nginx). On a host in `sponsord_hosts`, it
 then checks for a held top-up once more and stops and removes sponsord's unit. One
 typed confirmation per run, in the first play that reaches the host, names every
 service it covers there.
-It keeps `/etc/sponsord` (the treasury owns the pool), the binaries and the caddy
-package, and does not touch the chain: the pool and its USDC stay with the treasury
+It keeps `/etc/sponsord` (the treasury owns the pool), the certificate, the binaries
+and the nginx package, and does not touch the chain: the pool and its USDC stay with the treasury
 wallet until you withdraw them with the `decdn` CLI. tcp/80 and tcp/443 stay open
 until the host leaves `sponsord_onramp_hosts` and baseline runs again. Silence
 `SponsordDown` for the host first: it fires on a series that went silent, for up to

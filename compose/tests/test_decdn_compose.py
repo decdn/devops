@@ -213,9 +213,9 @@ class Guard(unittest.TestCase):
             fetch.assert_not_called()
 
     def test_which_commands_touch_sponsord(self) -> None:
-        self.assertTrue(dc.touches_sponsord("down", ["caddy"]))
+        self.assertTrue(dc.touches_sponsord("down", ["decdn-node"]))
         self.assertTrue(dc.touches_sponsord("restart", []))
-        self.assertTrue(dc.touches_sponsord("stop", ["sponsord", "caddy"]))
+        self.assertTrue(dc.touches_sponsord("stop", ["sponsord", "decdn-node"]))
         self.assertFalse(dc.touches_sponsord("restart", ["sponsord-onramp"]))
         self.assertFalse(dc.touches_sponsord("stop", ["decdn-node"]))
         self.assertFalse(dc.touches_sponsord("stop", ["--timeout=10", "decdn-node"]))
@@ -661,8 +661,8 @@ class FileProblem(TmpDir):
 
 class Profiles(unittest.TestCase):
     def test_onramp_starts_its_daemon(self) -> None:
-        project = dc.Project({"COMPOSE_PROFILES": "origin, onramp,caddy"})
-        self.assertEqual(project.services, {"decdn-node", "sponsord", "sponsord-onramp", "caddy"})
+        project = dc.Project({"COMPOSE_PROFILES": "origin, onramp"})
+        self.assertEqual(project.services, {"decdn-node", "sponsord", "sponsord-onramp"})
 
     def test_profiles_match_compose_yaml(self) -> None:
         text = (HERE.parent / "compose.yaml").read_text()
@@ -678,22 +678,51 @@ class Profiles(unittest.TestCase):
         with mock.patch.object(dc, "require_root"), self.assertRaises(dc.Refused):
             dc.init(init_args(["node", "origin"]))
 
-    def test_relay_conflicts_with_the_onramp_and_caddy(self) -> None:
+    def test_relay_conflicts_with_the_onramp(self) -> None:
         self.assertEqual(dc.conflicts(["node", "relay"]), [])
-        for other in ("onramp", "caddy"):
-            with self.subTest(other=other):
-                self.assertIn("tcp/80 and tcp/443", dc.conflicts(["relay", other])[0])
-                with mock.patch.object(dc, "require_root"), self.assertRaises(dc.Refused) as cm:
-                    dc.init(init_args(["relay", other], hostname="relay.example.net", contact="noc@decdn.org"))
-                self.assertIn("cannot share a host", str(cm.exception))
+        self.assertIn("tcp/80 and tcp/443", dc.conflicts(["relay", "onramp"])[0])
+        with mock.patch.object(dc, "require_root"), self.assertRaises(dc.Refused) as cm:
+            dc.init(init_args(["relay", "onramp"], hostname="relay.example.net", contact="noc@decdn.org"))
+        self.assertIn("cannot share a host", str(cm.exception))
 
     def test_check_refuses_conflicting_profiles(self) -> None:
-        found = dc.problems(dc.Project({"COMPOSE_PROFILES": "relay,caddy"}), files_only=True)
+        found = dc.problems(dc.Project({"COMPOSE_PROFILES": "relay,onramp"}), files_only=True)
         self.assertTrue(any("cannot share a host" in p for p in found), found)
+
+    def test_the_removed_caddy_profile_is_named(self) -> None:
+        self.assertNotIn("caddy", dc.PROFILES)
+        with mock.patch.object(dc, "require_root"), self.assertRaises(dc.Refused) as cm:
+            dc.init(init_args(["onramp", "caddy"], domain="onramp.decdn.org"))
+        self.assertIn("caddy profile was removed", str(cm.exception))
+        self.assertIn("your own TLS proxy", str(cm.exception))
+        found = dc.problems(dc.Project({"COMPOSE_PROFILES": "onramp,caddy"}), files_only=True)
+        self.assertTrue(any("caddy profile was removed" in p for p in found), found)
+        self.assertFalse(any("unknown profiles" in p for p in found), found)
+
+    def test_a_running_container_of_a_removed_profile_is_refused(self) -> None:
+        with mock.patch.object(dc, "container_id", side_effect=lambda svc: "abc" if svc == "caddy" else ""):
+            found = dc.removed_containers()
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("--remove-orphans", found[0])
+        with mock.patch.object(dc, "container_id", return_value=""):
+            self.assertEqual(dc.removed_containers(), [])
+
+    def test_up_with_remove_orphans_is_not_held_back_by_the_orphan(self) -> None:
+        with (
+            mock.patch.object(dc, "check") as check,
+            mock.patch.object(dc, "up_recreates_sponsord", return_value=False),
+            mock.patch.object(dc, "compose") as compose,
+        ):
+            dc.cmd_up(argparse.Namespace(rest=["--remove-orphans"], ignore_topup_hold=False))
+            check.assert_called_once_with(removing_orphans=True)
+            compose.assert_called_once_with("up", "-d", "--remove-orphans")
+            check.reset_mock()
+            dc.cmd_up(argparse.Namespace(rest=[], ignore_topup_hold=False))
+            check.assert_called_once_with(removing_orphans=False)
 
     def test_dns_conflicts_with_every_tcp_443_profile(self) -> None:
         self.assertEqual(dc.conflicts(["origin", "dns"]), [])
-        for other in ("relay", "onramp", "caddy"):
+        for other in ("relay", "onramp"):
             with self.subTest(other=other):
                 self.assertIn("tcp/443", dc.conflicts(["dns", other])[0])
                 with mock.patch.object(dc, "require_root"), self.assertRaises(dc.Refused) as cm:
@@ -829,6 +858,32 @@ class RelayConfig(TmpDir):
         self.assertEqual(dc.RELAY_KEYS["[tls]"], sets["TLS_KEYS"])
         self.assertEqual(dc.RELAY_KEYS["[limits]"], sets["LIMIT_KEYS"])
         self.assertEqual(dc.RELAY_KEYS["[limits.client.rx]"], sets["RX_KEYS"])
+
+
+class OnrampInit(TmpDir):
+    def test_leaves_the_client_ip_header_unset(self) -> None:
+        # Behind a proxy the wrapper cannot see, trusting X-Forwarded-For would let
+        # clients pick the address the rate limits key on.
+        env = self.tmp / "sponsord-onramp.env"
+        project = dc.Project(
+            {
+                "SPONSORD_UID": "0",
+                "SPONSORD_GID": "0",
+                "SPONSORD_ENV_FILE": str(self.tmp / "sponsord.env"),
+                "SPONSORD_SECRET_ENV_FILE": str(self.tmp / "secret.env"),
+                "SPONSORD_ONRAMP_ENV_FILE": str(env),
+            }
+        )
+        with (
+            mock.patch.object(dc, "ETC_SPONSORD", self.tmp),
+            mock.patch.object(dc, "SD_TOKEN", self.tmp / "api-token"),
+            mock.patch.object(dc, "ensure_dir"),
+            mock.patch.object(dc, "fill_from_mirror"),
+            mock.patch.object(dc.os, "fchown", lambda *a: None),
+        ):
+            dc.init_sponsord(project, init_args(["onramp"], domain="onramp.decdn.org"), ["onramp"])
+        active = [line for line in env.read_text().splitlines() if line.startswith("ONRAMP_CLIENT_IP_HEADER")]
+        self.assertEqual(active, [])
 
 
 class RelayInit(TmpDir):
@@ -1051,13 +1106,11 @@ class SecretFileChecks(unittest.TestCase):
 
         project = dc.Project(
             {
-                "COMPOSE_PROFILES": "node,onramp,caddy",
+                "COMPOSE_PROFILES": "node,onramp",
                 "DECDN_UID": "1",
                 "DECDN_GID": "1",
                 "SPONSORD_UID": "2",
                 "SPONSORD_GID": "2",
-                "CADDY_UID": "3",
-                "CADDY_GID": "3",
                 "SPONSORD_ONRAMP_DOMAIN": "onramp.decdn.org",
             }
         )
@@ -1122,14 +1175,14 @@ class SecretFileChecks(unittest.TestCase):
         self.assertTrue(any("set SPONSORD_RPC_URL" in f for f in found))
 
     def test_a_uid_that_is_not_the_accounts_is_flagged(self) -> None:
-        project = dc.Project({"COMPOSE_PROFILES": "caddy", "CADDY_UID": "0", "CADDY_GID": "0"})
-        account = mock.Mock(pw_uid=997)
+        project = dc.Project({"COMPOSE_PROFILES": "sponsord", "SPONSORD_UID": "0", "SPONSORD_GID": "0"})
+        account = mock.Mock(pw_uid=998)
         with (
             mock.patch.object(dc, "rendered_environments", return_value={}),
             mock.patch.object(dc.pwd, "getpwnam", return_value=account),
         ):
             found = dc.problems(project, files_only=True)
-        self.assertTrue(any("CADDY_UID=0" in f for f in found))
+        self.assertTrue(any("SPONSORD_UID=0" in f for f in found))
 
 
 class GatewayChecks(unittest.TestCase):
@@ -1586,7 +1639,7 @@ class AlloyConfig(unittest.TestCase):
                     self.assertEqual(self.scraped(component, f"{profile},alloy"), profile in starts)
 
     def test_profile_lists_as_compose_reads_them(self) -> None:
-        self.assertTrue(self.scraped("decdn_node", "origin, onramp,caddy,alloy"))
+        self.assertTrue(self.scraped("decdn_node", "origin, onramp,gateway,alloy"))
         self.assertTrue(self.scraped("decdn_node", "*"))
         self.assertFalse(self.scraped("decdn_node", "nodes,alloy"))
         self.assertFalse(self.scraped("decdn_node", ""))

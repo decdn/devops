@@ -61,7 +61,7 @@ homed here only if the node is directly reachable; see
   when every process holding it is in the unit's cgroup (the whole path, so a relay
   in a nested container is another process), so a re-run against a relay that
   systemd is restarting does not refuse the relay itself. A web server or the
-  sponsord-onramp's Caddy cannot share 80/443 with the relay.
+  sponsord-onramp's nginx cannot share 80/443 with the relay.
   `playbooks/iroh_relay.yml` also refuses a host in both `iroh_relay_hosts` and
   `sponsord_onramp_hosts`.
 - **Gates the deploy.** After the start, loopback `/metrics` must answer, every

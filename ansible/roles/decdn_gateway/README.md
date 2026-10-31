@@ -136,6 +136,7 @@ a deploy sets:
 | `decdn_gateway_working_deposit_micro_usdc` | `""` | The pool's working deposit; `""` is the CLI's 10 USDC. |
 | `decdn_gateway_tls` | `acme` | `acme` or `self-signed`. |
 | `decdn_gateway_acme_server` | `letsencrypt` | A lego shortcode or directory URL. |
+| `decdn_gateway_lego_version` / `_lego_sha256` | the pinned lego release | Bump with `sponsord_onramp_lego_*`: `make test-scripts` checks they agree. |
 | `decdn_gateway_pointer_rate` / `_burst` | `6r/m` / `5` | The per-client limit on `PUT /_pointer`. |
 | `decdn_gateway_generate_keystore` | `false` | Mint a fresh wallet when none exists. |
 | `decdn_gateway_version` | the decdn line | Kept equal to `decdn_node_version` (`make test-scripts` checks). |

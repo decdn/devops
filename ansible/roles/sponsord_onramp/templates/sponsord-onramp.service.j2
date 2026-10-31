@@ -2,7 +2,7 @@
 #
 # sponsord-onramp: the gate page, the installers and the capability API, in front of the
 # sponsord daemon on this host. It listens on loopback only
-# ({{ sponsord_onramp_bind_address }}:{{ sponsord_onramp_port }}); {{ ('Caddy terminates TLS for ' ~ sponsord_onramp_domain) if sponsord_onramp_proxy == 'caddy' else "the operator's own proxy terminates TLS" }}.
+# ({{ sponsord_onramp_bind_address }}:{{ sponsord_onramp_port }}); {{ ('nginx terminates TLS for ' ~ sponsord_onramp_domain) if sponsord_onramp_proxy == 'nginx' else "the operator's own proxy terminates TLS" }}.
 # It keeps only in-flight hand-offs in memory. The daemon's API token and the
 # Turnstile secret never sit in the environment: systemd reads the root-only files
 # and hands them to this unit as credentials.

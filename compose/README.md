@@ -11,19 +11,18 @@ Compose cannot make by itself.
 | `node` | `decdn-node`, a deCDN cache node (node operators) | `ghcr.io/decdn/decdn-node` | `decdn_node` on `decdn_nodes` outside `decdn_origin_nodes` ([`playbooks/node.yml`](../ansible/playbooks/node.yml)) |
 | `origin` | the same `decdn-node`, run as a publisher's origin ([below](#run-it-as-an-origin-publishers)) | `ghcr.io/decdn/decdn-node` | `decdn_node` on `decdn_origin_nodes`, with an origin backend ([`playbooks/origin.yml`](../ansible/playbooks/origin.yml)) |
 | `sponsord` | `sponsord`, the onboarding sponsor: treasury signer and PaymentPool keeper | `ghcr.io/decdn/sponsord` | `sponsord` |
-| `onramp` | `sponsord-onramp`, its public side (Turnstile gate, installers); also starts `sponsord` | `ghcr.io/decdn/sponsord-onramp` | `sponsord_onramp` |
-| `caddy` | Caddy, TLS in front of the onramp; leave it out to bring your own proxy | `caddy` (official) | `sponsord_onramp_proxy: caddy` |
+| `onramp` | `sponsord-onramp`, its public side (Turnstile gate, installers), on loopback behind your own TLS proxy ([below](#sponsord-and-its-onramp)); also starts `sponsord` | `ghcr.io/decdn/sponsord-onramp` | `sponsord_onramp`, which also installs nginx and its certificate |
 | `relay` | `iroh-relay`, a self-hosted iroh relay ([below](#an-iroh-relay-publishers)) | `n0computer/iroh-relay` (official) | `iroh_relay` ([`playbooks/iroh_relay.yml`](../ansible/playbooks/iroh_relay.yml)) |
 | `dns` | `iroh-dns-server`, a self-hosted iroh DNS server ([below](#an-iroh-dns-server-publishers)) | `n0computer/iroh-dns-server` (official) | `iroh_dns_server` ([`playbooks/iroh_dns_server.yml`](../ansible/playbooks/iroh_dns_server.yml)) |
 | `gateway` | `decdn-gateway`, a public deCDN gateway on loopback, behind your own TLS proxy ([below](#a-public-gateway-publishers)) | `ghcr.io/decdn/decdn-node` (its `decdn` CLI) | `decdn_gateway` ([`playbooks/decdn_gateway.yml`](../ansible/playbooks/decdn_gateway.yml)), which also installs nginx and its certificate |
 | `alloy` | Grafana Alloy: this host's metrics and logs to Grafana Cloud ([below](#grafana-cloud-alloy)) | `grafana/alloy` (official) | `grafana_alloy` (`decdn_grafana_cloud_enabled`) |
 
 A **node operator** runs `node`. A **publisher** runs `origin` for an origin node,
-`onramp caddy` for a sponsor, or all three on one host, `relay` and `dns` on hosts
-of their own, and `gateway` for a public gateway. The sponsor is independent of the node. `node` and `origin` start the
-same service, so a host runs one or the other; `relay` and `dns` cannot share a host
-with each other, `onramp` or `caddy`, which want the same ports. Any host adds
-`alloy` to ship its metrics and logs to Grafana Cloud.
+`onramp` for a sponsor, or both on one host, `relay` and `dns` on hosts of their
+own, and `gateway` for a public gateway. The sponsor is independent of the node.
+`node` and `origin` start the same service, so a host runs one or the other; `relay`
+and `dns` cannot share a host with each other or with `onramp`, whose TLS proxy wants
+the same ports. Any host adds `alloy` to ship its metrics and logs to Grafana Cloud.
 
 Pick this path for a single machine you already run Docker on. For a fleet, or a host
 you want hardened from scratch (firewall, SSH, auto-patching), use the
@@ -57,7 +56,7 @@ against [`compose.yaml`](compose.yaml), plus `compose.override.yaml` when you ha
 | `check` | the preflight `up` also runs: every file present, owned and moded as the services need, the settings filled in, `decdn config validate` against the pinned image, the relay's and DNS server's configs, and no other process on the ports the stopped services bind |
 | `up [svc…]` | `check`, then `docker compose up -d` |
 | `stop`, `restart`, `down` | `docker compose …`, but refused while sponsord holds an unconfirmed pool top-up ([below](#the-top-up-hold)) |
-| `health` | probes every running service: the node's admin RPC and metrics, each `/healthz`, sponsord's hold, the onramp's certificate through Caddy, the relay's metrics and certificate, the DNS server's version, SOA answers and certificate, Alloy's readiness and components |
+| `health` | probes every running service: the node's admin RPC and metrics, each `/healthz`, sponsord's hold, the relay's metrics and certificate, the DNS server's version, SOA answers and certificate, Alloy's readiness and components |
 | `cli <args>` | the `decdn` CLI from the node image, with the node's config and keys and your RPC endpoint from `decdn.env`: `cli whoami`, `cli node status`, `cli setup` |
 | `backup -r <age recipient>` | an age-encrypted archive of the active profiles' keys and secrets |
 | `config` | `docker compose config`, with every value that came from an env file shown as `<redacted>` (the plain command prints `DECDN_RPC_URL` and the rest in clear) |
@@ -216,14 +215,13 @@ what each setting does; this section covers the Compose side.
 1. **Prepare the host:**
 
    ```bash
-   sudo compose/decdn-compose init onramp caddy --domain onramp.example.org --generate-treasury
+   sudo compose/decdn-compose init onramp --domain onramp.example.org --generate-treasury
    ```
 
-   This creates the `sponsord` and `caddy` accounts, `/etc/sponsord` and
-   `/var/lib/caddy`, the API token, and the env files, with the chain id and the
-   PaymentPool, CapacityBond and SlashJudge addresses filled in from this repo's
-   mirror of upstream's deployment manifest. Leave out `caddy` to bring your own
-   proxy, and `onramp` (use `sponsord`) for the daemon alone.
+   This creates the `sponsord` account, `/etc/sponsord`, the API token, and the env
+   files, with the chain id and the PaymentPool, CapacityBond and SlashJudge addresses
+   filled in from this repo's mirror of upstream's deployment manifest. Use
+   `sponsord` instead of `onramp` for the daemon alone.
 
    `--generate-treasury` creates the treasury wallet on the host. Without it, copy
    your own keystore and its password in, owned by `sponsord`, `0600`:
@@ -244,20 +242,54 @@ what each setting does; this section covers the Compose side.
 
    `sudoedit` writes a file back with its existing owner and mode.
 
-3. **TLS in front of the onramp.** Either:
-   - **Caddy** (`caddy` profile): point the domain's DNS at this host and open
-     **tcp/80** and **tcp/443** in the host firewall and the cloud security group.
-     Caddy gets the certificate from Let's Encrypt, redirects http to https and
-     proxies to `127.0.0.1:8080`. Its config is [`Caddyfile`](Caddyfile): no admin
-     API, no HTTP/3 (so no udp/443), and an optional ACME contact email. `init` set
-     `ONRAMP_CLIENT_IP_HEADER=X-Forwarded-For` in `sponsord-onramp.env`, so the onramp
-     rate limits each client instead of Caddy as a whole.
-   - **Your own proxy**: leave `caddy` out and proxy the domain to `127.0.0.1:8080`.
-     Then decide on `ONRAMP_CLIENT_IP_HEADER` in `sponsord-onramp.env`. The onramp
-     rate limits by that header's right-most address, so set it only if your proxy is
-     the **only** way in and overwrites that header (e.g. `CF-Connecting-IP` behind
-     Cloudflare). Unset, the onramp limits by the TCP peer, which behind a proxy is
-     the proxy itself.
+3. **Your TLS proxy.** The onramp listens on `127.0.0.1:8080` only. Point the
+   domain's DNS at a proxy of your own that terminates TLS for it and forwards to
+   `http://127.0.0.1:8080`, and open its ports (tcp/80 and tcp/443 when it runs on
+   this host). The Ansible role puts the distro's nginx in front with a Let's Encrypt
+   certificate, but stock nginx cannot bind tcp/80 and tcp/443 as a non-root account
+   on the host network, and this file runs no service as root but the iroh ones
+   ([Security notes](#security-notes)). A minimal nginx site, with the certificate
+   from any ACME client. The `/.well-known/acme-challenge/` location serves an
+   HTTP-01 webroot, as the role's
+   [certificate unit](../ansible/roles/sponsord_onramp/templates/sponsord-onramp-certs.service.j2)
+   uses with lego (`--http --http.webroot /var/www/acme`):
+
+   ```nginx
+   server {
+       listen 80;
+       listen [::]:80;
+       server_name onramp.example.org;
+       location ^~ /.well-known/acme-challenge/ {
+           root /var/www/acme;
+       }
+       location / {
+           return 301 https://$host$request_uri;
+       }
+   }
+
+   server {
+       # nginx 1.25.1 and later: `listen 443 ssl;` plus `http2 on;`.
+       listen 443 ssl http2;
+       listen [::]:443 ssl http2;
+       server_name onramp.example.org;
+       ssl_certificate     /etc/ssl/onramp/fullchain.pem;
+       ssl_certificate_key /etc/ssl/onramp/privkey.pem;
+
+       location / {
+           proxy_pass http://127.0.0.1:8080;
+           proxy_set_header Host $host;
+           # The client's address, replacing whatever the client sent.
+           proxy_set_header X-Forwarded-For $remote_addr;
+       }
+   }
+   ```
+
+   Then decide on `ONRAMP_CLIENT_IP_HEADER` in `sponsord-onramp.env`; `init` leaves it
+   unset. The onramp rate limits by that header's right-most address, so set it
+   (`X-Forwarded-For` for the site above) only if your proxy is the **only** way in
+   and puts the client's address there (`CF-Connecting-IP` behind Cloudflare).
+   Unset, the onramp limits by the TCP peer, which behind a proxy is the proxy
+   itself, so every user shares one limit.
 
 4. **Start it:**
 
@@ -298,7 +330,6 @@ it through a check: unless the path resolves (symlinks followed) to a file in
 | `/etc/sponsord/treasury-password` | `sponsord`, `0600` | sponsord | Compose secret |
 | `/etc/sponsord/turnstile-secret` | `sponsord`, `0600` | onramp | Compose secret |
 | `/etc/sponsord/onramp-gate/` | `root`, `0755` | onramp | read-only directory, same path: an optional custom gate page |
-| `/var/lib/caddy/` | `caddy`, `0700` | Caddy | `/data`: certificates, ACME account |
 
 The paths match the Ansible roles, with one difference: the credential files belong
 to a `sponsord` account instead of root. Under systemd, root hands them to the
@@ -333,19 +364,28 @@ until it does (the error log line names the transaction and how many). The
 overrides the check. A plain `docker compose` command does not check: use the
 wrapper.
 
-- **Logs:** `sudo compose/decdn-compose logs -f sponsord sponsord-onramp caddy`.
-- **Stop:** `sudo compose/decdn-compose stop caddy sponsord-onramp sponsord`. On
-  SIGTERM sponsord waits for a pool top-up it already sent, up to 120 s. Stopping
-  sponsord alone leaves the onramp running, and stopping both leaves Caddy on tcp/80
-  and tcp/443 answering with errors.
+- **Logs:** `sudo compose/decdn-compose logs -f sponsord sponsord-onramp`.
+- **Stop:** `sudo compose/decdn-compose stop sponsord-onramp sponsord`. On SIGTERM
+  sponsord waits for a pool top-up it already sent, up to 120 s. Stopping sponsord
+  alone leaves the onramp running, and stopping both leaves your proxy answering
+  with errors.
 - **Restart:** `sudo compose/decdn-compose restart sponsord` restarts the onramp too,
   because the onramp reads the daemon's limits only at start.
 - **Config change:** edit the env file, then `sudo compose/decdn-compose up`, which
   recreates a container whose env changed. A changed credential file needs
   `restart sponsord` (the onramp restarts with it), or `restart sponsord-onramp` for
   the Turnstile secret alone.
-- **Caddyfile change:** `sudo compose/decdn-compose restart caddy`. The admin API is
-  off, so there is no live reload.
+- **Moving off the old `caddy` profile:** this file no longer has one, and `check`
+  and `up` refuse a `COMPOSE_PROFILES` that still names it. Drop `caddy` from it in
+  `.env` (and the `CADDY_*` lines), then
+  `sudo compose/decdn-compose up --remove-orphans`, which removes the Caddy container
+  and frees tcp/80 and tcp/443 for your own proxy ([Set up](#set-up-1), step 3).
+  `check` and a plain `up` refuse while that container still runs. Afterwards,
+  `sudo rm -r /var/lib/caddy` and `sudo userdel caddy` remove its old certificates
+  and account. The old `init` set `ONRAMP_CLIENT_IP_HEADER=X-Forwarded-For` in
+  `sponsord-onramp.env`, which was safe only because Caddy overwrote that header:
+  keep it only if your proxy is the only way in and sets the header itself (step 3),
+  otherwise remove it, or clients choose the address the rate limits key on.
 - **Rotate the treasury:** replace the keystore and password files (same owner and
   mode), then `restart sponsord`. The new wallet must own `SPONSORD_POOL_ID`, or
   sponsord exits at start.
@@ -374,7 +414,8 @@ relay in depth; this section covers the Compose side.
 The relay is public by design and terminates its own TLS: it gets a Let's Encrypt
 certificate itself (TLS-ALPN-01 on tcp/443), and QAD needs that certificate
 in-process, so no proxy can stand in front of it. It binds tcp/80, tcp/443 and
-udp/7842 itself, so it cannot share a host with `onramp`, `caddy` or `dns`.
+udp/7842 itself, so it cannot share a host with `dns`, or with `onramp`, whose TLS
+proxy wants tcp/80 and tcp/443.
 
 ### Set up
 
@@ -492,7 +533,7 @@ explains it in depth; this section covers the Compose side.
 
 It is public by design and terminates its own TLS (Let's Encrypt over TLS-ALPN-01 on
 tcp/443), and it is authoritative for its zone on udp/53 and tcp/53. It cannot share a
-host with `relay`, `onramp` or `caddy`, which want tcp/443 too. Run **one server per
+host with `relay`, or with `onramp`, whose TLS proxy wants tcp/443 too. Run **one server per
 origin**: upstream does not replicate, so two instances would be two independent
 stores.
 
@@ -756,7 +797,7 @@ plus `region` and `deployment_environment` from `.env`):
 - the host journal to Loki, every unit's and every container's lines. The
   containers' lines arrive as `docker.service` with a `container` label; this
   project's get their role's unit (`decdn-decdn-node-1` becomes
-  `unit="decdn-node.service"`, likewise `sponsord`, `sponsord-onramp`, `caddy`,
+  `unit="decdn-node.service"`, likewise `sponsord`, `sponsord-onramp`,
   `iroh-relay`, `iroh-dns-server` and `alloy`), so the level parsing, the debug/trace guardrail and the dashboards' log
   panels work as on the Ansible path;
 - OTLP on `127.0.0.1:4317` (gRPC) and `:4318` (HTTP), sampled and forwarded.
@@ -858,10 +899,9 @@ is given.
 
 ## Security notes
 
-- Every container runs as a dedicated host account (`decdn`, `sponsord`, `caddy`,
+- Every container runs as a dedicated host account (`decdn`, `sponsord`,
   `decdn-gateway`, `alloy`) with a read-only root filesystem, every capability dropped and
-  `no-new-privileges`, from one shared block (`x-hardened`). Caddy keeps
-  `NET_BIND_SERVICE` and nothing else, for tcp/80 and tcp/443. Alloy gets the host's
+  `no-new-privileges`, from one shared block (`x-hardened`). Alloy gets the host's
   `systemd-journal` group and read-only views of the host (`/proc`, `/sys`, `/`, the
   journal): no other container mounts any of them. "Read-only" holds for what is
   mounted at start (submounts too only on Docker 25+ with kernel 5.12+); a
@@ -873,8 +913,7 @@ is given.
   udp+tcp/53; each terminates its own TLS, and the relay's QUIC address discovery
   needs the certificate in-process, so no proxy can take the ports), and on the host
   network Docker cannot give a non-root process that capability: Docker sets no
-  ambient capabilities, the images' binaries carry no file capability (Caddy's
-  does), and the `net.ipv4.ip_unprivileged_port_start` sysctl cannot be set on a
+  ambient capabilities, the images' binaries carry no file capability, and the `net.ipv4.ip_unprivileged_port_start` sysctl cannot be set on a
   host-network container. The rest of the hardening stays: read-only root
   filesystem, `no-new-privileges`, every other capability dropped (the effective set
   is `0x400`, `CAP_NET_BIND_SERVICE` alone, so root's file-permission and other
@@ -891,9 +930,9 @@ is given.
   URL cut to its scheme and host.
 - The remaining KICS findings are the design, not an oversight: host networking
   (loopback-only backends, no Docker-published ports), no healthchecks on the sponsor's
-  images, Caddy's and Alloy's (they have no HTTP client) and the iroh services'
+  images, Alloy's (they have no HTTP client) and the iroh services'
   (`decdn-compose health` probes them all from the host), the one added capability of
-  Caddy and the iroh services, the iroh services running as root (above), and the API
+  the iroh services, the iroh services running as root (above), and the API
   token both sponsord containers mount. The "Volume Has Sensitive Host Directory"
   query, which flags every host-path mount (the roles' host layout, and Alloy's view
   of the host), and "Volume Mounted In Multiple Containers", which flags the `rslave`

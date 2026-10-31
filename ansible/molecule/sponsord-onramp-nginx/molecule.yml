@@ -2,11 +2,12 @@
 # The onramp's proxy handling, split from ../sponsord-onramp so the two run side by
 # side: the same host shape, inventory and converge (that scenario's prepare,
 # converge and verify, by path), then side_effect.yml here:
-#   proxy "none" (no client-IP header, the given public URL, the stale-Caddy
-#   warning), ACME mode (no `tls internal`, the redirect answers, an unissuable
-#   certificate only warns), a broken upstream behind Caddy failing the run, and a
-#   Caddyfile the role did not write (refused until confirmed; the package's
-#   untouched default replaced); then a custom gate page, and the Turnstile secret
+#   proxy "none" (no client-IP header, the given public URL, the stale-site
+#   warning), a broken upstream behind nginx failing the run, an nginx site the
+#   role did not enable (refused, left untouched), the role's earlier Caddy retired
+#   (a marked Caddyfile and a stand-in caddy unit, gone after a converge), ACME
+#   against a server that does not answer (the issuance fails the run, nginx keeps
+#   serving http); then a custom gate page, and the Turnstile secret
 #   from inventory (both from ../sponsord-onramp, to keep the two jobs short).
 # No idempotence step: ../sponsord-onramp runs it on the identical converge.
 #
@@ -15,7 +16,7 @@
 driver:
   name: docker
 platforms:
-  - name: onramp-caddy-molecule
+  - name: onramp-nginx-molecule
     # Same digest-pinned images as ../sponsord (repo convention).
     image: geerlingguy/docker-debian12-ansible@sha256:a131e3b7a9a38dda40e98b49b39d6200ffab0ad853c714a513f5eea41bab9a25
     pre_build_image: true
@@ -27,8 +28,8 @@ platforms:
     groups:
       - sponsord_hosts
       - sponsord_onramp_hosts
-  # systemd 255 writes LoadCredential= files 0440 and Caddy comes from universe.
-  - name: onramp-caddy-molecule-u2404
+  # systemd 255 writes LoadCredential= files 0440.
+  - name: onramp-nginx-molecule-u2404
     image: geerlingguy/docker-ubuntu2404-ansible@sha256:3394e335df58c961c00b78ae601ef30cdd7463b112f21b0c5f78674a70526302
     pre_build_image: true
     command: /usr/lib/systemd/systemd
@@ -80,8 +81,8 @@ provisioner:
         # sponsord_onramp_network follows sponsord_network (arbitrum-sepolia).
         sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc
         sponsord_onramp_domain: onramp.molecule.test
-        sponsord_onramp_caddy_tls: internal
-        # Renders (and so validates) the Caddyfile's global email option.
+        sponsord_onramp_tls: self-signed
+        # Read only under acme, which ../sponsord-onramp-nginx's side effects switch to.
         sponsord_onramp_acme_email: ops@molecule.test
         sponsord_onramp_turnstile_sitekey: 1x00000000000000000000AA
         # Must equal EXPECTED_BRAND in ../sponsord-onramp/files/sponsord-onramp-stub:
