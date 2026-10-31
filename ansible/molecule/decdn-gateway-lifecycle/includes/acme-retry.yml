@@ -26,6 +26,18 @@
           Attempt {{ _gw_attempt }} failed at "{{ ansible_failed_task.name }}", not at
           the issuance check: {{ ansible_failed_result.msg | default('') }}
 
+# The timer was paused for the issuance; a failed one must still leave it running.
+- name: Read the renewal timer, attempt {{ _gw_attempt }}
+  ansible.builtin.systemd_service:
+    name: decdn-gateway-certs.timer
+  register: _gw_timer_after
+
+- name: Require the timer running again, attempt {{ _gw_attempt }}
+  ansible.builtin.assert:
+    that:
+      - _gw_timer_after.status.ActiveState == 'active'
+    fail_msg: The renewal timer is {{ _gw_timer_after.status.ActiveState }} after a failed issuance.
+
 - name: Read the forcing env file and the record, attempt {{ _gw_attempt }}
   ansible.builtin.slurp:
     src: "{{ item }}"
