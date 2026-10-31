@@ -12,8 +12,8 @@
 #      restarts nothing (the revert writes the recorded content back, which must
 #      not slip a restart past the guard); the override restarts during the hold;
 #      an unreadable /metrics refuses too; a plain converge restarts once it clears.
-# Release mode, treasury wallet generation and secret.env's provenance guards run in
-# ../sponsord-install, beside this scenario. The first play must run on a fresh
+# Release mode runs in ../sponsord-install, treasury wallet generation and
+# secret.env's provenance guards in ../sponsord-wallet, beside this scenario. The first play must run on a fresh
 # converge (it asserts no restart yet), and it records the API token verify.yml
 # compares against.
 # The host is left healthy, on the inventory-authored secret.env, for verify.yml.

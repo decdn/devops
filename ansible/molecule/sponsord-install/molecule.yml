@@ -4,11 +4,11 @@
 #   prepare      ../sponsord's staging plus a signed release mirror on loopback;
 #   side_effect  release mode against that mirror (verified install, no re-download,
 #                bad checksum / signature / version each failing at its own task,
-#                manual clearing the stamp), then treasury wallet generation,
-#                then secret.env's provenance guards.
+#                manual clearing the stamp).
+# Treasury wallet generation and secret.env's provenance guards are ../sponsord-wallet.
 # No idempotence step (../sponsord runs it on the identical converge) and no verify:
-# ../sponsord/verify.yml checks state its own side effect records, and each play
-# here asserts its own outcome and leaves the host as converged.
+# ../sponsord/verify.yml checks state its own side effect records, and the play here
+# asserts its own outcome and leaves the host as converged.
 #
 # The inventory below must stay identical to ../sponsord/molecule.yml's
 # (`make test-scripts` checks).

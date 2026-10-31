@@ -222,10 +222,11 @@ export it, so watch the address yourself.
     before the restart and keeps the restart record, the override restarts, and the
     next run after the hold clears restarts;
   - the Alloy toggles.
-- `molecule/sponsord-install` runs beside it on the same converge. It checks:
-  - release mode against a locally signed mirror: the version stamp, a re-run
-    with the mirror down, and rejection of a bad checksum, a bad signature and
-    a binary that is not the pinned version;
+- `molecule/sponsord-install` runs beside it on the same converge. It checks
+  release mode against a locally signed mirror: the version stamp, a re-run with
+  the mirror down, and rejection of a bad checksum, a bad signature and a binary
+  that is not the pinned version.
+- `molecule/sponsord-wallet` runs beside both on the same converge. It checks:
   - treasury wallet generation through a `key-gen` stub: the files and modes, the
     stop on an empty pool id, an existing wallet kept, and the daemon starting on it;
   - each `secret.env` hand-off between inventory and host, with its guards.

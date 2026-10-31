@@ -80,7 +80,7 @@ class Properties(unittest.TestCase):
 class Dependencies(unittest.TestCase):
     def test_a_stub_selects_the_scenarios_that_read_it_by_path(self):
         got = names("ansible/molecule/default/files/decdn-node-stub")
-        self.assertLessEqual({"default", "os-matrix", "collection", "sponsord-install"}, got)
+        self.assertLessEqual({"default", "os-matrix", "collection", "sponsord-wallet"}, got)
 
     def test_reading_one_file_of_a_scenario_is_not_reading_it_all(self):
         # iroh-relay reads grafana-cloud's alloy-stub, not its converge.
@@ -104,7 +104,7 @@ class Dependencies(unittest.TestCase):
 
     def test_a_deleted_file_selects_every_reader_of_its_scenario(self):
         got = names("ansible/molecule/default/files/no-such-file")
-        self.assertLessEqual({"default", "os-matrix", "sponsord-install"}, got)
+        self.assertLessEqual({"default", "os-matrix", "sponsord-wallet"}, got)
 
     def test_a_deleted_file_alone_in_its_directory_keeps_its_readers(self):
         # Simulate deleting grafana-cloud's alloy-stub, the only file in files/:

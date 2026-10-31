@@ -207,10 +207,11 @@ want="$(cd "$repo/ansible/molecule" && for d in */molecule.yml; do echo "${d%/mo
 
 # Split scenarios share one converge, so their inventories must not drift apart.
 if command -v yq >/dev/null; then
-  for pair in sponsord:sponsord-install sponsord-onramp:sponsord-onramp-nginx \
+  for pair in sponsord:sponsord-install sponsord:sponsord-wallet sponsord-onramp:sponsord-onramp-nginx \
+      sponsord-onramp:sponsord-onramp-turnstile \
       sponsord-onramp:sponsord-onramp-source sponsord-onramp:sponsord-onramp-lifecycle \
       iroh-relay:iroh-relay-lifecycle iroh-relay:iroh-relay-install \
-      iroh-relay:iroh-relay-certificate iroh-relay:iroh-relay-gate \
+      iroh-relay:iroh-relay-certificate iroh-relay:iroh-relay-gate iroh-relay:iroh-relay-access \
       iroh-dns-server:iroh-dns-server-certificate iroh-dns-server:iroh-dns-server-install \
       iroh-dns-server:iroh-dns-server-lifecycle iroh-dns-server:iroh-dns-server-gate \
       decdn-gateway:decdn-gateway-lifecycle \

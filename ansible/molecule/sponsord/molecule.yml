@@ -15,9 +15,10 @@
 #                top-up refuses the restart until it clears.
 #   verify       files, modes, unit hardening, credentials, listener, Alloy config.
 #
-# Release mode, treasury wallet generation and secret.env's provenance guards run in
-# ../sponsord-install on the same converge, so the two run side by side. Its inventory below must stay identical to
-# this one (`make test-scripts` checks).
+# Release mode runs in ../sponsord-install, treasury wallet generation and secret.env's
+# provenance guards in ../sponsord-wallet, on the same converge, so the three run side
+# by side. Their inventories must stay identical to this one (`make test-scripts`
+# checks).
 #
 # `baseline` is skipped (real-host-only — see ../default/molecule.yml). The
 # broken-input matrix for this role lives in ../validation-sponsord.

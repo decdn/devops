@@ -202,18 +202,20 @@ decommission:
 # /metrics probe timeout), grafana-cloud and grafana-cloud-token (opt-in Grafana
 # Cloud observability, host-provisioned vs inventory token), os-matrix (default's
 # plays on Debian 13, Ubuntu 24.04 and 26.04), lifecycle (network profile,
-# backup + decommission), sponsord and sponsord-install (the sponsord role on a host
-# with no node, through playbooks/sponsord.yml, on Debian 12 and Ubuntu 24.04; the
-# install-method, wallet and secret.env provenance side effects run in
-# sponsord-install), sponsord-onramp and sponsord-onramp-nginx (the onramp beside its
-# daemon, behind the real distro nginx; the proxy, Caddy retirement, ACME, gate-page and
-# inventory Turnstile side effects run in sponsord-onramp-nginx), sponsord-onramp-source
+# backup + decommission), sponsord, sponsord-install and sponsord-wallet (the sponsord
+# role on a host with no node, through playbooks/sponsord.yml, on Debian 12 and Ubuntu
+# 24.04; the install-method side effects run in sponsord-install, the wallet and
+# secret.env provenance ones in sponsord-wallet), sponsord-onramp, sponsord-onramp-nginx
+# and sponsord-onramp-turnstile (the onramp beside its daemon, behind the real distro
+# nginx; the proxy, Caddy retirement and ACME side effects run in sponsord-onramp-nginx,
+# the gate-page and inventory Turnstile ones in sponsord-onramp-turnstile),
+# sponsord-onramp-source
 # (that converge, then both sponsord roles built from source), sponsord-onramp-lifecycle
 # (that converge, then sponsord's backup and decommission), iroh-relay,
-# iroh-relay-certificate, iroh-relay-gate, iroh-relay-lifecycle and
+# iroh-relay-certificate, iroh-relay-gate, iroh-relay-access, iroh-relay-lifecycle and
 # iroh-relay-install (the relay through playbooks/iroh_relay.yml against a stub on
 # Debian 12 and Ubuntu 24.04: restarts, the fatal gate, the port guard; then the
-# certificate check, the gate's other refusals with the bind and access modes, its
+# certificate check, the gate's other refusals, the bind and access modes, its
 # decommission, and its release install from a local mirror), validation-iroh-relay
 # (the relay's bad knobs), iroh-dns-server, iroh-dns-server-certificate,
 # iroh-dns-server-gate, iroh-dns-server-install and iroh-dns-server-lifecycle (the
@@ -264,10 +266,10 @@ decommission:
 # rename cannot leave it silently stale.
 SCENARIOS ?= all
 JOBS ?=
-SLOW_FIRST ?= sponsord-onramp-source sponsord-install cloud-init source-build-recovery \
-	iroh-relay-gate cloud-init-publisher sponsord source-build sponsord-onramp \
-	sponsord-onramp-nginx decdn-gateway-lifecycle iroh-relay source-build-rollback \
-	iroh-relay-certificate \
+SLOW_FIRST ?= sponsord-onramp-source sponsord-install sponsord-wallet cloud-init \
+	source-build-recovery iroh-relay-gate iroh-relay-access cloud-init-publisher sponsord \
+	source-build sponsord-onramp sponsord-onramp-nginx sponsord-onramp-turnstile \
+	decdn-gateway-lifecycle iroh-relay source-build-rollback iroh-relay-certificate \
 	validation iroh-relay-install os-matrix grafana-cloud
 MOLECULE_LOCK_PREFIX ?= /tmp/decdn-devops-molecule
 molecule_env = SCENARIOS='$(SCENARIOS)' JOBS='$(JOBS)' SLOW_FIRST='$(SLOW_FIRST)' \

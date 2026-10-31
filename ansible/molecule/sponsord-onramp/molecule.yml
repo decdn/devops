@@ -19,9 +19,10 @@
 #                https chain through nginx, the client address nginx passes on.
 #
 # The proxy side effects (proxy "none", ACME, a foreign nginx site, the earlier
-# Caddy retired), a custom gate page and the Turnstile secret from inventory run in
-# ../sponsord-onramp-nginx on the same converge, so the two run side by side;
-# so do ../sponsord-onramp-source and ../sponsord-onramp-lifecycle. Their
+# Caddy retired) run in ../sponsord-onramp-nginx, a custom gate page and the
+# Turnstile secret from inventory in ../sponsord-onramp-turnstile, on the same
+# converge, so they run side by side; so do ../sponsord-onramp-source and
+# ../sponsord-onramp-lifecycle. Their
 # inventories must stay identical to this one (`make test-scripts` checks).
 #
 # `baseline` is skipped (real-host-only — see ../default/molecule.yml), so the

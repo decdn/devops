@@ -12,8 +12,8 @@
 # as playbooks/iroh_relay.yml does: facts the converge run set do not carry over to
 # this run.
 # The certificate check runs in ../iroh-relay-certificate, the gate's other
-# refusals, QAD off, the bind addresses and the access modes in ../iroh-relay-gate,
-# and decommission in ../iroh-relay-lifecycle. The host is left as converged, with
+# refusals and QAD off in ../iroh-relay-gate, the bind addresses and the access modes
+# in ../iroh-relay-access, and decommission in ../iroh-relay-lifecycle. The host is left as converged, with
 # the molecule CA trusted, for verify.
 - name: Side effect — restarts, the fatal gate, the port guard, no config
   hosts: all

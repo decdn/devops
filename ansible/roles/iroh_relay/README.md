@@ -278,8 +278,8 @@ check of your own.
     - an untrusted certificate fails in `fail` mode, warns in `warn` mode, and fails
       in `warn` mode once a certificate was issued (`iroh-relay-certificate`);
     - `0.0.0.0` and a specific IPv4 address are rendered, bound and probed
-      (`iroh-relay-gate`);
-    - the allowlist (`iroh-relay-gate`): the ID read from a stand-in node (a fake
+      (`iroh-relay-access`);
+    - the allowlist (`iroh-relay-access`): the ID read from a stand-in node (a fake
       `decdn` on the relay host) is merged with the listed one; a node without an
       identity fails the read; the `everyone` and `denylist` modes render as such.
 - `molecule/iroh-relay-install` runs the `release` method against a local mirror

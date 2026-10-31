@@ -20,8 +20,9 @@
 #
 # The other side effects run on the same converge, so they run side by side (their
 # inventories must stay identical to this one: `make test-scripts` checks): the
-# certificate check in ../iroh-relay-certificate; the gate's other refusals, QAD off,
-# the bind addresses and the access modes in ../iroh-relay-gate; the release install
+# certificate check in ../iroh-relay-certificate; the gate's other refusals and QAD
+# off in ../iroh-relay-gate; the bind addresses and the access modes in
+# ../iroh-relay-access; the release install
 # (download, sha256 pin, stamp, version backstop) in ../iroh-relay-install against a
 # local mirror; and decommission in ../iroh-relay-lifecycle. The broken-input matrix lives in
 # ../validation-iroh-relay. `baseline` is skipped (real-host-only — see
