@@ -1403,6 +1403,7 @@ cdy='/^  caddy:$/,/^ {0,2}[a-z]/'
 rly='/^  iroh-relay:$/,/^ {0,2}[a-z]/'
 dns='/^  iroh-dns-server:$/,/^ {0,2}[a-z]/'
 aly='/^  alloy:$/,/^ {0,2}[a-z]/'
+gw='/^  decdn-gateway:$/,/^ {0,2}[a-z]/'
 h='s/^(\s*)<<: \*hardened$/&\n\1'
 # Shape
 variant "unexpected service"       "compose.yaml: services are exactly"           "s/^  caddy:$/  proxy:/"
@@ -1519,6 +1520,17 @@ variant "dns low fd limit"         "iroh-dns-server: ulimits.nofile is 65536"   
 variant "dns by tag"               "iroh-dns-server: image is pinned"             "${dns} s#^(\s*)image: .*#\1image: docker.io/n0computer/iroh-dns-server:v1.3.0#"
 variant "dns inline secret"        "iroh-dns-server: sets only allowed environment keys inline (extra: ACME_KEY)" "${dns} s/^(\s*)RUST_LOG: (.*)$/&\n\1ACME_KEY: x/"
 variant "dns always on"            "iroh-dns-server: profiles are [dns]"          "${dns} {/^    profiles: \[dns\]$/d}"
+
+# decdn-gateway
+variant "gateway as root"          "decdn-gateway: runs as a non-root uid:gid"    "${gw} s/^(\s*)user: .*/\1user: \"0:0\"/"
+variant "gateway extra capability" "decdn-gateway: sets only allowed keys (extra: cap_add)" "${gw} ${h}cap_add: [NET_BIND_SERVICE]/"
+variant "gateway SIGTERM"          "decdn-gateway: stop_signal is SIGINT"         "${gw} s/^(\s*)stop_signal: SIGINT$/\1stop_signal: SIGTERM/"
+variant "gateway public listener"  "decdn-gateway: command is exactly the role's ExecStart" "${gw} s/^(\s*)- 127\.0\.0\.1:8484$/\1- 0.0.0.0:8484/"
+variant "gateway other wallet"     "decdn-gateway: command is exactly the role's ExecStart" "${gw} s#^(\s*)- /var/lib/decdn-gateway/keystore\.json\$#\1- /etc/decdn-gateway/keystore.json#"
+variant "gateway entrypoint swap"  "decdn-gateway: entrypoint is exactly [decdn]" "${gw} s#^(\s*)entrypoint: \[decdn\]#\1entrypoint: [/bin/sh, -c]#"
+variant "gateway writable config"  "decdn-gateway: mounts are exactly"            "${gw} {/target: \/etc\/decdn-gateway$/{n;s/read_only: true/read_only: false/}}"
+variant "gateway inline password"  "decdn-gateway: no inline DECDN_KEYSTORE_PASSWORD" "${gw} s/^(\s*)NO_COLOR: (.*)$/&\n\1DECDN_KEYSTORE_PASSWORD: x/"
+variant "gateway always on"        "decdn-gateway: profiles are [gateway]"        "${gw} {/^    profiles: \[gateway\]$/d}"
 
 # alloy
 variant "alloy writable host root" "alloy: mounts are exactly"                    "${aly} {/target: \/host\/root$/{n;s/read_only: true/read_only: false/}}"

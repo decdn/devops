@@ -3,7 +3,7 @@
 # at /dev/null, so only the inline environment remains (not `--no-env-resolution`:
 # the CI runner's older Compose still merges the env files with it). The other
 # renders cannot tell an inline value from one in an env file, so this is what
-# keeps a secret (DECDN_RPC_URL, SPONSORD_RPC_URL, Alloy's GC_API_TOKEN, …) out of
+# keeps a secret (DECDN_RPC_URL, DECDN_GATEWAY_RPC_URL, SPONSORD_RPC_URL, Alloy's GC_API_TOKEN, …) out of
 # the tracked file: each service may set only these keys inline; everything else
 # belongs in its env file on the host. Prints one line per violation.
 
@@ -16,6 +16,7 @@ def allowed: {
   "caddy": ["SPONSORD_ONRAMP_DOMAIN"],
   "iroh-relay": ["NO_COLOR", "RUST_LOG"],
   "iroh-dns-server": ["NO_COLOR", "RUST_LOG"],
+  "decdn-gateway": ["DECDN_KEYSTORE_PASSWORD_FILE", "DECDN_SELF_UPDATE_CHECK", "HOME", "NO_COLOR"],
   "alloy": ["ALLOY_DEPLOYMENT_ENVIRONMENT", "ALLOY_INSTANCE_ID", "ALLOY_REGION", "DECDN_COMPOSE_PROFILES"]
 };
 

@@ -19,6 +19,7 @@ def allowed_keys: {
   "caddy": (base_keys + ["cap_add", "tmpfs"]),
   "iroh-relay": (base_keys + ["cap_add", "stop_grace_period", "ulimits"]),
   "iroh-dns-server": (base_keys + ["cap_add", "stop_grace_period", "ulimits"]),
+  "decdn-gateway": (base_keys + ["stop_grace_period", "tmpfs"]),
   "alloy": (base_keys + ["group_add", "stop_grace_period"])
 };
 
@@ -30,9 +31,9 @@ def allowed_keys: {
 def root_allowed: ["iroh-relay", "iroh-dns-server"];
 def nonroot: test("^[1-9][0-9]*:[1-9][0-9]*$");
 
-# The signal each daemon drains on (the units' KillSignal): iroh's servers shut
-# down gracefully on SIGINT only.
-def stop_signal($n): {"iroh-relay": "SIGINT", "iroh-dns-server": "SIGINT"}[$n] // "SIGTERM";
+# The signal each daemon drains on (the units' KillSignal): iroh's servers and the
+# gateway shut down gracefully on SIGINT only.
+def stop_signal($n): {"iroh-relay": "SIGINT", "iroh-dns-server": "SIGINT", "decdn-gateway": "SIGINT"}[$n] // "SIGTERM";
 
 # Every mount, exactly: [source, target, read-only?], volumes and secrets alike (a
 # secret is a read-only bind of its host file, listed as "secret:<file>"). Each
@@ -58,6 +59,8 @@ def allowed_mounts: {
                  ["/var/lib/iroh-relay", "/var/lib/iroh-relay", false]],
   "iroh-dns-server": [["/etc/iroh-dns-server/config.toml", "/etc/iroh-dns-server/config.toml", true],
                       ["/var/lib/iroh-dns-server", "/var/lib/iroh-dns-server", false]],
+  "decdn-gateway": [["/etc/decdn-gateway", "/etc/decdn-gateway", true],
+                    ["/var/lib/decdn-gateway", "/var/lib/decdn-gateway", false]],
   "alloy": [["/proc", "/host/proc", true], ["/sys", "/host/sys", true],
             ["/", "/host/root", true],
             ["/var/log/journal", "/var/log/journal", true], ["/run/log/journal", "/run/log/journal", true],
@@ -90,6 +93,14 @@ def inline_secrets: {
 # Alloy's command, as the unit's ExecStart: its UI and API on loopback, the WAL
 # in the state mount, and the generated config. Nothing else: a flag could move
 # the listener or load another config.
+# The gateway's command, as the role's ExecStart: its listener and metrics on
+# loopback, the wallet named, the config and data in their mounts. The public URL
+# and the allowance come from .env, so they are checked by shape, not pinned.
+def gateway_fixed: ["--config", "/etc/decdn-gateway/gateway.toml", "gateway", "--public-url", null,
+  "--listen", "127.0.0.1:8484", "--metrics-listen", "127.0.0.1:9094",
+  "--keystore", "/var/lib/decdn-gateway/keystore.json", "--data-dir", "/var/lib/decdn-gateway/gateway",
+  "--allowance-bytes-per-day", null];
+
 def alloy_command: ["run", "--server.http.listen-addr=127.0.0.1:12345", "--storage.path=/var/lib/alloy/data",
   "/etc/alloy/config.alloy"];
 
@@ -101,7 +112,7 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
 
 .services as $all
 | (.secrets // {}) as $secrets
-| (["alloy", "caddy", "decdn-node", "iroh-dns-server", "iroh-relay", "sponsord", "sponsord-onramp"] as $want
+| (["alloy", "caddy", "decdn-gateway", "decdn-node", "iroh-dns-server", "iroh-relay", "sponsord", "sponsord-onramp"] as $want
    | check("compose.yaml"; "services are exactly \($want | join(", "))"; ($all | keys) == $want)),
 
   # Every service: host networking and nothing published, so loopback listeners
@@ -148,6 +159,21 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
   check("alloy"; "stop_grace_period is 90s"; $all.alloy.stop_grace_period == "1m30s"),
   check("iroh-relay"; "stop_grace_period is 30s"; $all["iroh-relay"].stop_grace_period == "30s"),
   check("iroh-dns-server"; "stop_grace_period is 30s"; $all["iroh-dns-server"].stop_grace_period == "30s"),
+  check("decdn-gateway"; "stop_grace_period is 30s"; $all["decdn-gateway"].stop_grace_period == "30s"),
+
+  # The gateway: the decdn CLI's `gateway` with the role's flags and nothing else, so
+  # no flag can move a listener off loopback or point it at another wallet.
+  check("decdn-gateway"; "entrypoint is exactly [decdn]"; $all["decdn-gateway"].entrypoint == ["decdn"]),
+  check("decdn-gateway"; "command is exactly the role's ExecStart";
+    ($all["decdn-gateway"].command // []) as $c
+    | ($c | length) == (gateway_fixed | length)
+      and ([range(0; $c | length) | select(gateway_fixed[.] != null and $c[.] != gateway_fixed[.])] | length) == 0
+      and ($c[4] | test("^https://[^/]+$"))
+      and ($c[14] | test("^[0-9]+([KMGkmg][iI]?[bB]?|[bB])?$"))),
+  check("decdn-gateway"; "the keystore password is a file in its read-only mount";
+    ($all["decdn-gateway"].environment.DECDN_KEYSTORE_PASSWORD_FILE // "") == "/etc/decdn-gateway/keystore.password"),
+  check("decdn-gateway"; "no inline DECDN_KEYSTORE_PASSWORD";
+    ($all["decdn-gateway"].environment // {}) | has("DECDN_KEYSTORE_PASSWORD") | not),
 
   # The relay: the unit's ExecStart and nothing else (no `--dev`, which serves plain
   # http, and no entrypoint swap), its log level set (it logs only errors without
@@ -213,4 +239,5 @@ def onramp_entrypoint: ["/bin/sh", "-c", "t=\"$${ONRAMP_GATE_TEMPLATE-}\"\nif [ 
   check("caddy"; "profiles are [caddy]"; $all.caddy.profiles == ["caddy"]),
   check("iroh-relay"; "profiles are [relay]"; $all["iroh-relay"].profiles == ["relay"]),
   check("iroh-dns-server"; "profiles are [dns]"; $all["iroh-dns-server"].profiles == ["dns"]),
+  check("decdn-gateway"; "profiles are [gateway]"; $all["decdn-gateway"].profiles == ["gateway"]),
   check("alloy"; "profiles are [alloy]"; $all.alloy.profiles == ["alloy"])

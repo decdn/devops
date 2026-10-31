@@ -129,6 +129,7 @@ lint-compose:        ## render compose/ with its examples and check its security
 			SPONSORD_ENV_FILE="$$(ef sponsord.env.example)" \
 			SPONSORD_ONRAMP_ENV_FILE="$$(ef sponsord-onramp.env.example)" \
 			ALLOY_ENV_FILE="$$(ef grafana-alloy.env.example)" \
+			DECDN_GATEWAY_ENV_FILE="$$(ef decdn-gateway.env.example)" \
 			docker compose -f '$(LINT_COMPOSE_FILE)' --env-file "$$2" --profile '*' config --format json)" \
 			|| { echo "lint-compose: docker compose could not render $(LINT_COMPOSE_FILE) (see above)" >&2; exit 2; }; \
 		fi; \

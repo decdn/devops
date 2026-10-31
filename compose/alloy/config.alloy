@@ -232,6 +232,57 @@ prometheus.relabel "iroh_dns_server_identity" {
   }
 }
 
+// Scraped only while COMPOSE_PROFILES starts it (gateway).
+discovery.relabel "decdn_gateway_targets" {
+  targets = [
+    { "__address__"      = "127.0.0.1:9094",
+      "instance"         = sys.env("ALLOY_INSTANCE_ID"),
+      "job"              = "decdn-gateway",
+      "__decdn_profiles" = string.format(",%s,", sys.env("DECDN_COMPOSE_PROFILES")) },
+  ]
+
+  rule {
+    source_labels = ["__decdn_profiles"]
+    regex         = `.*,\s*(?:gateway|\*)\s*,.*`
+    action        = "keep"
+  }
+}
+
+prometheus.scrape "decdn_gateway" {
+  targets         = discovery.relabel.decdn_gateway_targets.output
+  forward_to      = [prometheus.relabel.decdn_gateway_identity.receiver]
+  scrape_interval = "30s"
+}
+
+prometheus.relabel "decdn_gateway_identity" {
+  forward_to = [prometheus.remote_write.cloud.receiver]
+
+  rule {
+    target_label = "service_name"
+    replacement  = "decdn-gateway"
+  }
+
+  rule {
+    target_label = "service_namespace"
+    replacement  = "decdn"
+  }
+
+  rule {
+    target_label = "service_instance_id"
+    replacement  = sys.env("ALLOY_INSTANCE_ID")
+  }
+
+  rule {
+    target_label = "deployment_environment"
+    replacement  = sys.env("ALLOY_DEPLOYMENT_ENVIRONMENT")
+  }
+
+  rule {
+    target_label = "region"
+    replacement  = sys.env("ALLOY_REGION")
+  }
+}
+
 prometheus.remote_write "cloud" {
   endpoint {
     url = sys.env("GC_PROM_REMOTE_WRITE_URL")
@@ -373,7 +424,7 @@ loki.relabel "journal_rules" {
 
   rule {
     source_labels = ["__journal_container_name"]
-    regex         = "decdn-(decdn-node|sponsord|sponsord-onramp|caddy|iroh-relay|iroh-dns-server|alloy)-[0-9]+"
+    regex         = "decdn-(decdn-node|sponsord|sponsord-onramp|caddy|iroh-relay|iroh-dns-server|decdn-gateway|alloy)-[0-9]+"
     target_label  = "unit"
     replacement   = "${1}.service"
   }
@@ -401,7 +452,7 @@ loki.relabel "journal_rules" {
   // Cost guardrail: the regex is anchored to the WHOLE value by Prometheus
   // relabel semantics, so "debug" drops debug and nothing else.
   //
-  // decdn-node and sponsord and sponsord-onramp and iroh-relay and iroh-dns-server are exempt: journald reports every line it writes as info, so
+  // decdn-node and sponsord and sponsord-onramp and iroh-relay and iroh-dns-server and decdn-gateway are exempt: journald reports every line it writes as info, so
   // judging it by priority would be judging it by a level it never set (a
   // regex containing "info" would drop its errors). loki.process
   // "daemon_level" below applies the same regex to its real level. The
@@ -414,7 +465,7 @@ loki.relabel "journal_rules" {
 
   rule {
     source_labels = ["unit"]
-    regex         = "(?:decdn-node|sponsord|sponsord-onramp|iroh-relay|iroh-dns-server)\\.service"
+    regex         = "(?:decdn-node|sponsord|sponsord-onramp|iroh-relay|iroh-dns-server|decdn-gateway)\\.service"
     target_label  = "__priority_guardrail"
     replacement   = ""
   }
@@ -487,11 +538,11 @@ loki.process "daemon_level" {
     }
   }
 
-  // sponsord and sponsord-onramp and iroh-relay and iroh-dns-server log tracing-subscriber's plain-text format with colour off
+  // sponsord and sponsord-onramp and iroh-relay and iroh-dns-server and decdn-gateway log tracing-subscriber's plain-text format with colour off
   // (NO_COLOR=1 in the units): "<timestamp>  WARN <target>: <message>". The
   // level is the second whitespace-separated field.
   stage.match {
-    selector = `{unit=~"(sponsord|sponsord-onramp|iroh-relay|iroh-dns-server)\\.service"}`
+    selector = `{unit=~"(sponsord|sponsord-onramp|iroh-relay|iroh-dns-server|decdn-gateway)\\.service"}`
 
     stage.regex {
       expression = `^\S+\s+(?P<decdn_level>TRACE|DEBUG|INFO|WARN|ERROR)\s`
@@ -520,7 +571,7 @@ loki.process "daemon_level" {
   // the lines that say WHY it stopped, so they are errors. Any other unlevelled
   // line keeps its journald level.
   stage.match {
-    selector = `{unit=~"(sponsord|sponsord-onramp|iroh-relay|iroh-dns-server)\\.service"} |~ "^(Error: |Caused by:|thread '.+' panicked)"`
+    selector = `{unit=~"(sponsord|sponsord-onramp|iroh-relay|iroh-dns-server|decdn-gateway)\\.service"} |~ "^(Error: |Caused by:|thread '.+' panicked)"`
 
     stage.template {
       source   = "decdn_level"
@@ -594,6 +645,13 @@ loki.relabel "journal_identity" {
     regex         = "iroh-dns-server\\.service"
     target_label  = "service_name"
     replacement   = "iroh-dns-server"
+  }
+
+  rule {
+    source_labels = ["unit"]
+    regex         = "decdn-gateway\\.service"
+    target_label  = "service_name"
+    replacement   = "decdn-gateway"
   }
 }
 
