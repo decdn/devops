@@ -269,7 +269,7 @@ assert_has sponsordonly.alloy 'forward_to      = [prometheus.relabel.sponsord_id
 assert_has sponsordonly.alloy 'replacement  = "sponsord"' "the sponsord metric service_name"
 assert_has sponsordonly.alloy 'regex         = "sponsord\\.service"' "the sponsord log-stream unit match"
 assert_has sponsordonly.alloy 'replacement   = "sponsord"' "the sponsord log-stream service_name"
-assert_has sponsordonly.alloy '(decdn-node|sponsord|sponsord-onramp|iroh-relay|iroh-dns-server|nginx|alloy|ssh|sshd)' "sponsord, the onramp, iroh-relay, iroh-dns-server and nginx in the systemd collector's unit list"
+assert_has sponsordonly.alloy '(decdn-node|sponsord|sponsord-onramp|sponsord-onramp-certs|iroh-relay|iroh-dns-server|nginx|alloy|ssh|sshd)' "sponsord, the onramp and its certificate renewal, iroh-relay, iroh-dns-server and nginx in the systemd collector's unit list"
 assert_has colocated.alloy 'prometheus.scrape "decdn_node"' "the node scrape on a co-located host"
 assert_has colocated.alloy 'prometheus.scrape "sponsord"' "the sponsord scrape on a co-located host"
 assert_has colocated.alloy '"__address__" = "127.0.0.1:8090"' "the default sponsord listener"

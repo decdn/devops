@@ -30,6 +30,7 @@ all:
         co-located: {}
         onramp: {}
         onramp-own-proxy: {}
+        onramp-legacy-caddy: {}
         co-located-onramp: {}
         relay-sponsord: {}
         dns-sponsord: {}
@@ -38,6 +39,9 @@ all:
         onramp: {}
         onramp-own-proxy:
           sponsord_onramp_proxy: none
+        # Inventory from before nginx: the role refuses it, after baseline has run.
+        onramp-legacy-caddy:
+          sponsord_onramp_proxy: caddy
         co-located-onramp: {}
         origin-onramp: {}
     iroh_relay_hosts:

@@ -8,6 +8,10 @@
     {"proto": "tcp", "port": 443, "comment": "sponsord-onramp (nginx, https)"}
   ],
   "onramp-own-proxy": [],
+  "onramp-legacy-caddy": [
+    {"proto": "tcp", "port": 80, "comment": "sponsord-onramp (nginx, http)"},
+    {"proto": "tcp", "port": 443, "comment": "sponsord-onramp (nginx, https)"}
+  ],
   "co-located-onramp": [
     {"proto": "udp", "port": 4433, "comment": "decdn QUIC"},
     {"proto": "tcp", "port": 80, "comment": "sponsord-onramp (nginx, http)"},

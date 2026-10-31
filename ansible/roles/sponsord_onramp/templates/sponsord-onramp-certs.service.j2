@@ -5,7 +5,7 @@
 # on tcp/80. `lego run` issues when there is no certificate and otherwise renews only
 # when one is due; its deploy hook, which runs only after an issuance, records it and
 # reloads nginx. Started by sponsord-onramp-certs.timer, and by the role on the first
-# deploy and while a reissue is pending. No random sleep of lego's own: the timer
+# deploy, while a reissue is pending and when this unit changes. No random sleep of lego's own: the timer
 # already randomizes when it runs, and the role waits for a run in flight.
 [Unit]
 Description=Obtain or renew the sponsord-onramp certificate ({{ sponsord_onramp_domain }})

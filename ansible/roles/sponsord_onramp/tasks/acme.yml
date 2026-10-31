@@ -164,10 +164,14 @@
     # a minute); it comes back whatever happens (always:).
     - name: Settle the certificate with the timer paused
       block:
+        # Not a change of its own: the timer comes back below. The module's status is
+        # the unit's state before the pause, which decides whether that is a change.
         - name: Pause the renewal timer
           ansible.builtin.systemd:
             name: sponsord-onramp-certs.timer
             state: stopped
+          register: sponsord_onramp_timer_paused
+          changed_when: false
           when:
             - sponsord_onramp_timer_unit.stat.exists
             - not ansible_check_mode
@@ -272,10 +276,10 @@
             state: absent
           when: not sponsord_onramp_need_issue
 
-        # Synchronous: nginx cannot serve the site before the certificate exists, and a
-        # changed domain or CA must not wait for the timer. systemctl start waits for a
-        # oneshot to finish (the units were loaded above); its exit status is the
-        # run's.
+        # Synchronous: the https server is added only once the certificate exists
+        # (front.yml includes the site again after this), and a changed domain or CA
+        # must not wait for the timer. systemctl start waits for a oneshot to finish
+        # (the units were loaded above); its exit status is the run's.
         - name: Obtain or update the certificate now
           ansible.builtin.command:
             argv: [systemctl, start, sponsord-onramp-certs.service]
@@ -301,8 +305,9 @@
               this host's nginx: check that the domain's A/AAAA records point here and
               that tcp/80 reaches it from the internet, then read the reason:
                 sudo journalctl -u sponsord-onramp-certs -e
-              The onramp is running and nginx serves its http redirect, but https stays
-              closed until a certificate is issued; re-run the deploy once it can be.
+              The onramp is running and nginx serves its http redirect; https serves the
+              previous certificate if there was one, and otherwise stays closed until a
+              certificate is issued. Re-run the deploy once it can be.
               Use sponsord_onramp_acme_server: letsencrypt-staging while iterating, so failed
               attempts do not spend the production rate limits.
           when:
@@ -346,10 +351,17 @@
             - sponsord_onramp_issued_for.content is not defined
 
       always:
+        # A change only when the timer was not already enabled and running before the
+        # pause, so a converge that settles nothing is idempotent.
         - name: Enable and start the renewal timer
           ansible.builtin.systemd:
             name: sponsord-onramp-certs.timer
             enabled: true
             state: started
             daemon_reload: true
+          register: sponsord_onramp_timer_started
+          changed_when: >-
+            sponsord_onramp_timer_started is changed
+            and not (sponsord_onramp_timer_paused.status.ActiveState | default('') == 'active'
+                     and sponsord_onramp_timer_paused.status.UnitFileState | default('') == 'enabled')
           when: not ansible_check_mode or sponsord_onramp_lego_bin_stat.stat.exists

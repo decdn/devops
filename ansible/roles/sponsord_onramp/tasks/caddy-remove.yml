@@ -1,30 +1,51 @@
 ---
-# Retire the Caddy this role ran in front of the onramp before it moved to nginx:
-# stop it, purge its package and drop its state (the old certificate and ACME
-# account). Only a Caddy serving this role's Caddyfile (its marker line); a Caddy
-# someone else runs is never touched, and nginx then fails loudly to bind tcp/80.
-# Runs on every converge, before nginx starts (tasks/main.yml), and on decommission.
+# Retire the Caddy this role ran in front of the onramp before it moved to nginx.
+# Only a Caddy serving this role's Caddyfile (its marker line); a Caddy someone else
+# runs is never touched, and tasks/front.yml then names it as the holder of tcp/80.
+#
+# In: _sponsord_onramp_caddy_purge  false: stop and disable it only, so nginx can
+#                                   take tcp/80 and tcp/443 (tasks/main.yml, before
+#                                   nginx starts). true: also purge the package and
+#                                   drop the Caddyfile and /var/lib/caddy, its old
+#                                   certificate and ACME account (tasks/front.yml,
+#                                   once the onramp answers over https through nginx;
+#                                   with proxy "none"; on decommission).
+# A first issuance that fails therefore leaves Caddy installed with its state, so
+# the operator can stop nginx and start Caddy again while fixing it.
 
-- name: Check for this role's Caddyfile
+- name: Check for a Caddyfile
+  ansible.builtin.stat:
+    path: "{{ _sponsord_onramp_legacy_caddyfile }}"
+  register: sponsord_onramp_legacy_caddyfile_stat
+
+# 1 = no marker: not the role's Caddy. A Caddyfile that is there but unreadable (2)
+# must not pass for "not ours".
+- name: Check the Caddyfile for this role's marker
   ansible.builtin.command:
     argv: [grep, -qF, "{{ _sponsord_onramp_nginx_marker }}", "{{ _sponsord_onramp_legacy_caddyfile }}"]
   register: sponsord_onramp_legacy_caddy
   changed_when: false
   check_mode: false
-  # 1 = no marker, 2 = no file (or unreadable): neither is the role's Caddy.
-  failed_when: false
+  failed_when: sponsord_onramp_legacy_caddy.rc not in [0, 1]
+  when: sponsord_onramp_legacy_caddyfile_stat.stat.exists
 
 - name: Remove the role's Caddy
-  when: sponsord_onramp_legacy_caddy.rc == 0
+  when: sponsord_onramp_legacy_caddy.rc | default(1) == 0
   block:
+    # A caddy unit that is already gone (the package removed by hand) is fine; any
+    # other failure to stop it is not.
     - name: Stop and disable Caddy
       ansible.builtin.systemd_service:
         name: caddy
         state: stopped
         enabled: false
-      failed_when: false
+      register: sponsord_onramp_legacy_caddy_stop
+      failed_when:
+        - sponsord_onramp_legacy_caddy_stop is failed
+        - "'Could not find the requested service' not in sponsord_onramp_legacy_caddy_stop.msg | default('')"
 
     - name: Purge the caddy package
+      when: _sponsord_onramp_caddy_purge | bool
       ansible.builtin.apt:
         name: caddy
         state: absent
@@ -32,6 +53,7 @@
 
     # The purge leaves the role's Caddyfile behind when dpkg no longer owns it.
     - name: Remove Caddy's configuration and state
+      when: _sponsord_onramp_caddy_purge | bool
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent

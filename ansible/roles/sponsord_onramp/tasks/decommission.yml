@@ -4,8 +4,8 @@
 # LIMIT=<host>`). It runs before sponsord's own decommission: the onramp needs the
 # daemon.
 #
-# What it does: stop the onramp and disable and remove its systemd unit, stop and
-# disable the certificate renewal timer, disable the role's nginx site and stop
+# What it does: stop the onramp and the certificate renewal timer and remove their
+# systemd units, disable the role's nginx site and stop
 # nginx when that was the only site it served (a site someone else enabled keeps
 # nginx running, minus the role's), and retire a Caddy the role ran before nginx.
 # What it KEEPS: the Turnstile secret and the other files under
@@ -154,6 +154,8 @@
 # A host never converged since the move to nginx still runs the role's Caddy.
 - name: Retire the role's earlier Caddy
   ansible.builtin.include_tasks: caddy-remove.yml
+  vars:
+    _sponsord_onramp_caddy_purge: true
 
 - name: Report what is left to do
   ansible.builtin.debug:
@@ -162,7 +164,7 @@
         sponsord-onramp is stopped and its units removed on {{ inventory_hostname }}
         {{- "; the role's nginx site is disabled" if _sponsord_onramp_decommission_site.rc == 0
             else "; no nginx site of this role's was found" }}
-        {{- "; the role's earlier Caddy is removed" if sponsord_onramp_legacy_caddy.rc == 0 else "" }}.
+        {{- "; the role's earlier Caddy is removed" if sponsord_onramp_legacy_caddy.rc | default(1) == 0 else "" }}.
       - >-
         Kept: {{ sponsord_onramp_turnstile_secret_file }} and the other files under
         {{ sponsord_onramp_etc }}, the certificate under {{ sponsord_onramp_acme_dir }},

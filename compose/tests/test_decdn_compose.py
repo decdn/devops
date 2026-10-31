@@ -699,6 +699,27 @@ class Profiles(unittest.TestCase):
         self.assertTrue(any("caddy profile was removed" in p for p in found), found)
         self.assertFalse(any("unknown profiles" in p for p in found), found)
 
+    def test_a_running_container_of_a_removed_profile_is_refused(self) -> None:
+        with mock.patch.object(dc, "container_id", side_effect=lambda svc: "abc" if svc == "caddy" else ""):
+            found = dc.removed_containers()
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("--remove-orphans", found[0])
+        with mock.patch.object(dc, "container_id", return_value=""):
+            self.assertEqual(dc.removed_containers(), [])
+
+    def test_up_with_remove_orphans_is_not_held_back_by_the_orphan(self) -> None:
+        with (
+            mock.patch.object(dc, "check") as check,
+            mock.patch.object(dc, "up_recreates_sponsord", return_value=False),
+            mock.patch.object(dc, "compose") as compose,
+        ):
+            dc.cmd_up(argparse.Namespace(rest=["--remove-orphans"], ignore_topup_hold=False))
+            check.assert_called_once_with(removing_orphans=True)
+            compose.assert_called_once_with("up", "-d", "--remove-orphans")
+            check.reset_mock()
+            dc.cmd_up(argparse.Namespace(rest=[], ignore_topup_hold=False))
+            check.assert_called_once_with(removing_orphans=False)
+
     def test_dns_conflicts_with_every_tcp_443_profile(self) -> None:
         self.assertEqual(dc.conflicts(["origin", "dns"]), [])
         for other in ("relay", "onramp"):
@@ -837,6 +858,32 @@ class RelayConfig(TmpDir):
         self.assertEqual(dc.RELAY_KEYS["[tls]"], sets["TLS_KEYS"])
         self.assertEqual(dc.RELAY_KEYS["[limits]"], sets["LIMIT_KEYS"])
         self.assertEqual(dc.RELAY_KEYS["[limits.client.rx]"], sets["RX_KEYS"])
+
+
+class OnrampInit(TmpDir):
+    def test_leaves_the_client_ip_header_unset(self) -> None:
+        # Behind a proxy the wrapper cannot see, trusting X-Forwarded-For would let
+        # clients pick the address the rate limits key on.
+        env = self.tmp / "sponsord-onramp.env"
+        project = dc.Project(
+            {
+                "SPONSORD_UID": "0",
+                "SPONSORD_GID": "0",
+                "SPONSORD_ENV_FILE": str(self.tmp / "sponsord.env"),
+                "SPONSORD_SECRET_ENV_FILE": str(self.tmp / "secret.env"),
+                "SPONSORD_ONRAMP_ENV_FILE": str(env),
+            }
+        )
+        with (
+            mock.patch.object(dc, "ETC_SPONSORD", self.tmp),
+            mock.patch.object(dc, "SD_TOKEN", self.tmp / "api-token"),
+            mock.patch.object(dc, "ensure_dir"),
+            mock.patch.object(dc, "fill_from_mirror"),
+            mock.patch.object(dc.os, "fchown", lambda *a: None),
+        ):
+            dc.init_sponsord(project, init_args(["onramp"], domain="onramp.decdn.org"), ["onramp"])
+        active = [line for line in env.read_text().splitlines() if line.startswith("ONRAMP_CLIENT_IP_HEADER")]
+        self.assertEqual(active, [])
 
 
 class RelayInit(TmpDir):

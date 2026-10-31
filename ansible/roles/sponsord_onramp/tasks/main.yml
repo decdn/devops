@@ -723,6 +723,79 @@
   loop: "{{ sponsord_onramp_nginx_enabled.files | map(attribute='path') | list }}"
   when: sponsord_onramp_proxy == 'nginx'
 
+# The names the role takes over must still be its own: a site file or link of that
+# name someone else wrote, or a package default site they edited, would otherwise
+# be replaced or disabled without a word.
+- name: Check the role's site file for its marker
+  ansible.builtin.command:
+    argv: [grep, -qF, "{{ _sponsord_onramp_nginx_marker }}", "{{ _sponsord_onramp_nginx_site }}"]
+  register: sponsord_onramp_site_marker
+  changed_when: false
+  check_mode: false
+  # 1 = no marker; 2 = no file (checked below) or unreadable.
+  failed_when: false
+  when: sponsord_onramp_proxy == 'nginx'
+
+- name: Check the role's site file
+  ansible.builtin.stat:
+    path: "{{ _sponsord_onramp_nginx_site }}"
+  register: sponsord_onramp_site_stat
+  when: sponsord_onramp_proxy == 'nginx'
+
+# dpkg records the package's default site among its conffiles (nginx-common on
+# Debian and Ubuntu, nginx where it ships it); empty when neither is installed.
+- name: Read the packaged default site's checksum
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      { dpkg-query -W -f='${Conffiles}\n' nginx-common nginx 2>/dev/null || true; } \
+        | awk '$1 == "/etc/nginx/sites-available/default" { print $2; exit }'
+  register: sponsord_onramp_default_site_md5
+  changed_when: false
+  check_mode: false
+  when: sponsord_onramp_proxy == 'nginx'
+
+- name: Check the package's default site
+  ansible.builtin.stat:
+    path: /etc/nginx/sites-available/default
+    get_checksum: true
+    checksum_algorithm: md5
+  register: sponsord_onramp_default_site_stat
+  when: sponsord_onramp_proxy == 'nginx'
+
+- name: Refuse a site file or default site this role does not own
+  vars:
+    _link: >-
+      {{ sponsord_onramp_nginx_enabled_stat.results
+         | selectattr('item', 'equalto', _sponsord_onramp_nginx_site_link) | first | default({}) }}
+    _default_enabled: >-
+      {{ sponsord_onramp_nginx_enabled_stat.results
+         | selectattr('item', 'equalto', '/etc/nginx/sites-enabled/default') | list | length > 0 }}
+  ansible.builtin.assert:
+    that:
+      # The site file, if there is one, is the role's.
+      - not sponsord_onramp_site_stat.stat.exists or sponsord_onramp_site_marker.rc == 0
+      # The enabled name, if taken, is the role's link to it.
+      - >-
+        _link == {}
+        or (_link.stat.islnk | default(false)
+            and _link.stat.lnk_source | default('') == _sponsord_onramp_nginx_site)
+      # The enabled default site, if any, is the package's untouched one.
+      - >-
+        not _default_enabled
+        or (sponsord_onramp_default_site_md5.stdout | trim | length > 0
+            and sponsord_onramp_default_site_stat.stat.checksum | default('')
+                == sponsord_onramp_default_site_md5.stdout | trim)
+    fail_msg: >-
+      nginx configuration the role would replace is not its own:
+      {{ _sponsord_onramp_nginx_site }} has no "{{ _sponsord_onramp_nginx_marker }}" line, or
+      {{ _sponsord_onramp_nginx_site_link }} is not a link to it, or the enabled
+      /etc/nginx/sites-available/default is not the package's untouched one. Move that
+      configuration elsewhere (or put the onramp behind it yourself, with
+      sponsord_onramp_proxy "none") before deploying the onramp's nginx here.
+  when: sponsord_onramp_proxy == 'nginx'
+
 - name: Refuse nginx sites this role did not enable
   vars:
     # The role's own link, and the package's default site while it still is that.
@@ -960,10 +1033,13 @@
   when: not ansible_check_mode
 
 # --- TLS front ----------------------------------------------------------------------
-# Whatever the proxy: the role's Caddy is retired, and with "nginx" before nginx
-# needs tcp/80.
+# Whatever the proxy: the role's Caddy is retired. With "nginx" it is only stopped
+# here, before nginx needs tcp/80, and purged by front.yml once https answers; with
+# "none" nothing replaces it, so it is purged at once.
 - name: Retire the role's earlier Caddy
   ansible.builtin.import_tasks: caddy-remove.yml
+  vars:
+    _sponsord_onramp_caddy_purge: "{{ sponsord_onramp_proxy == 'none' }}"
 
 - name: Put nginx in front of the onramp
   ansible.builtin.import_tasks: front.yml

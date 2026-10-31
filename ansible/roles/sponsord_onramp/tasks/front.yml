@@ -16,6 +16,30 @@
 - name: Name the certificate and make a self-signed one
   ansible.builtin.import_tasks: tls.yml
 
+# nginx would otherwise fail to start with systemd's bare "Job for nginx.service
+# failed". The role's earlier Caddy is gone by now (tasks/caddy-remove.yml); any
+# other holder of tcp/80 or tcp/443 is named here, before the site is touched.
+- name: Read the listeners on tcp/80 and tcp/443
+  ansible.builtin.command:
+    argv: [ss, -Hltnp, "( sport = :80 or sport = :443 )"]
+  register: sponsord_onramp_web_listeners
+  changed_when: false
+  check_mode: false
+
+- name: Refuse tcp/80 and tcp/443 held by anything but nginx
+  vars:
+    _foreign: "{{ sponsord_onramp_web_listeners.stdout_lines | reject('search', 'users:\\(\\(\"nginx\"') | list }}"
+  ansible.builtin.assert:
+    that:
+      - _foreign | length == 0
+    fail_msg: |-
+      Something other than nginx listens on tcp/80 or tcp/443:
+        {{ _foreign | join('\n  ') }}
+      The onramp's nginx needs both. Stop that service (a Caddy this role did not
+      write, another web server, an iroh relay), or put the onramp behind it with
+      sponsord_onramp_proxy "none". A line naming no process is one ss could not
+      attribute: run the play as root.
+
 - name: Serve the site
   ansible.builtin.include_tasks: nginx-site.yml
 
@@ -73,3 +97,11 @@
   when:
     - not ansible_check_mode
     - sponsord_onramp_https_probe.rc != 0
+
+# Only now that nginx serves the onramp over https: until here a failed first
+# issuance could still go back to the role's Caddy (main.yml only stopped it).
+- name: Purge the role's earlier Caddy
+  ansible.builtin.include_tasks: caddy-remove.yml
+  vars:
+    _sponsord_onramp_caddy_purge: true
+  when: not ansible_check_mode

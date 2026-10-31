@@ -245,7 +245,8 @@ boundaries or exists nowhere else.
   and drops the pulls in flight, so the restart-inputs comparison is its only restart
   trigger, as sponsord's: never add `notify: Restart decdn-gateway` to a task.
 - nginx is the distro package, so unattended-upgrades patches it; with the onramp's
-  (also distro nginx) it is the only role-installed TLS terminator in this repo. Its
+  (also distro nginx), these are the only internet-facing TLS terminators in this
+  repo that it patches. Its
   certificate is a wildcard for `<domain>` and `*.<domain>` from lego over ACME DNS-01
   (sha256-pinned per architecture; bump the version and both digests together). The
   onramp's single-name certificate is the same lego over HTTP-01 (webroot, no DNS

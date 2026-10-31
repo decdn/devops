@@ -239,9 +239,10 @@ grafana_alloy_host_netdev_device_exclude: '^(veth.*|cali.*|docker.*|br-.*|lo|[a-
 grafana_alloy_host_disk_device_exclude: '^(ram|loop|fd|(h|s|v|xv)d[a-z]|nvme\d+n\d+p)\d+$'
 # Per-unit state, deliberately scoped: one series set per unit on the box is a
 # real cost, and only these units matter. Units must match include AND NOT match
-# exclude.
-grafana_alloy_host_systemd_unit_include: "(decdn-node|sponsord|sponsord-onramp|iroh-relay|\
-  iroh-dns-server|nginx|alloy|ssh|sshd)\\.service"
+# exclude. sponsord-onramp-certs is the onramp's lego renewal: a failed run shows
+# here as a failed unit, and the certificate expires if nothing reads it.
+grafana_alloy_host_systemd_unit_include: "(decdn-node|sponsord|sponsord-onramp|sponsord-onramp-certs|\
+  iroh-relay|iroh-dns-server|nginx|alloy|ssh|sshd)\\.service"
 grafana_alloy_host_systemd_unit_exclude: '.+\.(automount|device|mount|scope|slice)'
 
 # --- Agent self-monitoring ----------------------------------------------------

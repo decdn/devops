@@ -2038,7 +2038,15 @@ lego_pin() { # <defaults file> <prefix>
 want="$(lego_pin "$repo/ansible/roles/decdn_gateway/defaults/main.yml" decdn_gateway)"
 [[ -n "$want" && "$(lego_pin "$repo/ansible/roles/sponsord_onramp/defaults/main.yml" sponsord_onramp)" == "$want" ]] \
   || fail "sponsord_onramp_lego_* differ from decdn_gateway_lego_*: bump lego in both roles"
-pass "the lego pin, identical in decdn_gateway and sponsord_onramp"
+# Their deploy hooks are one script, the role's names aside: its argument order and
+# force variable pair with each role's certs unit and tls tasks, and only the
+# gateway's molecule exercises an issuance end to end.
+diff <(sed -e 's/decdn_gateway role/ROLE/; s/decdn-gateway-certs/CERTS/; s/DECDN_GATEWAY_FORCE_FOR/FORCE_FOR/' \
+         "$repo/ansible/roles/decdn_gateway/files/certs-deployed") \
+     <(sed -e 's/sponsord_onramp role/ROLE/; s/sponsord-onramp-certs/CERTS/; s/SPONSORD_ONRAMP_FORCE_FOR/FORCE_FOR/' \
+         "$repo/ansible/roles/sponsord_onramp/files/certs-deployed") >/dev/null \
+  || fail "sponsord_onramp/files/certs-deployed differs from decdn_gateway's beyond the role's names"
+pass "the lego pin and the certs-deployed hook, identical in decdn_gateway and sponsord_onramp"
 # iroh_relay, iroh_dns_server and decdn_gateway have no source build, so only their
 # decommission keys are compared.
 decom_keys() { grep -E '^decdn_decommission_(max_hosts|prompt_seconds):' "$1" || true; }

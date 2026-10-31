@@ -2008,10 +2008,26 @@ def origin_mounts(project: Project) -> list[str]:
     return [f"{d}:{ORIGIN_TARGET}:ro"] if d else []
 
 
-def check(args: argparse.Namespace | None = None, project: Project | None = None) -> Project:
+def removed_containers() -> list[str]:
+    """A container of a removed profile still running: dropped from COMPOSE_PROFILES,
+    it is an orphan a plain `up` leaves in place (Caddy, holding tcp/80 and tcp/443
+    that your own proxy needs)."""
+    return [
+        f"a {p} container is still running from the removed {p} profile: "
+        "`sudo compose/decdn-compose up --remove-orphans` removes it"
+        for p in REMOVED_PROFILES
+        if container_id(p)
+    ]
+
+
+def check(
+    args: argparse.Namespace | None = None, project: Project | None = None, removing_orphans: bool = False
+) -> Project:
     require_root()
     project = project or Project.load()
     found = problems(project)
+    if not removing_orphans:
+        found += removed_containers()
     if not found:
         rendered = json.loads(compose("config", "--format", "json", capture=True).stdout)
         journald = sorted(
@@ -2183,7 +2199,7 @@ def touched_in_dry_run(output: str, container: str) -> bool:
 
 
 def cmd_up(args: argparse.Namespace) -> None:
-    check()
+    check(removing_orphans="--remove-orphans" in args.rest)
     if up_recreates_sponsord(args.rest):
         guard_sponsord(args, "recreate")
     compose("up", "-d", *args.rest)

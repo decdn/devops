@@ -97,9 +97,12 @@ is unreachable.
     hosts.
 - **Retires the Caddy it ran before nginx.** Up to `decdn.publisher` 0.4 the role
   put Caddy in front. On the first converge since, a Caddy serving the role's
-  `/etc/caddy/Caddyfile` (its marker line) is stopped, its package purged and
-  `/var/lib/caddy` removed, before nginx takes tcp/80. A Caddy someone else runs is
-  never touched. The retired `sponsord_onramp_caddy_tls` and
+  `/etc/caddy/Caddyfile` (its marker line) is stopped and disabled before nginx
+  takes tcp/80, and purged with `/var/lib/caddy` only once the onramp answers over
+  https through nginx: until then a failed first issuance can go back to it
+  (`sudo systemctl disable --now nginx && sudo systemctl enable --now caddy`). A
+  Caddy someone else runs is never touched; the role names whatever else holds
+  tcp/80 or tcp/443 before nginx starts. The retired `sponsord_onramp_caddy_tls` and
   `sponsord_onramp_caddy_overwrite_config`, and `sponsord_onramp_proxy: caddy`, fail
   preflight with what replaces them.
 
@@ -193,7 +196,9 @@ onramp's journal with `service_name="sponsord-onramp"` and a `level` parsed from
 line (it has no `/metrics`). This repo's playbooks turn that on for hosts in
 `sponsord_onramp_hosts`. From your own playbook, set
 `grafana_alloy_sponsord_onramp_enabled`. nginx's unit state is in the systemd
-collector; its access logs are not shipped.
+collector, and so is `sponsord-onramp-certs.service`, lego's renewal: alert on it
+being `failed`, or run a blackbox check of `https://<domain>/healthz`, since nothing
+else warns before the certificate expires. nginx's access logs are not shipped.
 
 ## Day 2
 

@@ -112,7 +112,7 @@ sponsord_onramp_public_url: >-
 # the first deploy. "self-signed": a certificate this role makes with openssl, for
 # staging and tests; browsers will not trust it.
 sponsord_onramp_tls: acme                 # "acme" | "self-signed"
-# acme: REQUIRED. The ACME account contact (Let's Encrypt mails expiry warnings there).
+# acme: REQUIRED. The ACME account contact lego registers with.
 sponsord_onramp_acme_email: ""
 # The ACME directory: a URL or a lego shortcode. "letsencrypt-staging" for a trial
 # run that does not spend the production rate limits; its certificates are NOT

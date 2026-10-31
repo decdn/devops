@@ -6,13 +6,17 @@
 #      that the role's nginx site is still enabled.
 #   2. A broken upstream behind nginx fails the run.
 #   3. The role never silently disables an nginx site it did not enable.
-#   4. The Caddy the role ran before nginx is retired (stopped, disabled, its
-#      Caddyfile and state gone); a Caddyfile someone else wrote is left alone.
+#   4. The Caddy the role ran before nginx is retired while it holds tcp/80
+#      (stopped and disabled, nginx started in its place, its Caddyfile and state
+#      gone); a Caddyfile someone else wrote is left alone.
 #   5. ACME against a server that does not answer: lego's issuance fails the run,
-#      while nginx keeps serving the HTTP-01 challenge and the https redirect.
+#      while nginx keeps serving the HTTP-01 challenge and the https redirect, and
+#      the renewal timer keeps running.
+#   6. ACME with the certificate already issued for that server and domain: the
+#      converge serves it over https without running lego, and leaves no force.
 # And two that need no proxy change, here so both scenarios stay short:
-#   6. A custom gate page is installed, read by the onramp, and removed again.
-#   7. The Turnstile secret from inventory: it replaces a host-written file only when
+#   7. A custom gate page is installed, read by the onramp, and removed again.
+#   8. The Turnstile secret from inventory: it replaces a host-written file only when
 #      confirmed, lands verbatim at 0600 with an `inventory` record and restarts the
 #      onramp; an unchanged re-run is a no-op; an emptied value never adopts the
 #      role's own file; with the record discarded the host's file is accepted.
@@ -133,8 +137,8 @@
         path: "{{ _or_foreign }}"
         state: absent
 
-# No caddy package in the image: a stand-in unit plays the old Caddy, so the test
-# needs no network and binds no port. The purge of an absent package is a no-op.
+# No caddy package in the image: a stand-in unit plays the old Caddy, holding tcp/80
+# as Caddy did, with nginx stopped. The purge of an absent package is a no-op.
 - name: Side effect — the role's earlier Caddy is retired
   hosts: all
   become: true
@@ -150,10 +154,13 @@
           mkdir -p /etc/caddy /var/lib/caddy/.local
           printf '# MANAGED BY the sponsord_onramp role — do not edit by hand.\nonramp.molecule.test {\n}\n' \
             > {{ _or_caddyfile }}
-          printf '[Service]\nExecStart=/bin/sleep infinity\n[Install]\nWantedBy=multi-user.target\n' \
+          printf '[Service]\nExecStart=/usr/bin/python3 -m http.server 80\n[Install]\nWantedBy=multi-user.target\n' \
             > /etc/systemd/system/caddy.service
+          systemctl stop nginx
           systemctl daemon-reload
           systemctl enable --now caddy.service
+          for _ in $(seq 50); do ss -Hltn 'sport = :80' | grep -q . && exit 0; sleep 0.2; done
+          echo "the stand-in Caddy never bound tcp/80" >&2; exit 1
       changed_when: true
 
     - name: Converge with the role's Caddy in place
@@ -164,6 +171,11 @@
       ansible.builtin.systemd_service:
         name: caddy
       register: _or_caddy_unit
+
+    - name: Read nginx after the converge
+      ansible.builtin.systemd_service:
+        name: nginx
+      register: _or_nginx_unit
 
     - name: Stat the Caddy files after the converge
       ansible.builtin.stat:
@@ -177,6 +189,7 @@
           - _or_caddy_unit.status.ActiveState == 'inactive'
           - _or_caddy_unit.status.UnitFileState == 'disabled'
           - _or_caddy_files.results | selectattr('stat.exists') | list | length == 0
+          - _or_nginx_unit.status.ActiveState == 'active'
         fail_msg: >-
           caddy is {{ _or_caddy_unit.status.ActiveState }}/{{ _or_caddy_unit.status.UnitFileState }};
           still present: {{ _or_caddy_files.results | selectattr('stat.exists') | map(attribute='item') | list }}
@@ -187,6 +200,9 @@
         cmd: |
           set -euo pipefail
           printf 'other.example {\n  respond "theirs"\n}\n' > {{ _or_caddyfile }}
+          printf '[Service]\nExecStart=/bin/sleep infinity\n[Install]\nWantedBy=multi-user.target\n' \
+            > /etc/systemd/system/caddy.service
+          systemctl daemon-reload
           systemctl enable --now caddy.service
       changed_when: true
 
@@ -228,6 +244,10 @@
   hosts: all
   become: true
   gather_facts: false
+  vars:
+    # "staging" in the URL makes the role's https probe accept an untrusted
+    # certificate, which the next play plants.
+    _or_acme_server: https://127.0.0.1:14000/staging/dir
   tasks:
     - name: Converge on acme
       block:
@@ -236,7 +256,7 @@
             name: sponsord_onramp
           vars:
             sponsord_onramp_tls: acme
-            sponsord_onramp_acme_server: https://127.0.0.1:14000/dir
+            sponsord_onramp_acme_server: "{{ _or_acme_server }}"
 
         - name: Fail — the role finished without a certificate
           ansible.builtin.fail:
@@ -256,13 +276,27 @@
       register: _or_certs_unit
       changed_when: false
 
-    - name: Require an HTTP-01 webroot issuance for the one name
+    - name: Read the renewal timer after the failed issuance
+      ansible.builtin.systemd_service:
+        name: sponsord-onramp-certs.timer
+      register: _or_timer_failed
+
+    # The deploy hook's arguments are what files/certs-deployed reads: the server
+    # and domain it records, the record file and the force file it clears.
+    - name: Require an HTTP-01 webroot issuance for the one name, and the timer running
       ansible.builtin.assert:
         that:
           - "'--http.webroot /var/www/sponsord-onramp-acme' in _or_certs_unit.stdout"
           - "'--domains onramp.molecule.test' in _or_certs_unit.stdout"
           - "'--dns' not in _or_certs_unit.stdout"
           - "'--email ops@molecule.test' in _or_certs_unit.stdout"
+          - ('--server ' ~ _or_acme_server) in _or_certs_unit.stdout
+          - >-
+            ('--deploy-hook \"/usr/local/lib/sponsord-onramp/certs-deployed ' ~ _or_acme_server
+             ~ ' onramp.molecule.test /var/lib/sponsord-onramp-acme/.issued-for'
+             ~ ' /var/lib/sponsord-onramp-acme/force.env\"') in _or_certs_unit.stdout
+          - _or_timer_failed.status.ActiveState == 'active'
+          - _or_timer_failed.status.UnitFileState == 'enabled'
         fail_msg: "{{ _or_certs_unit.stdout }}"
 
     # What the ACME server would fetch: a token lego wrote, served on tcp/80 under
@@ -306,6 +340,64 @@
       ansible.builtin.file:
         path: /var/www/sponsord-onramp-acme/.well-known/acme-challenge/molecule-token
         state: absent
+
+    # What a successful issuance leaves (lego's files and the deploy hook's record),
+    # planted: the converge must serve it without running lego (the dead server would
+    # fail the run) and without forcing a reissue.
+    - name: Plant a certificate issued for this server and domain
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          d=/var/lib/sponsord-onramp-acme
+          install -d -m 0700 "$d/certificates"
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 30 \
+            -subj /CN=onramp.molecule.test -addext subjectAltName=DNS:onramp.molecule.test \
+            -keyout "$d/certificates/sponsord-onramp.key" -out "$d/certificates/sponsord-onramp.crt" 2>/dev/null
+          printf '%s onramp.molecule.test\n' '{{ _or_acme_server }}' > "$d/.issued-for"
+      changed_when: true
+
+    - name: Read when lego last ran
+      ansible.builtin.command:
+        argv: [systemctl, show, -P, ExecMainStartTimestampMonotonic, sponsord-onramp-certs.service]
+      register: _or_lego_before
+      changed_when: false
+
+    - name: Converge on acme with the certificate in place
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_tls: acme
+        sponsord_onramp_acme_server: "{{ _or_acme_server }}"
+
+    - name: Read when lego last ran, after the converge
+      ansible.builtin.command:
+        argv: [systemctl, show, -P, ExecMainStartTimestampMonotonic, sponsord-onramp-certs.service]
+      register: _or_lego_after
+      changed_when: false
+
+    - name: Read the site and the force file with the certificate in place
+      ansible.builtin.slurp:
+        src: /etc/nginx/sites-available/sponsord-onramp
+      register: _or_acme_site
+
+    - name: Stat the force file
+      ansible.builtin.stat:
+        path: /var/lib/sponsord-onramp-acme/force.env
+      register: _or_force
+
+    - name: Require the issued certificate served, lego not run and nothing forced
+      ansible.builtin.assert:
+        that:
+          - _or_lego_after.stdout == _or_lego_before.stdout
+          - "'ssl_certificate /var/lib/sponsord-onramp-acme/certificates/sponsord-onramp.crt;' in _site"
+          - "'No certificate yet' not in _site"
+          - not _or_force.stat.exists
+        fail_msg: >-
+          lego ran at {{ _or_lego_before.stdout }} -> {{ _or_lego_after.stdout }};
+          force file {{ _or_force.stat.exists }}; site: {{ _site }}
+      vars:
+        _site: "{{ _or_acme_site.content | b64decode }}"
 
     - name: Converge back onto the self-signed certificate
       ansible.builtin.include_role:

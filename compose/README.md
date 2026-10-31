@@ -249,22 +249,28 @@ what each setting does; this section covers the Compose side.
    certificate, but stock nginx cannot bind tcp/80 and tcp/443 as a non-root account
    on the host network, and this file runs no service as root but the iroh ones
    ([Security notes](#security-notes)). A minimal nginx site, with the certificate
-   from any ACME client (the role's
+   from any ACME client. The `/.well-known/acme-challenge/` location serves an
+   HTTP-01 webroot, as the role's
    [certificate unit](../ansible/roles/sponsord_onramp/templates/sponsord-onramp-certs.service.j2)
-   runs lego over HTTP-01):
+   uses with lego (`--http --http.webroot /var/www/acme`):
 
    ```nginx
    server {
        listen 80;
        listen [::]:80;
        server_name onramp.example.org;
-       return 301 https://$host$request_uri;
+       location ^~ /.well-known/acme-challenge/ {
+           root /var/www/acme;
+       }
+       location / {
+           return 301 https://$host$request_uri;
+       }
    }
 
    server {
-       listen 443 ssl;
-       listen [::]:443 ssl;
-       http2 on;
+       # nginx 1.25.1 and later: `listen 443 ssl;` plus `http2 on;`.
+       listen 443 ssl http2;
+       listen [::]:443 ssl http2;
        server_name onramp.example.org;
        ssl_certificate     /etc/ssl/onramp/fullchain.pem;
        ssl_certificate_key /etc/ssl/onramp/privkey.pem;
@@ -374,8 +380,12 @@ wrapper.
   `.env` (and the `CADDY_*` lines), then
   `sudo compose/decdn-compose up --remove-orphans`, which removes the Caddy container
   and frees tcp/80 and tcp/443 for your own proxy ([Set up](#set-up-1), step 3).
-  Afterwards, `sudo rm -r /var/lib/caddy` and `sudo userdel caddy` remove its old
-  certificates and account.
+  `check` and a plain `up` refuse while that container still runs. Afterwards,
+  `sudo rm -r /var/lib/caddy` and `sudo userdel caddy` remove its old certificates
+  and account. The old `init` set `ONRAMP_CLIENT_IP_HEADER=X-Forwarded-For` in
+  `sponsord-onramp.env`, which was safe only because Caddy overwrote that header:
+  keep it only if your proxy is the only way in and sets the header itself (step 3),
+  otherwise remove it, or clients choose the address the rate limits key on.
 - **Rotate the treasury:** replace the keystore and password files (same owner and
   mode), then `restart sponsord`. The new wallet must own `SPONSORD_POOL_ID`, or
   sponsord exits at start.
