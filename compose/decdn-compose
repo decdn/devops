@@ -803,6 +803,13 @@ def init_gateway(project: Project, args: argparse.Namespace) -> None:
     uid, gid = int(project.env["DECDN_GATEWAY_UID"]), int(project.env["DECDN_GATEWAY_GID"])
     ensure_dir(VAR_GATEWAY, 0o700, uid, gid)
     ensure_dir(ETC_GATEWAY, 0o750, uid, gid)
+    # A wallet without its password (a partial restore) is never paired with a new
+    # one: the gateway could not unlock it, and the files alone would pass `check`.
+    if GATEWAY_KEYSTORE.exists() and not GATEWAY_PASSWORD.exists():
+        raise Refused(
+            f"{GATEWAY_KEYSTORE} exists but {GATEWAY_PASSWORD} does not: restore the wallet's "
+            "own password from your backup (a new one cannot unlock it)"
+        )
     # The password first: key-gen reads it, never creates it.
     if write_new(GATEWAY_PASSWORD, base64.b64encode(secrets.token_bytes(32)) + b"\n", 0o600, uid, gid):
         say(f"generated {GATEWAY_PASSWORD} (0600)")

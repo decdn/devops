@@ -1204,6 +1204,24 @@ class GatewayInit(TmpDir):
         role = (HERE.parent.parent / "ansible/roles/decdn_gateway/templates/gateway.toml.j2").read_text()
         self.assertEqual(keys, set(re.findall(r"(?m)^([a-z_]+) = ", role)) - {"buyer_working_deposit_micro_usdc"})
 
+    def test_a_wallet_without_its_password_is_refused(self) -> None:
+        etc, var = self.tmp / "etc", self.tmp / "var"
+        var.mkdir()
+        (var / "keystore.json").write_text("{}")
+        project = dc.Project({"DECDN_GATEWAY_UID": str(os.getuid()), "DECDN_GATEWAY_GID": str(os.getgid())})
+        with (
+            mock.patch.object(dc, "ETC_GATEWAY", etc),
+            mock.patch.object(dc, "VAR_GATEWAY", var),
+            mock.patch.object(dc, "GATEWAY_PASSWORD", etc / "keystore.password"),
+            mock.patch.object(dc, "GATEWAY_KEYSTORE", var / "keystore.json"),
+            mock.patch.object(dc, "decdn_cli") as cli,
+            self.assertRaises(dc.Refused) as cm,
+        ):
+            dc.init_gateway(project, init_args(["gateway"], chain="arbitrum-sepolia"))
+        self.assertIn("restore the wallet's own password", str(cm.exception))
+        self.assertFalse((etc / "keystore.password").exists())
+        cli.assert_not_called()
+
     def test_an_unknown_chain_is_refused(self) -> None:
         with self.assertRaises(dc.Refused):
             dc.render_gateway_toml("no-such-chain")
