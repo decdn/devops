@@ -1,6 +1,6 @@
 # Convenience targets for the deCDN DevOps monorepo.
 # Run from the repo root. Ansible-specific work is delegated to ansible/Makefile.
-.PHONY: help hooks lint lint-ansible lint-helm lint-alloy lint-compose lint-cloud-init test-scripts security security-ansible security-helm security-compose molecule molecule-serial galaxy-build galaxy-check
+.PHONY: help hooks lint lint-ansible lint-helm lint-alloy lint-compose lint-cloud-init test-scripts security security-ansible security-helm security-compose molecule molecule-serial molecule-changed galaxy-build galaxy-check
 SHELL := /bin/bash
 
 # KICS runs straight from the engine image, pinned by digest. This target IS the
@@ -169,10 +169,11 @@ lint-cloud-init:     ## schema-check the cloud-init/ user-data templates and the
 # The guard rails nothing else exercises: ansible/Makefile's scoping guards, the
 # release gate, the lint-compose and lint-cloud-init negative cases, compose/'s
 # decdn-compose unit tests (compose/tests/test_decdn_compose.py), scripts/bump_decdn.py's
-# (scripts/tests/test_bump_decdn.py), the cloud-init
+# (scripts/tests/test_bump_decdn.py) and scripts/molecule-affected.py's
+# (scripts/tests/test_molecule_affected.py), the cloud-init
 # bootstrap's baseline guard and template contracts, and (with UPSTREAM=<decdn
 # checkout>) the upstream-mirror generators' exit codes. CI job `scripts`.
-test-scripts:        ## test the Makefile and molecule-driver guards, release gate, lint-compose and lint-cloud-init negatives, decdn-compose and bump_decdn unit tests (needs docker, jq, python3>=3.11, cloud-init, yq)
+test-scripts:        ## test the Makefile and molecule-driver guards, release gate, lint-compose and lint-cloud-init negatives, decdn-compose, bump_decdn and molecule-affected unit tests (needs docker, jq, python3>=3.11, cloud-init, yq)
 	tests/scripts-test.sh
 
 lint-helm:           ## helm lint + render tests + kubeconform + promtool + shared schema-key check (needs helm, yq, python3>=3.11, docker)
@@ -196,6 +197,9 @@ molecule:            ## containerised converge/verify of the roles, scenarios in
 
 molecule-serial:     ## same selection, one scenario at a time (readable output on failure)
 	$(MAKE) -C ansible molecule-serial
+
+molecule-changed:    ## only the scenarios your branch can affect, as CI picks them for a PR (CHANGED_FROM=origin/main)
+	$(MAKE) -C ansible molecule-changed
 
 galaxy-build:        ## stage + build the decdn.node and decdn.publisher Galaxy collection artifacts
 	$(MAKE) -C ansible build

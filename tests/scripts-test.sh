@@ -1545,8 +1545,9 @@ expect 0 "decdn-compose unit tests pass" \
   env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$repo/compose/tests" -p 'test_*.py'
 expect 2 "decdn-compose refuses an unknown command" "$repo/compose/decdn-compose" deploy
 
-# --- scripts/bump_decdn.py: the decdn bump's file rewrites, on copies of the pin files --
-expect 0 "bump_decdn unit tests pass" \
+# --- scripts/bump_decdn.py (the decdn bump's file rewrites, on copies of the pin files)
+# and scripts/molecule-affected.py (the scenarios a PR runs, against the real tree) --
+expect 0 "bump_decdn and molecule-affected unit tests pass" \
   env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$repo/scripts/tests" -p 'test_*.py'
 expect 2 "open-decdn-bump refuses an unknown argument" "$repo/scripts/open-decdn-bump.sh" --execute
 
