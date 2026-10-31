@@ -284,6 +284,15 @@
         - decdn_gateway_need_issue
         - decdn_gateway_cert_stat.stat.exists
 
+    # The certificate is already the wanted one (e.g. reverted to its CA after a
+    # failed switch): a force left for another server or domain would make every
+    # timer run reissue from this one, and its deploy hook would never clear it.
+    - name: Remove a force the wanted certificate no longer needs
+      ansible.builtin.file:
+        path: "{{ _decdn_gateway_force_env }}"
+        state: absent
+      when: not decdn_gateway_need_issue
+
     # Synchronous: nginx cannot serve the site before the certificate exists, and a
     # changed domain or CA must not wait for the timer. systemctl start waits for a
     # oneshot to finish (the timer task above reloaded systemd); its exit status is

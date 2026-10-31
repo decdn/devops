@@ -220,6 +220,53 @@
         remote_src: true
         mode: "0755"
 
+    # A failed switch to another CA, then a revert to the one the certificate is
+    # from: the other CA's force must go, or every timer run would reissue from
+    # this one. The certificate needs no run, so the converge goes on to nginx,
+    # whose https probe then fails on the planted, untrusted certificate.
+    - name: Leave a force behind for another CA, as a failed switch would
+      ansible.builtin.copy:
+        dest: /var/lib/decdn-gateway-acme/force.env
+        content: |
+          LEGO_RENEW_FORCE=true
+          LEGO_ARI_DISABLE=true
+          DECDN_GATEWAY_FORCE_FOR=letsencrypt gateway.molecule.test
+        mode: "0600"
+
+    - name: Converge back on the CA the certificate is from
+      block:
+        - name: Run the role on the recorded CA
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_tls: acme
+            decdn_gateway_acme_email: ops@molecule.test
+            decdn_gateway_acme_dns_provider: exec
+            decdn_gateway_acme_server: https://127.0.0.1:14000/dir
+
+        - name: Fail — nginx accepted the planted certificate
+          ansible.builtin.fail:
+            msg: The https probe passed on an untrusted certificate.
+      rescue:
+        - name: Require the failure to come from the https probe, past issuance
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Report a gateway that is not reachable through nginx'
+            fail_msg: >-
+              The revert failed at "{{ ansible_failed_task.name }}", not at the https
+              probe: {{ ansible_failed_result.msg | default('') }}
+
+    - name: Stat the force after the revert
+      ansible.builtin.stat:
+        path: /var/lib/decdn-gateway-acme/force.env
+      register: _gw_force_reverted
+
+    - name: Require the other CA's force removed
+      ansible.builtin.assert:
+        that:
+          - not _gw_force_reverted.stat.exists
+        fail_msg: A force for another CA survived a converge on the certificate's own CA.
+
     # A restore as root leaves the state root's; the converge gives it back. A link
     # the gateway's account planted there must not hand root's file to it.
     - name: Give the gateway's state to root, as a restore would
