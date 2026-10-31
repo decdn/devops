@@ -459,7 +459,7 @@ for pb in playbooks/*.yml; do ansible-playbook "$pb" --syntax-check -i localhost
 make molecule       # every molecule scenario, in parallel (needs Docker)
 make molecule SCENARIOS='sponsord schema'   # …only these
 make molecule-changed  # …only those your branch can affect, as CI picks them for a PR
-make molecule JOBS=2   # …capped to two at a time on a small machine
+make molecule JOBS=2   # …two at a time (the default follows the host's inotify limit, 4 on a stock host)
 make molecule-serial   # …one at a time, when a failure needs readable output
 
 # from the repo ROOT — the only test that uses a real Grafana Alloy binary

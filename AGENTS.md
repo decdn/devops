@@ -395,7 +395,11 @@ path it does not recognise selects them all).
 `scripts/molecule.sh` (behind `make molecule`) takes a host-wide lock per scenario: a
 *different* scenario does not block you, the *same* one refuses to start (exit 75). Run
 what you changed with `make molecule-changed` or `make molecule SCENARIOS='…'` rather
-than bare `molecule test -s`, which skips the lock. A scenario that grows slow is split along its side effects into a
+than bare `molecule test -s`, which skips the lock. They also share one kernel pool,
+root's `fs.inotify.max_user_instances` (128 stock): past it the next container's systemd
+dies at boot and the scenario fails with "container … is not running", which is no
+role bug. The default `JOBS` is sized to it (`jobs_width`), but runs side by side add
+up. A scenario that grows slow is split along its side effects into a
 sibling that reuses its prepare/converge/verify by path, with an identical inventory
 (`make test-scripts` checks the pairs); add the sibling to `SLOW_FIRST` in
 `ansible/Makefile` when it is among the slowest.

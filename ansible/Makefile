@@ -228,7 +228,8 @@ decommission:
 #
 #   make molecule                               every scenario, in parallel
 #   make molecule SCENARIOS='sponsord schema'   a subset
-#   make molecule JOBS=2                        narrower fan-out on a small machine
+#   make molecule JOBS=2                        a set width (the default follows the host's
+#                                               inotify limit: scripts/molecule.sh jobs_width)
 #   make molecule-serial                        one at a time, stops at the first failure
 #   make molecule-list                          the selection as JSON (CI's matrix)
 #   make molecule-changed                       the scenarios your branch can affect
