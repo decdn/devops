@@ -27,7 +27,8 @@ four-dashboard suite and alert rules that go with them. `decdn/decdn` ships none
 their only home.
 
 **The files** (the node's in `monitoring/decdn-node/`, sponsord's in `monitoring/sponsord/`,
-the iroh relay's in `monitoring/iroh-relay/`):
+the iroh relay's in `monitoring/iroh-relay/`, the public gateway's in
+`monitoring/decdn-gateway/`):
 
 - `grafana-dashboard.json` — "deCDN — fleet overview", uid `decdn-poc-overview`.
   Fleet status, delivery funnel, slash safety, logs and traces.
@@ -64,6 +65,16 @@ the iroh relay's in `monitoring/iroh-relay/`):
   any `relayserver_*` name not in it — so this pair, unlike the others, IS name-checked
   in CI. Re-capture it on an `iroh_relay_version` bump (the command is in its header).
   Logs: `{unit="iroh-relay.service"}` with the parsed `level`. Unit tests in
+  `prometheus-alerts_test.yml`.
+
+- `monitoring/decdn-gateway/` — the public gateway's pair: `dashboard-decdn-gateway.json`
+  (uid `decdn-gateway`) and `prometheus-alerts.yml` (group `decdn-gateway`,
+  `job="decdn-gateway"`), the Ansible path, not rendered by the chart. Nine unlabeled
+  `decdn_gateway_*` series (one counter per answer, a `pulls_active` gauge), listed
+  upstream in `adr/appendix-gateway.md` § Metrics. Like the relay's, they ARE
+  name-checked in CI against `exported-metrics.txt`, the pinned decdn's metrics:
+  re-capture it when the decdn line moves (the command is in its header). Logs:
+  `{unit="decdn-gateway.service"}` with the parsed `level`. Unit tests in
   `prometheus-alerts_test.yml`.
 
 Add a row to an existing dashboard before starting a fifth node one. The Helm chart renders

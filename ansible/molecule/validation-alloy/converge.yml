@@ -872,6 +872,48 @@
             decdn_rejected: "{{ decdn_rejected + ['identity-labels'] }}"
           when: ansible_failed_task.name == 'Validate identity labels'
 
+    - name: "Case ga-gateway-toggle — the gateway toggle as a string"
+      block:
+        - name: Run grafana_alloy with a string gateway toggle
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_decdn_gateway_enabled: "true"
+      rescue:
+        - name: Record ga-gateway-toggle rejection (only if the sub-switch gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['sub-switches'] }}"
+          when: ansible_failed_task.name == 'Validate the observability sub-switches'
+
+    - name: "Case ga-gateway-job — a gateway job label outside the charset"
+      block:
+        - name: Run grafana_alloy with a gateway job label holding a space
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_decdn_gateway_job: "decdn gateway"
+      rescue:
+        - name: Record ga-gateway-job rejection (only if the job-label gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['job-labels'] }}"
+          when: ansible_failed_task.name == 'Validate the job labels'
+
+    - name: "Case ga-gateway-service-name — a gateway service_name outside the charset"
+      block:
+        - name: Run grafana_alloy with a gateway service_name holding a quote
+          ansible.builtin.include_role:
+            name: grafana_alloy
+          vars:
+            decdn_grafana_cloud_enabled: true
+            grafana_alloy_decdn_gateway_service_name: 'decdn"gateway'
+      rescue:
+        - name: Record ga-gateway-service-name rejection (only if the identity gate failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['identity-labels'] }}"
+          when: ansible_failed_task.name == 'Validate identity labels'
+
     - name: Confirm every bad value was rejected by the role's own validation
       ansible.builtin.assert:
         that:
@@ -895,5 +937,6 @@
            "credential-knobs", "token-all-or-nothing", "token-all-or-nothing",
            "provenance-record", "provenance-record",
            "managed-paths", "managed-paths", "managed-paths", "managed-paths", "managed-paths",
+           "sub-switches", "job-labels", "identity-labels",
            "sub-switches", "job-labels", "identity-labels",
            "sub-switches", "job-labels", "identity-labels"]

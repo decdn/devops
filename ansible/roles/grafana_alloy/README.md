@@ -198,8 +198,9 @@ Binary/package removal is manual.
 | Node `/metrics` | `decdn-node` | your own dashboards/queries (`grafana_alloy_node_enabled`) |
 | sponsord `/metrics` | `sponsord` | pool balance, top-ups, keeper failures, issued capabilities (`grafana_alloy_sponsord_enabled`); `service_name=sponsord` |
 | iroh-relay `/metrics` | `iroh-relay` | relayed bytes and packets, client connects, QUIC address discovery (`grafana_alloy_iroh_relay_enabled`); `service_name=iroh-relay` |
+| Public gateway `/metrics` | `decdn-gateway` | requests by answer, bytes served, pulls in flight, pointer updates (`grafana_alloy_decdn_gateway_enabled`); `service_name=decdn-gateway` |
 | Machine metrics | `integrations/node_exporter` | Grafana Cloud's **Linux Server** integration dashboards + alerts, unmodified |
-| journald | `integrations/node_exporter` | the same integration's logs dashboards (correlated by `instance`); the daemon's own unit (`decdn-node.service`) also carries `service_name=<grafana_alloy_service_name>` (default `decdn-node`), `sponsord.service` carries `service_name=sponsord` when that scrape is on, `sponsord-onramp.service` carries `service_name=sponsord-onramp` when `grafana_alloy_sponsord_onramp_enabled` is, and `iroh-relay.service` carries `service_name=iroh-relay` when `grafana_alloy_iroh_relay_enabled` is |
+| journald | `integrations/node_exporter` | the same integration's logs dashboards (correlated by `instance`); the daemon's own unit (`decdn-node.service`) also carries `service_name=<grafana_alloy_service_name>` (default `decdn-node`), `sponsord.service` carries `service_name=sponsord` when that scrape is on, `sponsord-onramp.service` carries `service_name=sponsord-onramp` when `grafana_alloy_sponsord_onramp_enabled` is, `iroh-relay.service` carries `service_name=iroh-relay` when `grafana_alloy_iroh_relay_enabled` is, and `decdn-gateway.service` carries `service_name=decdn-gateway` when `grafana_alloy_decdn_gateway_enabled` is |
 | Alloy self-metrics | `integrations/alloy` | agent health |
 | Traces | — | Application Observability |
 
@@ -275,6 +276,9 @@ deliberately lean and every lever is a variable:
 - iroh-relay, when `grafana_alloy_iroh_relay_enabled` is on, logs the same
   plain-text format (its unit sets `NO_COLOR=1`) and is treated exactly like
   sponsord, scrape included.
+- The public gateway (the decdn CLI's `gateway`), when
+  `grafana_alloy_decdn_gateway_enabled` is on, logs the same plain-text format (its
+  unit sets `NO_COLOR=1`) and is treated exactly like sponsord, scrape included.
 
 ## Hardening: the two relaxations machine monitoring requires
 
@@ -326,6 +330,8 @@ upstream version/sha256). Highlights:
 | `grafana_alloy_sponsord_onramp_service_name` | `sponsord-onramp` | The onramp stream's `service_name` |
 | `grafana_alloy_iroh_relay_enabled` | `false` | Scrape iroh-relay's `/metrics`, label and re-level its journald stream. Set from membership of `iroh_relay_hosts` by the same file |
 | `grafana_alloy_iroh_relay_job` / `_iroh_relay_service_name` | `iroh-relay` / `iroh-relay` | iroh-relay's job label and `service_name` |
+| `grafana_alloy_decdn_gateway_enabled` | `false` | Scrape the public gateway's metrics listener, label and re-level its journald stream. Set from membership of `decdn_gateway_hosts` by the same file |
+| `grafana_alloy_decdn_gateway_job` / `_decdn_gateway_service_name` | `decdn-gateway` / `decdn-gateway` | The gateway's job label and `service_name` |
 
 Label variables (`service_name`, `service_namespace`, `instance_id`,
 `deployment_environment`, `region`) ship on most series, spans and log lines —
@@ -392,8 +398,8 @@ Three layers, because the first one cannot prove correctness on its own:
    host-metrics-only, logs-only, every sub-knob off, inventory-supplied
    endpoints, OTLP username fallback, vetoed collector + blanked node job,
    info-dropping guardrail, sponsord-only, node + sponsord co-located, the
-   same with the onramp, relay-only, node + relay co-located, DNS-only and node + DNS
-   co-located, plus Compose's runtime) and feeds them to the REAL pinned Alloy binary: `alloy validate`
+   same with the onramp, relay-only, node + relay co-located, DNS-only, node + DNS
+   co-located, gateway-only and node + gateway co-located, plus Compose's runtime) and feeds them to the REAL pinned Alloy binary: `alloy validate`
    (component graph, not just syntax), a check that every `ExecStart` flag exists
    in `alloy run --help`, and greps proving each Jinja branch actually switched —
    including that "every sub-knob off" reproduces the pre-machine-monitoring

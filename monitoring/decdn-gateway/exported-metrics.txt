@@ -1,0 +1,35 @@
+# The /metrics exposition of `decdn gateway --public-url` from decdn 0.3.0 (decdn/decdn,
+# x86_64-unknown-linux-gnu release asset), captured from a fresh process with no
+# traffic, so every value is 0. Every decdn_gateway_* name a dashboard or rule in this
+# directory uses must appear here (`make lint-helm` checks). Re-capture when the
+# decdn line moves:
+#   decdn --config <gateway.toml> gateway --public-url https://<domain> \
+#     --metrics-listen 127.0.0.1:9094 --keystore <keystore> --data-dir <dir>
+#   curl -s 127.0.0.1:9094/metrics
+# HELP decdn_gateway_bytes_served_total Content bytes handed to responses.
+# TYPE decdn_gateway_bytes_served_total counter
+decdn_gateway_bytes_served_total 0
+# HELP decdn_gateway_requests_ok_total Requests answered with success or a redirect.
+# TYPE decdn_gateway_requests_ok_total counter
+decdn_gateway_requests_ok_total 0
+# HELP decdn_gateway_requests_not_found_total Requests for a path, entry or manifest that does not exist.
+# TYPE decdn_gateway_requests_not_found_total counter
+decdn_gateway_requests_not_found_total 0
+# HELP decdn_gateway_requests_refused_total Requests refused before any pull: an unknown host, a missing token, a bad URI, a method, a range past the end.
+# TYPE decdn_gateway_requests_refused_total counter
+decdn_gateway_requests_refused_total 0
+# HELP decdn_gateway_requests_allowance_exhausted_total Requests answered 402: on a public gateway the day's allowance is spent; on a loopback gateway no capability covers the page.
+# TYPE decdn_gateway_requests_allowance_exhausted_total counter
+decdn_gateway_requests_allowance_exhausted_total 0
+# HELP decdn_gateway_pull_failures_funding_total Requests answered 503: the gateway's pool cannot pay.
+# TYPE decdn_gateway_pull_failures_funding_total counter
+decdn_gateway_pull_failures_funding_total 0
+# HELP decdn_gateway_pull_failures_other_total Requests answered 502: the upstream pull failed.
+# TYPE decdn_gateway_pull_failures_other_total counter
+decdn_gateway_pull_failures_other_total 0
+# HELP decdn_gateway_pulls_active Pulls handed to the worker and not yet ended.
+# TYPE decdn_gateway_pulls_active gauge
+decdn_gateway_pulls_active 0
+# HELP decdn_gateway_pointer_updates_total Namespace pointers stored through PUT /_pointer.
+# TYPE decdn_gateway_pointer_updates_total counter
+decdn_gateway_pointer_updates_total 0

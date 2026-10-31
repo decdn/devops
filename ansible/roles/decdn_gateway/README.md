@@ -145,10 +145,15 @@ a deploy sets:
 The gateway's metrics listener (`127.0.0.1:9094`) serves Prometheus text at
 `/metrics` and its state at `/_status` (`decdn dashboard --gateway`). It answers only
 a loopback `Host`. The series are listed in [`adr/appendix-gateway.md` §
-Metrics][metrics]. The two to alert on are
-`decdn_gateway_pull_failures_funding_total` (the pool cannot pay: `503`s) and
-`decdn_gateway_requests_allowance_exhausted_total` (`402`s). Logs go to the journal
-as `decdn-gateway.service` (`RUST_LOG` from `decdn_gateway_log_level`).
+Metrics][metrics]. Logs go to the journal as `decdn-gateway.service` (`RUST_LOG`
+from `decdn_gateway_log_level`).
+
+With Grafana Cloud on (`decdn_grafana_cloud_enabled`), the `grafana_alloy` role scrapes
+the listener as `job="decdn-gateway"` and labels and re-levels the journal stream on
+hosts in `decdn_gateway_hosts`. The dashboard and the alert rules are in
+[`monitoring/decdn-gateway/`](../../../monitoring/decdn-gateway/). They cover the pool
+that cannot pay (`503`s, critical), the spent daily allowance (`402`s) and pulls that
+fail (`502`s).
 
 [metrics]: https://github.com/decdn/decdn/blob/main/adr/appendix-gateway.md#metrics
 

@@ -2,8 +2,8 @@
 
 The deCDN Grafana dashboards and reference Prometheus alert rules, maintained here:
 `decdn-node/` for the node, on every deploy path, `sponsord/` for the onboarding
-sponsor, and `iroh-relay/` for the self-hosted iroh relay, both on the Ansible and
-Compose paths. The node's metric surface is documented in
+sponsor and `iroh-relay/` for the self-hosted iroh relay, both on the Ansible and
+Compose paths, and `decdn-gateway/` for the public gateway, on the Ansible path. The node's metric surface is documented in
 upstream `decdn/decdn`'s `adr/appendix-observability.md`. The node's assets were
 imported from `decdn/decdn` (MIT OR Apache-2.0) at `20db95ef`; distributed here under
 this repo's MIT license. sponsord's were written here.
@@ -18,6 +18,7 @@ this repo's MIT license. sponsord's were written here.
 | `decdn-node/prometheus-alerts_test.yml` | promtool unit tests for `DecdnNodeDown`, `DecdnCapacityBondRegistryResyncFailing`, `DecdnBuyerTopupUnresolved`, `DecdnRedemptionMaybeBroadcast`, `DecdnNodeClockSkew`, `DecdnSettlementLedgerWriteFailing`, `DecdnSettlementReanchorBacklog` and `DecdnSettlementReanchorLowerDeposit` (run by `make lint-helm`; the chart's `.helmignore` keeps them out of the package). |
 | `sponsord/` | The onboarding sponsor's dashboard and alert rules ([below](#sponsord)). Not rendered by the chart. |
 | `iroh-relay/` | The iroh relay's dashboard and alert rules ([below](#iroh-relay)). Not rendered by the chart. |
+| `decdn-gateway/` | The public gateway's dashboard and alert rules ([below](#public-gateway)). Not rendered by the chart. |
 
 **Editing.** Every `decdn_*` series a panel or rule names must be one `decdn-node`
 exports; nothing in CI checks this. See
@@ -33,7 +34,7 @@ that `.helmignore`.
 
 ## The `*Down` alerts
 
-`DecdnNodeDown`, `SponsordDown` and `IrohRelayDown` fire on `up == 0`, and also on an
+`DecdnNodeDown`, `SponsordDown`, `IrohRelayDown` and `DecdnGatewayDown` fire on `up == 0`, and also on an
 instance whose `up` stopped arriving after it reported in the last day.
 
 - **Why.** On the Ansible path, and with Compose's `alloy` profile, the scraper is
@@ -138,3 +139,25 @@ as above, e.g.
 The certificate's expiry is not covered: iroh-relay renews it itself but exports
 nothing about it. Watch `https://<hostname>/healthz` with a blackbox or synthetic check
 of your own.
+
+## Public gateway
+
+`decdn-gateway/` holds the same pair for the public gateway
+([`roles/decdn_gateway`](../ansible/roles/decdn_gateway/README.md)), which runs on the
+Ansible path. The chart never renders it.
+
+| File | What it is |
+|------|------------|
+| `decdn-gateway/dashboard-decdn-gateway.json` | `uid: decdn-gateway`: up, requests served and bytes per day, pulls in flight, 503s per day, requests per minute by answer, bandwidth, the allowance (402) and pool (503) refusals, pointer updates, the gateway's log. |
+| `decdn-gateway/prometheus-alerts.yml` | Rule group `decdn-gateway`: down, the pool cannot pay (503, critical), the daily allowance spent (402), most pulls failing (502). |
+| `decdn-gateway/exported-metrics.txt` | The gateway's metrics from the pinned decdn release. `make lint-helm` fails on a name the dashboard or rules use that is not in it. |
+
+They select `job="decdn-gateway"`, which the `grafana_alloy` role stamps on the
+gateway's metrics listener (`grafana_alloy_decdn_gateway_job`); the log panel selects
+`unit="decdn-gateway.service"` with the parsed `level`. Import them as above, e.g.
+`mimirtool rules load decdn-gateway/prometheus-alerts.yml`. `make lint-helm` also runs
+`promtool check rules` and the unit tests in `decdn-gateway/prometheus-alerts_test.yml`.
+
+Not covered: the wallet's balance (the gateway exports none; `DecdnGatewayPoolCannotPay`
+is the symptom) and the certificate's expiry (lego renews it from a timer; watch
+`https://<domain>/` with a blackbox check of your own).

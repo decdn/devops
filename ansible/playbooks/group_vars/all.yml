@@ -19,6 +19,7 @@ grafana_alloy_sponsord_enabled: "{{ 'sponsord_hosts' in group_names }}"
 grafana_alloy_sponsord_onramp_enabled: "{{ 'sponsord_onramp_hosts' in group_names }}"
 grafana_alloy_iroh_relay_enabled: "{{ 'iroh_relay_hosts' in group_names }}"
 grafana_alloy_iroh_dns_server_enabled: "{{ 'iroh_dns_server_hosts' in group_names }}"
+grafana_alloy_decdn_gateway_enabled: "{{ 'decdn_gateway_hosts' in group_names }}"
 
 # The public holes in the baseline firewall, from the groups a host is in. Each
 # group that runs baseline (decdn_nodes.yml, decdn_origin_nodes.yml, sponsord_hosts.yml,

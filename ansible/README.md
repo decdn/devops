@@ -426,6 +426,9 @@ once its owner points it there. Put it on a host of its own (or beside a node) i
   redirect lands) have no certificate: no wildcard covers two labels
   (decdn/decdn#2784).
 - **Back up** the wallet and the namespace pointers (`make backup`).
+- **Observability:** with Grafana Cloud on, Alloy scrapes it on hosts in
+  `decdn_gateway_hosts`. Its dashboard and alert rules are in
+  [`monitoring/decdn-gateway/`](../monitoring/decdn-gateway/).
 
 Setup and variables: [`roles/decdn_gateway/README.md`](roles/decdn_gateway/README.md).
 

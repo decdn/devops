@@ -170,6 +170,14 @@ grafana_alloy_iroh_relay_service_name: iroh-relay
 grafana_alloy_iroh_dns_server_enabled: false
 grafana_alloy_iroh_dns_server_job: iroh-dns-server
 grafana_alloy_iroh_dns_server_service_name: iroh-dns-server
+# The public gateway's loopback metrics (roles/decdn_gateway:
+# decdn_gateway_metrics_address:decdn_gateway_metrics_port, default 127.0.0.1:9094),
+# with its own job and service_name, and its journald stream labelled and
+# level-parsed as the relay's. playbooks/group_vars/all.yml derives it from
+# decdn_gateway_hosts.
+grafana_alloy_decdn_gateway_enabled: false
+grafana_alloy_decdn_gateway_job: decdn-gateway
+grafana_alloy_decdn_gateway_service_name: decdn-gateway
 
 # --- Host (machine) metrics ---------------------------------------------------
 # Alloy's built-in node_exporter. Runs IN-PROCESS: no extra listener, no extra
