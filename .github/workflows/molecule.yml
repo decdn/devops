@@ -90,7 +90,9 @@ jobs:
           n=0
           while read -r image; do
             n=$((n + 1))
-            ( docker pull -q "$image" >"$pulls/$n.log" 2>&1; echo $? >"$pulls/$n.rc" ) &
+            # `|| rc=$?`: under the step's `bash -e` a bare failing pull would end the
+            # subshell before it records its status, and the wait would time out.
+            ( rc=0; docker pull -q "$image" >"$pulls/$n.log" 2>&1 || rc=$?; echo "$rc" >"$pulls/$n.rc" ) &
           done <"$pulls/images"
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
