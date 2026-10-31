@@ -1,0 +1,40 @@
+---
+# Retire the Caddy this role ran in front of the onramp before it moved to nginx:
+# stop it, purge its package and drop its state (the old certificate and ACME
+# account). Only a Caddy serving this role's Caddyfile (its marker line); a Caddy
+# someone else runs is never touched, and nginx then fails loudly to bind tcp/80.
+# Runs on every converge, before nginx starts (tasks/main.yml), and on decommission.
+
+- name: Check for this role's Caddyfile
+  ansible.builtin.command:
+    argv: [grep, -qF, "{{ _sponsord_onramp_nginx_marker }}", "{{ _sponsord_onramp_legacy_caddyfile }}"]
+  register: sponsord_onramp_legacy_caddy
+  changed_when: false
+  check_mode: false
+  # 1 = no marker, 2 = no file (or unreadable): neither is the role's Caddy.
+  failed_when: false
+
+- name: Remove the role's Caddy
+  when: sponsord_onramp_legacy_caddy.rc == 0
+  block:
+    - name: Stop and disable Caddy
+      ansible.builtin.systemd_service:
+        name: caddy
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Purge the caddy package
+      ansible.builtin.apt:
+        name: caddy
+        state: absent
+        purge: true
+
+    # The purge leaves the role's Caddyfile behind when dpkg no longer owns it.
+    - name: Remove Caddy's configuration and state
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ _sponsord_onramp_legacy_caddyfile }}"
+        - "{{ _sponsord_onramp_legacy_caddy_state }}"

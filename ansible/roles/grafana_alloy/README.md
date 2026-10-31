@@ -314,7 +314,7 @@ upstream version/sha256). Highlights:
 | `grafana_alloy_host_metrics_enabled` | `true` | Machine metrics (Alloy's in-process `node_exporter`) |
 | `grafana_alloy_host_collectors` | 13 collectors | Replacement set; `_host_extra_collectors` adds, `_host_disable_collectors` vetoes |
 | `grafana_alloy_host_scrape_interval` | `60s` | Host metrics only; the node keeps `30s` |
-| `grafana_alloy_host_systemd_unit_include` | `(decdn-node\|sponsord\|sponsord-onramp\|iroh-relay\|caddy\|alloy\|ssh\|sshd)\.service` | Scope of the per-unit `systemd` collector |
+| `grafana_alloy_host_systemd_unit_include` | `(decdn-node\|sponsord\|sponsord-onramp\|iroh-relay\|iroh-dns-server\|nginx\|alloy\|ssh\|sshd)\.service` | Scope of the per-unit `systemd` collector |
 | `grafana_alloy_logs_enabled` | `true` | journald → Grafana Cloud Loki |
 | `grafana_alloy_logs_max_age` | `12h` | Bounds the catch-up burst after an outage |
 | `grafana_alloy_self_metrics_enabled` | `true` | Alloy's own health |

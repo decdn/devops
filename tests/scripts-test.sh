@@ -194,7 +194,7 @@ want="$(cd "$repo/ansible/molecule" && for d in */molecule.yml; do echo "${d%/mo
 
 # Split scenarios share one converge, so their inventories must not drift apart.
 if command -v yq >/dev/null; then
-  for pair in sponsord:sponsord-install sponsord-onramp:sponsord-onramp-caddy \
+  for pair in sponsord:sponsord-install sponsord-onramp:sponsord-onramp-nginx \
       sponsord-onramp:sponsord-onramp-source sponsord-onramp:sponsord-onramp-lifecycle \
       iroh-relay:iroh-relay-lifecycle iroh-relay:iroh-relay-install \
       iroh-relay:iroh-relay-certificate iroh-relay:iroh-relay-gate \
@@ -1399,19 +1399,18 @@ variant() {
 node='/^  decdn-node:$/,/^ {0,2}[a-z]/'
 sd='/^  sponsord:$/,/^ {0,2}[a-z]/'
 onr='/^  sponsord-onramp:$/,/^ {0,2}[a-z]/'
-cdy='/^  caddy:$/,/^ {0,2}[a-z]/'
 rly='/^  iroh-relay:$/,/^ {0,2}[a-z]/'
 dns='/^  iroh-dns-server:$/,/^ {0,2}[a-z]/'
 aly='/^  alloy:$/,/^ {0,2}[a-z]/'
 gw='/^  decdn-gateway:$/,/^ {0,2}[a-z]/'
 h='s/^(\s*)<<: \*hardened$/&\n\1'
 # Shape
-variant "unexpected service"       "compose.yaml: services are exactly"           "s/^  caddy:$/  proxy:/"
+variant "unexpected service"       "compose.yaml: services are exactly"           "s/^  decdn-gateway:$/  proxy:/"
 variant "sponsord privileged"      "sponsord: sets only allowed keys (extra: privileged)" "${sd} ${h}privileged: true/"
 variant "sponsord host pid"        "sponsord: sets only allowed keys (extra: pid)" "${sd} ${h}pid: host/"
 variant "onramp device"            "sponsord-onramp: sets only allowed keys (extra: devices)" "${onr} ${h}devices: [\"\/dev\/mem:\/dev\/mem\"]/"
 variant "hardening dropped"        "sponsord: read_only rootfs"                   "${sd} {/^    <<: \*hardened$/d}"
-variant "anchor weakened"          "caddy: read_only rootfs"                      "/^x-hardened:/,/^[a-z]/ s/^(\s*)read_only: true$/\1read_only: false/"
+variant "anchor weakened"          "sponsord-onramp: read_only rootfs"            "/^x-hardened:/,/^[a-z]/ s/^(\s*)read_only: true$/\1read_only: false/"
 # decdn-node
 variant "bridge network"           "decdn-node: network_mode is host"             "${node} ${h}network_mode: bridge/"
 variant "writable rootfs"          "decdn-node: read_only rootfs"                 "${node} ${h}read_only: false/"
@@ -1424,7 +1423,7 @@ variant "origin content writable"  "decdn-node: mounts are exactly"             
 variant "origin dir created"       "decdn-node: create_host_path on /srv/decdn-origin is true"               "${node} {/target: \/srv\/decdn-origin$/{n;n;s/create_host_path: false/create_host_path: true/}}"
 variant "node data dir created"    "decdn-node: create_host_path on /var/lib/decdn is true"               "${node} {/target: \/var\/lib\/decdn$/{n;s/create_host_path: false/create_host_path: true/}}"
 variant "create_host_path left out" "decdn-node: bind mount /etc/decdn sets create_host_path explicitly" "${node} {/target: \/etc\/decdn$/{n;n;d}}"
-variant "short-syntax volume"      "caddy: short-syntax volume"                   "${cdy} s#^(\s*)volumes:\$#\1volumes:\n\1  - /srv/x:/srv/x:ro#"
+variant "short-syntax volume"      "sponsord-onramp: short-syntax volume"         "${onr} s#^(\s*)volumes:\$#\1volumes:\n\1  - /srv/x:/srv/x:ro#"
 variant "node holds a secret"      "decdn-node: sets only allowed keys (extra: secrets)" "${node} ${h}secrets: [sponsord-api-token]/"
 variant "node always on"           "decdn-node: profiles are [node, origin]"      "${node} {/^    profiles: \[node, origin\]$/d}"
 variant "origin without the node"  "decdn-node: profiles are [node, origin]"      "${node} s/^(\s*)profiles: \[node, origin\]$/\1profiles: [node]/"
@@ -1470,14 +1469,6 @@ variant "gate page from a secret"  "sponsord-onramp: mounts are exactly"        
 variant "inline Turnstile secret"  "sponsord-onramp: no inline ONRAMP_TURNSTILE_SECRET" "${onr} s/^(\s*)ONRAMP_BIND: (.*)$/&\n\1ONRAMP_TURNSTILE_SECRET: x/"
 variant "onramp on sponsord hosts" "sponsord-onramp: profiles are [onramp]"       "${onr} s/^(\s*)profiles: \[onramp\]$/\1profiles: [onramp, sponsord]/"
 variant "resolvable domain default" "sponsord-onramp: unset domain"               "${onr} s#ONRAMP_PUBLIC_URL: .*#ONRAMP_PUBLIC_URL: https://\\\${SPONSORD_ONRAMP_DOMAIN:-unset-SPONSORD_ONRAMP_DOMAIN.invalid}#"
-# caddy
-variant "caddy extra capability"   "caddy: cap_add is exactly"                    "${cdy} s/cap_add: \[NET_BIND_SERVICE\]/cap_add: [NET_BIND_SERVICE, NET_ADMIN]/"
-variant "caddy keeps capabilities" "caddy: cap_drop is [ALL]"                     "${cdy} ${h}cap_drop: []/"
-variant "caddy as root"            "caddy: runs as a non-root uid:gid"            "${cdy} {/^    user: /d}"
-variant "caddy published port"     "caddy: publishes no ports"                    "${cdy} ${h}ports: [\"443:443\"]/"
-variant "caddy always on"          "caddy: profiles are [caddy]"                  "${cdy} {/^    profiles: \[caddy\]$/d}"
-# Caddy holds NET_BIND_SERVICE too, but only the iroh services may run as uid 0.
-variant "caddy as uid 0"           "caddy: runs as a non-root uid:gid"            "${cdy} s/^(\s*)user: .*/\1user: \"0:0\"/"
 # iroh-relay: uid 0 holding NET_BIND_SERVICE alone, SIGINT, the config read-only
 variant "relay extra capability"   "iroh-relay: runs as uid 0 only with cap_add exactly [NET_BIND_SERVICE]" "${rly} s/cap_add: \[NET_BIND_SERVICE\]/cap_add: [NET_BIND_SERVICE, NET_ADMIN]/"
 variant "relay root, no cap_add"   "iroh-relay: runs as uid 0 only with cap_add exactly [NET_BIND_SERVICE]" "${rly} {/^    cap_add: /d}"
@@ -1535,7 +1526,7 @@ variant "gateway always on"        "decdn-gateway: profiles are [gateway]"      
 # alloy
 variant "alloy writable host root" "alloy: mounts are exactly"                    "${aly} {/target: \/host\/root$/{n;s/read_only: true/read_only: false/}}"
 variant "alloy root not rslave"    "alloy: the host root is mounted with rslave"  "${aly} s/propagation: rslave, //"
-variant "caddy rshared state"     "caddy: only alloy's read-only host root sets a mount propagation" "${cdy} {/target: \/data$/{n;s/bind: \{create_host_path: false\}/bind: {propagation: rshared, create_host_path: false}/}}"
+variant "relay rshared state"     "iroh-relay: only alloy's read-only host root sets a mount propagation" "${rly} {/target: \/var\/lib\/iroh-relay$/{n;s/bind: \{create_host_path: false\}/bind: {propagation: rshared, create_host_path: false}/}}"
 variant "alloy extra mount"        "alloy: mounts are exactly"                    "${aly} s#^(\s*)volumes:\$#&\n\1  - {type: bind, source: /etc/sponsord, target: /host/etc/sponsord, read_only: true, bind: {create_host_path: false}}#"
 variant "alloy docker socket"      "alloy: mounts are exactly"                    "${aly} s#^(\s*)volumes:\$#&\n\1  - {type: bind, source: /var/run/docker.sock, target: /var/run/docker.sock, read_only: true, bind: {create_host_path: false}}#"
 variant "alloy as root"            "alloy: runs as a non-root uid:gid"            "${aly} s/^(\s*)user: .*/\1user: \"0:0\"/"
@@ -1762,7 +1753,7 @@ if command -v cloud-init >/dev/null; then
   ci_variant "shellcheck-dirty stage 1"    'decdn-bootstrap fails shellcheck' 's#git clone --quiet --no-checkout "\$DEVOPS_REPO"#git clone --quiet --no-checkout $DEVOPS_REPO#'
   # The publisher host (user-data-publisher.yaml)
   spnet='^(\s*)sponsord_network: arbitrum-sepolia$'
-  onproxy='^(\s*)sponsord_onramp_proxy: caddy$'
+  onproxy='^(\s*)sponsord_onramp_proxy: nginx$'
   ci_variant "sponsord RPC URL in the inventory" 'sponsord_hosts.vars.sponsord_rpc_url looks secret-bearing' "s#$spnet#&\\n\\1sponsord_rpc_url: https://rpc.example/#" "$sponsorud"
   ci_variant "SPONSORD_RPC_URL in bootstrap.env" 'bootstrap.env: unexpected key SPONSORD_RPC_URL' "s#$ref#&\\n\\1SPONSORD_RPC_URL=https://rpc.example/key#" "$sponsorud"
   ci_variant "Turnstile secret in the inventory" 'sponsord_onramp_turnstile_secret looks secret-bearing' "s#$onproxy#&\\n\\1sponsord_onramp_turnstile_secret: x#" "$sponsorud"
@@ -2038,6 +2029,16 @@ want="$(backup_dir_default "$repo/ansible/roles/decdn_node/defaults/main.yml" de
 [[ "$(backup_dir_default "$repo/ansible/roles/decdn_gateway/defaults/main.yml" decdn_gateway_backup_local_dir)" == "$want" ]] \
   || fail "decdn_gateway_backup_local_dir's default differs from decdn_backup_local_dir's"
 pass "source-build and decommission defaults, the backup directory, the installer, the release resolver and decdn's KEYS, identical across roles"
+# lego issues both nginx fronts' certificates (the gateway's over DNS-01, the onramp's
+# over HTTP-01): one pinned release, so a bump moves both roles' version and digests.
+lego_pin() { # <defaults file> <prefix>
+  awk -v p="$2" '$0 ~ "^" p "_lego_(version|release_base|sha256):" {on = 1; print; next}
+                 on && /^  / {print; next} {on = 0}' "$1" | sed "s/^$2_//"
+}
+want="$(lego_pin "$repo/ansible/roles/decdn_gateway/defaults/main.yml" decdn_gateway)"
+[[ -n "$want" && "$(lego_pin "$repo/ansible/roles/sponsord_onramp/defaults/main.yml" sponsord_onramp)" == "$want" ]] \
+  || fail "sponsord_onramp_lego_* differ from decdn_gateway_lego_*: bump lego in both roles"
+pass "the lego pin, identical in decdn_gateway and sponsord_onramp"
 # iroh_relay, iroh_dns_server and decdn_gateway have no source build, so only their
 # decommission keys are compared.
 decom_keys() { grep -E '^decdn_decommission_(max_hosts|prompt_seconds):' "$1" || true; }

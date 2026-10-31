@@ -241,7 +241,7 @@ grafana_alloy_host_disk_device_exclude: '^(ram|loop|fd|(h|s|v|xv)d[a-z]|nvme\d+n
 # real cost, and only these units matter. Units must match include AND NOT match
 # exclude.
 grafana_alloy_host_systemd_unit_include: "(decdn-node|sponsord|sponsord-onramp|iroh-relay|\
-  iroh-dns-server|caddy|alloy|ssh|sshd)\\.service"
+  iroh-dns-server|nginx|alloy|ssh|sshd)\\.service"
 grafana_alloy_host_systemd_unit_exclude: '.+\.(automount|device|mount|scope|slice)'
 
 # --- Agent self-monitoring ----------------------------------------------------

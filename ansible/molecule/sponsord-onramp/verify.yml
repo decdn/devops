@@ -1,6 +1,6 @@
 ---
 # What a converged onramp host must look like. Runs after side_effect.yml, which
-# leaves the host healthy on the role's own Caddyfile.
+# leaves the host healthy on the role's own nginx site.
 - name: Verify
   hosts: all
   become: true
@@ -19,7 +19,8 @@
         - /etc/sponsord/turnstile-secret
         - /etc/sponsord/sponsord-onramp.env
         - /etc/sponsord/.onramp-inputs.sha256
-        - /etc/caddy/Caddyfile
+        - /etc/nginx/sites-available/sponsord-onramp
+        - /etc/sponsord/tls/onramp.molecule.test.key
 
     - name: Require the secret and records root-only, the config world-readable
       ansible.builtin.assert:
@@ -29,15 +30,17 @@
           - _or_files.results[1].stat.isreg and _or_files.results[1].stat.mode == '0644'
           - _or_files.results[2].stat.isreg and _or_files.results[2].stat.mode == '0600'
           - _or_files.results[3].stat.isreg and _or_files.results[3].stat.mode == '0644'
+          - _or_files.results[4].stat.isreg and _or_files.results[4].stat.mode == '0600'
+          - _or_files.results[4].stat.pw_name == 'root'
         fail_msg: "{{ _or_files.results | map(attribute='stat') | map(attribute='mode', default='absent') | list }}"
 
-    - name: Read the env file and the Caddyfile
+    - name: Read the env file and the nginx site
       ansible.builtin.slurp:
         src: "{{ item }}"
       register: _or_text
       loop:
         - /etc/sponsord/sponsord-onramp.env
-        - /etc/caddy/Caddyfile
+        - /etc/nginx/sites-available/sponsord-onramp
         - /usr/local/lib/sponsord-onramp/decdn-release
 
     - name: Require the env file to carry the settings and no secret
@@ -65,20 +68,29 @@
         _env: "{{ _or_text.results[0].content | b64decode }}"
         _profile: "{{ _sponsord_onramp_network_profiles['arbitrum-sepolia'] }}"
 
-    - name: Require the role's Caddyfile, with its admin API off
+    - name: Stat the site's link and the package's default site
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: _or_links
+      loop: [/etc/nginx/sites-enabled/sponsord-onramp, /etc/nginx/sites-enabled/default]
+
+    - name: Require the role's site, enabled, with the self-signed certificate
       ansible.builtin.assert:
         that:
-          - "'MANAGED BY the sponsord_onramp role' in _caddy"
-          - "'admin off' in _caddy"
-          - "'onramp.molecule.test {' in _caddy"
-          - "'tls internal' in _caddy"
-          - "'protocols h1 h2' in _caddy"
-          - "'email ops@molecule.test' in _caddy"
-          - "'reverse_proxy 127.0.0.1:8080' in _caddy"
-          - "'not the onramp' not in _caddy"
-        fail_msg: "{{ _caddy }}"
+          - "'MANAGED BY the sponsord_onramp role' in _site"
+          - "'server_name onramp.molecule.test;' in _site"
+          - "'ssl_certificate /etc/sponsord/tls/onramp.molecule.test.crt;' in _site"
+          - "'location ^~ /.well-known/acme-challenge/' in _site"
+          - "'server 127.0.0.1:8080;' in _site"
+          - "'proxy_set_header X-Forwarded-For $remote_addr;' in _site"
+          - "'proxy_add_x_forwarded_for' not in _site"
+          - "'No certificate yet' not in _site"
+          - _or_links.results[0].stat.islnk
+          - _or_links.results[0].stat.lnk_source == '/etc/nginx/sites-available/sponsord-onramp'
+          - not _or_links.results[1].stat.exists
+        fail_msg: "{{ _site }}"
       vars:
-        _caddy: "{{ _or_text.results[1].content | b64decode }}"
+        _site: "{{ _or_text.results[1].content | b64decode }}"
 
     - name: Read the onramp unit
       ansible.builtin.command:
@@ -107,18 +119,16 @@
       register: _or_ss
       changed_when: false
 
-    - name: Require the onramp on loopback only, Caddy on 80 and 443
+    - name: Require the onramp on loopback only, nginx on 80 and 443
       ansible.builtin.assert:
         that:
           - _or_ss.stdout is search('127\.0\.0\.1:8080\s')
           - _or_ss.stdout is not search('(0\.0\.0\.0|\*|\[::\]):8080\s')
           - _or_ss.stdout is search('(\*|0\.0\.0\.0|\[::\]):443\s')
           - _or_ss.stdout is search('(\*|0\.0\.0\.0|\[::\]):80\s')
-          # The admin API is off: nothing on Caddy's default 2019.
-          - _or_ss.stdout is not search(':2019\s')
         fail_msg: "{{ _or_ss.stdout }}"
 
-    - name: Reach the onramp through Caddy, as a user would
+    - name: Reach the onramp through nginx, as a user would
       ansible.builtin.command:
         argv:
           - curl
@@ -140,7 +150,7 @@
 
     # The onramp rate-limits and gates by the right-most X-Forwarded-For address.
     # A client that sends its own must not be able to choose it.
-    - name: Send a forged X-Forwarded-For through Caddy
+    - name: Send a forged X-Forwarded-For through nginx
       ansible.builtin.command:
         argv:
           - curl
@@ -156,15 +166,15 @@
       register: _or_xff
       changed_when: false
 
-    # Caddy without trusted_proxies REPLACES the header, so the forged address must
+    # The role's nginx SETS the header to $remote_addr, so the forged address must
     # be gone entirely, not just pushed left of the real one.
-    - name: Require the client address Caddy saw, and nothing else
+    - name: Require the client address nginx saw, and nothing else
       ansible.builtin.assert:
         that:
           - (_or_xff.stdout | trim) == '127.0.0.1'
         fail_msg: >-
           The onramp saw X-Forwarded-For "{{ _or_xff.stdout }}": it must be exactly the
-          client Caddy saw (127.0.0.1), without the forged 203.0.113.9.
+          client nginx saw (127.0.0.1), without the forged 203.0.113.9.
 
     - name: Read the Alloy config
       ansible.builtin.slurp:

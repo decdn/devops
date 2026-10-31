@@ -1,0 +1,63 @@
+---
+# The role's nginx site, validated on its own (files/nginx-validate-site) before it
+# replaces the live one, so a site that does not load never lands. Included twice
+# by tasks/front.yml under acme: first before the certificate exists (http only:
+# the ACME challenge and the https redirect), then after lego has issued it, which
+# adds the https server. A converge with the certificate already in place renders
+# the same site both times.
+
+- name: Check for the certificate nginx serves
+  ansible.builtin.stat:
+    path: "{{ sponsord_onramp_cert_file }}"
+  register: sponsord_onramp_cert_present
+
+# Under --check the self-signed certificate is only simulated: render the full site.
+- name: Note whether the https server can be served
+  ansible.builtin.set_fact:
+    _sponsord_onramp_https: >-
+      {{ sponsord_onramp_cert_present.stat.exists
+         or (ansible_check_mode and sponsord_onramp_tls == 'self-signed') }}
+
+- name: Template the onramp's nginx site
+  ansible.builtin.template:
+    src: sponsord-onramp.nginx.j2
+    dest: "{{ _sponsord_onramp_nginx_site }}"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "{{ _sponsord_onramp_lib }}/nginx-validate-site %s"
+  notify: Reload nginx
+
+- name: Enable the onramp's nginx site
+  ansible.builtin.file:
+    src: "{{ _sponsord_onramp_nginx_site }}"
+    dest: "{{ _sponsord_onramp_nginx_site_link }}"
+    state: link
+    # Under --check on a fresh host the site above is only simulated.
+    force: true
+  notify: Reload nginx
+
+# The package's own site is a default_server on tcp/80 too, which nginx refuses
+# beside the role's. main.yml checked that this link is still the package's.
+- name: Disable the package's default site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+# The whole configuration, as nginx will load it, before a reload or first start.
+- name: Check the whole nginx configuration
+  ansible.builtin.command:
+    argv: [nginx, -t, -q]
+  changed_when: false
+  when: not ansible_check_mode or sponsord_onramp_nginx_installed
+
+- name: Apply pending nginx changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start nginx
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started
+  when: not ansible_check_mode or sponsord_onramp_nginx_installed

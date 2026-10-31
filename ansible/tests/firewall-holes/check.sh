@@ -73,8 +73,8 @@ fi
 roles="$here/../../roles"
 grep -qE '^decdn_bind_port: 4433([[:space:]]|$)' "$roles/decdn_node/defaults/main.yml" \
   || { echo "decdn_bind_port's default is not 4433: update the fallback in playbooks/group_vars/all.yml" >&2; exit 1; }
-grep -qE '^sponsord_onramp_proxy: caddy([[:space:]]|$)' "$roles/sponsord_onramp/defaults/main.yml" \
-  || { echo "sponsord_onramp_proxy's default is not caddy: update the fallback in playbooks/group_vars/all.yml" >&2; exit 1; }
+grep -qE '^sponsord_onramp_proxy: nginx([[:space:]]|$)' "$roles/sponsord_onramp/defaults/main.yml" \
+  || { echo "sponsord_onramp_proxy's default is not nginx: update the fallback in playbooks/group_vars/all.yml" >&2; exit 1; }
 grep -qE '^iroh_relay_enable_quic_addr_discovery: true([[:space:]]|$)' "$roles/iroh_relay/defaults/main.yml" \
   || { echo "iroh_relay_enable_quic_addr_discovery's default is not true: update the fallback in playbooks/group_vars/all.yml" >&2; exit 1; }
 

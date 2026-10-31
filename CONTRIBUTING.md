@@ -95,7 +95,7 @@ they are maintained here. See [its README](monitoring/README.md).
   `cloud-init-publisher` scenarios boot the real user-data templates, so they need
   network access to apt, PyPI and Galaxy. Keep each scenario well under its leg's
   timeout; when one grows, split it along its side effects (as `sponsord-install`,
-  `sponsord-onramp-caddy`, `sponsord-onramp-source`, `iroh-relay-gate`,
+  `sponsord-onramp-nginx`, `sponsord-onramp-source`, `iroh-relay-gate`,
   `source-build-recovery` and the `validation-*` scenarios are), or move a play into
   a short sibling that already shares its converge. `source-build`, its two siblings
   and `sponsord-onramp-source` download rustup and a Rust toolchain from

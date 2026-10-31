@@ -10,7 +10,7 @@
 # and health listener stay on loopback. Point nodes at it with
 # decdn_discovery_pkarr_url and decdn_discovery_dns_origin — see
 # roles/iroh_dns_server/README.md.
-# Before the server play: an iroh relay and the onramp's Caddy need tcp/443 too,
+# Before the server play: an iroh relay and the onramp's nginx need tcp/443 too,
 # and only one of them can have it. (Under site.yml, sponsord.yml and
 # iroh_relay.yml run first, so on a host in both groups the other service is
 # already up when this refuses; either way the deploy fails loudly.) The role

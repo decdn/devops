@@ -43,8 +43,9 @@ them into inventory or docs.
    its holes via `baseline_extra_inbound`, and an HTTP service sits behind a reverse
    proxy with the backend on loopback. Never bind a *backend* to `0.0.0.0`. The
    exceptions, each public by design and each asserting its metrics onto loopback:
-   - `sponsord-onramp` behind the role's Caddy (tcp/80 + tcp/443): Turnstile guards the
-     one spending action (`POST /v1/fund`), per-address rate limits cover the rest.
+   - `sponsord-onramp` behind the role's nginx (tcp/80 + tcp/443): Turnstile guards the
+     one spending action (`POST /v1/fund`), per-address rate limits cover the rest;
+     nginx sets `X-Forwarded-For` to the client it saw, never appends a client's.
    - `decdn gateway` behind the role's nginx (tcp/80 + tcp/443): every request spends
      its pool, bounded by the gateway's own daily allowance; nginx's per-address
      `limit_req` covers `PUT /_pointer`, since the gateway reads no `X-Forwarded-*`.
@@ -75,10 +76,9 @@ ansible/                # the deployment project (DevSec-hardened, lean roles); 
   inventory/ galaxy/ molecule/
 cloud-init/             # user-data-{node,publisher}.yaml + on-host bootstrap.sh; pinned ansible-core/collections (README.md)
 compose/                # one-host Docker Compose path (README.md)
-  compose.yaml          # profiles: node / origin (one decdn-node), sponsord, onramp (+ sponsord), caddy, relay, dns, gateway, alloy
+  compose.yaml          # profiles: node / origin (one decdn-node), sponsord, onramp (+ sponsord), relay, dns, gateway, alloy
   alloy/config.alloy    # GENERATED from roles/grafana_alloy's config.alloy.j2 (scripts/render-compose-alloy.sh)
   decdn-compose         # the operator's wrapper: init, check, guarded up/stop/restart/down, health, cli, backup
-  Caddyfile             # hand-kept copy of roles/sponsord_onramp/templates/Caddyfile.j2: change one, change both
   tests/*.jq            # lint-compose: bind-sources, invariants, inline-env, fail-closed
   tests/test_decdn_compose.py  # the wrapper's unit tests (make test-scripts)
 charts/decdn-node/      # Helm chart (README.md); ci/ values mirror molecule/schema's three plays; files/monitoring -> ../../../monitoring/decdn-node (symlink); tests/render-test.sh (make lint-helm); artifacthub-repo.yml
@@ -244,12 +244,17 @@ boundaries or exists nowhere else.
   `stop_signal: SIGINT`). A restart forgives the day's allowance (in-memory counters)
   and drops the pulls in flight, so the restart-inputs comparison is its only restart
   trigger, as sponsord's: never add `notify: Restart decdn-gateway` to a task.
-- nginx is the distro package, the only internet-facing TLS terminator in this repo
-  that unattended-upgrades patches. Its certificate is a wildcard for `<domain>` and
-  `*.<domain>` from lego over ACME DNS-01 (sha256-pinned per architecture; bump the
-  version and both digests together). Stock nginx cannot issue on demand, so the
-  hint host `<ns>.<hash32>.<domain>`, which the gateway's `?ns=` redirect produces, has
-  no certificate: decdn/decdn#2784 asks upstream for a single-label form.
+- nginx is the distro package, so unattended-upgrades patches it; with the onramp's
+  (also distro nginx) it is the only role-installed TLS terminator in this repo. Its
+  certificate is a wildcard for `<domain>` and `*.<domain>` from lego over ACME DNS-01
+  (sha256-pinned per architecture; bump the version and both digests together). The
+  onramp's single-name certificate is the same lego over HTTP-01 (webroot, no DNS
+  credentials): its `sponsord_onramp_lego_*` pin must equal `decdn_gateway_lego_*`
+  (`make test-scripts` checks). Each role refuses nginx sites it did not enable, so
+  the gateway and the onramp need separate hosts. Stock nginx cannot issue on
+  demand, so the hint host `<ns>.<hash32>.<domain>`, which the gateway's `?ns=`
+  redirect produces, has no certificate: decdn/decdn#2784 asks upstream for a
+  single-label form.
 - The site adds no header: the gateway sets its own CORS (a second
   `Access-Control-Allow-Origin` breaks browsers), routes on the exact `Host`, and reads
   no `X-Forwarded-*`. Per-client limits on `PUT /_pointer` are nginx's `limit_req`.
@@ -283,8 +288,7 @@ boundaries or exists nowhere else.
   `docker:27-dind` (privileged) with a `compose.override.yaml` that sets a non-journald
   logging driver.
 - The onramp's entrypoint script is pinned byte for byte in `invariants.jq`
-  (`onramp_entrypoint`): change both together. `compose/Caddyfile` is a hand copy of
-  the role's `Caddyfile.j2`.
+  (`onramp_entrypoint`): change both together.
 - **No `${VAR:?}`**: Compose interpolates disabled services too, so a required variable
   breaks other profiles. An unset variable must render a value its service refuses.
 - `make lint-compose` reads the file as written against `bind-sources.jq`
@@ -347,7 +351,7 @@ make build / galaxy-check          # both collections (build-node, galaxy-check-
 git-ignored and a real fleet lives in a private overlay. Inventory-adjacent group_vars do
 not load for an overlay, so anything every host needs lives in
 `ansible/playbooks/group_vars/`: the public holes (`baseline_extra_inbound`: the node's
-udp/4433, tcp/80 + tcp/443 on `sponsord_onramp_hosts` with `sponsord_onramp_proxy: caddy`,
+udp/4433, tcp/80 + tcp/443 on `sponsord_onramp_hosts` with `sponsord_onramp_proxy: nginx`,
 tcp/80 + tcp/443 + udp/7842 on `iroh_relay_hosts`, tcp/443 + udp/53 + tcp/53 on
 `iroh_dns_server_hosts`, tcp/80 + tcp/443 on `decdn_gateway_hosts`) are built from a host's groups in `all.yml`
 (`_baseline_service_inbound`) and every group file sets `baseline_extra_inbound` to that

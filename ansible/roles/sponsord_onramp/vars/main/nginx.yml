@@ -1,0 +1,42 @@
+---
+# Facts of the distro nginx package and of lego's storage layout, not operator knobs.
+# The role owns one site, enabled the Debian way; nginx.conf includes sites-enabled/*
+# and conf.d/*.conf inside its http block.
+_sponsord_onramp_nginx_site: /etc/nginx/sites-available/sponsord-onramp
+_sponsord_onramp_nginx_site_link: /etc/nginx/sites-enabled/sponsord-onramp
+_sponsord_onramp_nginx_marker: MANAGED BY the sponsord_onramp role
+
+# The role's helpers (the site validator, lego's deploy hook) and lego itself.
+_sponsord_onramp_lib: /usr/local/lib/sponsord-onramp
+
+# lego writes <path>/certificates/<cert.name>.crt (the chain) and .key; the role
+# names the certificate after the role so the paths are fixed.
+_sponsord_onramp_lego_cert_name: sponsord-onramp
+_sponsord_onramp_certs:
+  acme:
+    cert: "{{ sponsord_onramp_acme_dir }}/certificates/sponsord-onramp.crt"
+    key: "{{ sponsord_onramp_acme_dir }}/certificates/sponsord-onramp.key"
+  # Named by the domain, so a changed domain gets a certificate of its own.
+  self-signed:
+    cert: "{{ sponsord_onramp_etc }}/tls/{{ sponsord_onramp_domain }}.crt"
+    key: "{{ sponsord_onramp_etc }}/tls/{{ sponsord_onramp_domain }}.key"
+
+# What the certificate in sponsord_onramp_acme_dir was last issued for ("<server>
+# <domain>"), written only after a run that succeeded; and the env file that forces
+# the next lego run to reissue (LEGO_RENEW_FORCE) while that record is not the
+# wanted one. Both in lego's root-only state directory.
+_sponsord_onramp_issued_for: "{{ sponsord_onramp_acme_dir }}/.issued-for"
+_sponsord_onramp_force_env: "{{ sponsord_onramp_acme_dir }}/force.env"
+# lego's deploy hook: records an issuance, stops forcing, reloads nginx.
+_sponsord_onramp_certs_deployed: "{{ _sponsord_onramp_lib }}/certs-deployed"
+_sponsord_onramp_lego_stamp: "{{ _sponsord_onramp_lib }}/lego-installed"
+
+# lego's release architecture, by sponsord_onramp_target.
+_sponsord_onramp_lego_arches:
+  x86_64-unknown-linux-gnu: amd64
+  aarch64-unknown-linux-gnu: arm64
+
+# The Caddy this role ran before nginx (tasks/caddy-remove.yml): the Caddyfile the
+# distribution's caddy.service loads, and the state directory its package creates.
+_sponsord_onramp_legacy_caddyfile: /etc/caddy/Caddyfile
+_sponsord_onramp_legacy_caddy_state: /var/lib/caddy

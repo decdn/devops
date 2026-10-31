@@ -139,7 +139,7 @@
       ansible.builtin.systemd_service:
         name: "{{ item }}"
       register: _molecule_units
-      loop: [sponsord, sponsord-onramp, caddy]
+      loop: [sponsord, sponsord-onramp, nginx]
 
     - name: Require every service to survive the rejected runs
       ansible.builtin.assert:

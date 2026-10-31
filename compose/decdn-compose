@@ -64,27 +64,32 @@ PROFILES: dict[str, tuple[str, ...]] = {
     "origin": ("decdn-node",),
     "sponsord": ("sponsord",),
     "onramp": ("sponsord", "sponsord-onramp"),
-    "caddy": ("caddy",),
     "relay": ("iroh-relay",),
     "dns": ("iroh-dns-server",),
     "gateway": ("decdn-gateway",),
     "alloy": ("alloy",),
 }
-# Profiles that cannot share a host: each pair wants the same public ports (the
-# Ansible playbooks refuse the same pairs).
+# Profiles that cannot share a host: each pair wants the same public ports, the
+# onramp's through the TLS proxy in front of it (the Ansible playbooks refuse the
+# same pairs).
 CONFLICTS: tuple[tuple[str, str, str], ...] = (
     ("relay", "onramp", "tcp/80 and tcp/443"),
-    ("relay", "caddy", "tcp/80 and tcp/443"),
     ("dns", "relay", "tcp/443"),
     ("dns", "onramp", "tcp/443"),
-    ("dns", "caddy", "tcp/443"),
 )
+# Profiles this file no longer has, with what replaced them: named rather than
+# refused as unknown, so an older .env says what to do.
+REMOVED_PROFILES: dict[str, str] = {
+    "caddy": (
+        "the caddy profile was removed: put your own TLS proxy in front of the onramp "
+        '(README.md, "sponsord and its onramp"), then drop caddy from COMPOSE_PROFILES in .env'
+    ),
+}
 
 # Host layout: the Ansible roles' paths (README.md, "How it is laid out").
 ETC_DECDN = Path("/etc/decdn")
 VAR_DECDN = Path("/var/lib/decdn")
 ETC_SPONSORD = Path("/etc/sponsord")
-VAR_CADDY = Path("/var/lib/caddy")
 VAR_ALLOY = Path("/var/lib/alloy")
 # The Alloy configuration compose.yaml mounts: generated from the grafana_alloy
 # role's template (scripts/render-compose-alloy.sh), never edited here.
@@ -126,7 +131,6 @@ NOT_ORIGIN = (
     "/etc/decdn",
     "/etc/sponsord",
     "/var/lib/decdn",
-    "/var/lib/caddy",
     str(VAR_RELAY),
     str(VAR_DNS),
     str(ETC_GATEWAY),
@@ -186,7 +190,6 @@ PORTS: dict[str, tuple[tuple[str, int], ...]] = {
     "decdn-node": (("udp", 4433), ("tcp", 9090), ("tcp", 9191)),
     "sponsord": (("tcp", 8090),),
     "sponsord-onramp": (("tcp", 8080),),
-    "caddy": (("tcp", 80), ("tcp", 443)),
     # udp/7842 only with QUIC address discovery on, and the metrics port as
     # configured: relay_ports() reads both from the config.
     "iroh-relay": (("tcp", 80), ("tcp", 443), ("udp", 7842), ("tcp", 9092)),
@@ -639,6 +642,8 @@ def init(args: argparse.Namespace) -> None:
     require_root()
     wanted: list[str] = args.profiles
     for p in wanted:
+        if p in REMOVED_PROFILES:
+            raise Refused(REMOVED_PROFILES[p])
         if p not in PROFILES:
             raise Refused(f"unknown profile {p!r}: one of {', '.join(PROFILES)}")
     if {"node", "origin"} <= set(wanted):
@@ -685,9 +690,6 @@ def init(args: argparse.Namespace) -> None:
     if {"sponsord", "onramp"} & set(wanted):
         uid, gid = ensure_account("sponsord")
         updates |= {"SPONSORD_UID": str(uid), "SPONSORD_GID": str(gid)}
-    if "caddy" in wanted:
-        uid, gid = ensure_account("caddy")
-        updates |= {"CADDY_UID": str(uid), "CADDY_GID": str(gid)}
     if "gateway" in wanted:
         uid, gid = ensure_account("decdn-gateway", home=VAR_GATEWAY)
         updates |= {"DECDN_GATEWAY_UID": str(uid), "DECDN_GATEWAY_GID": str(gid)}
@@ -717,9 +719,6 @@ def init(args: argparse.Namespace) -> None:
         init_node(project, args, origin_url)
     if {"sponsord", "onramp"} & set(wanted):
         init_sponsord(project, args, wanted)
-    if "caddy" in wanted:
-        uid, gid = int(project.env["CADDY_UID"]), int(project.env["CADDY_GID"])
-        ensure_dir(VAR_CADDY, 0o700, uid, gid)
     if "relay" in wanted:
         init_relay(args)
     if "dns" in wanted:
@@ -902,10 +901,12 @@ def init_sponsord(project: Project, args: argparse.Namespace, wanted: list[str])
         generate_treasury(project, uid, gid)
     if "onramp" in wanted:
         onramp_env = project.env_file("SPONSORD_ONRAMP_ENV_FILE")
-        if install_template("sponsord-onramp.env.example", onramp_env, 0o644) and "caddy" in wanted:
-            # Caddy replaces any client-sent X-Forwarded-For (compose/Caddyfile).
-            set_env(onramp_env, {"ONRAMP_CLIENT_IP_HEADER": "X-Forwarded-For"})
-            say(f"set ONRAMP_CLIENT_IP_HEADER=X-Forwarded-For in {onramp_env} (behind Caddy)")
+        # ONRAMP_CLIENT_IP_HEADER stays unset: only the operator knows whether their
+        # proxy is the only way in and sets the header to the client's address. Set
+        # here for a proxy that does not, every client would pick its own address past
+        # the rate limits; unset, they share the proxy's (README.md, "sponsord and its
+        # onramp").
+        install_template("sponsord-onramp.env.example", onramp_env, 0o644)
         fill_from_mirror(
             onramp_env,
             "sponsord_onramp",
@@ -1214,8 +1215,12 @@ def next_steps(wanted: list[str], project: Project) -> str:
     steps = ["", "Then:"]
     if {"node", "origin"} & set(wanted):
         steps.append("  - open udp/4433 in the host firewall and your provider's security group")
-    if "caddy" in wanted:
-        steps.append("  - point the onramp domain at this host; open tcp/80 and tcp/443")
+    if "onramp" in wanted:
+        steps.append(
+            "  - point the onramp domain at your own TLS proxy, forwarding to 127.0.0.1:8080 (README.md); if it "
+            "is the only way in and sets X-Forwarded-For to the client's address, set "
+            f"ONRAMP_CLIENT_IP_HEADER=X-Forwarded-For in {project.env_file('SPONSORD_ONRAMP_ENV_FILE')}"
+        )
     if "relay" in wanted:
         steps.append("  - point the relay's hostname (A/AAAA) at this host; open tcp/80, tcp/443 and udp/7842")
     if "dns" in wanted:
@@ -1282,7 +1287,8 @@ def env_problems(path: Path, values: Mapping[str, str], required: list[str], wha
 def problems(project: Project, files_only: bool = False) -> list[str]:
     out: list[str] = []
     env = project.env
-    unknown = [p for p in project.profiles if p not in PROFILES]
+    out += [REMOVED_PROFILES[p] for p in project.profiles if p in REMOVED_PROFILES]
+    unknown = [p for p in project.profiles if p not in PROFILES and p not in REMOVED_PROFILES]
     if unknown:
         out.append(f"COMPOSE_PROFILES names unknown profiles: {', '.join(unknown)}")
     if not project.profiles:
@@ -1378,16 +1384,10 @@ def problems(project: Project, files_only: bool = False) -> list[str]:
                 f"{on_env}: ONRAMP_RPC_URL must be an http(s) URL with no userinfo, query or "
                 "fragment: every user is served it"
             )
-    if svcs & {"sponsord-onramp", "caddy"}:
+    if "sponsord-onramp" in svcs:
         dom = env.get("SPONSORD_ONRAMP_DOMAIN", "")
         if not dom or dom == "onramp.example.org":
             out.append(".env: set SPONSORD_ONRAMP_DOMAIN, the onramp's public host name")
-    if "caddy" in svcs:
-        uid = uid_of("CADDY", "caddy")
-        if not VAR_CADDY.is_dir():
-            out.append(f"{VAR_CADDY} is missing (`init caddy`)")
-        elif uid is not None and VAR_CADDY.stat().st_uid != uid:
-            out.append(f"{VAR_CADDY} is not owned by the caddy account")
     if "decdn-gateway" in svcs:
         uid = uid_of("DECDN_GATEWAY", "decdn-gateway")
         out += filter(None, [file_problem(GATEWAY_PASSWORD, uid, what="`init gateway`")])
@@ -2308,8 +2308,8 @@ def with_env_rpc_url(text: str) -> str:
 
 
 def tls_healthz(domain: str, addr: str = "127.0.0.1") -> str:
-    """GET https://<domain>/healthz from the listener on <addr>:443 (Caddy, the
-    relay), against the host's trust store: proves the certificate, not just the
+    """GET https://<domain>/healthz from the listener on <addr>:443 (the relay, the
+    DNS server), against the host's trust store: proves the certificate, not just the
     listener."""
     ctx = ssl.create_default_context()
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -2366,10 +2366,6 @@ def cmd_health(args: argparse.Namespace) -> None:
         report("decdn-gateway", status == 200, f"{GATEWAY_LISTEN} status {status}")
         status, _ = fetch(GATEWAY_METRICS)
         report("decdn-gateway metrics", status == 200, f"{GATEWAY_METRICS} status {status}")
-    if "caddy" in svcs:
-        dom = project.env.get("SPONSORD_ONRAMP_DOMAIN", "")
-        res = tls_healthz(dom)
-        report("caddy", res == "ok", f"https://{dom}/healthz: {res}")
     if "iroh-relay" in svcs:
         for name, ok, detail, warn_only in relay_health(RELAY_TOML):
             report(name, ok, detail, warn_only)
@@ -2634,7 +2630,7 @@ def parser() -> argparse.ArgumentParser:
         help="the chain: `decdn config init --chain`, and the sponsor's and the gateway's contract addresses",
     )
     p.add_argument("--origin", help="origin: the backend, https://…, s3://bucket or file:///host/path")
-    p.add_argument("--domain", help="onramp/caddy: the onramp's public host name")
+    p.add_argument("--domain", help="onramp: the onramp's public host name")
     p.add_argument("--gateway-domain", help="gateway: the domain the public gateway serves")
     p.add_argument(
         "--generate-treasury", action="store_true", help="sponsord/onramp: generate the treasury wallet on this host"

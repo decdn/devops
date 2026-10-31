@@ -424,7 +424,7 @@ loki.relabel "journal_rules" {
 
   rule {
     source_labels = ["__journal_container_name"]
-    regex         = "decdn-(decdn-node|sponsord|sponsord-onramp|caddy|iroh-relay|iroh-dns-server|decdn-gateway|alloy)-[0-9]+"
+    regex         = "decdn-(decdn-node|sponsord|sponsord-onramp|iroh-relay|iroh-dns-server|decdn-gateway|alloy)-[0-9]+"
     target_label  = "unit"
     replacement   = "${1}.service"
   }

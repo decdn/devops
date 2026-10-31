@@ -13,7 +13,7 @@ them and `decdn.node`'s (see [Usage](#usage)):
 | Role | Purpose |
 |------|---------|
 | `decdn.publisher.sponsord` | The `sponsord` onboarding sponsor (treasury signer + PaymentPool keeper), standalone or beside a node — local binary, a host-side source build or a GPG-verified decdn/decdn `v*` release (pinned by `sponsord_version`, the same line as the node's), `DynamicUser` unit with the API token and treasury wallet as systemd credentials, loopback-only API, `/healthz` deploy gate. `sponsord_network` sets the chain and PaymentPool from upstream's manifest. Restarts refuse while a pool top-up is held; `tasks_from: backup` / `decommission` for day 2. |
-| `decdn.publisher.sponsord_onramp` | `sponsord-onramp`, sponsord's public side (Turnstile gate, installers, capability API), on the daemon's host — local binary, a host-side source build or a GPG-verified decdn/decdn `v*` release (pinned by `sponsord_onramp_version`, kept equal to `sponsord_version`), `DynamicUser` unit with the daemon token and Turnstile secret as systemd credentials, loopback listener behind Caddy (distro package, ACME TLS, admin API off; or your own proxy), `/healthz` deploy gate; `tasks_from: decommission`. |
+| `decdn.publisher.sponsord_onramp` | `sponsord-onramp`, sponsord's public side (Turnstile gate, installers, capability API), on the daemon's host — local binary, a host-side source build or a GPG-verified decdn/decdn `v*` release (pinned by `sponsord_onramp_version`, kept equal to `sponsord_version`), `DynamicUser` unit with the daemon token and Turnstile secret as systemd credentials, loopback listener behind nginx (distro package, a lego certificate over ACME HTTP-01; or your own proxy; a Caddy the role ran before is retired), `/healthz` deploy gate; `tasks_from: decommission`. |
 | `decdn.publisher.iroh_relay` | A self-hosted [iroh relay](https://github.com/n0-computer/iroh) (`iroh-relay`) for deCDN peers that cannot hole-punch — sha256-pinned upstream release (or a local binary), its own Let's Encrypt TLS, QUIC address discovery, `DynamicUser` unit holding only `CAP_NET_BIND_SERVICE`, loopback metrics, a deploy gate on every listener, a refusal of ports another process holds; access limited to an allowlist of endpoint IDs by default (`iroh_relay_access`; `tasks_from: node-ids` reads nodes' IDs); `tasks_from: decommission`. Point nodes at it with `decdn_relay_urls`. |
 | `decdn.publisher.iroh_dns_server` | A self-hosted [iroh DNS server](https://github.com/n0-computer/iroh) (`iroh-dns-server`): the pkarr relay deCDN nodes publish their address records to and the DNS server peers resolve them through, in place of n0's `dns.iroh.link` — sha256-pinned upstream release (or a local binary), its own Let's Encrypt TLS, DNS on one bind address (clear of systemd-resolved's stub), `DynamicUser` unit holding only `CAP_NET_BIND_SERVICE`, loopback metrics, a deploy gate on every listener, `/healthz`'s version and an SOA answer over udp and tcp, a refusal of ports another process holds; `tasks_from: decommission`. Point nodes at it with `decdn_discovery_pkarr_url` and `decdn_discovery_dns_origin`. |
 | `decdn.publisher.decdn_gateway` | deCDN's public HTTP gateway (`decdn gateway --public-url`) on a domain of your own, paying for every request from its own wallet's pool within a daily allowance — a GPG-verified decdn/decdn `v*` release of the CLI (pinned by `decdn_gateway_version`, kept equal to `decdn_node_version`) or a local binary, at its own path beside a node's, hardened unit on loopback (SIGINT stop), behind the distro's nginx with a wildcard certificate for `<domain>` and `*.<domain>` from lego over ACME DNS-01 (any lego DNS provider) and a per-client limit on `PUT /_pointer`; a deploy gate on the loopback listener and the https chain; `tasks_from: backup` / `decommission`. |
@@ -80,7 +80,7 @@ inventory defines it, so `site` deploys whatever the inventory holds:
 | `decdn.publisher.iroh_dns_server` | `iroh_dns_server_hosts`, one at a time |
 | `decdn.publisher.decdn_gateway` | `decdn_gateway_hosts`; refuses one that is also an onramp, relay or DNS server host |
 | `decdn.publisher.backup` | encrypted backups of the nodes' identities (or full state), sponsord's credentials and the gateways' wallets and namespace pointers |
-| `decdn.publisher.decommission` | stops and removes every service on the run's hosts (the onramp's Caddy is stopped and disabled, not removed), then the Alloy agent, after one typed confirmation of the hosts; keeps the keys, never touches the chain |
+| `decdn.publisher.decommission` | stops and removes every service on the run's hosts (the onramp's or the gateway's nginx is stopped and disabled, not removed, once it serves nothing else), then the Alloy agent, after one typed confirmation of the hosts; keeps the keys, never touches the chain |
 
 ```bash
 ansible-galaxy collection install -r requirements.yml
@@ -96,8 +96,8 @@ and the `group_vars/` and `host_vars/` beside it, in
 a ready-made project for these collections. Beyond the roles, the playbooks
 bring:
 
-- **the firewall holes**, from the groups a host is in: the node's udp/4433, Caddy's
-  tcp/80 + tcp/443 on an onramp host, the relay's tcp/80 + tcp/443 + udp/7842, the
+- **the firewall holes**, from the groups a host is in: the node's udp/4433, the onramp's
+  nginx on tcp/80 + tcp/443, the relay's tcp/80 + tcp/443 + udp/7842, the
   DNS server's tcp/443 + udp/53 + tcp/53 and the gateway's nginx on tcp/80 + tcp/443,
   one list per host whatever the play, so a
   co-located host renders one firewall. They and the Grafana Alloy per-daemon toggles
@@ -142,7 +142,7 @@ onramp:
           - name: deploy
             keys: ["ssh-ed25519 AAAA... you@host"]
         baseline_sudo_autodetect_runner: false             # provision only the explicit admin above
-        baseline_extra_inbound:                            # the onramp's Caddy
+        baseline_extra_inbound:                            # the onramp's nginx
           - { proto: tcp, port: 80, comment: "ACME + redirect" }
           - { proto: tcp, port: 443, comment: "sponsord-onramp" }
     - role: decdn.publisher.sponsord
@@ -154,7 +154,8 @@ onramp:
       # git-ignored secret.yml).
     - role: decdn.publisher.sponsord_onramp
       vars:
-        sponsord_onramp_domain: downloads.example.org      # Caddy's ACME name
+        sponsord_onramp_domain: downloads.example.org      # the certificate's name
+        sponsord_onramp_acme_email: ops@example.org        # REQUIRED with acme: the ACME contact
       # Also REQUIRED: sponsord_onramp_rpc_url (public, served to every user), the
       # Turnstile sitekey, and the Turnstile secret (host-provisioned
       # /etc/sponsord/turnstile-secret, or sponsord_onramp_turnstile_secret in a
@@ -167,7 +168,8 @@ which do not check them, so a playbook of your own must keep them: `sponsord_onr
 relay does not share a host with the onramp (both want tcp/80 and tcp/443); an iroh
 DNS server shares a host with neither (all want tcp/443); a gateway shares a host with
 none of the three (its nginx wants tcp/80 and tcp/443). The relay and DNS server
-roles also refuse ports another process holds; the onramp's Caddy does not check. See each role's README for the full variable list and
+roles also refuse ports another process holds; the onramp and the gateway each refuse
+nginx sites they did not enable. See each role's README for the full variable list and
 day-2 ops:
 
 - [`roles/sponsord`](https://github.com/decdn/devops/tree/main/ansible/roles/sponsord)
@@ -179,8 +181,8 @@ day-2 ops:
 ## Security model
 
 Backends bind `127.0.0.1`. `sponsord` has no public listener. `sponsord_onramp`
-listens on loopback too: Caddy is its public side, so a host that runs it opens
-tcp/80 and tcp/443 for Caddy in `baseline_extra_inbound` (the shipped playbooks
+listens on loopback too: nginx is its public side, so a host that runs it opens
+tcp/80 and tcp/443 for nginx in `baseline_extra_inbound` (the shipped playbooks
 derive that from `sponsord_onramp_hosts`; from your own playbook, add them yourself).
 `iroh_relay` is public by design and terminates its own TLS: it binds tcp/80, tcp/443
 and udp/7842 on every address (its metrics stay on loopback), so a relay host opens

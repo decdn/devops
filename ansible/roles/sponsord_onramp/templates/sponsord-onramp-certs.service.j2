@@ -1,0 +1,63 @@
+# MANAGED BY the sponsord_onramp role — do not edit by hand.
+#
+# Obtain or renew the certificate nginx serves for {{ sponsord_onramp_domain }}, over ACME
+# HTTP-01: lego writes the challenge into {{ sponsord_onramp_acme_webroot }}, which nginx serves
+# on tcp/80. `lego run` issues when there is no certificate and otherwise renews only
+# when one is due; its deploy hook, which runs only after an issuance, records it and
+# reloads nginx. Started by sponsord-onramp-certs.timer, and by the role on the first
+# deploy and while a reissue is pending. No random sleep of lego's own: the timer
+# already randomizes when it runs, and the role waits for a run in flight.
+[Unit]
+Description=Obtain or renew the sponsord-onramp certificate ({{ sponsord_onramp_domain }})
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# LEGO_RENEW_FORCE=true and LEGO_ARI_DISABLE=true while the certificate is not the
+# one the role wants (a new domain or ACME server): lego otherwise keeps a
+# certificate that is not due, and its renewal order would name the old
+# certificate (ARI's `replaces`), which another CA refuses. The role writes it;
+# the deploy hook removes it once the wanted certificate is issued.
+EnvironmentFile=-{{ _sponsord_onramp_force_env }}
+Environment=LEGO_LOG_FORMAT=text
+ExecStart={{ sponsord_onramp_lego_bin }} run \
+    --accept-tos \
+    --email {{ sponsord_onramp_acme_email | replace('%', '%%') }} \
+    --server {{ sponsord_onramp_acme_server | replace('%', '%%') }} \
+    --http \
+    --http.webroot {{ sponsord_onramp_acme_webroot }} \
+    --domains {{ sponsord_onramp_domain }} \
+    --force-cert-domains \
+    --no-random-sleep \
+    --cert.name {{ _sponsord_onramp_lego_cert_name }} \
+    --path {{ sponsord_onramp_acme_dir }} \
+    --deploy-hook "{{ _sponsord_onramp_certs_deployed }} {{ sponsord_onramp_acme_server | replace('%', '%%') }} {{ sponsord_onramp_domain }} {{ _sponsord_onramp_issued_for }} {{ _sponsord_onramp_force_env }}"
+
+# --- Hardening -------------------------------------------------------------
+# Root, for the root-only key nginx reads and the nginx reload; nothing else on disk
+# is writable but lego's state and the challenge webroot.
+ReadWritePaths={{ sponsord_onramp_acme_dir }} {{ sponsord_onramp_acme_webroot }}
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# Not 0077: nginx's unprivileged workers must read the challenge files lego writes
+# into the webroot. lego's state directory is root 0700 (the role keeps it so), and
+# lego writes its keys 0600 itself.
+UMask=0022

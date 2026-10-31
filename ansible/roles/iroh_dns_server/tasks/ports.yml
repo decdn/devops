@@ -1,6 +1,6 @@
 ---
 # The server must own its ports. Anything else on them (a web server, the
-# onramp's Caddy, an iroh relay, another DNS server) would make it crash-loop
+# onramp's nginx, an iroh relay, another DNS server) would make it crash-loop
 # after the install, so look before touching the host. Its own listeners (an
 # earlier converge) are fine.
 #
@@ -114,7 +114,7 @@
       {{ iroh_dns_server_metrics_port }} or the health port {{ iroh_dns_server_health_port }}):
         {{ _foreign | join('\n  ') }}
       The server terminates its own TLS on 443 and cannot share it with a web server,
-      an iroh relay or the sponsord-onramp's Caddy: give it a host of its own (or move
+      an iroh relay or the sponsord-onramp's nginx: give it a host of its own (or move
       the loopback ports with iroh_dns_server_metrics_port / _health_port). Another DNS
       server on port 53 at the bind address (or on a wildcard): stop it, or bind
       another of the host's addresses (iroh_dns_server_dns_bind_address).

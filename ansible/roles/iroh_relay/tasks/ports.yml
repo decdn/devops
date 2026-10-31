@@ -1,6 +1,6 @@
 ---
 # The relay must own its ports. Anything else on them (a web server, the onramp's
-# Caddy, another relay) would make it crash-loop after the install, so look before
+# nginx, another relay) would make it crash-loop after the install, so look before
 # touching the host. Its own listeners (an earlier converge) are fine. Separate so
 # molecule/iroh-relay-gate can run it on a unit it holds still.
 #
@@ -91,7 +91,7 @@
       (', or udp/' ~ _iroh_relay_ports.quic) if iroh_relay_enable_quic_addr_discovery else '' }}):
         {{ _foreign | join('\n  ') }}
       The relay terminates its own TLS on 80/443 and cannot share them with a web
-      server or the sponsord-onramp's Caddy: give it a host of its own (or move the
+      server or the sponsord-onramp's nginx: give it a host of its own (or move the
       metrics port with iroh_relay_metrics_port). A line naming no process is one ss
       could not attribute: run the play as root.
   vars:

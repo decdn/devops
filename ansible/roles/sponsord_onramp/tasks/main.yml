@@ -1,6 +1,6 @@
 ---
 # Provision sponsord-onramp: validate, gate on the host's secrets, install,
-# configure, start, gate on /healthz, then put Caddy in front. Every pure-input
+# configure, start, gate on /healthz, then put nginx in front. Every pure-input
 # assert runs before the first host mutation, and every gate (host files included)
 # before the binary is installed. The Turnstile widget and the release pins are
 # operator inputs — see roles/sponsord_onramp/README.md.
@@ -275,7 +275,7 @@
 
 # --- Listener -----------------------------------------------------------------------
 # AGENTS.md hard rule 2: the onramp's own listener stays on loopback; the public
-# side is Caddy (or your proxy) terminating TLS in front of it.
+# side is nginx (or your proxy) terminating TLS in front of it.
 - name: Require the listener to stay on loopback
   ansible.builtin.assert:
     that:
@@ -293,29 +293,64 @@
       itself.
 
 # --- Public address + TLS front ----------------------------------------------------
+# Inventory written for the Caddy front this role ran before nginx would otherwise
+# be ignored, or worse: an "internal" test certificate silently becoming ACME.
+- name: Refuse the retired Caddy settings
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_proxy != 'caddy'
+      - sponsord_onramp_caddy_tls is not defined
+      - sponsord_onramp_caddy_overwrite_config is not defined
+    fail_msg: >-
+      The role no longer runs Caddy: nginx is its TLS front (a converge retires the
+      role's Caddy). Set sponsord_onramp_proxy "nginx" (or "none"), replace
+      sponsord_onramp_caddy_tls with sponsord_onramp_tls ("acme", or "self-signed" in
+      place of "internal"), and delete sponsord_onramp_caddy_overwrite_config; the
+      role refuses nginx sites it did not enable instead.
+
 - name: Validate the proxy settings
   ansible.builtin.assert:
     that:
-      - sponsord_onramp_proxy in ['caddy', 'none']
-      - sponsord_onramp_caddy_tls in ['acme', 'internal']
-      - sponsord_onramp_caddy_overwrite_config is boolean
+      - sponsord_onramp_proxy in ['nginx', 'none']
+      - sponsord_onramp_tls in ['acme', 'self-signed']
     fail_msg: >-
-      sponsord_onramp_proxy must be "caddy" or "none", sponsord_onramp_caddy_tls "acme"
-      or "internal", and sponsord_onramp_caddy_overwrite_config a boolean.
+      sponsord_onramp_proxy must be "nginx" or "none", and sponsord_onramp_tls "acme"
+      or "self-signed".
 
-- name: Require a domain for Caddy
+- name: Require a domain for nginx
   ansible.builtin.assert:
     that:
       # A DNS name: labels of letters, digits and inner hyphens, at least one dot.
       - sponsord_onramp_domain is match('^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$')
-      - >-
-        sponsord_onramp_acme_email == ''
-        or sponsord_onramp_acme_email is match('^[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,63}$')
     fail_msg: >-
-      sponsord_onramp_proxy "caddy" needs sponsord_onramp_domain, the DNS name users
-      reach (got "{{ sponsord_onramp_domain }}"), and sponsord_onramp_acme_email must be
-      "" or an email address. For acme its A/AAAA records must point at this host.
-  when: sponsord_onramp_proxy == 'caddy'
+      sponsord_onramp_proxy "nginx" needs sponsord_onramp_domain, the DNS name users
+      reach (got "{{ sponsord_onramp_domain }}"). For acme its A/AAAA records must point
+      at this host.
+  when: sponsord_onramp_proxy == 'nginx'
+
+# As roles/decdn_gateway: the account contact lego registers with, a server it can
+# be handed on the unit's command line, and a pinned digest for this architecture.
+- name: Require the ACME settings
+  ansible.builtin.assert:
+    that:
+      - sponsord_onramp_acme_email is match('^[A-Za-z0-9._+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,63}$')
+      - >-
+        sponsord_onramp_acme_server is match('^[a-z0-9-]+$')
+        or sponsord_onramp_acme_server is match('^https://[^/?#@\s"]+(/[^?#\s"]*)?$')
+      - sponsord_onramp_lego_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+      - _lego_arch in sponsord_onramp_lego_sha256
+      - sponsord_onramp_lego_sha256.get(_lego_arch, '') is match('^[0-9a-f]{64}$')
+    fail_msg: >-
+      sponsord_onramp_tls "acme" needs sponsord_onramp_acme_email (the ACME account
+      contact; got "{{ sponsord_onramp_acme_email }}") and sponsord_onramp_acme_server
+      (a lego shortcode or an https directory URL), and a sha256 in
+      sponsord_onramp_lego_sha256 for this host's architecture.
+  vars:
+    # A manual install leaves sponsord_onramp_target unvalidated: look it up softly.
+    _lego_arch: "{{ _sponsord_onramp_lego_arches.get(sponsord_onramp_target, '') }}"
+  when:
+    - sponsord_onramp_proxy == 'nginx'
+    - sponsord_onramp_tls == 'acme'
 
 # Mirrors upstream's base_url + script_safe_url: the value is baked into the POSIX
 # and PowerShell installers inside quoted strings. In the character class below,
@@ -667,88 +702,79 @@
       {{ sponsord_onramp_turnstile_secret_file }} >/dev/null
   when: sponsord_onramp_turnstile_grep.rc | default(0) == 1
 
-# Before any mutation: a Caddyfile someone else wrote is never replaced silently.
-# It is judged by the file, not by whether the package is installed: a Caddy run
-# from a static binary leaves no dpkg trace, and apt keeps an existing conffile.
-- name: Check the Caddyfile
+# Before any mutation: nginx sites someone else enabled are never disabled silently.
+# The role's site is a default_server on 80 and 443, which nginx refuses beside
+# another default_server; the package's own default site is replaced. As
+# roles/decdn_gateway, which refuses this role's site the same way: the two do not
+# share a host.
+- name: List the enabled nginx sites and conf.d snippets
+  ansible.builtin.find:
+    paths: [/etc/nginx/sites-enabled, /etc/nginx/conf.d]
+    file_type: any
+    hidden: true
+  register: sponsord_onramp_nginx_enabled
+  when: sponsord_onramp_proxy == 'nginx'
+
+- name: Read where each enabled site points
   ansible.builtin.stat:
-    path: "{{ _sponsord_onramp_caddyfile }}"
+    path: "{{ item }}"
     follow: false
-    get_checksum: true
-    checksum_algorithm: md5
-  register: sponsord_onramp_caddyfile_stat
-  when: sponsord_onramp_proxy == 'caddy'
+  register: sponsord_onramp_nginx_enabled_stat
+  loop: "{{ sponsord_onramp_nginx_enabled.files | map(attribute='path') | list }}"
+  when: sponsord_onramp_proxy == 'nginx'
 
-- name: Check the Caddyfile for this role's marker
-  ansible.builtin.command:
-    argv: [grep, -qF, "MANAGED BY the sponsord_onramp role", "{{ _sponsord_onramp_caddyfile }}"]
-  register: sponsord_onramp_caddyfile_marker
-  changed_when: false
-  check_mode: false
-  # 1 = no marker; 2 = unreadable, which must not pass for "no marker".
-  failed_when: sponsord_onramp_caddyfile_marker.rc not in [0, 1]
-  when:
-    - sponsord_onramp_proxy == 'caddy'
-    - sponsord_onramp_caddyfile_stat.stat.isreg | default(false)
-
-# The package's own default Caddyfile (a first run that installed Caddy and then
-# stopped before templating leaves exactly that) is safe to replace. dpkg records
-# its md5 among the package's conffiles; empty when the package is not installed.
-- name: Read the packaged Caddyfile's checksum
-  ansible.builtin.shell:
-    executable: /bin/bash
-    cmd: |
-      set -o pipefail
-      { dpkg-query -W -f='${Conffiles}\n' caddy 2>/dev/null || true; } \
-        | awk -v f={{ _sponsord_onramp_caddyfile | quote }} '$1 == f { print $2 }'
-  register: sponsord_onramp_caddyfile_pristine
-  changed_when: false
-  check_mode: false
-  when:
-    - sponsord_onramp_proxy == 'caddy'
-    - sponsord_onramp_caddyfile_marker.rc | default(0) == 1
-
-- name: Refuse to replace a Caddyfile this role did not write
+- name: Refuse nginx sites this role did not enable
+  vars:
+    # The role's own link, and the package's default site while it still is that.
+    _ours:
+      - "{{ _sponsord_onramp_nginx_site_link }}"
+    _foreign: >-
+      {{ sponsord_onramp_nginx_enabled_stat.results
+         | rejectattr('item', 'in', _ours)
+         | rejectattr('item', 'equalto', '/etc/nginx/sites-enabled/default')
+         | map(attribute='item') | list
+         + (sponsord_onramp_nginx_enabled_stat.results
+            | selectattr('item', 'equalto', '/etc/nginx/sites-enabled/default')
+            | rejectattr('stat.lnk_source', 'defined')
+            | map(attribute='item') | list)
+         + (sponsord_onramp_nginx_enabled_stat.results
+            | selectattr('item', 'equalto', '/etc/nginx/sites-enabled/default')
+            | selectattr('stat.lnk_source', 'defined')
+            | rejectattr('stat.lnk_source', 'equalto', '/etc/nginx/sites-available/default')
+            | map(attribute='item') | list) }}
   ansible.builtin.assert:
     that:
-      - sponsord_onramp_caddyfile_stat.stat.isreg
-      - >-
-        sponsord_onramp_caddy_overwrite_config
-        or sponsord_onramp_caddyfile_marker.rc | default(0) == 0
-        or (sponsord_onramp_caddyfile_pristine.stdout | default('') | trim | length > 0
-            and sponsord_onramp_caddyfile_pristine.stdout | trim == sponsord_onramp_caddyfile_stat.stat.checksum)
+      - _foreign | length == 0
     fail_msg: >-
-      {{ _sponsord_onramp_caddyfile }} exists and is not the role's (no "MANAGED BY the
-      sponsord_onramp role" line, and not the caddy package's untouched default), or
-      is not a regular file. The role owns that whole file, so it would discard
-      whatever else this Caddy serves. Move the other sites elsewhere (or onto your
-      own proxy, with sponsord_onramp_proxy "none"), or set
-      sponsord_onramp_caddy_overwrite_config: true to let the role replace it.
-  when:
-    - sponsord_onramp_proxy == 'caddy'
-    - sponsord_onramp_caddyfile_stat.stat.exists
+      nginx on this host already serves other configuration: {{ _foreign | join(', ') }}.
+      The role's site takes tcp/80 and tcp/443 as the default server, so it would
+      conflict with them. Move those sites to another host, or remove them (or put
+      the onramp behind that nginx yourself, with sponsord_onramp_proxy "none"),
+      before deploying the onramp's nginx here.
+  when: sponsord_onramp_proxy == 'nginx'
 
-# Switching to "none" closes the firewall holes but leaves the role's Caddy running
-# on 80/443 (your own proxy could not bind them). The role removes nothing.
-- name: Check for a Caddyfile this role wrote while proxy was "caddy"
+# Switching to "none" closes the firewall holes but leaves the role's nginx site
+# enabled on 80/443 (your own proxy could not bind them). The role removes nothing.
+- name: Check for this role's nginx site while proxy is "none"
   ansible.builtin.command:
-    argv: [grep, -qF, "MANAGED BY the sponsord_onramp role", "{{ _sponsord_onramp_caddyfile }}"]
-  register: sponsord_onramp_stale_caddy
+    argv: [grep, -qF, "{{ _sponsord_onramp_nginx_marker }}", "{{ _sponsord_onramp_nginx_site_link }}"]
+  register: sponsord_onramp_stale_site
   changed_when: false
   check_mode: false
   failed_when: false
   when: sponsord_onramp_proxy == 'none'
 
-- name: Warn that the role's Caddy is still installed
+- name: Warn that the role's nginx site is still enabled
   ansible.builtin.debug:
     msg: >-
-      WARNING: sponsord_onramp_proxy is "none", but {{ _sponsord_onramp_caddyfile }} is
-      this role's, so its Caddy may still be running and holding tcp/80 and tcp/443
-      (the firewall no longer opens them). Remove it: sudo systemctl disable --now
-      caddy && sudo apt-get remove caddy.
+      WARNING: sponsord_onramp_proxy is "none", but {{ _sponsord_onramp_nginx_site_link }}
+      is still this role's site, so nginx may still be holding tcp/80 and tcp/443 (the
+      firewall no longer opens them). Remove it: sudo rm {{ _sponsord_onramp_nginx_site_link }}
+      && sudo systemctl disable --now sponsord-onramp-certs.timer && sudo systemctl
+      reload nginx (or disable nginx if it serves nothing else).
   when:
     - sponsord_onramp_proxy == 'none'
-    - sponsord_onramp_stale_caddy.rc | default(1) == 0
+    - sponsord_onramp_stale_site.rc | default(1) == 0
 
 # --- Install, configure, start ------------------------------------------------------
 - name: Install the sponsord-onramp binary
@@ -934,6 +960,11 @@
   when: not ansible_check_mode
 
 # --- TLS front ----------------------------------------------------------------------
-- name: Put Caddy in front of the onramp
-  ansible.builtin.import_tasks: caddy.yml
-  when: sponsord_onramp_proxy == 'caddy'
+# Whatever the proxy: the role's Caddy is retired, and with "nginx" before nginx
+# needs tcp/80.
+- name: Retire the role's earlier Caddy
+  ansible.builtin.import_tasks: caddy-remove.yml
+
+- name: Put nginx in front of the onramp
+  ansible.builtin.import_tasks: front.yml
+  when: sponsord_onramp_proxy == 'nginx'

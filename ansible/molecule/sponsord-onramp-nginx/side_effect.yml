@@ -1,0 +1,502 @@
+---
+# Split from ../sponsord-onramp/side_effect.yml so the two run side by side; same
+# converged host (that scenario's prepare, converge and verify, by path). What a green
+# converge cannot prove about the role's proxy handling:
+#   1. proxy "none": no client-IP header, the public URL as given, and a warning
+#      that the role's nginx site is still enabled.
+#   2. A broken upstream behind nginx fails the run.
+#   3. The role never silently disables an nginx site it did not enable.
+#   4. The Caddy the role ran before nginx is retired (stopped, disabled, its
+#      Caddyfile and state gone); a Caddyfile someone else wrote is left alone.
+#   5. ACME against a server that does not answer: lego's issuance fails the run,
+#      while nginx keeps serving the HTTP-01 challenge and the https redirect.
+# And two that need no proxy change, here so both scenarios stay short:
+#   6. A custom gate page is installed, read by the onramp, and removed again.
+#   7. The Turnstile secret from inventory: it replaces a host-written file only when
+#      confirmed, lands verbatim at 0600 with an `inventory` record and restarts the
+#      onramp; an unchanged re-run is a no-op; an emptied value never adopts the
+#      role's own file; with the record discarded the host's file is accepted.
+# Order matters: 1 leaves the host in proxy "none" mode and 2's first converge puts
+# nginx back. Every later section converges back onto the self-signed certificate,
+# so the host is left healthy on the role's own site for verify. Plays after the
+# first reuse its facts (gather_facts: false).
+- name: Side effect — bring your own proxy
+  hosts: all
+  become: true
+  tasks:
+    - name: Converge with proxy "none"
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_proxy: none
+        sponsord_onramp_public_url: https://downloads.molecule.test
+
+    - name: Read the env file in proxy "none" mode
+      ansible.builtin.slurp:
+        src: /etc/sponsord/sponsord-onramp.env
+      register: _or_none_env
+
+    # With an arbitrary proxy in front, trusting X-Forwarded-For would let clients
+    # pick the address the rate limits key on.
+    - name: Require no client-IP header, the given public URL, and the stale-site warning
+      ansible.builtin.assert:
+        that:
+          - "'ONRAMP_CLIENT_IP_HEADER' not in _env"
+          - "'ONRAMP_PUBLIC_URL=https://downloads.molecule.test\n' in _env"
+          - sponsord_onramp_stale_site.rc == 0
+        fail_msg: "{{ _env }}"
+      vars:
+        _env: "{{ _or_none_env.content | b64decode }}"
+
+- name: Side effect — a broken upstream behind nginx
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Converge back onto nginx
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    # nginx pointed at a port nothing listens on: TLS works (self-signed), the
+    # upstream answers 502, and that must fail the run.
+    - name: Run the nginx tasks against a dead upstream
+      block:
+        - name: Point nginx at a port nothing listens on
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+            tasks_from: front
+          vars:
+            sponsord_onramp_port: 8099
+            sponsord_onramp_readiness_retries: 2
+
+        - name: Fail — the nginx probe let a dead upstream through
+          ansible.builtin.fail:
+            msg: The role finished although nginx could not reach the onramp.
+      rescue:
+        - name: Require the failure to come from the nginx probe report
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Report an onramp that is not reachable through nginx'
+            fail_msg: >-
+              Expected the nginx probe to fail the run, but it failed at
+              "{{ ansible_failed_task.name }}".
+
+    - name: Converge back onto the real upstream
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+- name: Side effect — an nginx site this role did not enable
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    _or_foreign: /etc/nginx/sites-enabled/other
+    _or_foreign_text: "server { listen 8081; server_name other.example; return 204; }\n"
+  tasks:
+    - name: Enable a site of someone else's
+      ansible.builtin.copy:
+        dest: "{{ _or_foreign }}"
+        content: "{{ _or_foreign_text }}"
+        mode: "0644"
+
+    - name: Converge against the foreign site
+      block:
+        - name: Run the role beside a foreign site
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+
+        - name: Fail — the role deployed beside a site it did not enable
+          ansible.builtin.fail:
+            msg: The role finished although nginx served {{ _or_foreign }}.
+      rescue:
+        - name: Require the failure to come from the foreign-site refusal
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Refuse nginx sites this role did not enable'
+            fail_msg: >-
+              Expected the role to refuse the foreign site, but it failed at
+              "{{ ansible_failed_task.name }}".
+
+    - name: Read the foreign site after the refusal
+      ansible.builtin.slurp:
+        src: "{{ _or_foreign }}"
+      register: _or_foreign_after
+
+    - name: Require the foreign site untouched
+      ansible.builtin.assert:
+        that:
+          - (_or_foreign_after.content | b64decode) == _or_foreign_text
+        fail_msg: The refused run still changed {{ _or_foreign }}.
+
+    - name: Remove the foreign site
+      ansible.builtin.file:
+        path: "{{ _or_foreign }}"
+        state: absent
+
+# No caddy package in the image: a stand-in unit plays the old Caddy, so the test
+# needs no network and binds no port. The purge of an absent package is a no-op.
+- name: Side effect — the role's earlier Caddy is retired
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    _or_caddyfile: /etc/caddy/Caddyfile
+  tasks:
+    - name: Stage the role's old Caddyfile, Caddy's state and a running caddy unit
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          mkdir -p /etc/caddy /var/lib/caddy/.local
+          printf '# MANAGED BY the sponsord_onramp role — do not edit by hand.\nonramp.molecule.test {\n}\n' \
+            > {{ _or_caddyfile }}
+          printf '[Service]\nExecStart=/bin/sleep infinity\n[Install]\nWantedBy=multi-user.target\n' \
+            > /etc/systemd/system/caddy.service
+          systemctl daemon-reload
+          systemctl enable --now caddy.service
+      changed_when: true
+
+    - name: Converge with the role's Caddy in place
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    - name: Read the caddy unit and the Caddy files after the converge
+      ansible.builtin.systemd_service:
+        name: caddy
+      register: _or_caddy_unit
+
+    - name: Stat the Caddy files after the converge
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: _or_caddy_files
+      loop: ["{{ _or_caddyfile }}", /var/lib/caddy]
+
+    - name: Require the role's Caddy stopped, disabled and its files gone
+      ansible.builtin.assert:
+        that:
+          - _or_caddy_unit.status.ActiveState == 'inactive'
+          - _or_caddy_unit.status.UnitFileState == 'disabled'
+          - _or_caddy_files.results | selectattr('stat.exists') | list | length == 0
+        fail_msg: >-
+          caddy is {{ _or_caddy_unit.status.ActiveState }}/{{ _or_caddy_unit.status.UnitFileState }};
+          still present: {{ _or_caddy_files.results | selectattr('stat.exists') | map(attribute='item') | list }}
+
+    - name: Stage a Caddyfile someone else wrote, with Caddy running
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          printf 'other.example {\n  respond "theirs"\n}\n' > {{ _or_caddyfile }}
+          systemctl enable --now caddy.service
+      changed_when: true
+
+    - name: Converge beside the foreign Caddy
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    - name: Read the caddy unit beside the foreign Caddyfile
+      ansible.builtin.systemd_service:
+        name: caddy
+      register: _or_caddy_foreign
+
+    - name: Read the foreign Caddyfile after the converge
+      ansible.builtin.slurp:
+        src: "{{ _or_caddyfile }}"
+      register: _or_caddyfile_foreign
+
+    - name: Require a Caddy the role did not run left alone
+      ansible.builtin.assert:
+        that:
+          - _or_caddy_foreign.status.ActiveState == 'active'
+          - "'respond \"theirs\"' in (_or_caddyfile_foreign.content | b64decode)"
+        fail_msg: The role touched a Caddy it did not run.
+
+    - name: Remove the stand-in Caddy
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          systemctl disable --now caddy.service
+          rm -rf /etc/systemd/system/caddy.service /etc/caddy
+          systemctl daemon-reload
+      changed_when: true
+
+# No ACME server answers in a container: lego is installed for real (the pinned
+# release, digest-verified), then its issuance against 127.0.0.1:14000 must fail
+# the run at the issuance check, with nginx still serving tcp/80.
+- name: Side effect — ACME against a server that does not answer
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Converge on acme
+      block:
+        - name: Run the role against the dead ACME server
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_tls: acme
+            sponsord_onramp_acme_server: https://127.0.0.1:14000/dir
+
+        - name: Fail — the role finished without a certificate
+          ansible.builtin.fail:
+            msg: The role finished although lego could not obtain a certificate.
+      rescue:
+        - name: Require the failure to come from the issuance check
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Report a certificate lego could not obtain'
+            fail_msg: >-
+              Expected the issuance check to fail the run, but it failed at
+              "{{ ansible_failed_task.name }}": {{ ansible_failed_result.msg | default('') }}
+
+    - name: Read the lego unit's command line and the renewal timer
+      ansible.builtin.command:
+        argv: [systemctl, cat, sponsord-onramp-certs.service]
+      register: _or_certs_unit
+      changed_when: false
+
+    - name: Require an HTTP-01 webroot issuance for the one name
+      ansible.builtin.assert:
+        that:
+          - "'--http.webroot /var/www/sponsord-onramp-acme' in _or_certs_unit.stdout"
+          - "'--domains onramp.molecule.test' in _or_certs_unit.stdout"
+          - "'--dns' not in _or_certs_unit.stdout"
+          - "'--email ops@molecule.test' in _or_certs_unit.stdout"
+        fail_msg: "{{ _or_certs_unit.stdout }}"
+
+    # What the ACME server would fetch: a token lego wrote, served on tcp/80 under
+    # the domain, readable by nginx's unprivileged workers.
+    - name: Write a challenge token the way lego would
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -euo pipefail
+          umask 022
+          printf 'molecule-key-auth' > /var/www/sponsord-onramp-acme/.well-known/acme-challenge/molecule-token
+      changed_when: true
+
+    - name: Fetch the challenge through nginx
+      ansible.builtin.uri:
+        url: http://127.0.0.1/.well-known/acme-challenge/molecule-token
+        headers:
+          Host: onramp.molecule.test
+        return_content: true
+      register: _or_challenge
+
+    - name: Probe the https redirect without a certificate
+      ansible.builtin.uri:
+        url: http://127.0.0.1/healthz
+        headers:
+          Host: onramp.molecule.test
+        follow_redirects: none
+        status_code: 301
+      register: _or_redirect
+
+    - name: Require the challenge served and the redirect intact
+      ansible.builtin.assert:
+        that:
+          - _or_challenge.content == 'molecule-key-auth'
+          - _or_redirect.location == 'https://onramp.molecule.test/healthz'
+        fail_msg: >-
+          challenge {{ _or_challenge.content | default('') }},
+          redirect {{ _or_redirect.location | default('') }}
+
+    - name: Remove the challenge token
+      ansible.builtin.file:
+        path: /var/www/sponsord-onramp-acme/.well-known/acme-challenge/molecule-token
+        state: absent
+
+    - name: Converge back onto the self-signed certificate
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    - name: Read the renewal timer after the switch back
+      ansible.builtin.systemd_service:
+        name: sponsord-onramp-certs.timer
+      register: _or_timer
+
+    - name: Require the renewal timer stopped and disabled under self-signed
+      ansible.builtin.assert:
+        that:
+          - _or_timer.status.ActiveState == 'inactive'
+          - _or_timer.status.UnitFileState == 'disabled'
+        fail_msg: "{{ _or_timer.status.ActiveState }}/{{ _or_timer.status.UnitFileState }}"
+
+- name: Side effect — a custom gate page
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    _or_page: >-
+      {{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/molecule/sponsord-onramp/files/gate.html
+  tasks:
+    - name: Converge with a custom gate page
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_gate_template_src: "{{ _or_page }}"
+
+    - name: Stat the installed page and read the env file
+      ansible.builtin.stat:
+        path: /etc/sponsord/onramp-gate.html
+      register: _or_page_stat
+
+    - name: Read the env file with the page set
+      ansible.builtin.slurp:
+        src: /etc/sponsord/sponsord-onramp.env
+      register: _or_page_env
+
+    # The stub reads the page at start, as the onramp's dynamic user: the role's
+    # /healthz gate passing already proves it was readable.
+    - name: Require the page installed root-owned, world-readable and configured
+      ansible.builtin.assert:
+        that:
+          - _or_page_stat.stat.isreg
+          - _or_page_stat.stat.mode == '0644'
+          - _or_page_stat.stat.pw_name == 'root'
+          - "'ONRAMP_GATE_TEMPLATE=/etc/sponsord/onramp-gate.html' in (_or_page_env.content | b64decode)"
+        fail_msg: The custom gate page is not installed, or not configured.
+
+    - name: Converge without the page again
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    - name: Stat the page after it was dropped
+      ansible.builtin.stat:
+        path: /etc/sponsord/onramp-gate.html
+      register: _or_page_gone
+
+    - name: Read the env file without the page
+      ansible.builtin.slurp:
+        src: /etc/sponsord/sponsord-onramp.env
+      register: _or_page_env_gone
+
+    - name: Require the page and its setting gone
+      ansible.builtin.assert:
+        that:
+          - not _or_page_gone.stat.exists
+          - "'ONRAMP_GATE_TEMPLATE' not in (_or_page_env_gone.content | b64decode)"
+        fail_msg: The dropped gate page is still installed or configured.
+
+- name: Side effect — the Turnstile secret from inventory
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    _or_ts: /etc/sponsord/turnstile-secret
+    _or_ts_record: /etc/sponsord/.turnstile-secret.sha256
+    _or_ts_value: 1x0000000000000000000000000000000DD
+  tasks:
+    - name: Converge with an inventory secret over the host's file, unconfirmed
+      block:
+        - name: Run the role with sponsord_onramp_turnstile_secret set
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_turnstile_secret: "{{ _or_ts_value }}"
+
+        - name: Fail — the role overwrote a host-provisioned Turnstile secret
+          ansible.builtin.fail:
+            msg: The role replaced a Turnstile secret it did not write, unconfirmed.
+      rescue:
+        - name: Require the failure to come from the overwrite guard
+          ansible.builtin.assert:
+            that:
+              - >-
+                ansible_failed_task.name
+                == 'Require confirmation to overwrite a Turnstile secret this role did not write'
+            fail_msg: "Expected the overwrite guard, got \"{{ ansible_failed_task.name }}\"."
+
+    - name: Read the onramp before the takeover
+      ansible.builtin.systemd_service:
+        name: sponsord-onramp
+      register: _or_ts_before
+
+    - name: Converge with the takeover confirmed
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_turnstile_secret: "{{ _or_ts_value }}"
+        sponsord_onramp_turnstile_secret_overwrite_host_file: true
+
+    - name: Read the secret, its record and the onramp after the takeover
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: _or_ts_files
+      loop: ["{{ _or_ts }}", "{{ _or_ts_record }}"]
+
+    - name: Stat the secret after the takeover
+      ansible.builtin.stat:
+        path: "{{ _or_ts }}"
+      register: _or_ts_stat
+
+    - name: Read the onramp after the takeover
+      ansible.builtin.systemd_service:
+        name: sponsord-onramp
+      register: _or_ts_after
+
+    - name: Require the inventory secret written, recorded and picked up
+      ansible.builtin.assert:
+        that:
+          - (_or_ts_files.results[0].content | b64decode) == _or_ts_value
+          - (_or_ts_files.results[1].content | b64decode) is match('^inventory [0-9a-f]{64}\s*$')
+          - _or_ts_stat.stat.mode == '0600'
+          - _or_ts_after.status.ActiveState == 'active'
+          - _or_ts_after.status.MainPID != _or_ts_before.status.MainPID
+        fail_msg: >-
+          The inventory secret was not written verbatim at 0600 with an `inventory`
+          record, or the onramp did not restart onto it.
+
+    - name: Re-run with the same inventory secret, unconfirmed
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+      vars:
+        sponsord_onramp_turnstile_secret: "{{ _or_ts_value }}"
+
+    - name: Read the onramp after the re-run
+      ansible.builtin.systemd_service:
+        name: sponsord-onramp
+      register: _or_ts_rerun
+
+    - name: Require the re-run to leave the role's own file and the onramp alone
+      ansible.builtin.assert:
+        that:
+          - _or_ts_rerun.status.MainPID == _or_ts_after.status.MainPID
+        fail_msg: Re-running with an unchanged inventory secret restarted the onramp.
+
+    - name: Converge with the inventory secret gone
+      block:
+        - name: Run the role with sponsord_onramp_turnstile_secret empty
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+
+        - name: Fail — the role adopted its own file as host-provisioned
+          ansible.builtin.fail:
+            msg: The role adopted a file it wrote from inventory as the host's.
+      rescue:
+        - name: Require the failure to come from the adoption guard
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Refuse to adopt a role-written Turnstile secret as host-provisioned'
+            fail_msg: "Expected the adoption guard, got \"{{ ansible_failed_task.name }}\"."
+
+    - name: Hand the secret to the host (discard the record)
+      ansible.builtin.file:
+        path: "{{ _or_ts_record }}"
+        state: absent
+
+    - name: Converge with the host-provisioned secret
+      ansible.builtin.include_role:
+        name: sponsord_onramp
+
+    - name: Read the record after the handover
+      ansible.builtin.slurp:
+        src: "{{ _or_ts_record }}"
+      register: _or_ts_handover
+
+    - name: Require a `host` record after the handover
+      ansible.builtin.assert:
+        that:
+          - (_or_ts_handover.content | b64decode) is match('^host [0-9a-f]{64}\s*$')
+        fail_msg: The handed-over secret was not recorded as the host's.

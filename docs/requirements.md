@@ -34,7 +34,7 @@ and they run the same roles.
 | OS | Debian 12 (bookworm), Debian 13 (trixie), Ubuntu 24.04 (noble), Ubuntu 26.04 (resolute) | molecule converges `decdn_node` on all four in systemd containers; `grafana_alloy`'s install path on Debian 12 only (its disabled path on all four); `sponsord` and `sponsord_onramp` on Debian 12 and Ubuntu 24.04; `baseline` on real hosts |
 | Architecture | x86_64, aarch64 | upstream builds both; the Ansible role derives the target from the host |
 | Ansible (control machine) | ansible-core ≥ 2.15 | CI runs the current release |
-| cloud-init | the provider image's own; the bootstrap installs its pinned ansible-core on the host | the node template is booted with the distro's cloud-init in Debian 12 and Ubuntu 26.04 containers, to a running node; the sponsor template in Ubuntu 26.04, to running `sponsord`, `sponsord-onramp` and Caddy |
+| cloud-init | the provider image's own; the bootstrap installs its pinned ansible-core on the host | the node template is booted with the distro's cloud-init in Debian 12 and Ubuntu 26.04 containers, to a running node; the sponsor template in Ubuntu 26.04, to running `sponsord`, `sponsord-onramp` and nginx |
 | Kubernetes | ≥ 1.25 | rendered and validated with kubeconform against 1.30 |
 | Docker Compose | v2 with `env_file.required` and `depends_on.restart` support (2.24+), with systemd-journald (or a `compose.override.yaml` setting another logging driver); Python ≥ 3.11 for the `decdn-compose` wrapper | rendered in CI with every profile on; the wrapper's decisions unit-tested |
 
@@ -46,14 +46,14 @@ On Ubuntu 25.10 and later, `sudo` is sudo-rs; see the `ansible_become_exe` note 
 - **Inbound: udp/4433 (QUIC)** from anywhere. This is the node's only public port. Open
   it in the host firewall (the Ansible `baseline` does this) **and** in your cloud
   provider's security group or firewall, which the host cannot see.
-- **A sponsord-onramp host also needs inbound tcp/80 and tcp/443** for Caddy, from
-  anywhere: 443 serves the onramp, 80 answers the ACME challenge and redirects to
-  https. On Ansible, `baseline` opens both for hosts in `sponsord_onramp_hosts` while
-  `sponsord_onramp_proxy` is `caddy` (the default; `none` opens neither), and Caddy
-  comes from the distribution: on Ubuntu, enable the **universe** component. On
-  Compose, the `caddy` profile runs the official image and you open both ports in the
-  host firewall. Either way, open them in the provider's firewall too, and point the
-  domain's A/AAAA records at the host.
+- **A sponsord-onramp host also needs inbound tcp/80 and tcp/443** for nginx, from
+  anywhere: 443 serves the onramp, 80 answers lego's ACME HTTP-01 challenge and
+  redirects to https. On Ansible, `baseline` opens both for hosts in
+  `sponsord_onramp_hosts` while `sponsord_onramp_proxy` is `nginx` (the default;
+  `none` opens neither), and nginx comes from the distribution. On Compose the onramp
+  stays on loopback behind your own TLS proxy, which opens its own ports. Either way,
+  open them in the provider's firewall too, and point the domain's A/AAAA records at
+  the host before the first deploy.
 - **An iroh relay host (Ansible, or Compose's `relay` profile) needs inbound tcp/80, tcp/443 and udp/7842**
   from anywhere: 443 carries the relay and Let's Encrypt's TLS-ALPN-01 challenge, 80
   iroh's captive-portal probe, and 7842 QUIC address discovery (unless

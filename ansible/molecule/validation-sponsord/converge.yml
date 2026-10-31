@@ -12,7 +12,7 @@
 #
 # Most cases abort at an assert before any host mutation. The rest stage files
 # under /etc/sponsord (treasury files, an API token, secret.env, the Turnstile
-# secret; one also a foreign /etc/caddy/Caddyfile) to reach a host-side gate, stop
+# secret; one also a foreign nginx site) to reach a host-side gate, stop
 # before the binary is installed, and remove what they staged in `always:`, so case
 # order does not matter and no service starts. The sponsord-dir-* cases stage on
 # the CONTROL machine, in a per-run tempdir. No prepare.yml: every fixture is
@@ -706,14 +706,15 @@
       }}/molecule/sponsord-onramp/files/sponsord-onramp-stub
     sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc
     sponsord_onramp_domain: onramp.validation.test
+    sponsord_onramp_acme_email: ops@validation.test
     sponsord_onramp_turnstile_sitekey: 1x00000000000000000000AA
     sponsord_onramp_decdn_release: v9.9.9
     sponsord_onramp_decdn_sums_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
   tasks:
     # --- sponsord_onramp: each case breaks ONE input over the valid baseline in play
     # vars. All abort at an assert before any host mutation except four
-    # (onramp-turnstile twice, onramp-turnstile-empty, onramp-caddyfile), which
-    # stage /etc/sponsord (and /etc/caddy) files and remove them again.
+    # (onramp-turnstile twice, onramp-turnstile-empty, onramp-nginx-site), which
+    # stage /etc/sponsord (and /etc/nginx) files and remove them again.
     - name: "Case onramp-release-version — release mode with no pinned version"
       block:
         - name: Run sponsord_onramp with release mode with no pinned version
@@ -828,16 +829,16 @@
           ansible.builtin.include_role:
             name: sponsord_onramp
           vars:
-            sponsord_onramp_proxy: nginx
+            sponsord_onramp_proxy: traefik
       rescue:
         - name: Record onramp-proxy rejection (only if its assert failed)
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['onramp-proxy'] }}"
           when: ansible_failed_task.name == "Validate the proxy settings"
 
-    - name: "Case onramp-domain — Caddy with no domain"
+    - name: "Case onramp-domain — nginx with no domain"
       block:
-        - name: Run sponsord_onramp with Caddy with no domain
+        - name: Run sponsord_onramp with nginx with no domain
           ansible.builtin.include_role:
             name: sponsord_onramp
           vars:
@@ -846,7 +847,7 @@
         - name: Record onramp-domain rejection (only if its assert failed)
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['onramp-domain'] }}"
-          when: ansible_failed_task.name == "Require a domain for Caddy"
+          when: ansible_failed_task.name == "Require a domain for nginx"
 
     - name: "Case onramp-public-url — an http public URL behind your own proxy"
       block:
@@ -1137,18 +1138,45 @@
             decdn_rejected: "{{ decdn_rejected + ['onramp-network-chain'] }}"
           when: ansible_failed_task.name == "Require the onramp's network to be the daemon's chain"
 
-    - name: "Case onramp-proxy — a quoted overwrite confirmation"
+    # Inventory from before nginx: each retired setting fails with what replaces it.
+    - name: "Case onramp-retired — the retired Caddy proxy"
       block:
-        - name: Run sponsord_onramp with a quoted overwrite confirmation
+        - name: Run sponsord_onramp with the retired Caddy proxy
           ansible.builtin.include_role:
             name: sponsord_onramp
           vars:
-            sponsord_onramp_caddy_overwrite_config: "false"
+            sponsord_onramp_proxy: caddy
       rescue:
-        - name: Record onramp-proxy rejection (only if its assert failed)
+        - name: Record onramp-retired rejection (only if its assert failed)
           ansible.builtin.set_fact:
-            decdn_rejected: "{{ decdn_rejected + ['onramp-proxy'] }}"
-          when: ansible_failed_task.name == "Validate the proxy settings"
+            decdn_rejected: "{{ decdn_rejected + ['onramp-retired'] }}"
+          when: ansible_failed_task.name == "Refuse the retired Caddy settings"
+
+    - name: "Case onramp-retired — the retired Caddy TLS mode"
+      block:
+        - name: Run sponsord_onramp with the retired Caddy TLS mode
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_caddy_tls: internal
+      rescue:
+        - name: Record onramp-retired rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-retired'] }}"
+          when: ansible_failed_task.name == "Refuse the retired Caddy settings"
+
+    - name: "Case onramp-retired — the retired overwrite confirmation"
+      block:
+        - name: Run sponsord_onramp with the retired overwrite confirmation
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_caddy_overwrite_config: true
+      rescue:
+        - name: Record onramp-retired rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-retired'] }}"
+          when: ansible_failed_task.name == "Refuse the retired Caddy settings"
 
     - name: "Case onramp-proxy — a misspelt TLS mode"
       block:
@@ -1156,25 +1184,38 @@
           ansible.builtin.include_role:
             name: sponsord_onramp
           vars:
-            sponsord_onramp_caddy_tls: interal
+            sponsord_onramp_tls: self-sign
       rescue:
         - name: Record onramp-proxy rejection (only if its assert failed)
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['onramp-proxy'] }}"
           when: ansible_failed_task.name == "Validate the proxy settings"
 
-    - name: "Case onramp-domain — an ACME email that would break the Caddyfile"
+    - name: "Case onramp-acme — an ACME email lego's unit could not hold"
       block:
-        - name: Run sponsord_onramp with an ACME email that would break the Caddyfile
+        - name: Run sponsord_onramp with an ACME email lego's unit could not hold
           ansible.builtin.include_role:
             name: sponsord_onramp
           vars:
             sponsord_onramp_acme_email: "ops}@example.org"
       rescue:
-        - name: Record onramp-domain rejection (only if its assert failed)
+        - name: Record onramp-acme rejection (only if its assert failed)
           ansible.builtin.set_fact:
-            decdn_rejected: "{{ decdn_rejected + ['onramp-domain'] }}"
-          when: ansible_failed_task.name == "Require a domain for Caddy"
+            decdn_rejected: "{{ decdn_rejected + ['onramp-acme'] }}"
+          when: ansible_failed_task.name == "Require the ACME settings"
+
+    - name: "Case onramp-acme — acme with no account contact"
+      block:
+        - name: Run sponsord_onramp with acme with no account contact
+          ansible.builtin.include_role:
+            name: sponsord_onramp
+          vars:
+            sponsord_onramp_acme_email: ""
+      rescue:
+        - name: Record onramp-acme rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['onramp-acme'] }}"
+          when: ansible_failed_task.name == "Require the ACME settings"
 
     - name: "Case onramp-rpc — a public RPC URL that injects a second variable"
       block:
@@ -1308,36 +1349,36 @@
             decdn_rejected: "{{ decdn_rejected + ['onramp-turnstile-inventory'] }}"
           when: ansible_failed_task.name == "Validate the Turnstile secret knobs"
 
-    # Caddy run from a static binary leaves no dpkg trace: the file alone decides.
-    - name: "Case onramp-caddyfile — a foreign Caddyfile with no caddy package"
+    # nginx need not be installed: the enabled site alone decides.
+    - name: "Case onramp-nginx-site — a foreign nginx site with no nginx package"
       block:
-        - name: Stage the API token, the Turnstile secret and a foreign Caddyfile
+        - name: Stage the API token, the Turnstile secret and a foreign nginx site
           ansible.builtin.shell:
             cmd: |
               set -eu
-              mkdir -p /etc/sponsord /etc/caddy
+              mkdir -p /etc/sponsord /etc/nginx/sites-enabled
               umask 077
               printf '%064d' 0 > /etc/sponsord/api-token
               echo 'not-empty' > /etc/sponsord/turnstile-secret
-              printf 'other.example {\n  respond "theirs"\n}\n' > /etc/caddy/Caddyfile
+              printf 'server { listen 80; server_name other.example; }\n' > /etc/nginx/sites-enabled/other
           changed_when: true
 
-        - name: Run sponsord_onramp against the foreign Caddyfile
+        - name: Run sponsord_onramp against the foreign nginx site
           ansible.builtin.include_role:
             name: sponsord_onramp
       rescue:
-        - name: Record onramp-caddyfile rejection (only if its assert failed)
+        - name: Record onramp-nginx-site rejection (only if its assert failed)
           ansible.builtin.set_fact:
-            decdn_rejected: "{{ decdn_rejected + ['onramp-caddyfile'] }}"
-          when: ansible_failed_task.name == "Refuse to replace a Caddyfile this role did not write"
+            decdn_rejected: "{{ decdn_rejected + ['onramp-nginx-site'] }}"
+          when: ansible_failed_task.name == "Refuse nginx sites this role did not enable"
       always:
-        - name: Remove the foreign-Caddyfile fixtures
+        - name: Remove the foreign-site fixtures
           ansible.builtin.file:
             path: "{{ item }}"
             state: absent
           loop:
             - /etc/sponsord
-            - /etc/caddy
+            - /etc/nginx/sites-enabled/other
 
     # --- Install method + build-from-source inputs, both roles -------------------
     # These asserts run before any other input is read, so the cases need no
@@ -1425,8 +1466,9 @@
            "onramp-limit", "onramp-ip-header", "onramp-token",
            "onramp-turnstile", "onramp-turnstile", "onramp-turnstile-empty",
            "onramp-turnstile-inventory",
-           "onramp-network-chain", "onramp-proxy", "onramp-proxy", "onramp-domain",
-           "onramp-rpc", "onramp-limit", "onramp-caddyfile",
+           "onramp-network-chain", "onramp-retired", "onramp-retired", "onramp-retired",
+           "onramp-proxy", "onramp-acme", "onramp-acme",
+           "onramp-rpc", "onramp-limit", "onramp-nginx-site",
            "sponsord-install-method", "sponsord-source-ref", "sponsord-source-repo",
            "sponsord-source-repo", "sponsord-source-jobs",
            "onramp-install-method", "onramp-source-ref", "onramp-source-repo",

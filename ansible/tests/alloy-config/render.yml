@@ -473,7 +473,7 @@
           iroh_dns_server: [dns]
           decdn_gateway: [gateway]
         _ga_compose_units:
-          [decdn-node, sponsord, sponsord-onramp, caddy, iroh-relay, iroh-dns-server, decdn-gateway, alloy]
+          [decdn-node, sponsord, sponsord-onramp, iroh-relay, iroh-dns-server, decdn-gateway, alloy]
         grafana_alloy_node_enabled: true
         grafana_alloy_sponsord_enabled: true
         grafana_alloy_sponsord_onramp_enabled: true

@@ -1,6 +1,6 @@
 ---
 # Boots the REAL cloud-init/user-data-publisher.yaml (a publisher host: an origin node,
-# sponsord, then sponsord-onramp behind Caddy) in a systemd container, following the
+# sponsord, then sponsord-onramp behind nginx) in a systemd container, following the
 # "Publisher host" walkthrough in cloud-init/README.md. Built from ../cloud-init/pack.yml
 # and ../cloud-init/includes/, so the boot plumbing is the node scenario's; this one
 # covers what differs:
@@ -10,8 +10,8 @@
 #               stubs, each under its own base (upstream ships all four binaries in one
 #               release; the stubs are separate fixtures, so the mirror keeps two).
 #   converge    seeds the template (placeholders filled, an http origin backend;
-#               release bases, keyrings and Caddy's `tls internal` pointed at local
-#               ones) and boots. Asserts the host stopped at the secret gate with the
+#               release bases and keyrings pointed at local ones; a self-signed
+#               onramp certificate) and boots. Asserts the host stopped at the secret gate with the
 #               node's and all four sponsor secrets listed.
 #   side_effect refuses an inventory with localhost in neither base group, one with
 #               the origin outside decdn_nodes and one with the onramp outside
@@ -19,23 +19,23 @@
 #               the node's and sponsord's secrets and re-runs: the gate must still hold,
 #               now for the Turnstile secret alone. Then writes it, moves DEVOPS_REF to
 #               a tag, and re-runs.
-#   verify      the origin node, both sponsor services and Caddy running from the signed
+#   verify      the origin node, both sponsor services and nginx running from the signed
 #               releases, the origin backend in node.toml, the API token generated on
-#               the host, https through Caddy, no hint left.
+#               the host, https through nginx, no hint left.
 #
 # The release download and verify path of sponsord-onramp runs here and nowhere else
 # in the suite (../validation-sponsord sets its release mode, but stops at its
 # asserts); sponsord's also runs in ../sponsord-install.
 #
 # One platform: Ubuntu 26.04, the newest supported release, so systemd >= 255 (which
-# writes credentials 0440, see roles/sponsord/README.md) and Caddy from universe. The
+# writes credentials 0440, see roles/sponsord/README.md). The
 # controller-Python bracket and stage 1's refusals are ../cloud-init's job.
 #
 # Coverage boundary: `baseline` is skipped through bootstrap.sh's test-only switch, as
 # in ../cloud-init, so the tcp/80 + tcp/443 holes are pinned by tests/firewall-holes
 # (make test-scripts), not here.
 #
-# The stages need network access: apt (the user-data's packages, Caddy), PyPI and Galaxy.
+# The stages need network access: apt (the user-data's packages, nginx), PyPI and Galaxy.
 driver:
   name: docker
 platforms:

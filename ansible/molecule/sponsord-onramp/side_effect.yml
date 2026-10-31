@@ -7,11 +7,12 @@
 #   3. With no record, a running onramp is restarted (it was never confirmed
 #      healthy on its inputs), and a daemon restart brings the onramp back by
 #      itself (PartOf=, Restart=on-failure, no start limit).
-# The proxy side effects (proxy "none", ACME, a foreign Caddyfile), a custom gate
-# page and the Turnstile secret from inventory run in ../sponsord-onramp-caddy, the
+# The proxy side effects (proxy "none", a foreign nginx site, the earlier Caddy
+# retired, ACME), a custom gate page and the Turnstile secret from inventory run in
+# ../sponsord-onramp-nginx, the
 # source install in ../sponsord-onramp-source, and backup and decommission in
 # ../sponsord-onramp-lifecycle, beside this scenario.
-# The host is left healthy on the role's own Caddyfile, `tls internal`, for verify.
+# The host is left healthy on the role's own nginx site, self-signed, for verify.
 - name: Side effect — rotation, the fatal gate and the restart-input record
   hosts: all
   become: true

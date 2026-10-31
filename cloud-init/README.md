@@ -10,7 +10,7 @@ then SSH in once to write them.
 On the host it runs the [Ansible project](../ansible/README.md)'s `site.yml` against
 localhost. That means the same `baseline` hardening (nftables default-deny with only
 SSH and the host's public services open: udp/4433 for a node, an origin included, and
-tcp/80 and tcp/443 for the onramp's Caddy; DevSec SSH/OS hardening, fail2ban, unattended upgrades) and the same
+tcp/80 and tcp/443 for the onramp's nginx; DevSec SSH/OS hardening, fail2ban, unattended upgrades) and the same
 `decdn_node` role (or the `sponsord` roles), with no second copy of any. Nearly
 every provider accepts cloud-init: Hetzner, DigitalOcean, OVHcloud, Vultr, AWS,
 Scaleway and others.
@@ -25,7 +25,7 @@ only in their inventory:
 | Template | For | Host | Waits for |
 |----------|-----|------|-----------|
 | [`user-data-node.yaml`](user-data-node.yaml) | node operators | a deCDN cache node | `/etc/decdn/decdn.env` |
-| [`user-data-publisher.yaml`](user-data-publisher.yaml) | publishers | an origin node, `sponsord` and `sponsord-onramp` behind Caddy ([Publisher host](#publisher-host)) | `/etc/decdn/decdn.env`, `/etc/sponsord/{secret.env,treasury-keystore.json,treasury-password,turnstile-secret}` |
+| [`user-data-publisher.yaml`](user-data-publisher.yaml) | publishers | an origin node, `sponsord` and `sponsord-onramp` behind nginx ([Publisher host](#publisher-host)) | `/etc/decdn/decdn.env`, `/etc/sponsord/{secret.env,treasury-keystore.json,treasury-password,turnstile-secret}` |
 
 A publisher who wants fewer of them on the VM deletes the groups it does not need from
 the publisher template: an origin alone keeps `decdn_nodes` and `decdn_origin_nodes`, a
@@ -196,7 +196,7 @@ one host:
 - the deCDN onboarding sponsor: the [`sponsord`](../ansible/roles/sponsord/README.md)
   daemon, which holds the treasury wallet and pays for your users' downloads, and
   [`sponsord-onramp`](../ansible/roles/sponsord_onramp/README.md), its public gate,
-  with Caddy terminating TLS.
+  with nginx terminating TLS (a lego certificate over ACME HTTP-01).
 
 The flow is the node's. Only the values and the secrets differ. Configuring the backend
 does not make the node your origin on-chain: as the namespace's publisher you seat its
@@ -223,17 +223,17 @@ Until then it serves its bytes as a cache does.
    `baseline_sudo_users` and `decdn_region` (as for a node), the origin backend
    (`decdn_cache_origin_url` for an http store; or `decdn_cache_origin_kind: s3` with
    its bucket and region, or `fs` with a path, as the template's comment shows),
-   `sponsord_pool_id`, `sponsord_onramp_domain`, `sponsord_onramp_rpc_url` and
-   `sponsord_onramp_turnstile_sitekey`.
+   `sponsord_pool_id`, `sponsord_onramp_domain`, `sponsord_onramp_acme_email`,
+   `sponsord_onramp_rpc_url` and `sponsord_onramp_turnstile_sitekey`.
    - `sponsord_onramp_rpc_url` is served to every user, so it must be a **public**
      endpoint with no API key in it. sponsord's own RPC URL may embed a key, so it is
      written on the host instead (step 5).
    - Check the file with
      `make lint-cloud-init CLOUD_INIT_FILE=path/to/your-user-data.yaml`.
 3. **Point DNS** for the domain (A/AAAA) at the VM, and open **udp/4433** (the node)
-   and **tcp/80 and tcp/443** (Caddy) in the provider's firewall, if it has one. The
+   and **tcp/80 and tcp/443** (nginx) in the provider's firewall, if it has one. The
    host's nftables already allows all three.
-   Caddy needs them to get its certificate.
+   lego needs tcp/80 to get the onramp's certificate.
 4. **Create the VM and wait for the first boot.** It ends at `awaiting-secret`, with
    the node's and the four sponsor secrets listed in `/var/lib/decdn-bootstrap/awaiting`.
 5. **Write the secrets on the host**, as your admin account. The node's RPC endpoint,
@@ -350,7 +350,7 @@ Day 2 is in the role READMEs. Rotate a secret by replacing its file and running
   non-root account with a key.
 - **The network posture is the role's.** It is nftables default-deny with only SSH and
   the host's public services open: the node's QUIC udp/4433, and tcp/80 + tcp/443 for
-  the onramp's Caddy. Metrics, the admin RPC and both sponsor daemons stay on loopback.
+  the onramp's nginx. Metrics, the admin RPC and both sponsor daemons stay on loopback.
 - The files in `/etc/decdn-bootstrap/` are `root` `0600`. `decdn-bootstrap` refuses a
   `bootstrap.env` that is not `root`-owned `0600`. It reads the file as literal
   `KEY=value` lines and never sources it, and it rejects unknown keys. That leaves no
@@ -371,7 +371,7 @@ What CI proves:
   in neither base group, and one with the onramp outside `sponsord_hosts`, each
   recording `failed`. It writes sponsord's secrets but not the Turnstile secret, and
   checks that the gate still holds for that one file. It then covers both services
-  installed from a locally signed mirror, and the onramp answering through Caddy.
+  installed from a locally signed mirror, and the onramp answering through nginx.
 - Both scenarios skip `baseline`, because host hardening means nothing in a container.
   It is exercised on real hosts, as for the Ansible path. `make test-scripts` checks
   that every `decdn_nodes` and `sponsord_hosts` play keeps the role and its tag.

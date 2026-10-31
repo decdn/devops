@@ -2,13 +2,13 @@
 # sponsord-onramp beside its daemon: a host in sponsord_hosts AND
 # sponsord_onramp_hosts, converged through the real playbooks/sponsord.yml (both
 # plays) against the stub daemon (../sponsord/files/sponsord-stub), a stub onramp
-# (files/sponsord-onramp-stub) and the REAL distro Caddy, with Caddy's internal CA
-# in place of ACME (no public DNS in a container).
+# (files/sponsord-onramp-stub) and the REAL distro nginx, with a self-signed
+# certificate in place of ACME (no public DNS in a container).
 #
 #   converge     the daemon (as ../sponsord, minus its RPC literal check), then the
 #                onramp: the host-provisioned Turnstile secret locked to 0600, the
 #                daemon's token as a credential, loopback listener, /healthz gate,
-#                Caddy terminating TLS for the domain with the role's Caddyfile;
+#                nginx terminating TLS for the domain with the role's site;
 #                Alloy labelling the onramp's journal stream.
 #   idempotence  an unchanged host must not restart anything.
 #   side_effect  rotate the Turnstile secret out of band -> the next converge must
@@ -16,11 +16,11 @@
 #                -> the /healthz gate must FAIL the converge; a missing record
 #                restarts a running onramp; a daemon restart brings it back.
 #   verify       files, modes, unit hardening, credentials, listeners, the whole
-#                https chain through Caddy, the client address Caddy passes on.
+#                https chain through nginx, the client address nginx passes on.
 #
-# The proxy side effects (proxy "none", ACME, a Caddyfile the role did not write), a
-# custom gate page and the Turnstile secret from inventory run in
-# ../sponsord-onramp-caddy on the same converge, so the two run side by side;
+# The proxy side effects (proxy "none", ACME, a foreign nginx site, the earlier
+# Caddy retired), a custom gate page and the Turnstile secret from inventory run in
+# ../sponsord-onramp-nginx on the same converge, so the two run side by side;
 # so do ../sponsord-onramp-source and ../sponsord-onramp-lifecycle. Their
 # inventories must stay identical to this one (`make test-scripts` checks).
 #
@@ -43,7 +43,7 @@ platforms:
     groups:
       - sponsord_hosts
       - sponsord_onramp_hosts
-  # systemd 255 writes LoadCredential= files 0440 and Caddy comes from universe.
+  # systemd 255 writes LoadCredential= files 0440.
   - name: onramp-molecule-u2404
     image: geerlingguy/docker-ubuntu2404-ansible@sha256:3394e335df58c961c00b78ae601ef30cdd7463b112f21b0c5f78674a70526302
     pre_build_image: true
@@ -92,8 +92,8 @@ provisioner:
         # sponsord_onramp_network follows sponsord_network (arbitrum-sepolia).
         sponsord_onramp_rpc_url: https://sepolia-rollup.arbitrum.io/rpc
         sponsord_onramp_domain: onramp.molecule.test
-        sponsord_onramp_caddy_tls: internal
-        # Renders (and so validates) the Caddyfile's global email option.
+        sponsord_onramp_tls: self-signed
+        # Read only under acme, which ../sponsord-onramp-nginx's side effects switch to.
         sponsord_onramp_acme_email: ops@molecule.test
         sponsord_onramp_turnstile_sitekey: 1x00000000000000000000AA
         # Must equal EXPECTED_BRAND in files/sponsord-onramp-stub: quotes and a

@@ -7,7 +7,7 @@
 # gateway listens on loopback; nginx is its public side (tcp/80 + tcp/443, opened by
 # playbooks/group_vars/all.yml). Funding its wallet, the DNS records and the DNS
 # provider token are operator steps — see roles/decdn_gateway/README.md.
-# Before the gateway play: the onramp's Caddy, an iroh relay and an iroh DNS server
+# Before the gateway play: the onramp's nginx, an iroh relay and an iroh DNS server
 # need tcp/443 too, and only one service can have it. (Under site.yml their plays
 # run first, so on a host in both groups the other service is already up when this
 # refuses; either way the deploy fails loudly.) tests/scripts-test.sh runs this play

@@ -1,8 +1,8 @@
 ---
 # Take a host out of service: stop every service this repo deployed on it and
 # remove its unit (decdn-node, iroh-relay, iroh-dns-server, decdn-gateway,
-# sponsord-onramp, sponsord; the onramp's Caddy is stopped and disabled, not removed,
-# and so is the gateway's nginx once it serves nothing else), then tear down the
+# sponsord-onramp, sponsord; the onramp's or the gateway's nginx is stopped and
+# disabled, not removed, once it serves nothing else), then tear down the
 # opt-in Grafana Alloy agent. Keeps the identities and keys (the node's keystore
 # withdraws the bond; sponsord's treasury keystore and the gateway's wallet own their
 # pools) and does NOT touch the chain; each role's last task prints what is left to

@@ -1,0 +1,13 @@
+# MANAGED BY the sponsord_onramp role — do not edit by hand.
+#
+# Check the onramp's certificate twice a day; lego renews it only when it is due.
+[Unit]
+Description=Renew the sponsord-onramp certificate ({{ sponsord_onramp_domain }})
+
+[Timer]
+OnCalendar=*-*-* 00/12:00:00
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

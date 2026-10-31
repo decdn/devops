@@ -24,7 +24,7 @@ without a release or a Turnstile account:
                    which is how the scenario proves the readiness gate is fatal.
                    Routes: /healthz, and /molecule/client-ip, which echoes the
                    header named by ONRAMP_CLIENT_IP_HEADER, so the scenario can
-                   check what Caddy passes on as the client address.
+                   check what nginx passes on as the client address.
   * anything else -> exit 2.
 """
 import os

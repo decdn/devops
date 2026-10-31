@@ -62,9 +62,9 @@ security-helm:       ## KICS scan of the decdn-node chart's rendered manifests (
 
 # Two queries are excluded, deliberately. "Volume Has Sensitive Host Directory"
 # (1c1325ff-…) flags every host-path mount: /etc/decdn (ro) and /var/lib/decdn, the
-# /etc/sponsord gate-page directory (ro) and /var/lib/caddy. They are the Ansible
-# roles' host layout, which is what lets backups and restores (docs/lifecycle.md)
-# work unchanged, and Alloy's read-only views of the host (/proc, /sys, /, the
+# /etc/sponsord gate-page directory (ro) and the iroh services' and the gateway's
+# state. They are the Ansible roles' host layout, which is what lets backups and
+# restores (docs/lifecycle.md) work unchanged, and Alloy's read-only views of the host (/proc, /sys, /, the
 # journal) for host metrics and logs; lint-compose pins each container's exact
 # mounts (and secrets) instead. A second, "Volume Mounted In Multiple Containers"
 # (baa452f0-…, HIGH), flags any mount propagation: Alloy's read-only host root is
@@ -75,8 +75,8 @@ security-helm:       ## KICS scan of the decdn-node chart's rendered manifests (
 # read-only, and submounts only with Docker 25+ on kernel 5.12+), which Alloy, as
 # a non-root account with no capability, can still only read as file modes allow.
 # lint-compose refuses propagation on any other mount.
-# The MEDIUMs (host network, no healthcheck on the sponsor's, Caddy's, the iroh
-# services' and Alloy's images, NET_BIND_SERVICE on Caddy and the iroh services)
+# The MEDIUMs (host network, no healthcheck on the sponsor's, the iroh services'
+# and Alloy's images, NET_BIND_SERVICE on the iroh services)
 # are the documented design; see compose/README.md. KICS has no query for the
 # iroh services' uid 0 (the only root services, NET_BIND_SERVICE alone):
 # lint-compose pins that instead.
@@ -91,8 +91,8 @@ security-compose:    ## KICS scan of compose/ (pinned engine image)
 # Renders compose/compose.yaml with every profile on, three times, and checks each:
 #  - with the example .env, against compose/tests/invariants.jq: the properties the
 #    README promises (host network, nothing published, images by digest, read-only
-#    rootfs, no capabilities beyond NET_BIND_SERVICE for Caddy and the iroh
-#    services, exact security_opt, non-root users (uid 0 for the iroh relay and DNS
+#    rootfs, no capabilities beyond NET_BIND_SERVICE for the iroh services, exact
+#    security_opt, non-root users (uid 0 for the iroh relay and DNS
 #    server only, with that one capability), each container's exact mounts, loopback sponsord listeners,
 #    secret files only, stop graces long enough for each daemon's drain);
 #  - with every service env file empty (/dev/null), against

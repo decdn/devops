@@ -1,0 +1,75 @@
+---
+# nginx in front of the onramp: the host's only public HTTP listener (tcp/80 for
+# the ACME challenge and the https redirect, tcp/443). This repo's
+# playbooks/group_vars/all.yml opens both in the baseline firewall for hosts in
+# sponsord_onramp_hosts while sponsord_onramp_proxy is "nginx". main.yml has
+# already refused nginx sites this role does not own.
+#
+# HTTP-01 needs nginx serving tcp/80 before lego can issue, and nginx cannot load an
+# https server without its certificate, so the order is: the self-signed
+# certificate (that mode), the site (http only until a certificate exists), lego
+# (acme), the site again with https.
+
+- name: Install nginx
+  ansible.builtin.import_tasks: nginx-install.yml
+
+- name: Name the certificate and make a self-signed one
+  ansible.builtin.import_tasks: tls.yml
+
+- name: Serve the site
+  ansible.builtin.include_tasks: nginx-site.yml
+
+- name: Obtain the ACME certificate
+  ansible.builtin.import_tasks: acme.yml
+
+- name: Serve the site with the issued certificate
+  ansible.builtin.include_tasks: nginx-site.yml
+  when: sponsord_onramp_tls == 'acme'
+
+# nginx serves the domain at all: plain http answers with its https redirect.
+# KICS flags plain HTTP here; it is the redirect, on loopback.
+- name: Probe nginx's http redirect for the domain
+  ansible.builtin.uri:
+    url: http://127.0.0.1/healthz
+    headers:
+      Host: "{{ sponsord_onramp_domain }}"
+    follow_redirects: none
+    status_code: 301
+    timeout: 5
+  register: sponsord_onramp_redirect
+  retries: "{{ sponsord_onramp_readiness_retries }}"
+  delay: "{{ sponsord_onramp_readiness_delay }}"
+  until: sponsord_onramp_redirect.status | default(-1) == 301
+  changed_when: false
+  when: not ansible_check_mode
+
+# The whole chain, as a user would reach it but pinned to this host: TLS for the
+# domain, nginx, the onramp. The certificate verifies unless it is self-signed or
+# from a staging CA.
+- name: Probe the onramp through nginx
+  ansible.builtin.command:
+    argv: >-
+      {{ ['curl', '--silent', '--show-error', '--fail', '--max-time', '5',
+          '--output', '/dev/null',
+          '--retry', sponsord_onramp_readiness_retries | string,
+          '--retry-delay', sponsord_onramp_readiness_delay | string,
+          '--retry-max-time', '60', '--retry-all-errors',
+          '--resolve', sponsord_onramp_domain ~ ':443:127.0.0.1']
+         + (['--insecure'] if sponsord_onramp_tls == 'self-signed' or 'staging' in sponsord_onramp_acme_server else [])
+         + ['https://' ~ sponsord_onramp_domain ~ '/healthz'] }}
+  register: sponsord_onramp_https_probe
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Report an onramp that is not reachable through nginx
+  ansible.builtin.fail:
+    msg: |-
+      https://{{ sponsord_onramp_domain }}/healthz did not answer through nginx on this
+      host (curl exit {{ sponsord_onramp_https_probe.rc }}: {{ sponsord_onramp_https_probe.stderr | trim }}).
+      The onramp itself is healthy on loopback, so the fault is in nginx or the
+      certificate:
+        sudo journalctl -u nginx -e; sudo tail /var/log/nginx/error.log
+  when:
+    - not ansible_check_mode
+    - sponsord_onramp_https_probe.rc != 0
