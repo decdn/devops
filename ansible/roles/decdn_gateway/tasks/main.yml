@@ -352,21 +352,62 @@
 
 # A restore (docs/lifecycle.md) runs as root, often before the first deploy, and
 # the archive's numeric owners are another host's account: the gateway's state is
-# its own account's, whoever wrote it. Recursive, but small (the pool store and the
-# pointers).
+# its own account's, whoever wrote it. The directory is that account's to write, so
+# nothing in it is followed: a symlinked data dir is refused, and the chown never
+# dereferences a link (-P -h), or a link planted there would hand root's files to
+# the account.
 - name: Check for restored or existing gateway state
   ansible.builtin.stat:
     path: "{{ decdn_gateway_data_dir }}"
+    follow: false
   register: decdn_gateway_data_stat
 
-- name: Give the gateway's state to its account
-  ansible.builtin.file:
-    path: "{{ decdn_gateway_data_dir }}"
-    state: directory
-    owner: "{{ decdn_gateway_user }}"
-    group: "{{ decdn_gateway_group }}"
-    recurse: true
+- name: Refuse a symlinked gateway data directory
+  ansible.builtin.assert:
+    that:
+      - not (decdn_gateway_data_stat.stat.islnk | default(false))
+      - not decdn_gateway_data_stat.stat.exists or decdn_gateway_data_stat.stat.isdir
+    fail_msg: >-
+      {{ decdn_gateway_data_dir }} is a symlink or not a directory. The gateway's
+      state must be a real directory under {{ decdn_gateway_home }}: replace the link
+      with the directory itself.
+
+- name: Find gateway state its account does not own
+  ansible.builtin.command:
+    argv:
+      - find
+      - "{{ decdn_gateway_data_dir }}"
+      - -xdev
+      - (
+      - "!"
+      - -user
+      - "{{ decdn_gateway_user }}"
+      - -o
+      - "!"
+      - -group
+      - "{{ decdn_gateway_group }}"
+      - )
+      - -print
+      - -quit
+  register: decdn_gateway_foreign_state
+  changed_when: false
+  check_mode: false
   when: decdn_gateway_data_stat.stat.isdir | default(false)
+
+- name: Give the gateway's state to its account, never through a link
+  ansible.builtin.command:
+    argv:
+      - chown
+      - -R
+      - -P
+      - -h
+      - --
+      - "{{ decdn_gateway_user }}:{{ decdn_gateway_group }}"
+      - "{{ decdn_gateway_data_dir }}"
+  changed_when: true
+  when:
+    - decdn_gateway_data_stat.stat.isdir | default(false)
+    - decdn_gateway_foreign_state.stdout | default('') | length > 0
 
 # --- Install the binary -----------------------------------------------------------
 - name: Install the decdn CLI for the gateway

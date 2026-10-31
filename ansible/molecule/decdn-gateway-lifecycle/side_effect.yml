@@ -114,13 +114,30 @@
       loop_control:
         loop_var: _gw_attempt
 
-    # A restore as root leaves the state root's; the converge gives it back.
+    # A restore as root leaves the state root's; the converge gives it back. A link
+    # the gateway's account planted there must not hand root's file to it.
     - name: Give the gateway's state to root, as a restore would
       ansible.builtin.file:
         path: /var/lib/decdn-gateway/gateway
         owner: root
         group: root
         recurse: true
+
+    - name: Write a root-only canary outside the state
+      ansible.builtin.copy:
+        dest: /root/molecule-canary
+        content: "root's\n"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Plant a link to it in the state, as a compromised gateway could
+      ansible.builtin.file:
+        src: /root/molecule-canary
+        dest: /var/lib/decdn-gateway/gateway/pointers/escape.json
+        state: link
+        owner: root
+        group: root
 
     - name: Converge back on self-signed
       ansible.builtin.include_role:
@@ -131,11 +148,28 @@
         path: /var/lib/decdn-gateway/gateway/pointers
       register: _gw_pointers_owner
 
-    - name: Require the state back with the gateway's account
+    - name: Stat the canary and the link to it
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      register: _gw_canary
+      loop: [/root/molecule-canary, /var/lib/decdn-gateway/gateway/pointers/escape.json]
+
+    - name: Require the state back with the gateway's account, and the canary root's
       ansible.builtin.assert:
         that:
           - _gw_pointers_owner.stat.pw_name == 'decdn-gateway'
-        fail_msg: "/var/lib/decdn-gateway/gateway/pointers is {{ _gw_pointers_owner.stat.pw_name }}'s"
+          - _gw_canary.results[0].stat.pw_name == 'root'
+          - _gw_canary.results[1].stat.islnk and _gw_canary.results[1].stat.pw_name == 'decdn-gateway'
+        fail_msg: >-
+          pointers is {{ _gw_pointers_owner.stat.pw_name }}'s, the canary
+          {{ _gw_canary.results[0].stat.pw_name }}'s, the link
+          {{ _gw_canary.results[1].stat.pw_name }}'s: the chown followed the link.
+
+    - name: Remove the planted link
+      ansible.builtin.file:
+        path: /var/lib/decdn-gateway/gateway/pointers/escape.json
+        state: absent
 
     - name: Read the renewal timer again
       ansible.builtin.systemd_service:
