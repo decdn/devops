@@ -9,7 +9,7 @@
 collections:
   # Node operators: cache nodes only. Delete decdn.publisher below.
   - name: decdn.node
-    version: ">=0.5.0"
+    version: ">=0.6.0"
   # Publishers: origin nodes, sponsord and its onramp, iroh relays and DNS servers
   # (and cache nodes). Depends on decdn.node.
   - name: decdn.publisher
