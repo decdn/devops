@@ -5,7 +5,8 @@
 # issues when there is no certificate and otherwise renews only when one is due;
 # its deploy hook, which runs only after an issuance, records it and reloads nginx.
 # Started by decdn-gateway-certs.timer, and by the role on the first deploy and
-# while a reissue is pending.
+# while a reissue is pending. No random sleep of lego's own: the timer already
+# randomizes when it runs, and the role waits for a run in flight.
 [Unit]
 Description=Obtain or renew the deCDN gateway certificate ({{ decdn_gateway_domain }})
 After=network-online.target
@@ -30,6 +31,7 @@ ExecStart={{ decdn_gateway_lego_bin }} run \
     --domains {{ decdn_gateway_domain }} \
     --domains *.{{ decdn_gateway_domain }} \
     --force-cert-domains \
+    --no-random-sleep \
     --cert.name {{ _decdn_gateway_lego_cert_name }} \
     --path {{ decdn_gateway_acme_dir }} \
     --deploy-hook "{{ _decdn_gateway_certs_deployed }} {{ decdn_gateway_acme_server | replace('%', '%%') }} {{ decdn_gateway_domain }} {{ _decdn_gateway_issued_for }} {{ _decdn_gateway_force_env }}"

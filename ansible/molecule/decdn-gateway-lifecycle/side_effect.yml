@@ -81,6 +81,8 @@
           - "'--domains gateway.molecule.test' in _svc"
           - "'--domains *.gateway.molecule.test' in _svc"
           - "'--server https://127.0.0.1:14000/dir' in _svc"
+          # The timer randomizes; lego's own sleep would only lengthen the role's wait.
+          - "'--no-random-sleep' in _svc"
           - "'EnvironmentFile=/etc/decdn-gateway/acme-dns.env' in _svc"
           - >-
             '--deploy-hook "/usr/local/lib/decdn-gateway/certs-deployed https://127.0.0.1:14000/dir'
@@ -213,13 +215,6 @@
           force.env {{ 'is still there' if _gw_force_after.stat.exists else 'is gone' }}, and the
           record is {{ _gw_record_after.content | b64decode | to_json }}.
 
-    - name: Put the real lego back
-      ansible.builtin.copy:
-        src: /root/lego.real
-        dest: /usr/local/lib/decdn-gateway/lego
-        remote_src: true
-        mode: "0755"
-
     # A failed switch to another CA, then a revert to the one the certificate is
     # from: the other CA's force must go, or every timer run would reissue from
     # this one. The certificate needs no run, so the converge goes on to nginx,
@@ -232,6 +227,24 @@
           LEGO_ARI_DISABLE=true
           DECDN_GATEWAY_FORCE_FOR=letsencrypt gateway.molecule.test
         mode: "0600"
+
+    # A renewal in flight when the converge starts: the role must wait it out
+    # before it reads anything (the lego stand-in takes 90 s, then issues).
+    - name: Put a slow lego that issues in its place
+      ansible.builtin.copy:
+        dest: /usr/local/lib/decdn-gateway/lego
+        content: |
+          #!/usr/bin/env python3
+          import subprocess, sys, time
+          time.sleep(90)
+          a = sys.argv
+          subprocess.run(a[a.index("--deploy-hook") + 1].split(), check=True)
+        mode: "0755"
+
+    - name: Start a renewal without waiting for it, as the timer would
+      ansible.builtin.command:
+        argv: [systemctl, start, --no-block, decdn-gateway-certs.service]
+      changed_when: true
 
     - name: Converge back on the CA the certificate is from
       block:
@@ -261,11 +274,22 @@
         path: /var/lib/decdn-gateway-acme/force.env
       register: _gw_force_reverted
 
-    - name: Require the other CA's force removed
+    - name: Require the other CA's force removed, after the run in flight
       ansible.builtin.assert:
         that:
           - not _gw_force_reverted.stat.exists
-        fail_msg: A force for another CA survived a converge on the certificate's own CA.
+          - decdn_gateway_certs_state.attempts | default(1) > 1
+        fail_msg: >-
+          force.env {{ 'survived' if _gw_force_reverted.stat.exists else 'is gone' }}; the
+          role checked for a run in flight {{ decdn_gateway_certs_state.attempts | default(1) }}
+          time(s) (it must have waited for the slow one).
+
+    - name: Put the real lego back
+      ansible.builtin.copy:
+        src: /root/lego.real
+        dest: /usr/local/lib/decdn-gateway/lego
+        remote_src: true
+        mode: "0755"
 
     # A restore as root leaves the state root's; the converge gives it back. A link
     # the gateway's account planted there must not hand root's file to it.
