@@ -212,6 +212,32 @@
             decdn_rejected: "{{ decdn_rejected + ['data-outside'] }}"
           when: ansible_failed_task.name == "Require the home and data directories under /var/lib"
 
+    - name: "Case data-trailing-slash — a data dir with a trailing slash"
+      block:
+        - name: Run decdn_gateway with a data dir with a trailing slash
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_data_dir: "/var/lib/decdn-gateway/gateway/"
+      rescue:
+        - name: Record data-trailing-slash rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['data-trailing-slash'] }}"
+          when: ansible_failed_task.name == "Require the home and data directories under /var/lib"
+
+    - name: "Case data-nested — a data dir nested below the home"
+      block:
+        - name: Run decdn_gateway with a data dir nested below the home
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_data_dir: "/var/lib/decdn-gateway/state/gateway"
+      rescue:
+        - name: Record data-nested rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['data-nested'] }}"
+          when: ansible_failed_task.name == "Require the home and data directories under /var/lib"
+
     - name: "Case allowance-unit — an allowance in TiB"
       block:
         - name: Run decdn_gateway with an allowance in TiB
@@ -568,6 +594,8 @@
           - ports-equal
           - home-outside
           - data-outside
+          - data-trailing-slash
+          - data-nested
           - allowance-unit
           - allowance-space
           - ns-zero

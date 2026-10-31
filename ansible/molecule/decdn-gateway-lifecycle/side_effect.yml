@@ -155,6 +155,29 @@
           - (_gw_after_empty.results[1].content | b64decode) is search('LEGO_RENEW_FORCE=true')
         fail_msg: "{{ _gw_after_empty.results | map(attribute='content') | map('b64decode') | list }}"
 
+    # A run already under way for another CA finishes after the role forced this
+    # one: its hook must leave this force alone.
+    - name: Run the deploy hook as a run for another CA would
+      ansible.builtin.command:
+        argv:
+          - /usr/local/lib/decdn-gateway/certs-deployed
+          - letsencrypt
+          - gateway.molecule.test
+          - /root/other-ca.issued-for
+          - /var/lib/decdn-gateway-acme/force.env
+      changed_when: true
+
+    - name: Stat the force after the other CA's hook
+      ansible.builtin.stat:
+        path: /var/lib/decdn-gateway-acme/force.env
+      register: _gw_force_other
+
+    - name: Require the other CA's hook to have left this force alone
+      ansible.builtin.assert:
+        that:
+          - _gw_force_other.stat.exists
+        fail_msg: A deploy hook for another CA removed the pending force for this one.
+
     # lego runs --deploy-hook's value split on whitespace, with no shell.
     - name: Put a lego that issues, running its deploy hook, in its place
       ansible.builtin.copy:

@@ -96,12 +96,18 @@
   ansible.builtin.assert:
     that:
       - decdn_gateway_home is match('^/var/lib/[A-Za-z0-9._-]+$')
-      - decdn_gateway_data_dir.startswith(decdn_gateway_home ~ '/')
+      # One plain segment under the home, no trailing slash: the role re-owns this
+      # tree as root, and only the directory itself can then be a link (refused
+      # below); a link among its ancestors, or one a trailing slash resolves, would
+      # take that chown outside it.
+      - decdn_gateway_data_dir is match('^' ~ (decdn_gateway_home | regex_escape) ~ '/[A-Za-z0-9_-][A-Za-z0-9._-]*$')
+      - decdn_gateway_data_dir is not match('.*/\.\.?$')
       - decdn_gateway_keystore_file.startswith(decdn_gateway_home ~ '/')
     fail_msg: >-
       decdn_gateway_home must be a directory directly under /var/lib (got
-      "{{ decdn_gateway_home }}"), and decdn_gateway_data_dir and
-      decdn_gateway_keystore_file must sit inside it: the unit makes the home its
+      "{{ decdn_gateway_home }}"), decdn_gateway_data_dir a directory directly
+      inside it, with no trailing slash (got "{{ decdn_gateway_data_dir }}"), and
+      decdn_gateway_keystore_file inside it too: the unit makes the home its
       StateDirectory, the one place the gateway may write.
 
 # --- Allowance ---------------------------------------------------------------------

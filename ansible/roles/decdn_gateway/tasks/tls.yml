@@ -271,7 +271,12 @@
     - name: Force the next issuance
       ansible.builtin.copy:
         dest: "{{ _decdn_gateway_force_env }}"
-        content: "LEGO_RENEW_FORCE=true\nLEGO_ARI_DISABLE=true\n"
+        # The last line names what it forces, so a run already under way for another
+        # server or domain does not clear it (files/certs-deployed).
+        content: |
+          LEGO_RENEW_FORCE=true
+          LEGO_ARI_DISABLE=true
+          DECDN_GATEWAY_FORCE_FOR={{ decdn_gateway_issue_for }}
         owner: root
         group: root
         mode: "0600"
