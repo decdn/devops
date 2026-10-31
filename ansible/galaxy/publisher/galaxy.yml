@@ -43,10 +43,11 @@ tags:
 # decdn.node.decdn_node. The floor is the oldest decdn.node these playbooks work with:
 # raise it whenever they need a newer decdn.node role, and whenever the decdn release
 # line moves, since a publisher's origin nodes, sponsord and onramp must run one line
-# (decdn.node 0.5.0 is the first on decdn 0.3). scripts/release.sh refuses a release
-# of this collection while no node-collection tag satisfies it.
+# (decdn.node 0.5.0 is the first on decdn 0.3; 0.6.0 is the first whose Alloy scrapes
+# the gateway and watches the onramp's nginx and lego units). scripts/release.sh
+# refuses a release of this collection while no node-collection tag satisfies it.
 dependencies:
-  decdn.node: ">=0.5.0"
+  decdn.node: ">=0.6.0"
 repository: https://github.com/decdn/devops
 documentation: https://github.com/decdn/devops/tree/main/ansible
 homepage: https://decdn.org
