@@ -30,6 +30,13 @@ ExecStart={{ decdn_gateway_lego_bin }} run \
     --cert.name {{ _decdn_gateway_lego_cert_name }} \
     --path {{ decdn_gateway_acme_dir }} \
     --deploy-hook "/usr/bin/systemctl try-reload-or-restart nginx.service"
+# Only after lego exited 0 (systemd runs ExecStartPost= on success alone), from a
+# timer run as from the role's: record what the certificate is now issued for, and
+# stop forcing. A forced run that the role is not there to clean up after would
+# otherwise reissue twice a day into the CA's duplicate-certificate limit.
+ExecStartPost=/bin/sh -c 'printf "%%s\n" "$$1" > "$$2.new" && mv -f -- "$$2.new" "$$2" && rm -f -- "$$3"' \
+    sh "{{ decdn_gateway_acme_server | replace('%', '%%') }} {{ decdn_gateway_domain }}" \
+    {{ _decdn_gateway_issued_for }} {{ _decdn_gateway_force_env }}
 
 # --- Hardening -------------------------------------------------------------
 # Root, for the root-only key nginx reads and the nginx reload; nothing else on disk

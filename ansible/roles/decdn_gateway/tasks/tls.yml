@@ -305,7 +305,8 @@
         - decdn_gateway_certs_run is not skipped
         - decdn_gateway_certs_run.rc != 0 or not decdn_gateway_cert_post.stat.exists
 
-    # Only now, after a run that succeeded (or a certificate adopted as it is).
+    # Only now, after a run that succeeded (or a certificate adopted as it is). The
+    # unit's ExecStartPost= does the same after a timer run that succeeds.
     - name: Record what the certificate is issued for
       ansible.builtin.copy:
         dest: "{{ _decdn_gateway_issued_for }}"

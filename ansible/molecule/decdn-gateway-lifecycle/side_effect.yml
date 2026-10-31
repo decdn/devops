@@ -114,6 +114,54 @@
       loop_control:
         loop_var: _gw_attempt
 
+    # A timer run that succeeds, with the reissue still pending from the failed
+    # converges above, must clear it itself: no converge follows to do it. lego is
+    # swapped for one that succeeds (the ACME server is still dead) and the real
+    # one put back after.
+    - name: Keep the real lego aside
+      ansible.builtin.copy:
+        src: /usr/local/lib/decdn-gateway/lego
+        dest: /root/lego.real
+        remote_src: true
+        mode: "0755"
+
+    - name: Put a lego that succeeds in its place
+      ansible.builtin.copy:
+        dest: /usr/local/lib/decdn-gateway/lego
+        content: "#!/bin/sh\nexit 0\n"
+        mode: "0755"
+
+    - name: Run the certificate service as the timer would
+      ansible.builtin.command:
+        argv: [systemctl, start, decdn-gateway-certs.service]
+      changed_when: true
+
+    - name: Read what the successful run left
+      ansible.builtin.stat:
+        path: /var/lib/decdn-gateway-acme/force.env
+      register: _gw_force_after
+
+    - name: Read the record after the successful run
+      ansible.builtin.slurp:
+        src: /var/lib/decdn-gateway-acme/.issued-for
+      register: _gw_record_after
+
+    - name: Require the timer run to have recorded the new CA and stopped forcing
+      ansible.builtin.assert:
+        that:
+          - not _gw_force_after.stat.exists
+          - (_gw_record_after.content | b64decode) == 'https://127.0.0.1:14000/dir gateway.molecule.test\n'
+        fail_msg: >-
+          force.env {{ 'is still there' if _gw_force_after.stat.exists else 'is gone' }}, and the
+          record is {{ _gw_record_after.content | b64decode | to_json }}.
+
+    - name: Put the real lego back
+      ansible.builtin.copy:
+        src: /root/lego.real
+        dest: /usr/local/lib/decdn-gateway/lego
+        remote_src: true
+        mode: "0755"
+
     # A restore as root leaves the state root's; the converge gives it back. A link
     # the gateway's account planted there must not hand root's file to it.
     - name: Give the gateway's state to root, as a restore would
