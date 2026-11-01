@@ -129,7 +129,9 @@ groups:
             certificate (curl -v https://<hostname>/healthz from outside),
             the nodes' decdn_discovery_pkarr_url and
             decdn_discovery_dns_origin, and whether
-            iroh_dns_server_pkarr_put_rate_limit refuses them. Stored
-            records keep resolving until they expire, 7 days after their
-            last put, but a node whose addresses change meanwhile is
-            resolved to the old ones.
+            iroh_dns_server_pkarr_put_rate_limit refuses them. The store
+            drops a record 7 days after the time it was signed (each
+            republish re-signs it, so about its last accepted put), and a
+            node whose addresses change meanwhile is resolved to the old
+            ones. A key already in the lookup cache can keep resolving
+            past that: eviction does not clear the cache.

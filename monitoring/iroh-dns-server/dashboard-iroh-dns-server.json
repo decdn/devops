@@ -448,7 +448,7 @@
         "uid": "${DS_PROMETHEUS}"
       },
       "title": "Record store per minute",
-      "description": "Signed packets inserted (a key first seen), updated (replaced by a newer one: every republish, so it tracks the update rate of the panel beside it) and expired (evicted 7 days after its last put) in the store. Removed is always 0 in 1.3.0.",
+      "description": "Signed packets inserted (a key first seen), updated (replaced by a newer one: every republish, so it tracks the update rate of the panel beside it) and expired (evicted 7 days after it was signed, about its last accepted put; eviction does not clear the lookup cache) in the store. Removed is always 0 in 1.3.0.",
       "type": "timeseries",
       "targets": [
         {
