@@ -145,7 +145,7 @@ write_files:
           # the digest read from it. To serve one exact release, set its tag with the
           # SHA-256 of its SHA256SUMS (`sha256sum SHA256SUMS` once its SHA256SUMS.asc
           # verifies), e.g.:
-          # sponsord_onramp_decdn_release: "v0.3.0"
+          # sponsord_onramp_decdn_release: "v0.3.1"
           # sponsord_onramp_decdn_sums_sha256: "<64 lowercase hex>"
 
   # What an interactive login prints while the bootstrap is unfinished. It is written

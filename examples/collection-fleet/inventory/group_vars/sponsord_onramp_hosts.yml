@@ -12,10 +12,10 @@
 # --- Binary ------------------------------------------------------------------------
 # The same three methods as sponsord. "release" (default) installs the same release
 # as the sponsord role; set both versions together to hold the host on another:
-# sponsord_onramp_version: "0.3.0"
+# sponsord_onramp_version: "0.3.1"
 # Or build on the host (its own checkout, so it may pin a different ref):
 # sponsord_onramp_install_method: source
-# sponsord_onramp_source_ref: v0.3.0
+# sponsord_onramp_source_ref: v0.3.1
 # Or manual, which follows sponsord_release_target_dir (`cargo build --release` in
 # a decdn/decdn checkout builds both binaries):
 # sponsord_onramp_install_method: manual
@@ -38,6 +38,6 @@
 # role's sponsord_onramp_decdn_release line (decdn/decdn, the decdn_node role's default
 # line; a host's decdn_node_version does not move it), with the SHA-256 of its
 # verified SHA256SUMS, on each deploy. To serve one exact release, set its tag and digest:
-# sponsord_onramp_decdn_release: v0.3.0
+# sponsord_onramp_decdn_release: v0.3.1
 # sponsord_onramp_decdn_sums_sha256: "…"
 # CapacityBond and SlashJudge come from sponsord_network (group_vars/sponsord_hosts.yml).
