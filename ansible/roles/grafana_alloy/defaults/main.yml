@@ -105,7 +105,8 @@ grafana_alloy_server_http_addr: 127.0.0.1:12345
 # NEVER put a credential in THIS template: config.alloy is world-readable 0644 on
 # the host, and inventory is committed. The API token is the ONE value allowed to
 # ride through inventory — via grafana_alloy_api_token below, which is SENSITIVE
-# and belongs in a git-ignored secret.yml exactly like decdn_rpc_url (#39). Setting
+# and belongs in a git-ignored secret.yml (or an ansible-vault encrypted vault.yml in
+# a private repository) exactly like decdn_rpc_url (#39). Setting
 # it makes this role author /etc/grafana-alloy.env itself; leaving it "" keeps the
 # original operator-provisioned posture. See README.md §Credentials.
 grafana_alloy_prom_url: ""            # else sys.env("GC_PROM_REMOTE_WRITE_URL")

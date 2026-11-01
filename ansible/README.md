@@ -138,7 +138,19 @@ the overlay carries its own: create them next to its `hosts.yml`, starting from 
 `host_vars/*/secret.*` in the private repo, so it never tracks a per-node secret (and
 `group_vars/*/secret.*` for a secret a whole group shares; a `group_vars/<group>/`
 directory silently replaces a `group_vars/<group>.yml` beside it, so move that file to
-`<group>/main.yml` first). The public
+`<group>/main.yml` first). To share those secrets through the private repo instead,
+commit them ansible-vault encrypted as `vault.yml` beside where `secret.yml` would go,
+and export `ANSIBLE_VAULT_PASSWORD_FILE` before `make check`/`make deploy` (not
+`ANSIBLE_ARGS=--ask-vault-pass`, which the targets' `LIMIT` guard also passes to its own
+`ansible-playbook` run, so it asks twice):
+[`examples/collection-fleet/README.md` § Encrypted secrets](../examples/collection-fleet/README.md#encrypted-secrets-optional)
+covers the password, and has a pre-commit hook and CI step worth copying into the
+overlay. Both assume the vars live under `inventory/`: with `group_vars/` and
+`host_vars/` beside the overlay's `hosts.yml`, as here, drop the `inventory/` prefix
+from the hook's `files:` and `exclude:` regexes and from the CI step's `git ls-files`
+pathspecs, or the hook skips the overlay's vault files and the CI step finds none and
+never uses the password. This repo is public, so it git-ignores `vault.*` under
+`inventory/`. The public
 `inventory/group_vars/` and `inventory/host_vars/` are **not** loaded for it. (Deploying from
 the Galaxy collections instead? [`examples/collection-fleet/`](../examples/collection-fleet/README.md)
 is a ready-made private repository for that path, inventory templates and `.gitignore` included.) Add child groups

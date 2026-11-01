@@ -22,8 +22,8 @@ defaults:
 # malicious code). The trailing comment records the human-readable version;
 # .github/dependabot.yml bumps them.
 jobs:
-  # Every pre-commit hook on every file: hygiene, markdownlint and yamllint. The same
-  # gate `pre-commit run --all-files` runs locally.
+  # Every pre-commit hook on every file: hygiene, markdownlint, yamllint and the vault
+  # files' encryption. The same gate `pre-commit run --all-files` runs locally.
   pre-commit:
     runs-on: ubuntu-latest
     timeout-minutes: 10         # hook environments are cached; ~1m cold
@@ -49,8 +49,9 @@ jobs:
   # release whose playbooks no longer load fails here. What a role makes of your
   # variables is only checked by a run (--check --diff). Fails until
   # inventory/hosts.yml is committed. Nothing here connects to a host or reads the
-  # git-ignored secret.yml files; a committed ansible-vault file would need its
-  # password here.
+  # git-ignored secret.yml files. Committed vault.yml files must decrypt with the
+  # ANSIBLE_VAULT_PASSWORD repository secret when it is set, and are replaced by an
+  # empty mapping when it is not (README.md § Encrypted secrets).
   ansible:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -78,6 +79,35 @@ jobs:
       # The same check the pre-commit hook runs on your working tree.
       - name: No vars source shadowed by another of the same name
         run: scripts/check-vars-shadowing.sh
+      # Optional (README.md § Encrypted secrets). With the ANSIBLE_VAULT_PASSWORD secret
+      # set, every committed vault file (at any depth under a group or host directory,
+      # as the vault-encrypted hook checks them) must decrypt with it, here, even one of
+      # a host or group the inventory does not name; the steps after it decrypt the
+      # rest as they load them. Without it (also on pull requests from forks and from
+      # Dependabot, which get no Actions secrets), each vault file is replaced by an
+      # empty mapping in this checkout only: the rest of the inventory is still loaded
+      # and checked, and the pre-commit job still checks each one is encrypted.
+      - name: Decrypt or stub the vault files
+        env:
+          VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+        run: |
+          list="$(git ls-files -- ':(glob)inventory/*_vars/*/**/vault.yml' \
+            ':(glob)inventory/*_vars/*/**/vault.yaml' ':(glob)inventory/*_vars/*/**/vault.json')"
+          [[ -n $list ]] || { echo "No vault files committed"; exit 0; }
+          mapfile -t vaults <<<"$list"
+          if [[ -n $VAULT_PASSWORD ]]; then
+            pass_file="$RUNNER_TEMP/vault-pass"
+            (umask 077 && printf '%s\n' "$VAULT_PASSWORD" >"$pass_file")
+            echo "ANSIBLE_VAULT_PASSWORD_FILE=$pass_file" >>"$GITHUB_ENV"
+            for f in "${vaults[@]}"; do
+              ansible-vault view --vault-password-file "$pass_file" "$f" >/dev/null \
+                || { echo "::error file=$f::$f does not decrypt with the ANSIBLE_VAULT_PASSWORD secret"; exit 1; }
+            done
+            echo "${#vaults[@]} vault file(s) decrypt with the ANSIBLE_VAULT_PASSWORD secret"
+          else
+            for f in "${vaults[@]}"; do echo '{}' >"$f"; done
+            echo "::warning::No ANSIBLE_VAULT_PASSWORD secret: loading the inventory with ${#vaults[@]} vault file(s) replaced by {}, unchecked"
+          fi
       # --list, not --graph: it loads every group_vars/ and host_vars/ file too. Its
       # output (your committed variables) is not printed.
       - name: Load the inventory

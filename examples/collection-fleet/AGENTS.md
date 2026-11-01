@@ -22,9 +22,12 @@ not from memory. A change to a role or playbook is made upstream in
 
 1. **Never commit secrets.** No passwords, private keys, API tokens, RPC URLs with keys
    in them or keystores in any tracked file. Inventory secrets live in the git-ignored
-   `secret.yml` files (`host_vars/<host>/` or `group_vars/<group>/`); host secrets are
-   generated on, or provisioned by the operator to, the host. `.gitignore` is a
-   backstop, not the design.
+   `secret.yml` files (`host_vars/<host>/` or `group_vars/<group>/`) or, if this fleet
+   opted in, in ansible-vault encrypted `vault.yml` files beside them, the one secrets
+   file that is committed (`README.md` § Encrypted secrets). Change a `vault.yml` only
+   with `ansible-vault edit`, never decrypt it in place, and never put the vault
+   password in the repository. Host secrets are generated on, or provisioned by the
+   operator to, the host. `.gitignore` is a backstop, not the design.
 2. **Infrastructure only.** Protocol and economic facts trace to the
    [deCDN ADRs](https://github.com/decdn/decdn/tree/main/adr). Contract addresses come
    only from the collections' network profile (`decdn_network`), never copied into the
@@ -70,6 +73,7 @@ ansible-playbook decdn.publisher.site -l <host> --check --diff          # dry ru
 ansible-playbook decdn.publisher.site -l <host>                         # deploy what the host's groups call for
 ansible-playbook decdn.publisher.backup -l <host>                       # fetched to backups/ (git-ignored)
 ansible-playbook decdn.publisher.decommission -l <host>                 # typed confirmation; keeps the keys
+ansible-vault edit inventory/group_vars/<group>/vault.yml               # change encrypted secrets (ANSIBLE_VAULT_PASSWORD_FILE set)
 pre-commit run --all-files                                              # the lint gate CI runs
 ```
 
@@ -83,8 +87,9 @@ commands.
 Galaxy install, `scripts/check-vars-shadowing.sh`, `ansible-inventory --list`, which
 loads every vars file, and `--syntax-check` of the site, backup and decommission
 playbooks), and `actionlint`. None of it checks what a role makes of your variables:
-only a `--check --diff` run does. A committed ansible-vault file would need its
-password in CI.
+only a `--check --diff` run does. Committed `vault.yml` files must each decrypt with
+the `ANSIBLE_VAULT_PASSWORD` repository secret when it is set, and are replaced by `{}`
+in the checkout when it is not; the `vault-encrypted` hook checks each one is encrypted.
 
 ## This fleet
 

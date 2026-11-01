@@ -81,7 +81,8 @@ same hardening, port and day-2 tooling as a cache node. Three things differ:
   or `decdn_cache_origins` for an ordered fallback list
   ([`decdn_node` role](../ansible/roles/decdn_node/README.md)).
   S3 keys go in `/etc/decdn/decdn.env` on the host (or in `decdn_extra_env` in a
-  git-ignored `secret.yml`, beside `decdn_rpc_url`), never in tracked inventory or
+  git-ignored `secret.yml`, beside `decdn_rpc_url`, or an ansible-vault encrypted
+  `vault.yml` in a private repository), never in plaintext tracked inventory or
   user-data.
   The origin playbook (`decdn.publisher.origin`) refuses a `decdn_origin_nodes` host
   without a backend, or one outside `decdn_nodes`.

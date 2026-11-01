@@ -16,6 +16,10 @@ compose/compose.override.yaml
 # repo. The fleet example's own .gitignore must not ignore it (a private copy commits
 # it), and this file does not travel with `cp -R examples/collection-fleet`.
 /examples/collection-fleet/inventory/hosts.y*ml
+# Nor its committable ansible-vault files (examples/collection-fleet/README.md §
+# Encrypted secrets): encrypted, but ciphertext in a public repository can be attacked
+# offline. A private copy commits them; this file does not travel with it.
+/examples/collection-fleet/inventory/*_vars/*/**/vault.*
 
 # Private keys & certs (defense-in-depth; real keystores live under /etc on the host)
 **/cert.pem
