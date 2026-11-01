@@ -231,8 +231,8 @@ groups:
             See docs/runbook.md § Cache coalescing mutex poisoned.
 
       # The value, not increase(): the slash watcher's bring-up backfill counts
-      # every still-appealable slash before the first scrape, so increase()
-      # would miss a slash found at startup. A non-zero value means this process
+      # every still-appealable slash at startup, which can be before the first
+      # scrape, so increase() could miss a slash found then. A non-zero value means this process
       # has seen a slash; after a restart it re-counts only the slashes whose
       # appeal window is still open, so the alert clears once the last window
       # closes and the node restarts.
@@ -532,11 +532,13 @@ groups:
 
       # The metrics listener serves before bring-up, so a node stuck in boot
       # scrapes fine (up == 1) and DecdnNodeDown stays silent: this rule covers
-      # it. `max_over_time`, not the bare gauge, keeps it firing through the gaps
-      # a crash loop leaves in the series. It fires about 10m into a first boot
-      # (the node's 10-minute boot-read budget) and up to 25m after a ready
-      # node restarts (its last 1 stays in the 15m window). A node that exits
-      # before its first scrape has no series at all; DecdnNodeDown covers that.
+      # it. A node whose boot chain reads keep failing exits at upstream's boot
+      # deadline and restarts, a crash loop whose failed scrapes write staleness
+      # markers; `max_over_time`, not the bare gauge, keeps the for running
+      # across them. It fires 10m (the for) after a first boot's first scrape,
+      # and up to 25m after a ready node restarts (its last 1 stays in the 15m
+      # window, then the for). A node that exits before its first scrape has no
+      # series at all; DecdnNodeDown covers that.
       - alert: DecdnNodeBootStuck
         expr: max_over_time(decdn_node_boot_ready[15m]) == 0
         for: 10m
@@ -547,8 +549,8 @@ groups:
           runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#rpc-unreachable"
           summary: "{{ $labels.instance }} has not finished boot"
           description: |
-            decdn_node_boot_ready has read 0 for 10 m with no 1 sample in the
-            last 15 m. If decdn_chain_boot_read_retries_total rises, a boot chain
+            decdn_node_boot_ready has had no 1 sample for 25 m (or since its
+            first scrape, on a first boot, for 10 m). If decdn_chain_boot_read_retries_total rises, a boot chain
             read is retrying. If it does not rise, the node is stuck before the
             chain reads: read the first WARN or ERROR line after "deCDN node starting".
 
@@ -1325,8 +1327,8 @@ groups:
             for the buyer leg, decdn_node_pull_no_providers_total for discovery,
             and decdn_buyer_wallet_usdc for funding.
 
-      # Seeding runs once at cache open, before the first scrape, so the value
-      # is read rather than increase(). Only a restart clears it.
+      # Seeding runs once at cache open, which can be before the first scrape,
+      # so the value is read rather than increase(). Only a restart clears it.
       - alert: DecdnCacheRecencySeedFailed
         expr: decdn_cache_recency_seed_failures_total > 0
         for: 0m
