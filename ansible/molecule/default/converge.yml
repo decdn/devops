@@ -137,3 +137,16 @@
     - role: grafana_alloy
       tags: [observability, decdn_node, node]
     - role: decdn_node
+  post_tasks:
+    # The stub serves /metrics at once with decdn_node_boot_ready 0, then flips it
+    # to 1 (decdn-node-stub's BOOT_SECONDS): the probe must end on the 1, not on
+    # the first 200.
+    - name: Assert the readiness probe waited for decdn_node_boot_ready 1
+      ansible.builtin.assert:
+        that:
+          - decdn_metrics_probe.status == 200
+          - decdn_metrics_probe.content is search('(?m)^decdn_node_boot_ready 1$')
+        fail_msg: >-
+          The readiness probe ended on status
+          {{ decdn_metrics_probe.status | default('none') }} without
+          decdn_node_boot_ready 1: {{ decdn_metrics_probe.content | default('') }}

@@ -1800,17 +1800,21 @@
   when: (decdn_env_post_stat.stat.checksum | default('')) | length > 0
 
 # --- Readiness ----------------------------------------------------------------
-# ADVISORY probe: the daemon binds its loopback /metrics listener only after its
-# startup bootstrap completes, which on a healthy node can lag process start by a
-# long way (metrics/admin bind behind the PaymentPool buyer bootstrap — an
-# upstream startup-ordering issue tracked in decdn/decdn, not here). So a probe
-# TIMEOUT must NOT fail the deploy — but a metrics endpoint that ANSWERS with an
-# error is a real fault, not slow startup, so that still should. failed_when below
-# encodes exactly that (connection-refused advisory, non-200 fails loud). The
-# service-state assert further down is a necessary backstop but NOT sufficient:
-# the unit is Type=simple, so a wedged-but-alive or slow-crash-looping daemon can
-# still report `running` (see that task) — a persistent timeout here is therefore
-# not provably benign. Tune the window with
+# ADVISORY probe for boot. A release carrying decdn/decdn#2821 binds its loopback
+# /metrics listener before boot and exports `decdn_node_boot_ready`: 0 until the
+# RPC preflight and the boot chain reads finish, then 1 (the "node runtime ready"
+# banner). Older releases export no gauge and bind /metrics only once boot has
+# finished. So the node is boot-ready when /metrics answers 200 and either says
+# `decdn_node_boot_ready 1` or has no such line; a 200 alone is not enough.
+# A boot can take many minutes on a healthy node (a slow RPC, chain-read
+# retries), so a probe TIMEOUT must NOT fail the deploy; the warning below says
+# which state it ended in, and the DecdnNodeBootStuck alert covers a boot that
+# never finishes. A metrics endpoint that ANSWERS with an error is a real fault,
+# not slow startup, so that still fails (failed_when). The service-state assert
+# further down is a necessary backstop but NOT sufficient: the unit is
+# Type=simple, so a wedged-but-alive or slow-crash-looping daemon can still report
+# `running` (see that task) — a persistent timeout here is therefore not provably
+# benign. Tune the window with
 # decdn_readiness_retries × decdn_readiness_delay (≈60s at the defaults).
 # KICS reports this task under "Communication Over HTTP" (MEDIUM). It is a false
 # positive and is left unsuppressed deliberately — KICS's inline ignore directives
@@ -1821,46 +1825,62 @@
 # to require. "Require the metrics listener to stay on loopback" above enforces that
 # the address cannot be moved off loopback. `make security` gates on --fail-on high,
 # so this does not fail the build.
-- name: Wait for the node metrics endpoint (advisory)
+- name: Wait for the node to finish booting (advisory)
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ decdn_metrics_port }}/metrics"
     status_code: 200
+    return_content: true
   register: decdn_metrics_probe
   retries: "{{ decdn_readiness_retries }}"
   delay: "{{ decdn_readiness_delay }}"
   # default(-1): on connection-refused the uri module returns status -1 (and may
-  # omit the key). Retry only while the endpoint has NOT answered (status -1) —
-  # stop the moment it answers (any other status), so a real fault (e.g. a 500)
-  # surfaces immediately via failed_when rather than after the whole window.
-  until: decdn_metrics_probe.status | default(-1) != -1
+  # omit the key). Retry while the endpoint has NOT answered (status -1) or answers
+  # 200 while still booting (`decdn_node_boot_ready 0`). Stop on a boot-ready 200,
+  # and on any other status, so a real fault (e.g. a 500) surfaces immediately via
+  # failed_when rather than after the whole window.
+  until: >-
+    decdn_metrics_probe.status | default(-1) != -1
+    and decdn_metrics_probe.content | default('') is not search('(?m)^decdn_node_boot_ready 0$')
   changed_when: false
-  # Scope the suppression, don't blanket it: -1 (not bound yet) stays advisory and
-  # 200 is ready, but a bound endpoint answering any other status (e.g. a 500 from
-  # a broken /metrics handler) is a genuine fault — fail loud on it instead of
-  # masking it as slow startup (AGENTS.md hard-rule 4).
+  # Scope the suppression, don't blanket it: -1 (not bound yet) and a 200 that is
+  # still booting stay advisory, but a bound endpoint answering any other status
+  # (e.g. a 500 from a broken /metrics handler) is a genuine fault — fail loud on
+  # it instead of masking it as slow startup (AGENTS.md hard-rule 4).
   failed_when: decdn_metrics_probe.status | default(-1) not in [-1, 200]
   # `--check` never starts the service, so the probe would be meaningless (and
   # uri skips in check mode anyway, leaving no status for the warn below).
   when: not ansible_check_mode
 
-- name: Warn if the metrics endpoint was not ready within the probe window
+- name: Warn if the node did not finish booting within the probe window
   ansible.builtin.debug:
     # Literal block so the curl/journalctl hints print on their own lines,
     # copy-pasteable, rather than folded onto one.
     msg: |-
-      decdn-node /metrics did not answer 200 within
+      decdn-node did not report boot-ready within
       ~{{ (decdn_readiness_retries | int) * (decdn_readiness_delay | int) }}s
       ({{ decdn_readiness_retries }}×{{ decdn_readiness_delay }}), so readiness
-      could NOT be confirmed. This is OFTEN benign — a healthy node binds
-      metrics/admin late (behind the startup PaymentPool bootstrap) and logs
-      "node runtime ready" once bound — but a PERSISTENT timeout can also mean a
-      wedged or mis-started daemon (a Type=simple unit still reports `running`
-      even when wedged). Verify before trusting the node:
-        curl -s http://127.0.0.1:{{ decdn_metrics_port }}/metrics
+      could NOT be confirmed.
+      {% if decdn_metrics_probe.status | default(-1) == 200 %}
+      /metrics answers with `decdn_node_boot_ready 0`: the node is still in its
+      RPC preflight or boot chain reads. A slow RPC can make this take minutes;
+      the DecdnNodeBootStuck alert fires if it never finishes. A rising
+      decdn_chain_boot_read_retries_total means the chain reads are retrying;
+      otherwise read the first WARN or ERROR after "deCDN node starting".
+      {% else %}
+      /metrics never answered. A release without `decdn_node_boot_ready` binds it
+      only once boot has finished, so this is OFTEN benign there; on a newer
+      release, or PERSISTENTLY, it means a daemon that died or wedged before its
+      listener came up (a Type=simple unit still reports `running` even when
+      wedged).
+      {% endif %}
+      Verify before trusting the node:
+        curl -s http://127.0.0.1:{{ decdn_metrics_port }}/metrics | grep -E '^decdn_node_boot_ready '
         journalctl -u decdn-node -e   (look for "node runtime ready")
   when:
     - not ansible_check_mode
-    - decdn_metrics_probe.status | default(-1) != 200
+    - >-
+      decdn_metrics_probe.status | default(-1) != 200
+      or decdn_metrics_probe.content | default('') is search('(?m)^decdn_node_boot_ready 0$')
 
 # A stale process can still answer /metrics, so also confirm THIS unit exists and
 # is running. This is a backstop, not a full health check: it catches a daemon

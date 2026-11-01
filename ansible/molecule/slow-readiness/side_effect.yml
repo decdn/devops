@@ -1,0 +1,47 @@
+---
+# What converge cannot show: a daemon whose /metrics never answers, as a release
+# without decdn_node_boot_ready looks while it boots (it binds only once boot has
+# finished), or a daemon that dies before its listener comes up. The probe must
+# keep that advisory too (status -1 warns, it does not fail). The host is left
+# booting as converged (the `stuck` stub), for verify.
+- name: Side effect — a daemon that never binds /metrics
+  hosts: all
+  become: true
+  tasks:
+    - name: Stop decdn-node
+      ansible.builtin.systemd_service:
+        name: decdn-node
+        state: stopped
+
+    - name: Make the stub never bind /metrics
+      ansible.builtin.copy:
+        dest: /etc/decdn/stub-boot
+        content: "no-metrics\n"
+        mode: "0644"
+
+    # The role starts the stopped unit, so its probe meets the new boot.
+    - name: Run the role against a daemon that never answers
+      ansible.builtin.include_role:
+        name: decdn_node
+
+    - name: Assert the probe retried a refused connection and the deploy went on
+      ansible.builtin.assert:
+        that:
+          - decdn_metrics_probe.status | default(-1) == -1
+          - decdn_metrics_probe.attempts | int > 1
+        fail_msg: >-
+          Expected the probe to retry a /metrics that never answers until its
+          window ran out; got status
+          {{ decdn_metrics_probe.status | default('none') }} after
+          {{ decdn_metrics_probe.attempts | default('?') }} attempt(s).
+
+    - name: Put the stub back into a boot that never finishes
+      ansible.builtin.copy:
+        dest: /etc/decdn/stub-boot
+        content: "stuck\n"
+        mode: "0644"
+
+    - name: Restart decdn-node on the stuck boot, for verify
+      ansible.builtin.systemd_service:
+        name: decdn-node
+        state: restarted

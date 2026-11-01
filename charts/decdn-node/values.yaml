@@ -213,16 +213,23 @@ config:
 # SIGTERM runs a graceful drain; killing mid-drain loses paid deliveries.
 terminationGracePeriodSeconds: 300
 
-# /metrics is the only probe target: there is no /health route and the admin RPC
-# is loopback-only. It binds only after startup completes — RPC preflight, key
-# load, cache/endpoint build, then the chain bring-up (CapacityBond + slash-watcher
-# enumerations, blacklist and DHT bootstrap) — so startup must cover a slow RPC; a
-# failed bring-up exits the container and restarts it. Ready != serving: paid QUIC
-# listeners open only after the first ContentBlacklist sync.
+# startupProbe asks the admin RPC (`decdn node health`, the CLI the image ships, as
+# Compose's healthcheck does). The admin RPC starts only once boot has finished —
+# RPC preflight, key load, cache/endpoint build, then the chain bring-up
+# (CapacityBond + slash-watcher enumerations, blacklist and DHT bootstrap) — so the
+# 5-minute budget below restarts a boot that never finishes, and must cover a slow
+# RPC. It needs config.observability.admin_port (default 9191) on. readiness and
+# liveness run only after it passes, on /metrics: from the decdn release that adds
+# decdn_node_boot_ready, /metrics answers from process start, so an httpGet on it
+# proves only that the listener is up (the DecdnNodeBootStuck alert reads the
+# gauge). A failed bring-up exits the container and restarts it. Ready != serving:
+# paid QUIC listeners open only after the first ContentBlacklist sync.
+# To replace a probe's handler, null the default's (startupProbe.exec: null):
+# Helm merges an override into these defaults, and two handlers fail the render.
 startupProbe:
-  httpGet:
-    path: /metrics
-    port: metrics
+  exec:
+    command: [decdn, node, health, --config, /etc/decdn/node.toml, --timeout-ms, "4000"]
+  timeoutSeconds: 5
   periodSeconds: 5
   failureThreshold: 60
 readinessProbe:

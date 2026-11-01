@@ -1,11 +1,13 @@
 ---
-# Regression scenario for the ADVISORY /metrics readiness probe. Runs the stub
-# daemon in its "late bind" mode (it stays alive but never binds metrics — see
-# molecule/default/files/decdn-node-stub, gated on /etc/decdn/stub-no-metrics),
-# with a deliberately tiny readiness window. It proves the fix: the role's probe
-# WARNS (does not fail) on timeout, the deploy still succeeds, and the hard
-# service-state gate confirms the unit is `running`. Reuses the default
-# scenario's stub binary rather than duplicating it.
+# Regression scenario for the ADVISORY boot-readiness probe. Runs the stub daemon
+# in its `stuck` boot (it serves /metrics with decdn_node_boot_ready 0 forever —
+# see molecule/default/files/decdn-node-stub, BOOT_MODE_MARKER) with a
+# deliberately tiny readiness window. It proves the role keeps polling a 200 that
+# is still booting instead of taking it as ready, WARNS (does not fail) when the
+# window runs out, and that the hard service-state gate confirms the unit is
+# `running`. side_effect.yml re-runs the role against a daemon that never binds
+# /metrics (a release without the gauge, booting), which must stay advisory too.
+# Reuses the default scenario's stub binary rather than duplicating it.
 #
 # `baseline` is NOT exercised here (same rationale as the default scenario:
 # host-level hardening is real-host-only — see molecule/default/molecule.yml).
@@ -37,6 +39,32 @@ provisioner:
     # round trip per remote task (measured at -22% on the `default` scenario, which
     # also carries the coverage note). Safe here: the containers have no sudo requiretty.
     ANSIBLE_PIPELINING: "true"
+  inventory:
+    group_vars:
+      # Inventory group_vars, not converge vars: side_effect.yml runs the role too.
+      # Chain/contract knobs mirror the default scenario's well-formed placeholders
+      # (the role's fail-loud asserts still run against them).
+      all:
+        # Reuse the default scenario's stub binary rather than duplicating it.
+        decdn_node_install_method: manual
+        decdn_node_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/default/files/decdn-node-stub"
+        decdn_cli_manual_bin_src: "${MOLECULE_PROJECT_DIRECTORY}/molecule/default/files/decdn-node-stub"
+        decdn_node_version: "0.0.0-molecule-stub"
+        decdn_rpc_url: "https://rpc.example.invalid/"
+        decdn_chain_id: 421614
+        decdn_region: "US"
+        decdn_payment_pool_address: "0x1111111111111111111111111111111111111111"
+        decdn_capacity_bond_address: "0x2222222222222222222222222222222222222222"
+        decdn_slash_judge_address: "0x3333333333333333333333333333333333333333"
+        # REQUIRED upstream (ADR 011/031) — the role asserts it with the other three.
+        decdn_content_blacklist_address: "0x4444444444444444444444444444444444444444"
+        decdn_cache_origin_kind: "http"
+        decdn_cache_origin_url: "https://origin.example.invalid/"
+        # Tiny probe window (~2s) so the advisory timeout is exercised fast. The
+        # stub never finishes booting (or never binds) here, so any window times
+        # out — this just keeps the scenario quick.
+        decdn_readiness_retries: 2
+        decdn_readiness_delay: 1
 verifier:
   name: ansible
 scenario:
@@ -48,5 +76,6 @@ scenario:
     - prepare
     - converge
     - idempotence
+    - side_effect
     - verify
     - destroy

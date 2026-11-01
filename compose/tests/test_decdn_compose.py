@@ -243,6 +243,30 @@ class Guard(unittest.TestCase):
             self.assertIsNone(dc.bind_metrics_url(bind), bind)
 
 
+class BootState(unittest.TestCase):
+    def test_ready_with_the_gauge_at_1(self) -> None:
+        self.assertIsNone(dc.boot_state(200, "a 1\ndecdn_node_boot_ready 1\nb 2\n"))
+
+    def test_a_release_without_the_gauge_is_ready_on_200(self) -> None:
+        self.assertIsNone(dc.boot_state(200, METRICS_OK))
+
+    def test_booting_with_the_gauge_at_0(self) -> None:
+        reason = dc.boot_state(200, "decdn_node_boot_ready 0\n")
+        self.assertIsNotNone(reason)
+        self.assertIn("booting", reason)
+
+    def test_only_the_exact_series_counts(self) -> None:
+        # A longer name is another series: no gauge, so a 200 is ready; the gauge
+        # itself still decides when both are present.
+        self.assertIsNone(dc.boot_state(200, "decdn_node_boot_ready_x 0\n"))
+        self.assertIsNotNone(dc.boot_state(200, "decdn_node_boot_ready_x 1\ndecdn_node_boot_ready 0\n"))
+
+    def test_no_200_is_not_ready(self) -> None:
+        for status in (0, -1, 500):
+            with self.subTest(status=status):
+                self.assertIsNotNone(dc.boot_state(status, "decdn_node_boot_ready 1\n"))
+
+
 class ContainerEnv(unittest.TestCase):
     def test_unreadable_env_is_empty(self) -> None:
         for out in ("null", "", "not json", '{"a": 1}', '["A=1", 2, "B"]'):

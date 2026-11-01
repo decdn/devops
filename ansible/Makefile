@@ -199,7 +199,7 @@ decommission:
 # validation-sponsord (bad knobs, every role, must be rejected by their own asserts;
 # split by role so they run side by side), generate-keystore (opt-in host-side
 # wallet), host-env (host-provisioned /etc/decdn/decdn.env), slow-readiness (advisory
-# /metrics probe timeout), grafana-cloud and grafana-cloud-token (opt-in Grafana
+# boot-readiness probe timeout), grafana-cloud and grafana-cloud-token (opt-in Grafana
 # Cloud observability, host-provisioned vs inventory token), os-matrix (default's
 # plays on Debian 13, Ubuntu 24.04 and 26.04), lifecycle (network profile,
 # backup + decommission), sponsord, sponsord-install and sponsord-wallet (the sponsord

@@ -433,7 +433,15 @@ check(cfg["blockchain"]["eth_keystore"] == cfg["identity"]["data_dir"] + "/keyst
 check(cfg["observability"]["metrics_bind"] == "0.0.0.0", "metrics_bind")
 check(ports["quic"]["containerPort"] == quic_port and ports["quic"]["protocol"] == "UDP", "quic containerPort")
 check(ports["metrics"]["containerPort"] == metrics_port, "metrics containerPort")
-for probe in ("startupProbe", "readinessProbe", "livenessProbe"):
+# startupProbe asks the admin RPC, which starts only once boot has finished;
+# /metrics answers during boot (decdn_node_boot_ready 0), so it gates nothing alone.
+check(main["startupProbe"].get("exec", {}).get("command", [])[:3] == ["decdn", "node", "health"]
+      and "httpGet" not in main["startupProbe"], "startupProbe must run `decdn node health`")
+cmd = main["startupProbe"]["exec"]["command"]
+check("--config" in cmd and cmd[cmd.index("--config") + 1] == main["args"][main["args"].index("--config") + 1],
+      "startupProbe reads another node.toml than the daemon")
+check(main["startupProbe"]["timeoutSeconds"] >= 5, "startupProbe timeout below the CLI's --timeout-ms")
+for probe in ("readinessProbe", "livenessProbe"):
     check(main[probe]["httpGet"]["port"] == "metrics", f"{probe} port")
 
 msvc = one("Service", "metrics")
@@ -643,6 +651,12 @@ expect_fail "ServiceMonitor, policy blocks" template 'metrics.networkPolicy.from
 expect_fail "non-string rule label"        schema   '/metrics/prometheusRule/ruleLabels'         --set-json 'metrics.prometheusRule.ruleLabels={"team":1}'
 expect_fail "invalid dashboard label key"  schema   '/metrics/grafanaDashboards/label'           --set 'metrics.grafanaDashboards.label=not a label'
 expect_fail "unknown monitoring knob"      schema   "additional propert(y|ies) 'rules'"          --set metrics.prometheusRule.rules=x
+# The admin RPC off leaves `decdn node health` nothing to ask; an override replaces
+# the handler only once the default's is nulled.
+http_startup=(--set-json 'startupProbe={"exec":null,"httpGet":{"path":"/metrics","port":"metrics"}}')
+expect_fail "startupProbe, admin RPC off"  template 'startupProbe runs .decdn node health.'      --set config.observability.admin_port=0 --set metrics.port=9191
+expect_fail "startupProbe, two handlers"   template 'startupProbe has 2 handlers \(exec, httpGet\)' --set-json 'startupProbe.httpGet={"path":"/metrics","port":"metrics"}'
+expect_fail "livenessProbe, two handlers"  template 'livenessProbe has 2 handlers'             --set-json 'livenessProbe.tcpSocket={"port":"metrics"}'
 
 # --- edge cases that must RENDER ---------------------------------------------------
 expect_render() { # <description> <helm args...>
@@ -651,7 +665,7 @@ expect_render() { # <description> <helm args...>
     || { cat "$work/render.err" >&2; fail "render should have passed: $desc"; }
   pass "renders: $desc"
 }
-expect_render "admin_port 0 frees 9191"        --set config.observability.admin_port=0 --set metrics.port=9191
+expect_render "admin_port 0 frees 9191"        --set config.observability.admin_port=0 --set metrics.port=9191 "${http_startup[@]}"
 expect_render "admin_port 65535"               --set config.observability.admin_port=65535
 expect_render "admin_port as a whole float"    --set-json 'config.observability.admin_port=9192.0'
 expect_render "fs origin at the mount root"    --set-json 'origin.volume={"emptyDir":{}}' --set config.cache.origin.kind=fs --set config.cache.origin.path=/srv/decdn-origin
@@ -745,7 +759,7 @@ n="$(notes_of -f "$base" --set service.enabled=false)" || fail "notes render (Se
 if ! { has 'the QUIC Service is disabled' && has 'service.enabled=true'; }; then
   fail "notes: Service-disabled node not told to enable it"
 fi
-n="$(notes_of -f "$base" --set config.observability.admin_port=0 --set metrics.port=9191)" || fail "notes render (admin off)"
+n="$(notes_of -f "$base" --set config.observability.admin_port=0 --set metrics.port=9191 "${http_startup[@]}")" || fail "notes render (admin off)"
 if ! { has 'admin RPC is disabled' && ! has 'port-forward'; }; then fail "notes: admin_port 0"; fi
 pass "install notes: multiaddrs per exposure, hostPort warning, no-address note, admin RPC"
 

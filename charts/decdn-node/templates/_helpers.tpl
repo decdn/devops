@@ -155,7 +155,11 @@ than let a values override win:
   removes one of them fails too: no seccomp profile at either level means
   Unconfined (the kubelet's default unless it runs with seccompDefault), and no
   runAsGroup means gid 0 for a uid the
-  image has no passwd entry for.
+  image has no passwd entry for;
+- a probe with more than one handler (Helm merges an override's `httpGet` into
+  the default `exec`, which the API server rejects: null the default's), or a
+  startupProbe running `decdn node health` with the admin RPC off
+  (config.observability.admin_port 0), which could never pass.
 --------------------------------------------------------------------------- */}}
 {{- define "decdn-node.validatePod" -}}
 {{- $fullname := include "decdn-node.fullname" . }}
@@ -237,6 +241,24 @@ than let a values override win:
 {{- end }}
 {{- if get $caps "add" }}
 {{- fail "securityContext.capabilities.add must be empty: the node needs no Linux capabilities" }}
+{{- end }}
+{{- range $name := list "startupProbe" "readinessProbe" "livenessProbe" }}
+{{- $probe := default (dict) (get $.Values $name) }}
+{{- $handlers := list }}
+{{- range $h := list "exec" "httpGet" "tcpSocket" "grpc" }}
+{{- if get $probe $h }}
+{{- $handlers = append $handlers $h }}
+{{- end }}
+{{- end }}
+{{- if gt (len $handlers) 1 }}
+{{- fail (printf "%s has %d handlers (%s): set the others to null, e.g. %s.exec: null (Helm merges an override into the default)" $name (len $handlers) (join ", " $handlers) $name) }}
+{{- end }}
+{{- end }}
+{{- $startCmd := dig "exec" "command" (list) (default (dict) .Values.startupProbe) }}
+{{- /* A non-number admin_port is decdn-node.config's to refuse, with its own message. */}}
+{{- $adminPort := dig "observability" "admin_port" 9191 (default (dict) .Values.config) }}
+{{- if and (has "node" $startCmd) (has "health" $startCmd) (has (kindOf $adminPort) (list "float64" "int64" "int")) (eq (float64 $adminPort) 0.0) }}
+{{- fail "startupProbe runs `decdn node health`, which needs the admin RPC, but config.observability.admin_port is 0: enable the admin RPC, or replace the startupProbe (startupProbe.exec: null plus an httpGet on /metrics, which then proves only that the listener is up)" }}
 {{- end }}
 {{- end }}
 

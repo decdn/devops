@@ -56,7 +56,7 @@ against [`compose.yaml`](compose.yaml), plus `compose.override.yaml` when you ha
 | `check` | the preflight `up` also runs: every file present, owned and moded as the services need, the settings filled in, `decdn config validate` against the pinned image, the relay's and DNS server's configs, and no other process on the ports the stopped services bind |
 | `up [svc…]` | `check`, then `docker compose up -d` |
 | `stop`, `restart`, `down` | `docker compose …`, but refused while sponsord holds an unconfirmed pool top-up ([below](#the-top-up-hold)) |
-| `health` | probes every running service: the node's admin RPC and metrics, each `/healthz`, sponsord's hold, the relay's metrics and certificate, the DNS server's version, SOA answers and certificate, Alloy's readiness and components |
+| `health` | probes every running service: the node's admin RPC and boot (`decdn_node_boot_ready`), each `/healthz`, sponsord's hold, the relay's metrics and certificate, the DNS server's version, SOA answers and certificate, Alloy's readiness and components |
 | `cli <args>` | the `decdn` CLI from the node image, with the node's config and keys and your RPC endpoint from `decdn.env`: `cli whoami`, `cli node status`, `cli setup` |
 | `backup -r <age recipient>` | an age-encrypted archive of the active profiles' keys and secrets |
 | `config` | `docker compose config`, with every value that came from an env file shown as `<redacted>` (the plain command prints `DECDN_RPC_URL` and the rest in clear) |
@@ -149,6 +149,10 @@ anything past your firewall. The node's only public port is QUIC **udp/4433**.
 
 **Health.** The container's healthcheck is `decdn node health` against the admin RPC,
 so `docker compose ps` shows a wedged runtime as unhealthy, not just a live process.
+`decdn-compose health` also reads `decdn_node_boot_ready` from the node's loopback
+`/metrics`: from the release that adds it, `/metrics` answers while the node is still
+booting, so a 200 alone proves only the listener. A release without the gauge binds
+`/metrics` only once boot has finished.
 Dashboards and alert rules are in [`monitoring/`](../monitoring/README.md).
 
 ### Operate
