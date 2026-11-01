@@ -27,8 +27,8 @@ four-dashboard suite and alert rules that go with them. `decdn/decdn` ships none
 their only home.
 
 **The files** (the node's in `monitoring/decdn-node/`, sponsord's in `monitoring/sponsord/`,
-the iroh relay's in `monitoring/iroh-relay/`, the public gateway's in
-`monitoring/decdn-gateway/`):
+the iroh relay's in `monitoring/iroh-relay/`, the iroh DNS server's in
+`monitoring/iroh-dns-server/`, the public gateway's in `monitoring/decdn-gateway/`):
 
 - `grafana-dashboard.json` — "deCDN — fleet overview", uid `decdn-poc-overview`.
   Fleet status, delivery funnel, slash safety, logs and traces.
@@ -66,6 +66,17 @@ the iroh relay's in `monitoring/iroh-relay/`, the public gateway's in
   in CI. Re-capture it on an `iroh_relay_version` bump (the command is in its header).
   Logs: `{unit="iroh-relay.service"}` with the parsed `level`. Unit tests in
   `prometheus-alerts_test.yml`.
+
+- `monitoring/iroh-dns-server/` — the self-hosted iroh DNS server's pair:
+  `dashboard-iroh-dns-server.json` (uid `decdn-iroh-dns-server`) and `prometheus-alerts.yml`
+  (group `iroh-dns-server`, `job="iroh-dns-server"`), Ansible and Compose paths, not rendered
+  by the chart. Unlabeled `dns_server_*` counters plus two gauges (`cache_zones`,
+  `cache_zones_dht`); TCP DNS counts in `dns_requests_total` only (tcp = total − udp −
+  https), and the mean HTTP duration is `http_requests_duration_ms_total` over
+  `http_requests_total` (no histogram). Name-checked in CI against `exported-metrics.txt`,
+  like the relay's: re-capture it on an `iroh_dns_server_version` bump (the command is in
+  its header). Logs: `{unit="iroh-dns-server.service"}` with the parsed `level`. Unit tests
+  in `prometheus-alerts_test.yml`.
 
 - `monitoring/decdn-gateway/` — the public gateway's pair: `dashboard-decdn-gateway.json`
   (uid `decdn-gateway`) and `prometheus-alerts.yml` (group `decdn-gateway`,

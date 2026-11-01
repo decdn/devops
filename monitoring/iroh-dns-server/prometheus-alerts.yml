@@ -1,0 +1,137 @@
+# iroh-dns-server reference Prometheus alerting rules
+#
+# For the self-hosted iroh DNS server deCDN nodes publish their records to and
+# clients resolve them through (roles/iroh_dns_server), whose /metrics the
+# grafana_alloy role (and Compose's alloy profile) ships as job="iroh-dns-server".
+# Every series is in iroh-dns-server's `dns_server` group; the names are the ones
+# the pinned release exports (exported-metrics.txt beside this file, which
+# `make lint-helm` checks them against). Thresholds are operator-onboarding
+# defaults, not normative.
+#
+# NOT covered: the certificate's expiry. iroh-dns-server renews it itself (Let's
+# Encrypt) but exports nothing about it; watch https://<hostname>/healthz with a
+# blackbox or synthetic check of your own, and DNS from outside the host with dig:
+# the server itself (dig @<hostname> <hostname> SOA) and the delegation through a
+# public resolver (dig <hostname> SOA). IrohDnsServerNoPublishes is the symptom
+# when nodes cannot reach the https listener.
+#
+# The server runs on the Ansible path and as Compose's `dns` profile. The
+# decdn-node chart does NOT render this file (its PrometheusRule reads
+# ../decdn-node/prometheus-alerts.yml).
+#
+# Validate locally with `make lint-helm`: it runs promtool check rules on this
+# file, and promtool test rules on prometheus-alerts_test.yml against a copy
+# with the annotations stripped (see that file).
+#
+# Load into Grafana Cloud with mimirtool (see ../README.md), or into Prometheus via
+# rule_files (example in ../decdn-node/prometheus-alerts.yml).
+
+groups:
+  - name: iroh-dns-server
+    interval: 30s
+    rules:
+      # The second arm fires on a series that stopped arriving. An agent scraping on the
+      # host (grafana_alloy) writes no up=0 when the host, its network or the agent itself
+      # is gone, so `up == 0` alone stays silent when the whole host is. (A central
+      # Prometheus writes up=0 itself; there the arm fires once the target leaves service
+      # discovery.) The arm keeps the instance label (absent() would not). Both arms
+      # reduce to job and instance, the labels the alert carries: a changed region or
+      # other label on a live target does not fire, one target fires once even with
+      # two label sets in the window, and the for: carries over between the arms. It
+      # remembers a series for 1d, so it resolves a day after the last sample even if
+      # the host is still dead, and a decommissioned host or a renamed job or instance
+      # fires until then: silence it.
+      - alert: IrohDnsServerDown
+        expr: |
+          max by (job, instance) (up{job="iroh-dns-server"} == 0)
+          or max by (job, instance) (
+               max_over_time(up{job="iroh-dns-server"}[1d]) unless on(job, instance) up{job="iroh-dns-server"})
+        for: 2m
+        labels:
+          component: dns
+          severity: critical
+        annotations:
+          summary: "iroh-dns-server on {{ $labels.instance }} unreachable"
+          description: |
+            iroh-dns-server's scrape has failed for two minutes, or its series
+            stopped arriving (the host, its network or the scraping agent is down).
+            Nodes cannot publish their records and clients cannot resolve
+            them under its origin (decdn_discovery_dns_origin); upstream has
+            no replication, so there is no second server to fall back to.
+            Read why on the host: journalctl -u iroh-dns-server -e. Adjust
+            the job="iroh-dns-server" selector if your scrape job is named
+            differently.
+
+      # A rise against the server's own last day, not a share of lookups. In 1.3.0
+      # dns_lookup_error counts every answer other than NOERROR and NXDOMAIN: a
+      # REFUSED (the record store failing: node_zone_handler maps a store error to
+      # REFUSED, not SERVFAIL) and a NOTIMP (a non-query opcode, such as an UPDATE
+      # or STATUS probe from a scanner). A query for a name outside the origins is
+      # NXDOMAIN (the server is authoritative for "." too) and an AXFR is NOERROR
+      # with no answer, so both count as not-found, and a packet that does not
+      # parse is not counted. The probes on a public udp/53 are steady, so the
+      # baseline absorbs them, and a quiet server could otherwise sit above any
+      # fixed share. The floor (0.1/s, 6 a minute) keeps a server with no baseline
+      # from firing on a few probes. A series under a day old has an understated
+      # baseline (rate() divides by the whole day): in its first ~8 hours any
+      # steady error rate over the floor fires.
+      - alert: IrohDnsServerLookupErrors
+        expr: >-
+          sum by (job, instance) (rate(dns_server_dns_lookup_error_total{job="iroh-dns-server"}[30m])) > 0.1
+          and on(job, instance)
+          sum by (job, instance) (rate(dns_server_dns_lookup_error_total{job="iroh-dns-server"}[30m]))
+          > 3 * sum by (job, instance) (rate(dns_server_dns_lookup_error_total{job="iroh-dns-server"}[1d]))
+        for: 15m
+        labels:
+          component: dns
+          severity: warning
+        annotations:
+          summary: "iroh-dns-server on {{ $labels.instance }} answers more lookups with an error"
+          description: |
+            iroh-dns-server answered {{ $value | humanize }} lookups a second
+            with an error (neither NOERROR nor NXDOMAIN) over the last 30
+            minutes, more than three times its rate over the last day, for
+            15 minutes. The record store failing answers REFUSED: look for
+            "get ... failed" (WARN) or "packet store actor failed" (ERROR)
+            in journalctl -u iroh-dns-server and check the disk under
+            /var/lib/iroh-dns-server. NOTIMP means
+            someone sends non-query opcodes (an UPDATE or STATUS scan);
+            harmless, and absorbed into the baseline once it is steady. A
+            server started in the last ~8 hours fires on any steady rate
+            over the floor: its day's baseline is still short.
+
+      # Every node republishes its record every 5 minutes, so 30 minutes is six
+      # missed rounds from every node. The second arm keeps it to a server that
+      # had puts in the last day: one no node points at (or a fresh one) stays
+      # silent, and it resolves a day after the last put even if none came back.
+      - alert: IrohDnsServerNoPublishes
+        expr: >-
+          (
+            sum by (job, instance) (increase(dns_server_pkarr_publish_update_total{job="iroh-dns-server"}[30m]))
+            + sum by (job, instance) (increase(dns_server_pkarr_publish_noop_total{job="iroh-dns-server"}[30m]))
+          ) == 0
+          and on(job, instance)
+          (
+            sum by (job, instance) (increase(dns_server_pkarr_publish_update_total{job="iroh-dns-server"}[1d]))
+            + sum by (job, instance) (increase(dns_server_pkarr_publish_noop_total{job="iroh-dns-server"}[1d]))
+          ) > 0
+        for: 5m
+        labels:
+          component: dns
+          severity: warning
+        annotations:
+          summary: "No node has published to iroh-dns-server on {{ $labels.instance }} for 35 minutes"
+          description: |
+            iroh-dns-server took no pkarr put (PUT /pkarr) in the last 30
+            minutes, for 5 minutes, after taking some in the last day.
+            Nodes republish every 5 minutes, so they cannot reach it, or
+            stopped pointing at it. Check the https listener and its
+            certificate (curl -v https://<hostname>/healthz from outside),
+            the nodes' decdn_discovery_pkarr_url and
+            decdn_discovery_dns_origin, and whether
+            iroh_dns_server_pkarr_put_rate_limit refuses them. The store
+            drops a record 7 days after the time it was signed (each
+            republish re-signs it, so about its last accepted put), and a
+            node whose addresses change meanwhile is resolved to the old
+            ones. A key already in the lookup cache can keep resolving
+            past that: eviction does not clear the cache.

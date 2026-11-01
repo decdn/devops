@@ -82,7 +82,7 @@ compose/                # one-host Docker Compose path (README.md)
   tests/*.jq            # lint-compose: bind-sources, invariants, inline-env, fail-closed
   tests/test_decdn_compose.py  # the wrapper's unit tests (make test-scripts)
 charts/decdn-node/      # Helm chart (README.md); ci/ values mirror molecule/schema's three plays; files/monitoring -> ../../../monitoring/decdn-node (symlink); tests/render-test.sh (make lint-helm); artifacthub-repo.yml
-monitoring/             # Grafana dashboards + Prometheus rules, maintained here by hand: decdn-node/ (rendered by the chart), sponsord/, iroh-relay/ (+ exported-metrics.txt); README.md
+monitoring/             # Grafana dashboards + Prometheus rules, maintained here by hand: decdn-node/ (rendered by the chart), sponsord/, iroh-relay/, iroh-dns-server/, decdn-gateway/ (the last three + exported-metrics.txt); README.md
 docs/                   # cross-path operator docs: node-operators.md, publishers.md, requirements.md, lifecycle.md
 examples/collection-fleet/  # consumer project for the collections, with its own CI, pre-commit and AGENTS.md; its inventory/ mirrors ansible/inventory/'s templates byte for byte except the hosts-*.yml.example comment headers (make test-scripts checks both parse to the same inventory): change both. release.sh moves its requirements.yml floors; its action SHAs and hook revs track this repo's (make test-scripts); galaxy/check-playbooks.sh runs it against the built collections
 scripts/                # upstream mirrors (sync-network-profiles.py, gen-schema-keys.py), render-compose-alloy.sh, the decdn bump (open-decdn-bump.sh, bump_decdn.py), fetch-decdn-cli.sh, release.sh (+ cliff.toml, chart-artifacthub-changes.py), molecule.sh, limit-guard.sh
@@ -136,10 +136,11 @@ and also publishes the binaries as crates (`decdn-node`, `decdn-cli`, `sponsord`
 `/metrics` and upstream's `adr/appendix-observability.md` registry, where a `planned`
 row emits nothing; decdn/decdn's `crates/sponsord/src/metrics.rs`) — nothing in CI
 checks those names, so a typo renders `(no data)` or a rule that never fires. The
-relay's `relayserver_*` and the gateway's `decdn_gateway_*` names *are* checked, against
-each one's `exported-metrics.txt`, the metrics of the pinned `iroh-relay` and decdn:
-re-capture the relay's when bumping `iroh_relay_version`, the gateway's when the decdn
-line moves.
+relay's `relayserver_*`, the DNS server's `dns_server_*` and the gateway's
+`decdn_gateway_*` names *are* checked, against each one's `exported-metrics.txt`, the
+metrics of the pinned `iroh-relay`, `iroh-dns-server` and decdn: re-capture the relay's
+when bumping `iroh_relay_version`, the DNS server's when bumping
+`iroh_dns_server_version`, the gateway's when the decdn line moves.
 The chart renders `monitoring/decdn-node/` through the `files/monitoring` symlink
 (`.Files` cannot read outside the chart), never through `tpl` (the alert annotations
 carry Prometheus templates), so copy a chart tree with `cp -RL`. Alert rules have
@@ -227,8 +228,9 @@ boundaries or exists nowhere else.
   stub is the holder; the role never touches the host's resolver.
 - A version bump (`iroh_relay_version`, `iroh_dns_server_version`, both tracking the
   iroh decdn builds against) moves every per-target sha256, the image digest and
-  version comment in `compose/compose.yaml`, `DNS_VERSION` in `decdn-compose` and the
-  relay's `exported-metrics.txt` (`make test-scripts` checks the names agree). The
+  version comment in `compose/compose.yaml` and `DNS_VERSION` in `decdn-compose`
+  (`make test-scripts` checks they agree with the role pins), and each one's
+  `exported-metrics.txt` (re-captured by hand; nothing checks its version header). The
   relay's allowlist play reads `decdn whoami` on every `decdn_nodes` host by
   `delegate_to`, so `LIMIT=<relay>` still needs those hosts reachable; relays deploy
   `serial: 1`.

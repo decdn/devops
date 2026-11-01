@@ -2,8 +2,9 @@
 
 The deCDN Grafana dashboards and reference Prometheus alert rules, maintained here:
 `decdn-node/` for the node, on every deploy path, `sponsord/` for the onboarding
-sponsor and `iroh-relay/` for the self-hosted iroh relay, both on the Ansible and
-Compose paths, and `decdn-gateway/` for the public gateway, on the Ansible path. The node's metric surface is documented in
+sponsor, `iroh-relay/` for the self-hosted iroh relay and `iroh-dns-server/` for the
+self-hosted iroh DNS server, all three on the Ansible and Compose paths, and
+`decdn-gateway/` for the public gateway, on the Ansible path. The node's metric surface is documented in
 upstream `decdn/decdn`'s `adr/appendix-observability.md`. The node's assets were
 imported from `decdn/decdn` (MIT OR Apache-2.0) at `20db95ef`; distributed here under
 this repo's MIT license. sponsord's were written here.
@@ -18,6 +19,7 @@ this repo's MIT license. sponsord's were written here.
 | `decdn-node/prometheus-alerts_test.yml` | promtool unit tests for `DecdnNodeDown`, `DecdnCapacityBondRegistryResyncFailing`, `DecdnBuyerTopupUnresolved`, `DecdnRedemptionMaybeBroadcast`, `DecdnNodeClockSkew`, `DecdnSettlementLedgerWriteFailing`, `DecdnSettlementReanchorBacklog` and `DecdnSettlementReanchorLowerDeposit` (run by `make lint-helm`; the chart's `.helmignore` keeps them out of the package). |
 | `sponsord/` | The onboarding sponsor's dashboard and alert rules ([below](#sponsord)). Not rendered by the chart. |
 | `iroh-relay/` | The iroh relay's dashboard and alert rules ([below](#iroh-relay)). Not rendered by the chart. |
+| `iroh-dns-server/` | The iroh DNS server's dashboard and alert rules ([below](#iroh-dns-server)). Not rendered by the chart. |
 | `decdn-gateway/` | The public gateway's dashboard and alert rules ([below](#public-gateway)). Not rendered by the chart. |
 
 **Editing.** Every `decdn_*` series a panel or rule names must be one `decdn-node`
@@ -34,7 +36,7 @@ that `.helmignore`.
 
 ## The `*Down` alerts
 
-`DecdnNodeDown`, `SponsordDown`, `IrohRelayDown` and `DecdnGatewayDown` fire on `up == 0`, and also on an
+`DecdnNodeDown`, `SponsordDown`, `IrohRelayDown`, `IrohDnsServerDown` and `DecdnGatewayDown` fire on `up == 0`, and also on an
 instance whose `up` stopped arriving after it reported in the last day.
 
 - **Why.** On the Ansible path, and with Compose's `alloy` profile, the scraper is
@@ -139,6 +141,50 @@ as above, e.g.
 The certificate's expiry is not covered: iroh-relay renews it itself but exports
 nothing about it. Watch `https://<hostname>/healthz` with a blackbox or synthetic check
 of your own.
+
+## iroh DNS server
+
+`iroh-dns-server/` holds the same pair for the self-hosted iroh DNS server
+([`roles/iroh_dns_server`](../ansible/roles/iroh_dns_server/README.md)), the pkarr
+relay nodes publish to and the DNS server clients resolve them through. It runs on
+the Ansible path and as Compose's `dns` profile. The chart never renders it.
+
+| File | What it is |
+|------|------------|
+| `iroh-dns-server/dashboard-iroh-dns-server.json` | `uid: decdn-iroh-dns-server`: up, publishes and DNS requests per day, zones cached, mean HTTP duration, pkarr publishes (update and no-op), the record store, DNS requests by transport, lookups by answer, HTTP requests, the server's log. |
+| `iroh-dns-server/prometheus-alerts.yml` | Rule group `iroh-dns-server`: down, lookup errors rising against the server's own last day, publishes stopped (no pkarr put in 30 minutes after some in the last day; nodes republish every 5). |
+| `iroh-dns-server/exported-metrics.txt` | The `/metrics` of the pinned `iroh-dns-server` release. `make lint-helm` fails on a `dns_server_*` name the dashboard or rules use that is not in it. |
+
+They select `job="iroh-dns-server"`, which the `grafana_alloy` role stamps on the
+server's `/metrics` (`grafana_alloy_iroh_dns_server_job`); the log panel selects
+`unit="iroh-dns-server.service"` with the parsed `level`. On Compose, the `alloy`
+profile on the server's host scrapes `127.0.0.1:9117/metrics` as
+`job="iroh-dns-server"` and labels the container's journal lines
+`unit="iroh-dns-server.service"`, so the dashboard and its log panel work unchanged;
+without that profile, the scrape is your own. Import them as above, e.g.
+`mimirtool rules load iroh-dns-server/prometheus-alerts.yml`. `make lint-helm` also
+runs `promtool check rules` and the unit tests in
+`iroh-dns-server/prometheus-alerts_test.yml`.
+
+The lookup-error rule is a rise, not a share: the server counts every answer other
+than NOERROR and NXDOMAIN as an error, including the NOTIMP it gives a scanner's
+UPDATE or STATUS probe, so a public udp/53 has a steady floor of them. A failing
+record store answers REFUSED, which counts too. A query for a name outside its
+origins is NXDOMAIN and an AXFR is NOERROR with no answer, so both count as not
+found. In a server's first ~8 hours its day's baseline is short, and any steady
+error rate over the floor fires.
+
+`IrohDnsServerNoPublishes`, like the `*Down` alerts, fires for up to a day on a
+server that went quiet on purpose: silence it before you re-point the nodes
+elsewhere, decommission the host, or drop `dns` from a Compose host's
+`COMPOSE_PROFILES` ([docs/lifecycle.md](../docs/lifecycle.md#iroh-dns-server)).
+
+The certificate's expiry is not covered: iroh-dns-server renews it itself but
+exports nothing about it. Watch `https://<hostname>/healthz` with a blackbox or
+synthetic check of your own, and DNS from outside the host with `dig`: the server
+itself (`dig @<hostname> <hostname> SOA`) and the delegation through a public
+resolver (`dig <hostname> SOA`). `IrohDnsServerNoPublishes` is the
+symptom when nodes cannot reach the https listener.
 
 ## Public gateway
 

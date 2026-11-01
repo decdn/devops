@@ -368,7 +368,9 @@ and certificate, which a new host re-issues for itself.
   zone's glue record. Until the glue moves, resolvers and Let's Encrypt still reach
   the old host, and the deploy's certificate check warns; re-run `make deploy-dns
   LIMIT=<new host>` once it has moved. Nodes keep their `decdn_discovery_pkarr_url`.
-  Mind Let's Encrypt's rate limits as for the relay.
+  Mind Let's Encrypt's rate limits as for the relay. Once the publishes follow the
+  name, the old host fires `IrohDnsServerNoPublishes`: silence it there, with
+  `IrohDnsServerDown` before you take the old host down.
 - **Decommission:** point every node's `decdn_discovery_pkarr_url` and
   `decdn_discovery_dns_origin` elsewhere (or clear them, back to n0's discovery) and
   re-deploy them first: peers resolving under the origin find nothing once the
@@ -377,7 +379,9 @@ and certificate, which a new host re-issues for itself.
   restart-inputs record, and tears down the Alloy agent. It keeps the binary, the
   config and the state directory. tcp/443 and udp+tcp/53 stay open until the host leaves
   `iroh_dns_server_hosts` and baseline runs again. Remove the delegation (NS and glue)
-  at the parent zone afterwards.
+  at the parent zone afterwards. Silence `IrohDnsServerNoPublishes` and
+  `IrohDnsServerDown` for the host before you re-point the nodes: both fire on a
+  server that went quiet, for up to a day.
 
 ## Public gateway
 
