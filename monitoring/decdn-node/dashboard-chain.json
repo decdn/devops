@@ -676,6 +676,15 @@
           "expr": "max(decdn_fee_shares_watcher_unregistered{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"})",
           "refId": "D",
           "legendFormat": "fee-shares watcher unregistered"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "min(decdn_node_boot_ready{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"})",
+          "refId": "E",
+          "legendFormat": "min boot ready"
         }
       ],
       "fieldConfig": {
@@ -753,7 +762,7 @@
         "y": 10
       },
       "id": 6,
-      "description": "Boot read retries counts transient-error retries of boot-time chain reads; the metrics listener binds after them, so it reads as a value since start, not a rate. A rise after a restart points at the RPC provider. Fee-shares watcher unregistered is 1 when the startup feeRouter() read failed: the watcher never started, its downtime gauge reads healthy, and the operator share stays at the floor until restart."
+      "description": "Boot read retries counts transient-error retries of boot-time chain reads since the process started; a rise after a restart points at the RPC provider. Min boot ready is 0 while any selected node is still in bring-up and 1 once all are ready; the metrics listener serves during boot, so a stuck boot shows here rather than as a down target. Fee-shares watcher unregistered is 1 when the startup feeRouter() read failed: the watcher never started, its downtime gauge reads healthy, and the operator share stays at the floor until restart."
     },
     {
       "datasource": {

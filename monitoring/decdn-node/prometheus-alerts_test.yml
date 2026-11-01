@@ -6,8 +6,10 @@
 # DecdnBuyerTopupUnresolved and DecdnSettlementReanchorBacklog pin their for,
 # DecdnSettlementLedgerWriteFailing its 1h resolve and a failure already counted
 # at a node's first scrape, DecdnNodeClockSkew its window against its for (a
-# one-off event stays quiet), and DecdnSettlementReanchorLowerDeposit a sparse
-# retry, a healed reorg and retries that stop. The test clock starts at 0. The chart's .helmignore keeps
+# one-off event stays quiet), DecdnSettlementReanchorLowerDeposit a sparse
+# retry, a healed reorg and retries that stop, and DecdnNodeBootStuck its window
+# (a lone 1 holds it off; a restart fires 25m after the last 1), a crash loop's
+# staleness markers and its resolve. The test clock starts at 0. The chart's .helmignore keeps
 # this file out of the package.
 #
 # It does not run in place: render-test.sh copies it into a scratch directory as
@@ -99,6 +101,86 @@ tests:
       - eval_time: 25h
         alertname: DecdnNodeDown
         exp_alerts: []
+
+  # Boot stuck. Range windows are left-open (Prometheus 3), so a sample leaves a
+  # 15m window at exactly 15m. a reads 0 from its first scrape (a first boot) and
+  # fires at exactly the 10m for. b reads its one 1 at 6m, so it is silent while
+  # that sample is in the window (checked at 10m and 20m); the 1 leaves at 21m
+  # and b fires at 31m. c was ready until 10m, restarted and is stuck at 0: its
+  # last 1 leaves at 25m and it fires at 35m, 25m after the last 1. d is a crash
+  # loop: 4 scrapes, then a failed one (a staleness marker) and a missed one. It
+  # fires at 10m, at a staleness marker, and keeps firing through the gap (11m)
+  # and later ones (34m); the bare gauge would restart its for at every marker.
+  # e boots for 20m and comes up: firing at 20m30s, resolved at its first 1 (21m).
+  - interval: 1m
+    input_series:
+      - series: 'decdn_node_boot_ready{job="decdn-node", instance="a"}'
+        values: '0x40'
+      - series: 'decdn_node_boot_ready{job="decdn-node", instance="b"}'
+        values: '0x5 1 0x34'
+      - series: 'decdn_node_boot_ready{job="decdn-node", instance="c"}'
+        values: '1x10 0x30'
+      - series: 'decdn_node_boot_ready{job="decdn-node", instance="d"}'
+        values: '0x3 stale _x1 0x3 stale _x1 0x3 stale _x1 0x3 stale _x1 0x3 stale _x1 0x3 stale _x1 0x3'
+      - series: 'decdn_node_boot_ready{job="decdn-node", instance="e"}'
+        values: '0x20 1x20'
+    alert_rule_test:
+      - eval_time: 9m30s
+        alertname: DecdnNodeBootStuck
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DecdnNodeBootStuck
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: d, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: e, component: node, severity: warning}
+      - eval_time: 11m
+        alertname: DecdnNodeBootStuck
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: d, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: e, component: node, severity: warning}
+      - eval_time: 20m
+        alertname: DecdnNodeBootStuck
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: d, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: e, component: node, severity: warning}
+      - eval_time: 20m30s
+        alertname: DecdnNodeBootStuck
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: d, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: e, component: node, severity: warning}
+      - eval_time: 21m
+        alertname: DecdnNodeBootStuck
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: d, component: node, severity: warning}
+      - eval_time: 30m30s
+        alertname: DecdnNodeBootStuck
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: d, component: node, severity: warning}
+      - eval_time: 31m
+        alertname: DecdnNodeBootStuck
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: b, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: d, component: node, severity: warning}
+      - eval_time: 34m
+        alertname: DecdnNodeBootStuck
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: b, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: d, component: node, severity: warning}
+      - eval_time: 35m
+        alertname: DecdnNodeBootStuck
+        exp_alerts:
+          - exp_labels: {job: decdn-node, instance: a, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: b, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: c, component: node, severity: warning}
+          - exp_labels: {job: decdn-node, instance: d, component: node, severity: warning}
 
   # Capacity-bond registry resync: attempts are 15m apart. a fails once (15m) and
   # never fires: one failure reads about 1.0. b fails twice (15m, 30m), so the

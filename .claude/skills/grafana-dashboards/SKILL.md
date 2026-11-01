@@ -40,11 +40,11 @@ the iroh relay's in `monitoring/iroh-relay/`, the iroh DNS server's in
   process, iroh transport, DHT and probe, logs, traces.
 - `prometheus-alerts.yml` — three groups: `decdn-slash-safety`, `decdn-liveness`,
   `decdn-delivery`. Every rule carries a `component` label. Only rules with a matching
-  section in upstream's `docs/runbook.md` (20 of 57) also carry a `runbook_url`.
+  section in upstream's `docs/runbook.md` (21 of 58) also carry a `runbook_url`.
   `DecdnNodeDown`, `DecdnCapacityBondRegistryResyncFailing`, `DecdnBuyerTopupUnresolved`,
   `DecdnRedemptionMaybeBroadcast`, `DecdnNodeClockSkew`,
-  `DecdnSettlementLedgerWriteFailing`, `DecdnSettlementReanchorBacklog` and
-  `DecdnSettlementReanchorLowerDeposit` have promtool unit tests in
+  `DecdnSettlementLedgerWriteFailing`, `DecdnSettlementReanchorBacklog`,
+  `DecdnSettlementReanchorLowerDeposit` and `DecdnNodeBootStuck` have promtool unit tests in
   `prometheus-alerts_test.yml` (the chart's `.helmignore` keeps that file out of the
   package): keep them in step.
 
