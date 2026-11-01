@@ -168,13 +168,22 @@ runs `promtool check rules` and the unit tests in
 
 The lookup-error rule is a rise, not a share: the server counts every answer other
 than NOERROR and NXDOMAIN as an error, including the NOTIMP it gives a scanner's
-UPDATE or STATUS probe, so a public udp/53 has a steady floor of them. A query for
-a name outside its origins is NXDOMAIN and counts as not found.
+UPDATE or STATUS probe, so a public udp/53 has a steady floor of them. A failing
+record store answers REFUSED, which counts too. A query for a name outside its
+origins is NXDOMAIN and an AXFR is NOERROR with no answer, so both count as not
+found. In a server's first ~8 hours its day's baseline is short, and any steady
+error rate over the floor fires.
+
+`IrohDnsServerNoPublishes`, like the `*Down` alerts, fires for up to a day on a
+server that went quiet on purpose: silence it before you re-point the nodes
+elsewhere, decommission the host, or drop `dns` from a Compose host's
+`COMPOSE_PROFILES` ([docs/lifecycle.md](../docs/lifecycle.md#iroh-dns-server)).
 
 The certificate's expiry is not covered: iroh-dns-server renews it itself but
 exports nothing about it. Watch `https://<hostname>/healthz` with a blackbox or
-synthetic check of your own, and the delegation with an external `dig` (e.g.
-`dig <hostname> SOA` through a public resolver). `IrohDnsServerNoPublishes` is the
+synthetic check of your own, and DNS from outside the host with `dig`: the server
+itself (`dig @<hostname> <hostname> SOA`) and the delegation through a public
+resolver (`dig <hostname> SOA`). `IrohDnsServerNoPublishes` is the
 symptom when nodes cannot reach the https listener.
 
 ## Public gateway

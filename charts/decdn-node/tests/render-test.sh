@@ -63,7 +63,8 @@ pass "schema-key checker: good/bad/empty fixtures"
 # operators on every deploy path import from; the chart reaches them through
 # files/monitoring, a relative symlink, because .Files cannot read outside the chart.
 # helm package must turn it into regular files, and nothing of sponsord's,
-# iroh-relay's, iroh-dns-server's or decdn-gateway's may ship, nor artifacthub-repo.yml (release-chart.yml pushes it on its own).
+# iroh-relay's, iroh-dns-server's or decdn-gateway's may ship, nor
+# artifacthub-repo.yml (release-chart.yml pushes it on its own).
 link_target="../../../monitoring/decdn-node"
 # Prints what is wrong and returns non-zero, so the negatives below can call it too.
 check_monitoring_link() { # <chart dir> <monitoring dir> <empty scratch dir>
@@ -147,6 +148,7 @@ expect_link_fail "the decdn-gateway dashboard copied into monitoring/decdn-node"
 rm "$neg/monitoring/decdn-node/dashboard-decdn-gateway.json"
 cp "$neg/monitoring/iroh-dns-server/dashboard-iroh-dns-server.json" "$neg/monitoring/decdn-node/"
 expect_link_fail "the iroh-dns-server dashboard copied into monitoring/decdn-node" "sponsord, iroh-relay, iroh-dns-server or decdn-gateway files in the chart package"
+rm "$neg/monitoring/decdn-node/dashboard-iroh-dns-server.json"
 
 # --- positive renders -----------------------------------------------------------
 for values in "$chart"/ci/*.yaml; do

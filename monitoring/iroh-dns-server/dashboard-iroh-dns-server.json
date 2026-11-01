@@ -243,7 +243,7 @@
         "uid": "${DS_PROMETHEUS}"
       },
       "title": "Zones cached",
-      "description": "Zones in the server's in-memory cache (dns_server_cache_zones, an LRU of up to about a million): one per key that published or was looked up since the server started.",
+      "description": "Zones in the server's in-memory lookup cache (dns_server_cache_zones, an LRU of up to about a million). A key enters on a DNS lookup and leaves on its next publish, so with nodes republishing every 5 minutes this counts keys resolved in the last few minutes, not nodes.",
       "type": "stat",
       "targets": [
         {
@@ -305,7 +305,7 @@
         "uid": "${DS_PROMETHEUS}"
       },
       "title": "Mean HTTP duration, 24h",
-      "description": "Mean duration of the HTTP requests (pkarr puts and gets, DNS-over-HTTPS) in the last 24 hours: dns_server_http_requests_duration_ms_total over dns_server_http_requests_total.",
+      "description": "Mean duration of the HTTP requests (pkarr puts and gets, DNS-over-HTTPS, and the loopback /healthz) in the last 24 hours: dns_server_http_requests_duration_ms_total over dns_server_http_requests_total. Each request counts in whole milliseconds, rounded down, so the mean reads low.",
       "type": "stat",
       "targets": [
         {
@@ -380,7 +380,7 @@
         "uid": "${DS_PROMETHEUS}"
       },
       "title": "Publishes per minute",
-      "description": "pkarr puts (PUT /pkarr) that changed the stored record (update: a node's addresses moved, or a new node) and that did not (no-op: the 5-minute republish). A flat zero on a server nodes point at fires IrohDnsServerNoPublishes.",
+      "description": "pkarr puts (PUT /pkarr). Update: every accepted put, including each node's 5-minute republish (re-signed with a fresh timestamp), so a steady fleet shows about one per node every 5 minutes. No-op: a put older than the stored record (a retry overtaken by a newer publish, or a node clock that went back), normally about zero. Both flat on a server nodes point at fires IrohDnsServerNoPublishes.",
       "type": "timeseries",
       "targets": [
         {
@@ -448,7 +448,7 @@
         "uid": "${DS_PROMETHEUS}"
       },
       "title": "Record store per minute",
-      "description": "Signed packets inserted (a key first seen), updated (replaced by a newer one) and expired (evicted 7 days after its last put) in the store. Removed is always 0 in 1.3.0.",
+      "description": "Signed packets inserted (a key first seen), updated (replaced by a newer one: every republish, so it tracks the update rate of the panel beside it) and expired (evicted 7 days after its last put) in the store. Removed is always 0 in 1.3.0.",
       "type": "timeseries",
       "targets": [
         {
@@ -534,7 +534,7 @@
         "uid": "${DS_PROMETHEUS}"
       },
       "title": "Cached zones",
-      "description": "dns_server_cache_zones (the main cache) and dns_server_cache_zones_dht (zones resolved from the mainline DHT, which stays empty with iroh_dns_server_mainline_enabled off).",
+      "description": "dns_server_cache_zones (the lookup cache: keys resolved since their last publish) and dns_server_cache_zones_dht (zones resolved from the mainline DHT, empty with [mainline] off, as the role and Compose configure it by default).",
       "type": "timeseries",
       "targets": [
         {
@@ -692,7 +692,7 @@
         "uid": "${DS_PROMETHEUS}"
       },
       "title": "Lookups per minute",
-      "description": "Success: at least one answer. Not found: NXDOMAIN or no answer, including every query for a name outside the origins (the server is authoritative for the root too). Error: any other answer: SERVFAIL (the record store failing) or NOTIMP (a non-query opcode, usually a scanner). A sustained rise fires IrohDnsServerLookupErrors.",
+      "description": "Success: at least one answer. Not found: NXDOMAIN or no answer, including every query for a name outside the origins (the server is authoritative for the root too). Error: any other answer: REFUSED (the record store failing) or NOTIMP (a non-query opcode, usually a scanner). An AXFR is NOERROR with no answer, so not found. A sustained rise fires IrohDnsServerLookupErrors.",
       "type": "timeseries",
       "targets": [
         {
@@ -850,7 +850,7 @@
         "uid": "${DS_PROMETHEUS}"
       },
       "title": "Mean HTTP duration",
-      "description": "dns_server_http_requests_duration_ms_total over dns_server_http_requests_total: the mean only, iroh-dns-server exports no histogram.",
+      "description": "dns_server_http_requests_duration_ms_total over dns_server_http_requests_total: the mean only, iroh-dns-server exports no histogram. Each request counts in whole milliseconds, rounded down, so sub-millisecond requests add 0 and the mean reads low.",
       "type": "timeseries",
       "targets": [
         {

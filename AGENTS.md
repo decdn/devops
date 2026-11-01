@@ -228,8 +228,9 @@ boundaries or exists nowhere else.
   stub is the holder; the role never touches the host's resolver.
 - A version bump (`iroh_relay_version`, `iroh_dns_server_version`, both tracking the
   iroh decdn builds against) moves every per-target sha256, the image digest and
-  version comment in `compose/compose.yaml`, `DNS_VERSION` in `decdn-compose` and each
-  one's `exported-metrics.txt` (`make test-scripts` checks the names agree). The
+  version comment in `compose/compose.yaml` and `DNS_VERSION` in `decdn-compose`
+  (`make test-scripts` checks they agree with the role pins), and each one's
+  `exported-metrics.txt` (re-captured by hand; nothing checks its version header). The
   relay's allowlist play reads `decdn whoami` on every `decdn_nodes` host by
   `delegate_to`, so `LIMIT=<relay>` still needs those hosts reachable; relays deploy
   `serial: 1`.

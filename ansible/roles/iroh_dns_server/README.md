@@ -226,8 +226,10 @@ then:
 
 The dashboard and alert rules (down, lookup errors rising, publishes stopped) are
 in [`monitoring/iroh-dns-server/`](../../../monitoring/README.md#iroh-dns-server).
-Certificate expiry is not exported. Watch `https://<hostname>/healthz` and an
-external `dig` with a check of your own.
+Certificate expiry is not exported. Watch `https://<hostname>/healthz`, and DNS
+with an external `dig` (the server itself and the delegation, as
+[`monitoring/README.md`](../../../monitoring/README.md#iroh-dns-server) shows), with
+a check of your own.
 
 ## Day 2
 

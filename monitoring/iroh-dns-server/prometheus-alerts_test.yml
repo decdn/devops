@@ -78,16 +78,15 @@ tests:
         alertname: IrohDnsServerDown
         exp_alerts: []
 
-
   # Lookup errors, per minute. a answers 3 errors a minute (0.05/s, under the
-  # floor) for 25h, then 60 (1/s) from 1501m: it fires once the rise has lasted
-  # the for, not before, and keeps firing while the day's rate is still low. b
-  # answers 60 a minute from the start: steady, so it never fires once it has a
-  # day behind it, but in its first hours its 1d rate is understated (the
-  # documented young-server case) and it fires. c has no errors for 25h, then 9
-  # a minute (0.15/s): over the floor with no baseline, so it fires, later than a
-  # because its 30m rate takes longer to pass the floor. d has no errors, then 3
-  # a minute: a rise, but under the floor, so it never fires.
+  # floor) for 25h, then 60 (1/s) from 1501m: both arms hold from 1504m, so it is
+  # pending at 1518m and fires at 1519m (the for, to the minute). b answers 60 a
+  # minute from the start: steady, so it never fires once it has a day behind it,
+  # but in its first hours its 1d rate is understated (the documented young-series
+  # case) and it fires. c has no errors for 25h, then 9 a minute (0.15/s): over
+  # the floor with no baseline, so it fires, later than a because its 30m rate
+  # takes longer to pass the floor. d has no errors, then 3 a minute: a rise, but
+  # under the floor, so it never fires.
   - interval: 1m
     input_series:
       - series: 'dns_server_dns_lookup_error_total{job="iroh-dns-server", instance="a"}'
@@ -106,10 +105,10 @@ tests:
       - eval_time: 1500m
         alertname: IrohDnsServerLookupErrors
         exp_alerts: []
-      - eval_time: 1510m
+      - eval_time: 1518m
         alertname: IrohDnsServerLookupErrors
         exp_alerts: []
-      - eval_time: 1530m
+      - eval_time: 1519m
         alertname: IrohDnsServerLookupErrors
         exp_alerts:
           - exp_labels: {job: iroh-dns-server, instance: a, component: dns, severity: warning}
@@ -119,11 +118,51 @@ tests:
           - exp_labels: {job: iroh-dns-server, instance: a, component: dns, severity: warning}
           - exp_labels: {job: iroh-dns-server, instance: c, component: dns, severity: warning}
 
-  # Publishes, per minute. a takes updates and no-op puts until 60m, then none: no
-  # put in 30m from 90m, so it fires after the for (95m), keeps firing while the
-  # last put is in the 1d window, and resolves once it is not (25h). b never took
-  # a put, so it never fires. c takes no-op puts only, which count. d restarts at
-  # 40m (its counters reset) and goes on taking puts: no alert.
+  # The 3x and floor boundaries, the day's memory, and resolution. e answers 60
+  # a minute for 25h, then 150 (2.5x its day): never fires. f goes to 240 (4x):
+  # fires. (3.5x would hold only for a while, as the rise enters the 1d window.)
+  # g has none, then 5 a minute (0.083/s, under the floor): never. h: none, then
+  # 7 a minute (0.117/s): fires. i goes from 3 to 60 a minute for 7h and still
+  # fires 6h in (a 6h baseline would have caught up). j goes to 60 a minute for
+  # an hour, then back to 3: it resolves once its 30m rate is under the floor.
+  - interval: 1m
+    input_series:
+      - series: 'dns_server_dns_lookup_error_total{job="iroh-dns-server", instance="e"}'
+        values: '0+60x1500 90000+150x150'
+      - series: 'dns_server_dns_lookup_error_total{job="iroh-dns-server", instance="f"}'
+        values: '0+60x1500 90000+240x150'
+      - series: 'dns_server_dns_lookup_error_total{job="iroh-dns-server", instance="g"}'
+        values: '0x1500 5+5x150'
+      - series: 'dns_server_dns_lookup_error_total{job="iroh-dns-server", instance="h"}'
+        values: '0x1500 7+7x150'
+      - series: 'dns_server_dns_lookup_error_total{job="iroh-dns-server", instance="i"}'
+        values: '0+3x1500 4560+60x420'
+      - series: 'dns_server_dns_lookup_error_total{job="iroh-dns-server", instance="j"}'
+        values: '0+3x1500 4560+60x60 8160+3x120'
+    alert_rule_test:
+      - eval_time: 1560m
+        alertname: IrohDnsServerLookupErrors
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: f, component: dns, severity: warning}
+          - exp_labels: {job: iroh-dns-server, instance: h, component: dns, severity: warning}
+          - exp_labels: {job: iroh-dns-server, instance: i, component: dns, severity: warning}
+          - exp_labels: {job: iroh-dns-server, instance: j, component: dns, severity: warning}
+      - eval_time: 1700m
+        alertname: IrohDnsServerLookupErrors
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: i, component: dns, severity: warning}
+      - eval_time: 1860m
+        alertname: IrohDnsServerLookupErrors
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: i, component: dns, severity: warning}
+
+  # Publishes, per minute. a takes puts until 60m, then none: its 30m increase is
+  # 0 from 89m, so it is pending at 92m, fires at 94m (the for), keeps firing
+  # while the last put is in the 1d window, and resolves once it is not (~25h).
+  # b never took a put, so it never fires. c takes updates until 60m and only
+  # no-op puts after: the no-op term keeps it quiet. d restarts at 40m (its
+  # counters reset) and goes on taking puts: no alert at 50m, with the reset
+  # inside the 30m window, nor later.
   - interval: 1m
     input_series:
       - series: 'dns_server_pkarr_publish_update_total{job="iroh-dns-server", instance="a"}'
@@ -135,18 +174,21 @@ tests:
       - series: 'dns_server_pkarr_publish_noop_total{job="iroh-dns-server", instance="b"}'
         values: '0x1660'
       - series: 'dns_server_pkarr_publish_update_total{job="iroh-dns-server", instance="c"}'
-        values: '0x1660'
+        values: '0+2x60 120x1600'
       - series: 'dns_server_pkarr_publish_noop_total{job="iroh-dns-server", instance="c"}'
-        values: '0+5x1660'
+        values: '0x60 0+5x1600'
       - series: 'dns_server_pkarr_publish_update_total{job="iroh-dns-server", instance="d"}'
         values: '0+2x40 0+2x1620'
       - series: 'dns_server_pkarr_publish_noop_total{job="iroh-dns-server", instance="d"}'
         values: '0+10x40 0+10x1620'
     alert_rule_test:
+      - eval_time: 50m
+        alertname: IrohDnsServerNoPublishes
+        exp_alerts: []
       - eval_time: 92m
         alertname: IrohDnsServerNoPublishes
         exp_alerts: []
-      - eval_time: 96m
+      - eval_time: 94m
         alertname: IrohDnsServerNoPublishes
         exp_alerts:
           - exp_labels: {job: iroh-dns-server, instance: a, component: dns, severity: warning}
@@ -157,3 +199,39 @@ tests:
       - eval_time: 25h30m
         alertname: IrohDnsServerNoPublishes
         exp_alerts: []
+
+  # Each summed counter counts on its own, and resolution on recovery. u takes
+  # updates only (the steady state: every republish is an update): no alert. n
+  # takes no-op puts only and v updates only, both stopping at 60m: both fire,
+  # so neither term can be dropped from either arm. r stops at 60m and resumes at
+  # 120m: it fires, then resolves as soon as puts come back.
+  - interval: 1m
+    input_series:
+      - series: 'dns_server_pkarr_publish_update_total{job="iroh-dns-server", instance="u"}'
+        values: '0+5x200'
+      - series: 'dns_server_pkarr_publish_noop_total{job="iroh-dns-server", instance="u"}'
+        values: '0x200'
+      - series: 'dns_server_pkarr_publish_update_total{job="iroh-dns-server", instance="n"}'
+        values: '0x200'
+      - series: 'dns_server_pkarr_publish_noop_total{job="iroh-dns-server", instance="n"}'
+        values: '0+5x60 300x140'
+      - series: 'dns_server_pkarr_publish_update_total{job="iroh-dns-server", instance="v"}'
+        values: '0+5x60 300x140'
+      - series: 'dns_server_pkarr_publish_noop_total{job="iroh-dns-server", instance="v"}'
+        values: '0x200'
+      - series: 'dns_server_pkarr_publish_update_total{job="iroh-dns-server", instance="r"}'
+        values: '0+2x60 120x59 122+2x80'
+      - series: 'dns_server_pkarr_publish_noop_total{job="iroh-dns-server", instance="r"}'
+        values: '0+10x60 600x140'
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: IrohDnsServerNoPublishes
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: n, component: dns, severity: warning}
+          - exp_labels: {job: iroh-dns-server, instance: r, component: dns, severity: warning}
+          - exp_labels: {job: iroh-dns-server, instance: v, component: dns, severity: warning}
+      - eval_time: 121m
+        alertname: IrohDnsServerNoPublishes
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: n, component: dns, severity: warning}
+          - exp_labels: {job: iroh-dns-server, instance: v, component: dns, severity: warning}
