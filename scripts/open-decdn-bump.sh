@@ -5,8 +5,9 @@
 # Usage:  scripts/open-decdn-bump.sh [--dry-run] [vX.Y.Z]
 #
 # With no tag it takes decdn's latest published release. decdn's
-# publish-crates.sh runs it with the tag it just published; a maintainer runs it
-# by hand from a clone whose `origin` is decdn/devops, with push access.
+# sign-release.sh runs it with the tag it just signed, once the release is out
+# of draft; a maintainer runs it by hand from a clone whose `origin` is
+# decdn/devops, with push access.
 #
 # It works in a detached worktree at origin/main, so the working copy and its
 # branch stay as they are. It commits as your git identity, pushes with your
