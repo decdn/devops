@@ -35,7 +35,10 @@ them into inventory or docs.
 1. **Never commit secrets.** No passwords, private keys, API tokens or keystores in any
    tracked file. Secrets are generated on, or operator-provisioned to, the target host
    under `/etc/<svc>/` at `0600` with a dedicated owner; the repo ships `*.example`
-   templates for secret files only. `.gitignore` is a backstop, not the design. The Helm
+   templates for secret files only. `.gitignore` is a backstop, not the design.
+   Ansible-vault encrypted inventory secrets (`vault.yml`) are supported only in a
+   private copy of `examples/collection-fleet` or a private overlay; this public repo
+   git-ignores them, encrypted or not, and the roles need no change for them. The Helm
    chart never creates a Secret: it references `existingSecret`, injects named env keys
    only (never `envFrom`: `DECDN_*` env overrides `node.toml`), keeps the keystore
    password off the PVC, and refuses secret-bearing keys in `config`.

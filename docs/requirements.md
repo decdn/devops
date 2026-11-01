@@ -13,7 +13,7 @@ facts (bond sizing, fees) are not here: they come from the deCDN ADRs.
 | Target | VMs, bare metal | one cloud VM, no control machine | one host running Docker | Kubernetes |
 | Host hardening (firewall, SSH, patching) | yes, `baseline` | yes, `baseline` | no, yours | no, the cluster's |
 | Fleets | yes, one inventory | one user-data per VM | one host per compose project | one release per node |
-| Secrets | host file or git-ignored inventory | host file, written over SSH | host file | operator-created Secrets |
+| Secrets | host file, git-ignored inventory, or ansible-vault in a private inventory repo | host file, written over SSH | host file | operator-created Secrets |
 | Install source | signed release tarball, build on the host from a git ref, or local build | signed release tarball | image by digest (enforced) | image by digest (recommended) or tag |
 | Chain config | `decdn_network` profile | `decdn_network` profile | `decdn config init --chain` | explicit values |
 | Monitoring | opt-in Grafana Cloud agent | opt-in Grafana Cloud agent (token in a host file) | opt-in Grafana Cloud agent (`alloy` profile, token in a host file) | ServiceMonitor, PrometheusRule, dashboards |

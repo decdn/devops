@@ -13,8 +13,9 @@ lifecycle guards included), and this repository holds only your inventory.
 | `.gitignore` | keeps the installed collections, per-host secrets and backups out of git |
 | `inventory/` | the inventory templates: `hosts-node.yml.example` and `hosts-publisher.yml.example`, with their `group_vars/` and `host_vars/` |
 | `.github/workflows/ci.yml` | CI: the pre-commit hooks; a fresh Galaxy install that loads your inventory and syntax-checks the playbooks against it; actionlint ([Checks](#checks)) |
-| `.pre-commit-config.yaml`, `.yamllint`, `.markdownlint-cli2.yaml` | the lint gate: hygiene, shellcheck, yamllint over `inventory/` and `requirements.yml`, markdownlint, and the vars-shadowing check |
+| `.pre-commit-config.yaml`, `.yamllint`, `.markdownlint-cli2.yaml` | the lint gate: hygiene, shellcheck, yamllint over `inventory/` and `requirements.yml`, markdownlint, the vars-shadowing check, and the vault files' encryption |
 | `scripts/check-vars-shadowing.sh` | refuses two vars sources of the same name in `group_vars/` or `host_vars/`, which Ansible would silently reduce to one |
+| `scripts/check-vault-encrypted.sh` | refuses a committed `vault.yml` that is not ansible-vault encrypted ([Encrypted secrets](#encrypted-secrets-optional)) |
 | `.github/dependabot.yml` | weekly bumps of the pinned actions and hook revs (not of the collections) |
 | `AGENTS.md`, `CLAUDE.md` | guidance for AI coding agents; fill in its *This fleet* section |
 
@@ -57,6 +58,61 @@ beside it and never says so, so keeping both silently drops every setting in the
 (the same holds for `host_vars/`, and for a `.yml` beside a `.yaml`).
 `scripts/check-vars-shadowing.sh` refuses such a pair, from the pre-commit hook and
 from CI. A host's own `secret.yml` still wins over the group's for the same variable.
+
+### Encrypted secrets (optional)
+
+A git-ignored `secret.yml` lives on one machine: a teammate or a second control machine
+rebuilds it by hand. To share the secrets through this repository instead, commit them
+encrypted with [ansible-vault](https://docs.ansible.com/ansible/latest/vault_guide/index.html)
+as `vault.yml`, beside where `secret.yml` would go (`host_vars/<host>/vault.yml`, or
+`group_vars/<group>/vault.yml` after moving the group's file as above). `secret.yml` stays
+git-ignored, and a fleet with no `vault.yml` works exactly as before. Writing the secret
+files on the hosts themselves (each `secret.yml.example` names them) still keeps them off
+your control machine altogether, and remains the first choice.
+
+```bash
+mkdir -p ~/.config && (umask 077 && openssl rand -base64 32 >~/.config/decdn-vault-pass)
+export ANSIBLE_VAULT_PASSWORD_FILE=~/.config/decdn-vault-pass   # for this repository only (see below)
+ansible-vault create inventory/group_vars/decdn_nodes/vault.yml # the same keys as secret.yml.example
+ansible-vault edit inventory/group_vars/decdn_nodes/vault.yml   # change it later
+ansible-vault view inventory/group_vars/decdn_nodes/vault.yml
+```
+
+- **The password** never goes in the repository. Generate a long random one, as above:
+  anyone with a copy of the repository can try passwords against the file offline.
+  `ANSIBLE_VAULT_PASSWORD_FILE` may instead name an executable script that prints the
+  password (one that runs `pass show decdn/vault` or `op read op://…`, say, with its
+  executable bit set), so it never sits in a file. Set the variable for this repository
+  only (direnv's `.envrc`, or by hand per shell): set globally, every Ansible run on the
+  machine reads it and fails if the file is gone. Never set `vault_password_file` in
+  `ansible.cfg` either: Ansible then fails for anyone without that file, vault or not.
+- **Without the password**, a run that reaches a host with a vault file among its vars
+  fails as its play starts ("Attempting to decrypt but no vault secrets found"); one
+  that reaches only other hosts runs as before.
+- **Never decrypt in place** (`ansible-vault decrypt`), and never append to the file:
+  change it with `edit`. The `vault-encrypted` pre-commit hook
+  (`scripts/check-vault-encrypted.sh`) refuses a `vault.yml`, `.yaml` or `.json` that is
+  not the vault header followed by ciphertext only, at any depth under a group or host
+  directory, and CI runs it on every file.
+- **One file per variable.** Ansible loads a vars directory's files in name order, so
+  for the same variable `vault.yml` beats `secret.yml`, which beats `main.yml`. Keep each
+  secret in exactly one of them.
+- **Readable diffs:** `echo 'inventory/**/vault.* diff=ansible-vault' >>.gitattributes`
+  (commit it), then on each machine
+  `git config diff.ansible-vault.textconv 'ansible-vault view'`. `git diff` and
+  `git log -p` then print the secrets in plaintext to your terminal, and need
+  `ANSIBLE_VAULT_PASSWORD_FILE` set (without it they prompt per file, or fail when not
+  interactive).
+- **When someone leaves**, `ansible-vault rekey` every `vault.yml` with a new password,
+  *and* rotate the secrets themselves: git history keeps every earlier ciphertext, and
+  the old password still opens it.
+- **CI**, when the repository has an `ANSIBLE_VAULT_PASSWORD` Actions secret, decrypts
+  every committed vault file with it (even one of a host the inventory no longer
+  names) and fails on any that does not open. Without the secret, and on pull requests
+  from forks and from Dependabot, which do not get Actions secrets (Dependabot reads
+  its own Dependabot secrets: add it there too to have those decrypt), it replaces each
+  vault file with an empty mapping, warns, and checks the rest of the inventory
+  ([Checks](#checks)).
 
 ## Run
 
@@ -118,7 +174,7 @@ The Makefile's third check, an inventory that fails to parse, is `ansible.cfg`'s
 
 ```bash
 pip install pre-commit && pre-commit install   # once: the hooks run on every commit
-pre-commit run --all-files                     # hygiene, yamllint, markdownlint
+pre-commit run --all-files                     # hygiene, yamllint, markdownlint, vault files encrypted
 ```
 
 CI (`.github/workflows/ci.yml`) runs on pull requests and pushes to `main`: the same
@@ -126,7 +182,9 @@ hooks, and beside them an `ansible` job that installs the collections fresh from
 Galaxy, runs the vars-shadowing check, loads the inventory with every vars file
 (`ansible-inventory --list`) and syntax-checks `decdn.publisher.site`, `.backup` and
 `.decommission` against it (swap in the `decdn.node.*` ones if you installed
-`decdn.node` alone). That job fails until `inventory/hosts.yml` is committed. It
+`decdn.node` alone). Committed `vault.yml` files must decrypt with the
+`ANSIBLE_VAULT_PASSWORD` secret if you set one, and are replaced by an empty mapping if not
+([Encrypted secrets](#encrypted-secrets-optional)). That job fails until `inventory/hosts.yml` is committed. It
 installs the newest releases the floors allow, so a collection release whose playbooks
 no longer load fails your next PR. What a role makes of your variables (a renamed or
 newly required one) only a run shows: dry-run with `--check --diff` after an upgrade.

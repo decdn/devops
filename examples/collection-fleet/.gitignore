@@ -7,6 +7,9 @@ inventory/host_vars/*/secret.*
 !inventory/host_vars/*/secret.*.example
 inventory/group_vars/*/secret.*
 !inventory/group_vars/*/secret.*.example
+# Not ignored, on purpose: a vault.yml beside them, the optional ansible-vault
+# encrypted secrets file this repository commits (README.md § Encrypted secrets). The
+# vault-encrypted pre-commit hook refuses one that is not encrypted.
 # Identity and sponsord backups fetched by decdn.node.backup / decdn.publisher.backup
 # (encrypted, but they belong with the operator, not in git).
 /backups/

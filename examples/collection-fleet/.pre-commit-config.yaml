@@ -34,6 +34,8 @@ repos:
       - id: check-yaml
         args: [--unsafe]   # tolerate custom/!vault tags; syntax check only
       - id: check-json
+        # An ansible-vault vault.json is ciphertext (vault-encrypted below), not JSON.
+        exclude: ^inventory/(group|host)_vars/[^/]+/(.+/)?vault\.json$
 
   # ── Bash ───────────────────────────────────────────────────────────────────
   - repo: https://github.com/koalaman/shellcheck-precommit
@@ -57,6 +59,8 @@ repos:
         language: python
         additional_dependencies: ["yamllint==1.35.1"]
         files: ^(inventory/.*|requirements)\.ya?ml$
+        # An ansible-vault file is ciphertext, not YAML to lint (vault-encrypted below).
+        exclude: ^inventory/(group|host)_vars/[^/]+/(.+/)?vault\.ya?ml$
 
       # On your working tree, so it sees the git-ignored secret.yml files (and their
       # directories) that CI never does.
@@ -66,3 +70,12 @@ repos:
         language: script
         pass_filenames: false
         always_run: true
+
+      # The optional committed secrets file (README.md § Encrypted secrets) holds
+      # ciphertext: refuse a vault.yml that is not ansible-vault encrypted, at any depth
+      # under a group or host directory (Ansible loads those recursively).
+      - id: vault-encrypted
+        name: inventory vault files are ansible-vault encrypted
+        entry: scripts/check-vault-encrypted.sh
+        language: script
+        files: ^inventory/(group|host)_vars/[^/]+/(.+/)?vault\.(ya?ml|json)$

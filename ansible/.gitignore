@@ -11,6 +11,10 @@ inventory/host_vars/*/secret.*
 # Same rule one level down, for any inventory kept under inventory/<dir>/.
 inventory/*/host_vars/*/secret.*
 !inventory/*/host_vars/*/secret.*.example
+# An ansible-vault encrypted vault.yml (README.md "Private fleet inventory") belongs in
+# a private overlay: ciphertext in this PUBLIC repo can be attacked offline.
+inventory/*_vars/*/**/vault.*
+inventory/*/*_vars/*/**/vault.*
 
 # The real inventory. This repo is PUBLIC, so real host IPs must never land here.
 # Copy hosts-node.yml.example (node operators) or hosts-publisher.yml.example

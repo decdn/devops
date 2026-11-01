@@ -369,7 +369,11 @@ fi
 # runs on its own line, so a failing one fails the check instead of comparing two
 # empty lists. Then the ignore rules: a secret.* (the fleet's .gitignore) or a filled-in
 # hosts.yml (the root one: this repo is public) never reaches git, and the
-# secret.*.example templates still ship.
+# secret.*.example templates still ship. A vault.* at any depth under a group or host
+# directory, in either inventory, never reaches this public repo's git (the root and
+# ansible/ .gitignore), but a private copy, which carries only the example's
+# .gitignore, can commit it. Global git excludes are switched off, so a developer's own
+# ignore file cannot make a broken rule pass.
 fleet_inventory_check() {
   local root="$1" inv=ansible/inventory fleet=examples/collection-fleet/inventory
   local mine theirs f side hdr p rc n=0
@@ -398,12 +402,27 @@ fleet_inventory_check() {
     esac
     n=$((n + 1))
   done <<<"$mine"
-  for p in host_vars/h/secret.yml host_vars/h/secret.yaml host_vars/h/secret.json group_vars/g/secret.yml hosts.yml hosts.yaml; do
-    git -C "$root" check-ignore -q --no-index "$fleet/$p" || fail "$fleet/$p is not git-ignored"
+  ignored() { git -C "$1" -c core.excludesFile=/dev/null check-ignore -q --no-index "$2"; }
+  for p in host_vars/h/secret.yml host_vars/h/secret.yaml host_vars/h/secret.json group_vars/g/secret.yml hosts.yml hosts.yaml \
+      host_vars/h/vault.yml group_vars/g/vault.yaml group_vars/g/sub/vault.yml; do
+    ignored "$root" "$fleet/$p" || fail "$fleet/$p is not git-ignored"
   done
-  rc=0; git -C "$root" check-ignore -q --no-index "$fleet/host_vars/h/secret.yml.example" || rc=$?
+  for p in host_vars/h/vault.yml group_vars/g/vault.json group_vars/g/sub/vault.yml prod/host_vars/h/vault.yml prod/group_vars/g/sub/vault.yaml; do
+    ignored "$root" "$inv/$p" || fail "$inv/$p is not git-ignored"
+  done
+  rc=0; ignored "$root" "$fleet/host_vars/h/secret.yml.example" || rc=$?
   [[ $rc == 1 ]] || fail "$fleet/host_vars/h/secret.yml.example is git-ignored (or git failed, exit $rc): the template would not ship"
-  pass "examples/collection-fleet/inventory/ is ansible/inventory/ but for the hosts examples' headers ($n files), and keeps secrets and hosts.yml out of git"
+  # The vault files are ignored above by this public repo's own rules only: a private
+  # copy carries just the example's .gitignore, which must let it commit them.
+  local copy="$work/fleet-copy"
+  if ! { rm -rf "$copy" && mkdir "$copy" && cp "$root/examples/collection-fleet/.gitignore" "$copy/" && git -C "$copy" init -q; }; then
+    fail "could not set up a private copy of the fleet's .gitignore"
+  fi
+  for p in host_vars/h/vault.yml group_vars/g/vault.json group_vars/g/sub/vault.yaml; do
+    rc=0; ignored "$copy" "inventory/$p" || rc=$?
+    [[ $rc == 1 ]] || fail "examples/collection-fleet/.gitignore ignores inventory/$p (or git failed, exit $rc): a private copy could not commit its encrypted secrets"
+  done
+  pass "examples/collection-fleet/inventory/ is ansible/inventory/ but for the hosts examples' headers ($n files), and keeps secrets and hosts.yml out of git (vault files too, but in a private copy)"
 }
 fleet_inventory_check "$repo"
 # Negative cases, on a git copy of the files the check reads, rebuilt for each.
@@ -412,7 +431,7 @@ fleet_fixture() {
   rm -rf "$fx" && mkdir "$fx"
   while IFS= read -r f; do
     mkdir -p "$fx/$(dirname "$f")" && cp "$repo/$f" "$fx/$f"
-  done < <(git -C "$repo" ls-files .gitignore ansible/inventory examples/collection-fleet)
+  done < <(git -C "$repo" ls-files .gitignore ansible/.gitignore ansible/inventory examples/collection-fleet)
   [[ -f $fx/ansible/inventory/group_vars/all.yml ]] || fail "could not copy the inventory templates into the fleet fixture"
   git -C "$fx" init -q && git -C "$fx" add -A
 }
@@ -445,6 +464,16 @@ fleet_fixture; sed -i '/^inventory\/host_vars\/\*\/secret\.\*$/d' "$work/fleet/e
 fleet_refuses "a .gitignore that lets a secret.yml through" "host_vars/h/secret.yml is not git-ignored"
 fleet_fixture; sed -i '/collection-fleet\/inventory\/hosts/d' "$work/fleet/.gitignore"
 fleet_refuses "a filled-in hosts.yml git would track" "hosts.yml is not git-ignored"
+fleet_fixture; sed -i '/collection-fleet\/inventory\/\*_vars/d' "$work/fleet/.gitignore"
+fleet_refuses "a vault file this public repo would track" "host_vars/h/vault.yml is not git-ignored"
+fleet_fixture; sed -i 's|/\*\*/vault|/vault|' "$work/fleet/.gitignore"
+fleet_refuses "a vault file one directory down this public repo would track" "group_vars/g/sub/vault.yml is not git-ignored"
+fleet_fixture; sed -i '/^inventory\/\*_vars\//d' "$work/fleet/ansible/.gitignore"
+fleet_refuses "an ansible/inventory/ vault file this public repo would track" "ansible/inventory/host_vars/h/vault.yml is not git-ignored"
+fleet_fixture; sed -i '/^inventory\/\*\/\*_vars\//d' "$work/fleet/ansible/.gitignore"
+fleet_refuses "a vault file of an inventory under ansible/inventory/<dir>/ this public repo would track" "ansible/inventory/prod/host_vars/h/vault.yml is not git-ignored"
+fleet_fixture; echo 'inventory/*_vars/*/vault.*' >>"$work/fleet/examples/collection-fleet/.gitignore"
+fleet_refuses "a fleet .gitignore that keeps a private copy from committing its vault files" "a private copy could not commit"
 fleet_fixture; echo "# header only" | cat - "$fleet_inv/hosts-node.yml.example" >"$work/h" && mv "$work/h" "$fleet_inv/hosts-node.yml.example"
 expect 0 "fleet inventory check allows a header-only edit" fleet_check_fixture
 
@@ -552,6 +581,66 @@ shadow_refuses "a .yaml beside a .yml" "has all.yaml all.yml" group_vars/all.yam
 shadow_refuses "a host file beside its directory" "has origin-1 origin-1.yml" host_vars/origin-1.yml
 shadow_refuses "an extensionless file beside a .yml" "has all all.yml" group_vars/all
 expect 2 "check-vars-shadowing refuses a missing inventory" "$shadow" "$work/no-such-inventory"
+
+# --- examples/collection-fleet/scripts/check-vault-encrypted.sh ------------------------
+# A private fleet may commit ansible-vault encrypted vault.yml files; the example's
+# pre-commit hook (and so its CI) refuses one that is not encrypted: the exact vault
+# header, then hex lines only, at any depth under a group or host directory (Ansible
+# loads those recursively). Here it passes on the example's inventory (none) and on
+# encrypted files, and refuses each kind of plaintext, by inventory scan and by file
+# argument as pre-commit passes them. Then the hook's own patterns: its files: regex
+# selects exactly what the script scans, and check-json and yamllint skip the ciphertext.
+vaultchk="$repo/examples/collection-fleet/scripts/check-vault-encrypted.sh"
+expect 0 "check-vault-encrypted passes on the example's inventory" "$vaultchk" --inventory "$repo/examples/collection-fleet/inventory"
+vault_fixture() {
+  rm -rf "$work/vault" && cp -R "$repo/examples/collection-fleet/inventory" "$work/vault"
+  mkdir -p "$work/vault/group_vars/decdn_nodes" "$work/vault/host_vars/origin-1/prod"
+  printf '%s\n' "\$ANSIBLE_VAULT;1.1;AES256" '3132333435363738' '3961' >"$work/vault/group_vars/decdn_nodes/vault.yml"
+  # --vault-id writes format 1.2 with its label.
+  printf '%s\n' "\$ANSIBLE_VAULT;1.2;AES256;prod" '3132333435363738' >"$work/vault/host_vars/origin-1/prod/vault.yaml"
+}
+vault_fixture
+expect 0 "check-vault-encrypted passes on encrypted vault files (1.1, and 1.2 labelled one directory down)" "$vaultchk" --inventory "$work/vault"
+expect 0 "check-vault-encrypted passes on encrypted file arguments" "$vaultchk" "$work/vault/group_vars/decdn_nodes/vault.yml" "$work/vault/host_vars/origin-1/prod/vault.yaml"
+# vault_refuses <description> <path, relative to the inventory> <content>
+vault_refuses() {
+  vault_fixture
+  mkdir -p "$(dirname "$work/vault/$2")" && printf '%s' "$3" >"$work/vault/$2"
+  expect 1 "check-vault-encrypted refuses $1" "$vaultchk" --inventory "$work/vault"
+  grep -qF -- "$2 is not ansible-vault encrypted" "$work/out" || { cat "$work/out" >&2; fail "check-vault-encrypted: $1 failed without naming $2"; }
+  expect 1 "check-vault-encrypted refuses $1 passed as a file" "$vaultchk" "$work/vault/$2"
+  grep -qF -- "$2 is not ansible-vault encrypted" "$work/out" || { cat "$work/out" >&2; fail "check-vault-encrypted: $1 passed as a file failed without naming $2"; }
+}
+vault_refuses "a plaintext vault.yml" group_vars/decdn_nodes/vault.yml $'decdn_rpc_url: "https://rpc.invalid/key"\n'
+vault_refuses "an empty vault.yaml" host_vars/origin-1/vault.yaml ""
+vault_refuses "a plaintext vault.json" host_vars/decdn-node-1/vault.json '{"decdn_rpc_url": "https://rpc.invalid/key"}'
+vault_refuses "a vault header that is not the first line" group_vars/decdn_nodes/vault.yml $'---\n$ANSIBLE_VAULT;1.1;AES256\n3132\n'
+vault_refuses "plaintext appended after the ciphertext" group_vars/decdn_nodes/vault.yml $'$ANSIBLE_VAULT;1.1;AES256\n3132\ndecdn_rpc_url: x\n'
+vault_refuses "plaintext on the header line" group_vars/decdn_nodes/vault.yml $'$ANSIBLE_VAULT;1.1;AES256 decdn_rpc_url: x\n3132\n'
+vault_refuses "a vault header with no ciphertext" group_vars/decdn_nodes/vault.yml $'$ANSIBLE_VAULT;1.1;AES256\n'
+vault_refuses "a plaintext vault.yml two directories down" group_vars/decdn_nodes/a/b/vault.yml $'decdn_rpc_url: x\n'
+expect 2 "check-vault-encrypted refuses a missing inventory" "$vaultchk" --inventory "$work/no-such-inventory"
+expect 2 "check-vault-encrypted refuses arguments after --inventory DIR" "$vaultchk" --inventory "$repo/examples/collection-fleet/inventory" extra
+# hook_regex <hook id> <key>: that key's regex in the hook's entry of the example's
+# .pre-commit-config.yaml (between its `- id:` and the next one).
+hook_regex() {
+  awk -v id="$1" -v key="$2" '$1 == "-" && $2 == "id:" { on = ($3 == id) }
+    on && $1 == key ":" { sub(/^[^:]*:[[:space:]]*/, ""); print; exit }' "$repo/examples/collection-fleet/.pre-commit-config.yaml"
+}
+vault_files="$(hook_regex vault-encrypted files)" json_skip="$(hook_regex check-json exclude)" yaml_skip="$(hook_regex yamllint-ansible exclude)"
+[[ -n $vault_files && -n $json_skip && -n $yaml_skip ]] \
+  || fail "could not read the vault-encrypted files: ('$vault_files'), check-json exclude: ('$json_skip') or yamllint-ansible exclude: ('$yaml_skip') regex"
+for p in inventory/group_vars/g/vault.yml inventory/host_vars/h/vault.yaml inventory/group_vars/g/vault.json inventory/host_vars/h/a/b/vault.yml; do
+  [[ $p =~ $vault_files ]] || fail "the vault-encrypted hook's files: regex misses $p, which check-vault-encrypted.sh scans"
+done
+for p in inventory/group_vars/g/main.yml inventory/group_vars/g/secret.yml inventory/group_vars/vault.yml inventory/host_vars/h/vault.yml.example requirements.yml; do
+  [[ ! $p =~ $vault_files ]] || fail "the vault-encrypted hook's files: regex selects $p, which is not a vault file"
+done
+[[ inventory/host_vars/h/a/vault.json =~ $json_skip && ! inventory/group_vars/g/main.json =~ $json_skip ]] \
+  || fail "check-json's exclude must skip exactly the vault files (an encrypted vault.json is not JSON): $json_skip"
+[[ inventory/group_vars/g/vault.yml =~ $yaml_skip && inventory/host_vars/h/a/vault.yaml =~ $yaml_skip && ! inventory/group_vars/g/main.yml =~ $yaml_skip ]] \
+  || fail "yamllint-ansible's exclude must skip exactly the vault files: $yaml_skip"
+pass "the example's vault-encrypted hook selects every vault file the script scans, and check-json and yamllint skip them"
 
 # --- release gate ----------------------------------------------------------------------
 gate="$repo/scripts/check-release-version.sh"
