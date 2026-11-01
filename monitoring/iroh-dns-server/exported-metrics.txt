@@ -1,0 +1,63 @@
+# The /metrics exposition of iroh-dns-server 1.3.0 (n0-computer/iroh, x86_64-unknown-linux-gnu
+# release asset), captured from a fresh process with no traffic, so every value is 0.
+# Every dns_server_* name a dashboard or rule in this directory uses must appear
+# here (`make lint-helm` checks). Re-capture on an iroh_dns_server_version bump, with
+# a config like the role's on unprivileged ports ([dns] port, [http] port, no [https],
+# [mainline] enabled = false) and [metrics] bind_addr = "127.0.0.1:9117":
+#   iroh-dns-server --config <config.toml>
+#   curl -s http://127.0.0.1:9117/metrics
+# HELP dns_server_pkarr_publish_update Number of pkarr relay puts that updated the stored packet.
+# TYPE dns_server_pkarr_publish_update counter
+dns_server_pkarr_publish_update_total 0
+# HELP dns_server_pkarr_publish_noop Number of pkarr relay puts that did not change the stored packet.
+# TYPE dns_server_pkarr_publish_noop counter
+dns_server_pkarr_publish_noop_total 0
+# HELP dns_server_dns_requests Total number of DNS requests across all transports.
+# TYPE dns_server_dns_requests counter
+dns_server_dns_requests_total 0
+# HELP dns_server_dns_requests_udp Number of DNS requests received over UDP.
+# TYPE dns_server_dns_requests_udp counter
+dns_server_dns_requests_udp_total 0
+# HELP dns_server_dns_requests_https Number of DNS requests received over HTTPS (DoH).
+# TYPE dns_server_dns_requests_https counter
+dns_server_dns_requests_https_total 0
+# HELP dns_server_dns_lookup_success Number of DNS lookups that returned at least one answer.
+# TYPE dns_server_dns_lookup_success counter
+dns_server_dns_lookup_success_total 0
+# HELP dns_server_dns_lookup_notfound Number of DNS lookups that returned no answers.
+# TYPE dns_server_dns_lookup_notfound counter
+dns_server_dns_lookup_notfound_total 0
+# HELP dns_server_dns_lookup_error Number of DNS lookups that failed with an error.
+# TYPE dns_server_dns_lookup_error counter
+dns_server_dns_lookup_error_total 0
+# HELP dns_server_http_requests Number of HTTP requests served.
+# TYPE dns_server_http_requests counter
+dns_server_http_requests_total 0
+# HELP dns_server_http_requests_success Number of HTTP requests that returned a 2xx status code.
+# TYPE dns_server_http_requests_success counter
+dns_server_http_requests_success_total 0
+# HELP dns_server_http_requests_error Number of HTTP requests that returned a non-2xx status code.
+# TYPE dns_server_http_requests_error counter
+dns_server_http_requests_error_total 0
+# HELP dns_server_http_requests_duration_ms Cumulative duration of all HTTP requests, in milliseconds.
+# TYPE dns_server_http_requests_duration_ms counter
+dns_server_http_requests_duration_ms_total 0
+# HELP dns_server_store_packets_inserted Number of signed packets newly inserted into the store.
+# TYPE dns_server_store_packets_inserted counter
+dns_server_store_packets_inserted_total 0
+# HELP dns_server_store_packets_removed Number of signed packets removed from the store.
+# TYPE dns_server_store_packets_removed counter
+dns_server_store_packets_removed_total 0
+# HELP dns_server_store_packets_updated Number of times an existing signed packet was replaced by a newer one.
+# TYPE dns_server_store_packets_updated counter
+dns_server_store_packets_updated_total 0
+# HELP dns_server_store_packets_expired Number of signed packets removed by the eviction task.
+# TYPE dns_server_store_packets_expired counter
+dns_server_store_packets_expired_total 0
+# HELP dns_server_cache_zones Current number of zones in the main cache.
+# TYPE dns_server_cache_zones gauge
+dns_server_cache_zones 0
+# HELP dns_server_cache_zones_dht Current number of zones in the DHT cache.
+# TYPE dns_server_cache_zones_dht gauge
+dns_server_cache_zones_dht 0
+# EOF

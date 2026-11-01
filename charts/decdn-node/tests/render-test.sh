@@ -62,8 +62,8 @@ pass "schema-key checker: good/bad/empty fixtures"
 # The node's dashboards and rules live in the repo's monitoring/decdn-node/, which
 # operators on every deploy path import from; the chart reaches them through
 # files/monitoring, a relative symlink, because .Files cannot read outside the chart.
-# helm package must turn it into regular files, and nothing of sponsord's or
-# iroh-relay's may ship, nor artifacthub-repo.yml (release-chart.yml pushes it on its own).
+# helm package must turn it into regular files, and nothing of sponsord's,
+# iroh-relay's, iroh-dns-server's or decdn-gateway's may ship, nor artifacthub-repo.yml (release-chart.yml pushes it on its own).
 link_target="../../../monitoring/decdn-node"
 # Prints what is wrong and returns non-zero, so the negatives below can call it too.
 check_monitoring_link() { # <chart dir> <monitoring dir> <empty scratch dir>
@@ -92,9 +92,9 @@ if not want:
 got = sorted(m.name[len(prefix):] for m in mon)
 if got != want:
     sys.exit(f"packaged files/monitoring {got}\n  != dashboards and rules in monitoring/decdn-node {want}")
-leak = [m.name for m in members if any(s in m.name.lower() for s in ("sponsord", "iroh-relay", "decdn-gateway"))]
+leak = [m.name for m in members if any(s in m.name.lower() for s in ("sponsord", "iroh-relay", "iroh-dns-server", "decdn-gateway"))]
 if leak:
-    sys.exit(f"sponsord, iroh-relay or decdn-gateway files in the chart package: {leak}")
+    sys.exit(f"sponsord, iroh-relay, iroh-dns-server or decdn-gateway files in the chart package: {leak}")
 if any(m.name == "decdn-node/artifacthub-repo.yml" for m in members):
     sys.exit("artifacthub-repo.yml is in the chart package (.helmignore it; release-chart.yml pushes it on its own)")
 PY
@@ -137,13 +137,16 @@ touch "$neg/monitoring/decdn-node/README.md"
 expect_link_fail "a stray file in monitoring/decdn-node" "!= dashboards and rules"
 rm "$neg/monitoring/decdn-node/README.md"
 cp "$neg/monitoring/sponsord/dashboard-sponsord.json" "$neg/monitoring/decdn-node/"
-expect_link_fail "the sponsord dashboard copied into monitoring/decdn-node" "sponsord, iroh-relay or decdn-gateway files in the chart package"
+expect_link_fail "the sponsord dashboard copied into monitoring/decdn-node" "sponsord, iroh-relay, iroh-dns-server or decdn-gateway files in the chart package"
 rm "$neg/monitoring/decdn-node/dashboard-sponsord.json"
 cp "$neg/monitoring/iroh-relay/dashboard-iroh-relay.json" "$neg/monitoring/decdn-node/"
-expect_link_fail "the iroh-relay dashboard copied into monitoring/decdn-node" "sponsord, iroh-relay or decdn-gateway files in the chart package"
+expect_link_fail "the iroh-relay dashboard copied into monitoring/decdn-node" "sponsord, iroh-relay, iroh-dns-server or decdn-gateway files in the chart package"
 rm "$neg/monitoring/decdn-node/dashboard-iroh-relay.json"
 cp "$neg/monitoring/decdn-gateway/dashboard-decdn-gateway.json" "$neg/monitoring/decdn-node/"
-expect_link_fail "the decdn-gateway dashboard copied into monitoring/decdn-node" "sponsord, iroh-relay or decdn-gateway files in the chart package"
+expect_link_fail "the decdn-gateway dashboard copied into monitoring/decdn-node" "sponsord, iroh-relay, iroh-dns-server or decdn-gateway files in the chart package"
+rm "$neg/monitoring/decdn-node/dashboard-decdn-gateway.json"
+cp "$neg/monitoring/iroh-dns-server/dashboard-iroh-dns-server.json" "$neg/monitoring/decdn-node/"
+expect_link_fail "the iroh-dns-server dashboard copied into monitoring/decdn-node" "sponsord, iroh-relay, iroh-dns-server or decdn-gateway files in the chart package"
 
 # --- positive renders -----------------------------------------------------------
 for values in "$chart"/ci/*.yaml; do
@@ -272,21 +275,25 @@ if [ -n "$promtool" ]; then
   $promtool check rules < "$monitoring/decdn-gateway/prometheus-alerts.yml" > "$work/promtool.out" 2>&1 \
     || { cat "$work/promtool.out" >&2; fail "promtool check rules (monitoring/decdn-gateway/prometheus-alerts.yml)"; }
   pass "promtool check rules (decdn-gateway): $(grep -o '[0-9]* rules found' "$work/promtool.out")"
+  $promtool check rules < "$monitoring/iroh-dns-server/prometheus-alerts.yml" > "$work/promtool.out" 2>&1 \
+    || { cat "$work/promtool.out" >&2; fail "promtool check rules (monitoring/iroh-dns-server/prometheus-alerts.yml)"; }
+  pass "promtool check rules (iroh-dns-server): $(grep -o '[0-9]* rules found' "$work/promtool.out")"
 
   # The sponsord rules do time arithmetic on unix-time gauges, the iroh-relay
-  # rules divide one counter's rate by another's, and every *Down rule has an
+  # rules divide one counter's rate by another's, the iroh-dns-server rules compare
+  # a rate with its own over a day, and every *Down rule has an
   # absence arm, which only a series that stops can exercise. Only a unit test
   # catches mistakes in those.
   # promtool compares annotations exactly and they are prose, so each test runs
   # against a copy with them stripped (monitoring/<service>/prometheus-alerts_test.yml).
   mkdir "$work/rules-test"
-  for svc in decdn-node sponsord iroh-relay decdn-gateway; do
+  for svc in decdn-node sponsord iroh-relay iroh-dns-server decdn-gateway; do
     yq 'del(.groups[].rules[].annotations)' "$monitoring/$svc/prometheus-alerts.yml" \
       > "$work/rules-test/$svc-alerts.yml"
     cp "$monitoring/$svc/prometheus-alerts_test.yml" "$work/rules-test/$svc-alerts_test.yml"
   done
   chmod -R a+rX "$work/rules-test"
-  for svc in decdn-node sponsord iroh-relay decdn-gateway; do
+  for svc in decdn-node sponsord iroh-relay iroh-dns-server decdn-gateway; do
     if [ -n "${PROMTOOL_IMAGE:-}" ]; then
       docker run --rm -v "$work/rules-test:/w:ro" -w /w --entrypoint promtool "$PROMTOOL_IMAGE" \
         test rules "$svc-alerts_test.yml" > "$work/promtool.out" 2>&1
@@ -296,21 +303,21 @@ if [ -n "$promtool" ]; then
     pass "promtool test rules: $svc alerts"
   done
 else
-  skipped+=("promtool (PROMTOOL is empty): alert rule syntax and the decdn-node, sponsord, iroh-relay and decdn-gateway rule tests are NOT checked")
+  skipped+=("promtool (PROMTOOL is empty): alert rule syntax and the decdn-node, sponsord, iroh-relay, iroh-dns-server and decdn-gateway rule tests are NOT checked")
 fi
 
-# The sponsord, iroh-relay and decdn-gateway dashboards live outside the chart (monitoring/<service>/),
+# The sponsord, iroh-relay, iroh-dns-server and decdn-gateway dashboards live outside the chart (monitoring/<service>/),
 # so the chart never renders them (the monitoring-link check above keeps them out of
 # the package). They must still parse and carry a uid no other dashboard uses:
 # Grafana imports by uid.
-python3 - "$monitoring" <<'PY' || fail "sponsord / iroh-relay / decdn-gateway dashboards"
+python3 - "$monitoring" <<'PY' || fail "sponsord / iroh-relay / iroh-dns-server / decdn-gateway dashboards"
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 uids = [json.load(open(p)).get("uid") for p in sorted((root / "decdn-node").glob("*.json"))]
 if not uids:
     sys.exit("no dashboard in monitoring/decdn-node/")
 dash = []
-for svc in ("sponsord", "iroh-relay", "decdn-gateway"):
+for svc in ("sponsord", "iroh-relay", "iroh-dns-server", "decdn-gateway"):
     found = sorted((root / svc).glob("*.json"))
     if not found:
         sys.exit(f"no dashboard in monitoring/{svc}/")
@@ -323,14 +330,14 @@ for p in dash:
 if len(uids) != len(set(uids)):
     sys.exit(f"duplicate dashboard uids: {sorted(uids)}")
 PY
-pass "sponsord, iroh-relay and decdn-gateway dashboards parse with their own uids"
+pass "sponsord, iroh-relay, iroh-dns-server and decdn-gateway dashboards parse with their own uids"
 
-# iroh-relay's and the gateway's metric names are checked against what the pinned
+# iroh-relay's, iroh-dns-server's and the gateway's metric names are checked against what the pinned
 # release exports (monitoring/<service>/exported-metrics.txt, captured from the real
 # binary): a typo would render "no data" or a rule that never fires. Every metric an
 # expr selects (an identifier before `{`) is checked, whatever its prefix, and so is
 # every series the rule tests feed in; only `up` comes from the scraper itself.
-for pair in iroh-relay:relayserver_ decdn-gateway:decdn_gateway_; do
+for pair in iroh-relay:relayserver_ iroh-dns-server:dns_server_ decdn-gateway:decdn_gateway_; do
   svc="${pair%%:*}" prefix="${pair#*:}"
   yq -o=json '.' "$monitoring/$svc/prometheus-alerts.yml" > "$work/$svc-alerts.json"
   yq -o=json '.' "$monitoring/$svc/prometheus-alerts_test.yml" > "$work/$svc-alerts-test.json"

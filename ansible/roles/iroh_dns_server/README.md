@@ -224,9 +224,10 @@ then:
 - labels its journal stream `unit="iroh-dns-server.service"`, with a `level` parsed
   from each line.
 
-There is no dashboard or alert rule set in `monitoring/` for it yet; that is a
-follow-up. Certificate expiry is not exported. Watch `https://<hostname>/healthz`
-and an external `dig` with a check of your own.
+The dashboard and alert rules (down, lookup errors rising, publishes stopped) are
+in [`monitoring/iroh-dns-server/`](../../../monitoring/README.md#iroh-dns-server).
+Certificate expiry is not exported. Watch `https://<hostname>/healthz` and an
+external `dig` with a check of your own.
 
 ## Day 2
 
@@ -302,3 +303,8 @@ and an external `dig` with a check of your own.
   - **The ACME certificate-cache name.** `warn` mode's escalation looks for
     tokio-rustls-acme 0.9's file name (`vars/main.yml`). If an iroh bump changes
     it, the escalation stops working without any error.
+  - **The exported metrics.** Re-capture
+    `monitoring/iroh-dns-server/exported-metrics.txt` from the new binary (the
+    command is in its header): `make lint-helm` then fails on a series the
+    dashboard or rules name that the new release dropped, and the gate's metric
+    (`vars/main.yml`) must still be in it.

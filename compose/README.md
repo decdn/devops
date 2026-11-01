@@ -640,9 +640,10 @@ no longer insists on the pinned version).
   (iroh-dns-server ignores a mistyped key) and refuses to restart on a problem.
 - **Backup:** `backup` takes the config only. Nodes republish their records every 5
   minutes, and the server gets a new certificate on a new host.
-- **Monitoring:** no dashboard or alert rules yet. Its metrics are on
-  `127.0.0.1:9117/metrics`, which the [`alloy` profile](#grafana-cloud-alloy) on the
-  same host scrapes as `job="iroh-dns-server"`.
+- **Dashboard and alerts:** in
+  [`monitoring/iroh-dns-server/`](../monitoring/README.md#iroh-dns-server). The
+  [`alloy` profile](#grafana-cloud-alloy) on the same host scrapes
+  `127.0.0.1:9117/metrics` as `job="iroh-dns-server"`; otherwise the scrape is your own.
 
 ## A public gateway (publishers)
 
@@ -786,7 +787,7 @@ plus `region` and `deployment_environment` from `.env`):
   relay's (`127.0.0.1:9092`, `job="iroh-relay"`) with `relay`, and the DNS server's
   (`127.0.0.1:9117`, `job="iroh-dns-server"`) with `dns`. A host without the daemon
   has no target, so no `up == 0` for `DecdnNodeDown` (or `SponsordDown`,
-  `IrohRelayDown`) to fire on. Compose passes `COMPOSE_PROFILES` in as `DECDN_COMPOSE_PROFILES`, so a profile
+  `IrohRelayDown`, `IrohDnsServerDown`) to fire on. Compose passes `COMPOSE_PROFILES` in as `DECDN_COMPOSE_PROFILES`, so a profile
   change recreates the container with the new targets (a profile chosen with
   `--profile` on the command line instead is not seen);
 - the host: Alloy's in-process node_exporter (CPU, memory, disks, filesystems,

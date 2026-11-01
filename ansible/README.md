@@ -403,7 +403,8 @@ deploy-dns`; `make deploy` covers it too.
 - **One server per origin.** Upstream has no replication; the role README records
   the single point of failure as an open question.
 - **Observability:** with Grafana Cloud on, Alloy scrapes it on hosts in
-  `iroh_dns_server_hosts`. No dashboard or alert rules yet.
+  `iroh_dns_server_hosts`; the dashboard and alert rules are in
+  [`monitoring/iroh-dns-server/`](../monitoring/iroh-dns-server/).
 
 Setup and variables: [`roles/iroh_dns_server/README.md`](roles/iroh_dns_server/README.md).
 

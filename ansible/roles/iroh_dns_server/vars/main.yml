@@ -31,5 +31,6 @@ _iroh_dns_server_archive_member: iroh-dns-server
 # hostname from a staging one (or one for an old name).
 _iroh_dns_server_acme_production_directory: https://acme-v02.api.letsencrypt.org/directory
 
-# One series the server always exports, for the readiness gate.
+# One series the server always exports, for the readiness gate (it is in
+# monitoring/iroh-dns-server/exported-metrics.txt).
 _iroh_dns_server_gate_metric: dns_server_dns_requests_total

@@ -1,0 +1,159 @@
+# promtool unit tests for prometheus-alerts.yml beside it, run by the chart's
+# tests/render-test.sh (`make lint-helm`). The rules compare a counter's rate with
+# its own over a day, and sum two counters' increases, which promtool check cannot
+# catch. The test clock starts at 0.
+#
+# It does not run in place: render-test.sh copies it into a scratch directory as
+# iroh-dns-server-alerts_test.yml, beside a copy of prometheus-alerts.yml with the
+# annotations stripped (promtool compares annotations exactly, and they are prose)
+# named iroh-dns-server-alerts.yml, the name rule_files below expects.
+rule_files:
+  - iroh-dns-server-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # Down. a fails its scrape (up=0) and fires at exactly the for, under job and
+  # instance alone (its region label is dropped). Its samples end at 5m too, and
+  # the absence arm carries the alert on without resetting the for (at 10m30s a
+  # for restarted at the handoff would not have run out yet). b is
+  # healthy throughout. c stops at 5m with no staleness marker (the host died with
+  # its agent): up goes absent once the 5m lookback passes, the absence arm fires
+  # after the for, is still firing at 23h and resolves once the 1d window holds no
+  # sample (25h). d gets a staleness marker and is back 1m later, inside the for,
+  # so it never fires (checked at 6m, inside the gap). d2's marker is followed by
+  # a gap longer than the for: it fires at 7m30s and resolves when it is back
+  # (10m30s). e changes its region label on a live target and does not fire;
+  # when it stops later (15m30s) it fires once, under job and instance alone,
+  # although both of its label sets are still in the 1d window.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="iroh-dns-server", instance="a", region="eu"}'
+        values: '0x10'
+      - series: 'up{job="iroh-dns-server", instance="b"}'
+        values: '1x3000'
+      - series: 'up{job="iroh-dns-server", instance="c"}'
+        values: '1x10'
+      - series: 'up{job="iroh-dns-server", instance="d"}'
+        values: '1x10 stale _x1 1x2987'
+      - series: 'up{job="iroh-dns-server", instance="d2"}'
+        values: '1x10 stale _x9 1x2979'
+      - series: 'up{job="iroh-dns-server", instance="e", region="eu"}'
+        values: '1x10'
+      - series: 'up{job="iroh-dns-server", instance="e", region="us"}'
+        values: '_x11 1x20'
+    alert_rule_test:
+      - eval_time: 1m30s
+        alertname: IrohDnsServerDown
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: IrohDnsServerDown
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: a, component: dns, severity: critical}
+      - eval_time: 6m
+        alertname: IrohDnsServerDown
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: a, component: dns, severity: critical}
+      - eval_time: 8m
+        alertname: IrohDnsServerDown
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: a, component: dns, severity: critical}
+          - exp_labels: {job: iroh-dns-server, instance: d2, component: dns, severity: critical}
+      - eval_time: 10m30s
+        alertname: IrohDnsServerDown
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: a, component: dns, severity: critical}
+      - eval_time: 13m
+        alertname: IrohDnsServerDown
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: a, component: dns, severity: critical}
+          - exp_labels: {job: iroh-dns-server, instance: c, component: dns, severity: critical}
+      - eval_time: 23h
+        alertname: IrohDnsServerDown
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: a, component: dns, severity: critical}
+          - exp_labels: {job: iroh-dns-server, instance: c, component: dns, severity: critical}
+          - exp_labels: {job: iroh-dns-server, instance: e, component: dns, severity: critical}
+      - eval_time: 25h
+        alertname: IrohDnsServerDown
+        exp_alerts: []
+
+
+  # Lookup errors, per minute. a answers 3 errors a minute (0.05/s, under the
+  # floor) for 25h, then 60 (1/s) from 1501m: it fires once the rise has lasted
+  # the for, not before, and keeps firing while the day's rate is still low. b
+  # answers 60 a minute from the start: steady, so it never fires once it has a
+  # day behind it, but in its first hours its 1d rate is understated (the
+  # documented young-server case) and it fires. c has no errors for 25h, then 9
+  # a minute (0.15/s): over the floor with no baseline, so it fires, later than a
+  # because its 30m rate takes longer to pass the floor. d has no errors, then 3
+  # a minute: a rise, but under the floor, so it never fires.
+  - interval: 1m
+    input_series:
+      - series: 'dns_server_dns_lookup_error_total{job="iroh-dns-server", instance="a"}'
+        values: '0+3x1500 4560+60x150'
+      - series: 'dns_server_dns_lookup_error_total{job="iroh-dns-server", instance="b"}'
+        values: '0+60x1650'
+      - series: 'dns_server_dns_lookup_error_total{job="iroh-dns-server", instance="c"}'
+        values: '0x1500 9+9x150'
+      - series: 'dns_server_dns_lookup_error_total{job="iroh-dns-server", instance="d"}'
+        values: '0x1500 3+3x150'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: IrohDnsServerLookupErrors
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: b, component: dns, severity: warning}
+      - eval_time: 1500m
+        alertname: IrohDnsServerLookupErrors
+        exp_alerts: []
+      - eval_time: 1510m
+        alertname: IrohDnsServerLookupErrors
+        exp_alerts: []
+      - eval_time: 1530m
+        alertname: IrohDnsServerLookupErrors
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: a, component: dns, severity: warning}
+      - eval_time: 1560m
+        alertname: IrohDnsServerLookupErrors
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: a, component: dns, severity: warning}
+          - exp_labels: {job: iroh-dns-server, instance: c, component: dns, severity: warning}
+
+  # Publishes, per minute. a takes updates and no-op puts until 60m, then none: no
+  # put in 30m from 90m, so it fires after the for (95m), keeps firing while the
+  # last put is in the 1d window, and resolves once it is not (25h). b never took
+  # a put, so it never fires. c takes no-op puts only, which count. d restarts at
+  # 40m (its counters reset) and goes on taking puts: no alert.
+  - interval: 1m
+    input_series:
+      - series: 'dns_server_pkarr_publish_update_total{job="iroh-dns-server", instance="a"}'
+        values: '0+2x60 120x1600'
+      - series: 'dns_server_pkarr_publish_noop_total{job="iroh-dns-server", instance="a"}'
+        values: '0+10x60 600x1600'
+      - series: 'dns_server_pkarr_publish_update_total{job="iroh-dns-server", instance="b"}'
+        values: '0x1660'
+      - series: 'dns_server_pkarr_publish_noop_total{job="iroh-dns-server", instance="b"}'
+        values: '0x1660'
+      - series: 'dns_server_pkarr_publish_update_total{job="iroh-dns-server", instance="c"}'
+        values: '0x1660'
+      - series: 'dns_server_pkarr_publish_noop_total{job="iroh-dns-server", instance="c"}'
+        values: '0+5x1660'
+      - series: 'dns_server_pkarr_publish_update_total{job="iroh-dns-server", instance="d"}'
+        values: '0+2x40 0+2x1620'
+      - series: 'dns_server_pkarr_publish_noop_total{job="iroh-dns-server", instance="d"}'
+        values: '0+10x40 0+10x1620'
+    alert_rule_test:
+      - eval_time: 92m
+        alertname: IrohDnsServerNoPublishes
+        exp_alerts: []
+      - eval_time: 96m
+        alertname: IrohDnsServerNoPublishes
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: a, component: dns, severity: warning}
+      - eval_time: 23h
+        alertname: IrohDnsServerNoPublishes
+        exp_alerts:
+          - exp_labels: {job: iroh-dns-server, instance: a, component: dns, severity: warning}
+      - eval_time: 25h30m
+        alertname: IrohDnsServerNoPublishes
+        exp_alerts: []
