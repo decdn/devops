@@ -31,3 +31,18 @@
     decdn_cache_origin_s3_use_default_chain: true
   roles:
     - role: decdn_node
+  post_tasks:
+    # prepare.yml boots the stub without the gauge: a 200 must count as ready
+    # (stopping the probe before its window runs out, when attempts would equal
+    # decdn_readiness_retries), not be polled for a gauge that never comes.
+    - name: Assert the readiness probe took a gauge-less 200 as ready
+      ansible.builtin.assert:
+        that:
+          - decdn_metrics_probe.status == 200
+          - decdn_metrics_probe.content is not search('(?m)^decdn_node_boot_ready[ {]')
+          - decdn_metrics_probe.attempts | int < decdn_readiness_retries | int
+          - decdn_readiness_warning is skipped
+        fail_msg: >-
+          Expected the probe to stop on a 200 without decdn_node_boot_ready, with no
+          warning; got status {{ decdn_metrics_probe.status | default('none') }}
+          after {{ decdn_metrics_probe.attempts | default('?') }} attempt(s).

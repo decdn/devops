@@ -429,15 +429,34 @@ metrics:
 
 ## Probes and lifecycle
 
-- `/metrics` is the only HTTP route suitable for probes; there is no `/health` endpoint.
-  It binds only after startup completes: RPC preflight, identity and keystore load, cache
-  and endpoint build, then the chain bring-up (CapacityBond registry and slash-watcher
-  enumerations, blacklist and DHT bootstrap).
-  - The default `startupProbe` allows 5 minutes (5s × 60). A slow RPC delays readiness.
+- **The startup probe asks the admin RPC.** The default `startupProbe` runs
+  `decdn node health` (the CLI the image ships, as the Compose healthcheck does). The
+  admin RPC starts only once boot has finished: RPC preflight, identity and keystore
+  load, cache and endpoint build, then the chain bring-up (CapacityBond registry and
+  slash-watcher enumerations, the first ContentBlacklist sync and DHT bootstrap).
+  - The default `startupProbe` allows 10 minutes (5s × 120), upstream's own budget for
+    retrying the boot chain reads, then restarts the container. A slow RPC delays
+    readiness.
+  - It needs the admin RPC: the render fails when `config.observability.admin_port` is
+    `0` and the default `startupProbe` is in use. Replace its handler with
+    `startupProbe.exec: null` plus an `httpGet` on `/metrics`, which then proves only
+    that the listener is up.
   - A failed bring-up, such as an unreachable RPC, exits the container and Kubernetes
     restarts it.
-  - **Ready is not the same as serving.** The paid-delivery QUIC listeners open only after
-    the first ContentBlacklist sync, which comes after `/metrics` binds. Check the logs
+- **Readiness and liveness read `/metrics`.** There is no `/health` HTTP route. Kubernetes
+  runs both only after the startup probe passes. From the decdn release that adds
+  `decdn_node_boot_ready`, `/metrics` answers from process start, with the gauge at `0`
+  until boot finishes, so an `httpGet` on it proves only that the listener is up. The
+  `DecdnNodeBootStuck` alert ([`monitoring/decdn-node/`](https://github.com/decdn/devops/blob/main/monitoring/decdn-node/prometheus-alerts.yml))
+  reads the gauge and fires on a boot that never finishes.
+  - **Overriding a probe's handler.** Helm merges your values into the defaults, so set
+    the default handler to `null` (for example `startupProbe.exec: null`); a probe with
+    two handlers fails the render. An older values file that copies the earlier
+    `httpGet` startupProbe therefore fails until it nulls `exec`. Once it does, its pod
+    can go Ready while the node is still booting.
+  - **Ready and serving are moments apart.** The paid-delivery QUIC protocols register
+    just after boot, once the first ContentBlacklist sync (part of boot) has passed. A
+    pod whose startupProbe is an `httpGet` can go Ready before that; check the logs
     before counting on traffic.
 - **SIGTERM runs a graceful drain.** `terminationGracePeriodSeconds` defaults to 300, the
   role's `TimeoutStopSec`. Killing a pod mid-drain loses paid deliveries, so do not

@@ -30,8 +30,8 @@ Per the deCDN node-onboarding ADR (019), a node only serves paid traffic after
 
 - **Ansible (this role): Phase 1 host prep + Phase 3 startup** — install binaries,
   create the `decdn` user + dirs, render `node.toml` + a hardened unit, open the
-  public QUIC port, start the daemon, and run a best-effort `/metrics` readiness
-  probe (see [Readiness](#readiness)).
+  public QUIC port, start the daemon, and run a best-effort boot-readiness probe
+  on `/metrics` (see [Readiness](#readiness)).
 - **Operator (manual, NOT automated here):** Phase 1 **key material** (generate the
   node + eth keys) and Phase 2 **on-chain** (fund + stake the wallet, register the
   node). These are no longer raw contract calls — upstream shipped a guided
@@ -286,8 +286,8 @@ Optional (omitted from `node.toml` unless set):
   you supply the matching one). The generated wallet is still **unfunded + unstaked**.
   Leave `false` to keep the operator-provisioned posture.
 - `decdn_readiness_retries` (default `30`) + `decdn_readiness_delay` (default `2`, seconds)
-  — bound the `/metrics` readiness probe window (`retries × delay`, so ~60 s at these
-  defaults). A **timeout** only warns; it never fails the deploy — but a non-200 *answer*
+  — bound the boot-readiness probe window on `/metrics` (`retries × delay`, so ~60 s
+  at these defaults). A **timeout** only warns; it never fails the deploy — but a non-200 *answer*
   does. See [Readiness](#readiness).
 
 ### Optional tuning knobs
@@ -613,20 +613,29 @@ it with `ps`. The section there covers the shared-host workaround and the upstre
 
 ## Readiness
 
-After starting the daemon the role runs a bounded probe against
-`http://127.0.0.1:<metrics_port>/metrics`, then a hard assert that the systemd
-unit is in the `running` state.
+After starting the daemon the role polls
+`http://127.0.0.1:<metrics_port>/metrics` until the node reports boot-ready, then
+asserts that the systemd unit is in the `running` state.
+
+Boot-ready means `/metrics` answers 200 and either says exactly
+`decdn_node_boot_ready 1` or has no `decdn_node_boot_ready` series at all (a sample
+the probe cannot read, such as a labelled one, counts as still booting). A release that carries
+[decdn/decdn#2821](https://github.com/decdn/decdn/pull/2821) serves `/metrics`
+from process start and holds the gauge at `0` through the RPC preflight and the
+boot chain reads, so a 200 alone proves only that the listener is up. Older
+releases export no gauge and bind `/metrics` only once boot has finished, so for
+them a 200 is still enough.
 
 The probe is **advisory** on timeout: exhausting the window logs a warning but
-does **not** fail the deploy. The daemon can bind its loopback metrics/admin
-listeners well after process start on an otherwise-healthy node — they come up
-behind the startup PaymentPool buyer bootstrap (an upstream startup-ordering
-issue tracked in `decdn/decdn`, not here), which can take many minutes. A short
-probe that hard-failed would therefore false-fail a healthy deploy, and
-stretching it to cover the worst case would hang every deploy for that whole
-window — neither is acceptable, so a timeout warns and moves on. A metrics
-endpoint that *answers* with a non-200 error is treated differently: that is a
-fault, not slow startup, so it **fails** the deploy loudly.
+does **not** fail the deploy. A healthy node can take many minutes to boot (a slow
+RPC, chain-read retries). A short probe that hard-failed would therefore
+false-fail a healthy deploy, and stretching it to cover the worst case would hang
+every deploy for that whole window, so a timeout warns and moves on. The warning
+says whether the node was still booting (`decdn_node_boot_ready 0`) or never
+answered. A boot that never finishes fires the `DecdnNodeBootStuck` alert
+([`monitoring/decdn-node/`](../../../monitoring/decdn-node/)). A metrics endpoint
+that *answers* with a non-200 error is treated differently: that is a fault, not
+slow startup, so it **fails** the deploy loudly.
 
 The follow-on assert that the `decdn-node.service` unit is `running` (via
 `service_facts`) is a **backstop, not a full health check**. It catches a daemon
@@ -639,7 +648,7 @@ with `decdn_readiness_retries` × `decdn_readiness_delay` (see
 has settled:
 
 ```bash
-curl -s http://127.0.0.1:9090/metrics     # loopback metrics (once bound)
+curl -s http://127.0.0.1:9090/metrics | grep -E '^decdn_node_boot_ready '   # 1 once booted
 journalctl -u decdn-node -e               # look for "node runtime ready"
 ```
 

@@ -6,9 +6,9 @@
 # sponsord_hosts), so Alloy must scrape both daemons. ../sponsord covers a
 # sponsord-only host.
 #
-# The stub does not serve /metrics, so decdn_node's readiness probe would sit out
-# its full advisory window (~60s of retries); decdn_readiness_* below bounds that
-# to ~3s without changing what the role asserts.
+# The stub reports decdn_node_boot_ready 0 for 3s after its first scrape, so
+# decdn_node's advisory readiness probe may warn here; decdn_readiness_* below
+# bounds its window to ~3s without changing what the role asserts.
 - name: Converge
   hosts: all
   become: true
@@ -21,7 +21,7 @@
     # environment labels exercise the "set" branch of the attribute rendering.
     grafana_alloy_deployment_environment: production
     grafana_alloy_region: US
-    # Keep the advisory metrics probe short (stub serves nothing).
+    # Keep the advisory readiness probe short (see the header).
     decdn_readiness_retries: 3
     decdn_readiness_delay: 1
 

@@ -54,3 +54,12 @@
           DECDN_RPC_URL=https://rpc.example.invalid/
           DECDN_MOLECULE_HOST_LINE=written-by-the-operator
         mode: "0644"
+
+    # The stub's `legacy` boot (decdn-node-stub's BOOT_MODE_MARKER): no
+    # decdn_node_boot_ready line, as v0.3.0 and v0.3.1, which bind /metrics only
+    # once boot has finished. converge.yml asserts the role takes that 200 as ready.
+    - name: Boot the stub daemon like a release without decdn_node_boot_ready
+      ansible.builtin.copy:
+        dest: "{{ decdn_etc }}/stub-boot"
+        content: "legacy\n"
+        mode: "0644"

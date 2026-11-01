@@ -407,19 +407,20 @@ decdn_client_region_allowlist: []
 decdn_self_update_check: false
 
 # --- Readiness probe (advisory) -----------------------------------------------
-# After start, the role probes http://127.0.0.1:<metrics_port>/metrics as a
-# best-effort readiness signal. A probe TIMEOUT only WARNS (it does NOT fail the
-# deploy): the daemon can bind its metrics/admin listeners well after process
-# start on an otherwise-healthy node (they come up behind the startup
-# PaymentPool buyer bootstrap — an upstream startup-ordering issue tracked in
-# decdn/decdn, not here), so a bounded probe would otherwise false-fail a healthy
-# deploy. A metrics endpoint that ANSWERS with a non-200 error, however, fails
-# loud — that's a fault, not slow startup. The systemd service-state assert
-# backstops this but is not a full health check: a Type=simple unit reports
-# `running` even for a wedged-but-alive daemon, so it catches an exited/failed or
-# fast-crash-looping unit, not a hung one. These two knobs bound the probe window
-# (retries × delay; ≈60s at the values below) — enough for a node that binds
-# promptly, without hanging the play on a slow-but-healthy startup.
+# After start, the role polls http://127.0.0.1:<metrics_port>/metrics until the
+# node reports boot-ready: a 200 with `decdn_node_boot_ready 1`, or a 200 with no
+# such line (a release without the gauge binds /metrics only once boot has
+# finished). A probe TIMEOUT only WARNS (it does NOT fail the deploy): a healthy
+# node can take minutes to boot (a slow RPC, chain-read retries), so a bounded
+# probe would otherwise false-fail a healthy deploy; the DecdnNodeBootStuck alert
+# covers a boot that never finishes. A metrics endpoint that ANSWERS with a
+# non-200 error, however, fails loud — that's a fault, not slow startup. The
+# systemd service-state assert backstops this but is not a full health check: a
+# Type=simple unit reports `running` even for a wedged-but-alive daemon, so it
+# catches an exited/failed or fast-crash-looping unit, not a hung one. These two
+# knobs bound the probe window (retries × delay; ≈60s at the values below) —
+# enough for a node that boots promptly, without hanging the play on a
+# slow-but-healthy boot.
 decdn_readiness_retries: 30       # probe attempts before giving up (advisory)
 decdn_readiness_delay: 2          # seconds between attempts
 

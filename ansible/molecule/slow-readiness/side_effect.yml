@@ -1,0 +1,99 @@
+---
+# What converge cannot show, on the stub's other boots:
+#   1. A daemon that stays up but never binds /metrics, as a release without
+#      decdn_node_boot_ready looks while it boots (it binds only once boot has
+#      finished), or a daemon wedged before its listener. The probe must keep that
+#      advisory (status -1 warns, it does not fail), and say /metrics did not answer.
+#   2. A /metrics that answers 500 (a broken handler): the probe must fail the
+#      run on its first attempt, not retry it as slow startup.
+# The host is left booting as converged (the `stuck` stub), for verify.
+- name: Side effect — a daemon that never binds, then a broken /metrics
+  hosts: all
+  become: true
+  tasks:
+    # --- 1. never binds ------------------------------------------------------------
+    - name: Stop decdn-node
+      ansible.builtin.systemd_service:
+        name: decdn-node
+        state: stopped
+
+    - name: Make the stub never bind /metrics
+      ansible.builtin.copy:
+        dest: /etc/decdn/stub-boot
+        content: "no-metrics\n"
+        mode: "0644"
+
+    # The role starts the stopped unit, so its probe meets the new boot.
+    - name: Run the role against a daemon that never answers
+      ansible.builtin.include_role:
+        name: decdn_node
+
+    # A stub that exits (a marker naming no mode) is refused too, and restarted by
+    # systemd: NRestarts 0 proves this was a live daemon that never bound.
+    - name: Read the unit's restart count and state
+      ansible.builtin.systemd_service:
+        name: decdn-node
+      register: never_binds_unit
+
+    - name: Assert the probe retried a daemon that stayed up and never answered
+      ansible.builtin.assert:
+        that:
+          - decdn_metrics_probe.status | default(-1) == -1
+          - decdn_metrics_probe.attempts | int == decdn_readiness_retries | int
+          - decdn_readiness_warning is not skipped
+          - "'/metrics did not answer on the last attempt' in decdn_readiness_warning.msg"
+          - never_binds_unit.status.NRestarts == '0'
+          - never_binds_unit.status.ActiveState == 'active'
+        fail_msg: >-
+          Expected the probe to retry a /metrics that never answers until its
+          window ran out, then warn, with the unit up throughout; got status
+          {{ decdn_metrics_probe.status | default('none') }} after
+          {{ decdn_metrics_probe.attempts | default('?') }} attempt(s), unit
+          NRestarts {{ never_binds_unit.status.NRestarts }}, ActiveState
+          {{ never_binds_unit.status.ActiveState }}.
+
+    # --- 2. answers 500 ------------------------------------------------------------
+    - name: Make the stub's /metrics answer 500
+      ansible.builtin.copy:
+        dest: /etc/decdn/stub-boot
+        content: "error\n"
+        mode: "0644"
+
+    - name: Restart decdn-node on the broken /metrics
+      ansible.builtin.systemd_service:
+        name: decdn-node
+        state: restarted
+
+    - name: Converge against a /metrics that answers 500
+      block:
+        - name: Run the role against a broken /metrics
+          ansible.builtin.include_role:
+            name: decdn_node
+
+        - name: Fail — the readiness probe let a 500 through
+          ansible.builtin.fail:
+            msg: The role finished although decdn-node's /metrics answered 500.
+      rescue:
+        - name: Require the probe itself to fail, on its first attempt
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Wait for the node to finish booting (advisory)'
+              - decdn_metrics_probe.status == 500
+              - decdn_metrics_probe.attempts | int == 1
+            fail_msg: >-
+              Expected the readiness probe to fail at once on a 500; failed at
+              '{{ ansible_failed_task.name }}' with status
+              {{ decdn_metrics_probe.status | default('none') }} after
+              {{ decdn_metrics_probe.attempts | default('?') }} attempt(s).
+
+    # --- leave the converged state for verify --------------------------------------
+    - name: Put the stub back into a boot that never finishes
+      ansible.builtin.copy:
+        dest: /etc/decdn/stub-boot
+        content: "stuck\n"
+        mode: "0644"
+
+    - name: Restart decdn-node on the stuck boot, for verify
+      ansible.builtin.systemd_service:
+        name: decdn-node
+        state: restarted

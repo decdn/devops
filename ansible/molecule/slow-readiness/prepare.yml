@@ -1,8 +1,8 @@
 ---
 # Same operator-keystore staging as the default scenario (the role's pre-start
 # gate needs keystore + node.secret + password to exist), PLUS the marker that
-# puts the stub daemon into "late bind" mode so it never binds /metrics — which
-# is what makes the role's advisory readiness probe time out.
+# puts the stub daemon into its `stuck` boot, which is what makes the role's
+# advisory readiness probe time out.
 - name: Prepare
   hosts: all
   become: true
@@ -38,11 +38,11 @@
         content: "molecule-placeholder-node-secret\n"
         mode: "0644"
 
-    # The stub reads this marker (NO_METRICS_MARKER in decdn-node-stub) and, when
-    # present, blocks forever WITHOUT binding metrics — simulating a healthy node
-    # whose metrics listener binds late. That drives the advisory-timeout path.
-    - name: Put the stub daemon into late-bind (no-metrics) mode
+    # The stub reads this marker (BOOT_MODE_MARKER in decdn-node-stub) and, on
+    # `stuck`, serves /metrics with decdn_node_boot_ready 0 forever — a node whose
+    # boot never finishes. That drives the advisory-timeout path.
+    - name: Put the stub daemon into a boot that never finishes
       ansible.builtin.copy:
-        dest: "{{ decdn_etc }}/stub-no-metrics"
-        content: "1\n"
+        dest: "{{ decdn_etc }}/stub-boot"
+        content: "stuck\n"
         mode: "0644"

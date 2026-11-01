@@ -472,7 +472,7 @@ make lint-alloy     # render grafana_alloy's templates, then `alloy validate` th
 `validation-alloy` and `validation-sponsord` (bad knobs, for every role, must be rejected
 by their own asserts; one scenario per role group), `generate-keystore` (opt-in
 host-side wallet), `host-env` (host-provisioned `/etc/decdn/decdn.env`),
-`slow-readiness` (advisory `/metrics` probe timeout), `grafana-cloud` (the opt-in
+`slow-readiness` (advisory boot-readiness probe timeout), `grafana-cloud` (the opt-in
 observability wiring — see [Grafana Cloud observability](#grafana-cloud-observability-opt-in)),
 `grafana-cloud-token` (the same wiring with the API token carried through
 git-ignored inventory instead: role-authored env file + provenance record),
