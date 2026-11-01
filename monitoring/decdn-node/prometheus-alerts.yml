@@ -530,6 +530,28 @@ groups:
             life of this process. Check the RPC provider, then restart the
             node.
 
+      # The metrics listener serves before bring-up, so a node stuck in boot
+      # scrapes fine (up == 1) and DecdnNodeDown stays silent: this rule covers
+      # it. `max_over_time`, not the bare gauge, keeps it firing through the gaps
+      # a crash loop leaves in the series. It fires about 10m into a first boot
+      # (the node's 10-minute boot-read budget) and up to 25m after a ready
+      # node restarts (its last 1 stays in the 15m window). A node that exits
+      # before its first scrape has no series at all; DecdnNodeDown covers that.
+      - alert: DecdnNodeBootStuck
+        expr: max_over_time(decdn_node_boot_ready[15m]) == 0
+        for: 10m
+        labels:
+          component: node
+          severity: warning
+        annotations:
+          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#rpc-unreachable"
+          summary: "{{ $labels.instance }} has not finished boot"
+          description: |
+            decdn_node_boot_ready has read 0 for 10 m with no 1 sample in the
+            last 15 m. If decdn_chain_boot_read_retries_total rises, a boot chain
+            read is retrying. If it does not rise, the node is stuck before the
+            chain reads: read the first WARN or ERROR line after "deCDN node starting".
+
       - alert: DecdnRpcUnhealthy
         expr: decdn_rpc_healthy == 0
         for: 2m
