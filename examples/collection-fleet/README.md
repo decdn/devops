@@ -71,7 +71,7 @@ files on the hosts themselves (each `secret.yml.example` names them) still keeps
 your control machine altogether, and remains the first choice.
 
 ```bash
-mkdir -p ~/.config && (umask 077 && openssl rand -base64 32 >~/.config/decdn-vault-pass)
+mkdir -p ~/.config && (umask 077 && set -C && openssl rand -base64 32 >~/.config/decdn-vault-pass)  # set -C: never replace an existing password
 export ANSIBLE_VAULT_PASSWORD_FILE=~/.config/decdn-vault-pass   # for this repository only (see below)
 ansible-vault create inventory/group_vars/decdn_nodes/vault.yml # the same keys as secret.yml.example
 ansible-vault edit inventory/group_vars/decdn_nodes/vault.yml   # change it later
@@ -80,6 +80,9 @@ ansible-vault view inventory/group_vars/decdn_nodes/vault.yml
 
 - **The password** never goes in the repository. Generate a long random one, as above:
   anyone with a copy of the repository can try passwords against the file offline.
+  Keep it somewhere you cannot lose it (a password manager): a vault file whose
+  password is gone cannot be opened, and nothing rekeys it for you. A second fleet on
+  the same machine gets its own file name.
   `ANSIBLE_VAULT_PASSWORD_FILE` may instead name an executable script that prints the
   password (one that runs `pass show decdn/vault` or `op read op://…`, say, with its
   executable bit set), so it never sits in a file. Set the variable for this repository

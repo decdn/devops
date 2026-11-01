@@ -144,8 +144,13 @@ and export `ANSIBLE_VAULT_PASSWORD_FILE` before `make check`/`make deploy` (not
 `ANSIBLE_ARGS=--ask-vault-pass`, which the targets' `LIMIT` guard also passes to its own
 `ansible-playbook` run, so it asks twice):
 [`examples/collection-fleet/README.md` § Encrypted secrets](../examples/collection-fleet/README.md#encrypted-secrets-optional)
-covers the password, and has the pre-commit hook and CI step to copy into the overlay. This repo is public, so it
-git-ignores `vault.*` under `inventory/`. The public
+covers the password, and has a pre-commit hook and CI step worth copying into the
+overlay. Both assume the vars live under `inventory/`: with `group_vars/` and
+`host_vars/` beside the overlay's `hosts.yml`, as here, drop the `inventory/` prefix
+from the hook's `files:` and `exclude:` regexes and from the CI step's `git ls-files`
+pathspecs, or the hook skips the overlay's vault files and the CI step finds none and
+never uses the password. This repo is public, so it git-ignores `vault.*` under
+`inventory/`. The public
 `inventory/group_vars/` and `inventory/host_vars/` are **not** loaded for it. (Deploying from
 the Galaxy collections instead? [`examples/collection-fleet/`](../examples/collection-fleet/README.md)
 is a ready-made private repository for that path, inventory templates and `.gitignore` included.) Add child groups
