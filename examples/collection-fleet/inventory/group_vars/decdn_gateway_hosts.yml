@@ -14,7 +14,7 @@
 # --- Binary ------------------------------------------------------------------------
 # "release" (default) installs the decdn CLI of the decdn_node role's release line.
 # To hold the host on one exact release:
-# decdn_gateway_version: "0.3.0"
+# decdn_gateway_version: "0.3.1"
 
 # --- Public address (REQUIRED) ----------------------------------------------------
 # Per host. <domain> and *.<domain> must resolve to the host; the playbooks open

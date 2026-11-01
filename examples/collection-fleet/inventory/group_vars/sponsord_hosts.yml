@@ -15,11 +15,11 @@
 # the role pins (sponsord_version "X.Y", the decdn_node role's line: one release ships
 # the node, sponsord and the onramp), on each deploy; set an exact one only to hold
 # the host on it, together with sponsord_onramp_version:
-# sponsord_version: "0.3.0"
+# sponsord_version: "0.3.1"
 # Or build on the host from a git ref (tag, branch or SHA; sponsord_version is not
 # checked in this mode):
 # sponsord_install_method: source
-# sponsord_source_ref: v0.3.0
+# sponsord_source_ref: v0.3.1
 # Or copy a control-machine build: a decdn/decdn checkout's target dir
 # (`cargo build --release -p sponsord`; the role checks the ELF matches the host).
 # sponsord_install_method: manual
