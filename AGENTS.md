@@ -126,7 +126,7 @@ paragraph, and that the vendored KEYS (four byte copies of decdn's) hold the key
 SECURITY.md publishes; the weekly `upstream-drift` job checks the exact copies and the
 mirrors against the line's newest release and flags a newer upstream line. Bump with
 the checklist in `roles/decdn_node/README.md`; `scripts/open-decdn-bump.sh` opens the
-bump's PR (decdn's `publish-crates.sh` runs it after each release). Upstream is public
+bump's PR (decdn's `sign-release.sh` runs it after each release). Upstream is public
 and also publishes the binaries as crates (`decdn-node`, `decdn-cli`, `sponsord`,
 `sponsord-onramp`); the roles do not install from crates.io (no maintainer signature).
 

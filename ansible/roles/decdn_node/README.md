@@ -739,7 +739,7 @@ chart's `appVersion` name a release line, so a decdn/decdn release in that line 
 deployments on its own. What cannot resolve a line names one release, and moves on
 every upstream release: Compose's three image digests and onramp installer pin, the
 chart's example digest, the commented exact-pin examples, and the generated mirrors. `scripts/open-decdn-bump.sh
-[vX.Y.Z]` opens that PR: decdn's `publish-crates.sh` runs it at the end of each decdn
+[vX.Y.Z]` opens that PR: decdn's `sign-release.sh` runs it at the end of each decdn
 release, and a maintainer runs it by hand from a decdn/devops clone (with no tag, it
 takes decdn's latest release). It works in a worktree at `origin/main`, takes the
 digests from the release's assets once their signatures verify against
