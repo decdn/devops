@@ -10,11 +10,15 @@
   hosts: all
   become: true
   tasks:
+    # side_effect.yml's last restart returns before the stub binds (Type=simple).
     - name: Read the node's metrics
       ansible.builtin.uri:
         url: http://127.0.0.1:9090/metrics
         return_content: true
       register: node_metrics
+      retries: 10
+      delay: 1
+      until: node_metrics.status | default(-1) == 200
 
     - name: Gather service facts
       ansible.builtin.service_facts:

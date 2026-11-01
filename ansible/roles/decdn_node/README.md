@@ -286,8 +286,8 @@ Optional (omitted from `node.toml` unless set):
   you supply the matching one). The generated wallet is still **unfunded + unstaked**.
   Leave `false` to keep the operator-provisioned posture.
 - `decdn_readiness_retries` (default `30`) + `decdn_readiness_delay` (default `2`, seconds)
-  — bound the `/metrics` readiness probe window (`retries × delay`, so ~60 s at these
-  defaults). A **timeout** only warns; it never fails the deploy — but a non-200 *answer*
+  — bound the boot-readiness probe window on `/metrics` (`retries × delay`, so ~60 s
+  at these defaults). A **timeout** only warns; it never fails the deploy — but a non-200 *answer*
   does. See [Readiness](#readiness).
 
 ### Optional tuning knobs
@@ -617,8 +617,9 @@ After starting the daemon the role polls
 `http://127.0.0.1:<metrics_port>/metrics` until the node reports boot-ready, then
 asserts that the systemd unit is in the `running` state.
 
-Boot-ready means `/metrics` answers 200 and either says `decdn_node_boot_ready 1`
-or has no `decdn_node_boot_ready` line at all. A release that carries
+Boot-ready means `/metrics` answers 200 and either says exactly
+`decdn_node_boot_ready 1` or has no `decdn_node_boot_ready` series at all (a sample
+the probe cannot read, such as a labelled one, counts as still booting). A release that carries
 [decdn/decdn#2821](https://github.com/decdn/decdn/pull/2821) serves `/metrics`
 from process start and holds the gauge at `0` through the RPC preflight and the
 boot chain reads, so a 200 alone proves only that the listener is up. Older

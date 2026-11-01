@@ -9,8 +9,9 @@ can be exercised end-to-end without a published release or a live chain:
   * `run ...`     -> serve HTTP 200 on 127.0.0.1:9090/metrics (404 elsewhere) and
                      block forever under systemd (Type=simple). Like a release
                      carrying decdn/decdn#2821, it binds at once and exports
-                     `decdn_node_boot_ready 0` for BOOT_SECONDS, then `1`, so
-                     the role's readiness probe has to wait for the flip. CLI
+                     `decdn_node_boot_ready 0` until BOOT_SECONDS after the first
+                     scrape, then `1`, so the role's readiness probe always sees
+                     the flip, however slow the runner. CLI
                      args (`--config`, `--keystore-password-file`) are accepted
                      and ignored.
                      Under a unit with WatchdogSec it heartbeats WATCHDOG=1 to
@@ -22,8 +23,11 @@ can be exercised end-to-end without a published release or a live chain:
                                      that never finishes; `slow-readiness`).
                        legacy     -> no gauge at all, as v0.3.0 and v0.3.1,
                                      which bind /metrics only after boot.
-                       no-metrics -> never binds (a daemon that stays alive
-                                     but dies before its listener comes up).
+                       no-metrics -> stays alive but never binds (a release
+                                     without the gauge, still booting, or a
+                                     daemon wedged before its listener).
+                       error      -> /metrics answers 500 (a broken handler,
+                                     which the role must fail on at once).
   * `config validate ...`
                   -> parse the rendered node.toml as TOML and exit 0. In the default
                      scenario it also checks the exact literal DECDN_RPC_URL passed
@@ -55,12 +59,13 @@ METRICS_ADDR = ("127.0.0.1", 9090)  # matches the role's default metrics_bind/po
 # Matches decdn_node_version in the cloud-init scenario's mirror. Printed after the
 # name it runs as (decdn-node or decdn), as clap prints the real binaries' line.
 VERSION = "0.0.0-molecule-stub"
-# How long a default boot reports `decdn_node_boot_ready 0` before it flips to 1.
+# How long a default boot reports `decdn_node_boot_ready 0`, from the first
+# scrape, before it flips to 1.
 BOOT_SECONDS = 3
 # Its first line picks a non-default boot (see the docstring); scenarios stage it
 # in prepare.yml.
 BOOT_MODE_MARKER = "/etc/decdn/stub-boot"
-BOOT_MODES = ("stuck", "legacy", "no-metrics")
+BOOT_MODES = ("stuck", "legacy", "no-metrics", "error")
 # Forces `config validate` to exit 1, so a scenario can prove the role's config
 # gate still fails the deploy (the gate itself runs with failed_when: false).
 BAD_CONFIG_MARKER = "/etc/decdn/stub-bad-config"
@@ -74,8 +79,14 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
+        if self.server.boot_mode == "error":
+            self.send_response(500)
+            self.end_headers()
+            return
         body = b"# stub decdn-node metrics\ndecdn_stub_up 1\n"
         if self.server.boot_mode != "legacy":
+            if self.server.ready_at is None:
+                self.server.ready_at = time.monotonic() + BOOT_SECONDS
             ready = self.server.boot_mode != "stuck" and time.monotonic() >= self.server.ready_at
             body += b"decdn_node_boot_ready %d\n" % ready
         self.send_response(200)
@@ -132,10 +143,11 @@ def config_validate(args):
     key-level drift; see its README.
     """
     config = _opt(args, "--config")
-    # Forced-failure marker, like BOOT_MODE_MARKER. The role's config gate
-    # deliberately runs with `failed_when: false` and defers to a following `fail`
-    # task, so a regression in THAT task's `when:` would silently no-op the whole
-    # gate. This lets a scenario prove the gate still fires.
+    # Forced-failure marker (a presence check, unlike BOOT_MODE_MARKER's mode
+    # line). The role's config gate deliberately runs with `failed_when: false`
+    # and defers to a following `fail` task, so a regression in THAT task's
+    # `when:` would silently no-op the whole gate. This lets a scenario prove the
+    # gate still fires.
     if os.path.isfile(BAD_CONFIG_MARKER):
         print(f"stub config validate: refusing {config} (forced by "
               f"{BAD_CONFIG_MARKER})", file=sys.stderr)
@@ -196,7 +208,8 @@ def _start_watchdog_heartbeat():
 
 
 def boot_mode():
-    """The boot BOOT_MODE_MARKER asks for ("" = default), or None when it names no mode."""
+    """'' when BOOT_MODE_MARKER is absent (the default boot), its mode, or None
+    when its first line names no mode (`run` then exits 1)."""
     try:
         with open(BOOT_MODE_MARKER, encoding="utf-8") as fh:
             mode = fh.readline().strip()
@@ -234,7 +247,7 @@ def main():
             print(f"stub: cannot bind {addr}: {exc}", file=sys.stderr)
             return 1
         server.boot_mode = mode
-        server.ready_at = time.monotonic() + BOOT_SECONDS
+        server.ready_at = None  # set by the first scrape
         server.serve_forever()
         return 0
     print(f"stub: unrecognised invocation: {args!r}", file=sys.stderr)

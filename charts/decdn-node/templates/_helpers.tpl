@@ -255,9 +255,14 @@ than let a values override win:
 {{- end }}
 {{- end }}
 {{- $startCmd := dig "exec" "command" (list) (default (dict) .Values.startupProbe) }}
-{{- /* A non-number admin_port is decdn-node.config's to refuse, with its own message. */}}
+{{- if not (kindIs "slice" $startCmd) }}
+{{- fail (printf "startupProbe.exec.command must be a list of arguments, got %s" (kindOf $startCmd)) }}
+{{- end }}
+{{- /* A non-number admin_port is decdn-node.config's to refuse, with its own message.
+     Matched on the joined command, so a shell-wrapped `sh -c "decdn node health"`
+     counts too. */}}
 {{- $adminPort := dig "observability" "admin_port" 9191 (default (dict) .Values.config) }}
-{{- if and (has "node" $startCmd) (has "health" $startCmd) (has (kindOf $adminPort) (list "float64" "int64" "int")) (eq (float64 $adminPort) 0.0) }}
+{{- if and (regexMatch "(^|\\s)node\\s+health(\\s|$)" (join " " $startCmd)) (has (kindOf $adminPort) (list "float64" "int64" "int")) (eq (float64 $adminPort) 0.0) }}
 {{- fail "startupProbe runs `decdn node health`, which needs the admin RPC, but config.observability.admin_port is 0: enable the admin RPC, or replace the startupProbe (startupProbe.exec: null plus an httpGet on /metrics, which then proves only that the listener is up)" }}
 {{- end }}
 {{- end }}

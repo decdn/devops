@@ -2072,26 +2072,30 @@ def fetch(url: str, timeout: float = 5.0) -> tuple[int, str]:
 
 
 NODE_METRICS = "http://127.0.0.1:9090/metrics"
-BOOT_READY_RE = re.compile(r"^decdn_node_boot_ready (\S+)$", re.M)
+# Any sample of the gauge: plain, labelled, or with a trailing timestamp.
+BOOT_READY_RE = re.compile(r"^decdn_node_boot_ready(?:\{[^}]*\})?\s.*$", re.M)
 
 
-def boot_state(status: int, body: str) -> str | None:
-    """None when decdn-node has finished booting, else what it is doing.
+def boot_state(status: int, body: str) -> tuple[bool, str]:
+    """(ready, detail) for decdn-node's boot, from its /metrics answer.
 
     A release carrying decdn/decdn#2821 serves /metrics from process start, with
     decdn_node_boot_ready 0 until bring-up finishes, so a 200 alone proves only the
     listener. Older releases export no gauge and bind /metrics once boot has
-    finished, so a 200 without one is ready (as the role's readiness probe)."""
+    finished, so a 200 without one is ready (as the role's readiness probe). A
+    sample that is not exactly `decdn_node_boot_ready 1` is still booting, so a
+    format this cannot read never passes as ready."""
     if status == 0:
-        return "/metrics is not listening (booting on a release without decdn_node_boot_ready, or down)"
+        return False, "/metrics is not listening (booting on a release without decdn_node_boot_ready, or down)"
     if status != 200:
-        return "/metrics did not answer" if status < 0 else f"/metrics answered {status}"
-    m = BOOT_READY_RE.search(body)
-    if m is None or m[1] == "1":
-        return None
-    return (
-        f"booting (decdn_node_boot_ready {m[1]}): see its logs; the DecdnNodeBootStuck alert fires "
-        "if boot never finishes"
+        return False, "/metrics did not answer" if status < 0 else f"/metrics answered {status}"
+    samples = BOOT_READY_RE.findall(body)
+    if not samples:
+        return True, "booted (a release without decdn_node_boot_ready: /metrics answers once boot has finished)"
+    if samples == ["decdn_node_boot_ready 1"]:
+        return True, "booted (decdn_node_boot_ready 1)"
+    return False, (
+        f"booting ({'; '.join(samples)}): see its logs; the DecdnNodeBootStuck alert fires if boot never finishes"
     )
 
 
@@ -2385,8 +2389,8 @@ def cmd_health(args: argparse.Namespace) -> None:
             "exec", "-T", "decdn-node", "decdn", "node", "health", "--config", str(NODE_TOML), check=False, capture=True
         )
         report("decdn-node admin RPC", cp.returncode == 0, " ".join(cp.stdout.split()) or "no answer")
-        reason = boot_state(*fetch(NODE_METRICS))
-        report("decdn-node boot", reason is None, reason or f"{NODE_METRICS} decdn_node_boot_ready 1")
+        ready, detail = boot_state(*fetch(NODE_METRICS))
+        report("decdn-node boot", ready, f"{NODE_METRICS}: {detail}")
     # Each at the bind its running container was started with, not a constant.
     for svc, bind_key in (("sponsord", "SPONSORD_BIND"), ("sponsord-onramp", "ONRAMP_BIND")):
         if svc in svcs:

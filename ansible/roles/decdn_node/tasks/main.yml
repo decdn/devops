@@ -1805,7 +1805,8 @@
 # RPC preflight and the boot chain reads finish, then 1 (the "node runtime ready"
 # banner). Older releases export no gauge and bind /metrics only once boot has
 # finished. So the node is boot-ready when /metrics answers 200 and either says
-# `decdn_node_boot_ready 1` or has no such line; a 200 alone is not enough.
+# exactly `decdn_node_boot_ready 1` or has no such series; a 200 alone is not
+# enough.
 # A boot can take many minutes on a healthy node (a slow RPC, chain-read
 # retries), so a probe TIMEOUT must NOT fail the deploy; the warning below says
 # which state it ended in, and the DecdnNodeBootStuck alert covers a boot that
@@ -1830,17 +1831,26 @@
     url: "http://127.0.0.1:{{ decdn_metrics_port }}/metrics"
     status_code: 200
     return_content: true
+    # Bounds each attempt, so a listener that accepts but never answers cannot
+    # stretch the window past retries × (delay + timeout).
+    timeout: 5
   register: decdn_metrics_probe
   retries: "{{ decdn_readiness_retries }}"
   delay: "{{ decdn_readiness_delay }}"
   # default(-1): on connection-refused the uri module returns status -1 (and may
   # omit the key). Retry while the endpoint has NOT answered (status -1) or answers
-  # 200 while still booting (`decdn_node_boot_ready 0`). Stop on a boot-ready 200,
-  # and on any other status, so a real fault (e.g. a 500) surfaces immediately via
-  # failed_when rather than after the whole window.
+  # 200 while still booting: a decdn_node_boot_ready sample that is not exactly
+  # `decdn_node_boot_ready 1` (a 0, but also a labelled, timestamped or 0.0 sample
+  # this probe cannot read, so a format change upstream cannot pass as ready).
+  # Stop on a boot-ready 200, and on any other status, so a real fault (e.g. a
+  # 500) surfaces immediately via failed_when rather than after the whole window.
   until: >-
     decdn_metrics_probe.status | default(-1) != -1
-    and decdn_metrics_probe.content | default('') is not search('(?m)^decdn_node_boot_ready 0$')
+    and not (
+      decdn_metrics_probe.status == 200
+      and decdn_metrics_probe.content | default('') is search('(?m)^decdn_node_boot_ready[ {]')
+      and decdn_metrics_probe.content | default('') is not search('(?m)^decdn_node_boot_ready 1$')
+    )
   changed_when: false
   # Scope the suppression, don't blanket it: -1 (not bound yet) and a 200 that is
   # still booting stay advisory, but a bound endpoint answering any other status
@@ -1861,26 +1871,33 @@
       ({{ decdn_readiness_retries }}×{{ decdn_readiness_delay }}), so readiness
       could NOT be confirmed.
       {% if decdn_metrics_probe.status | default(-1) == 200 %}
-      /metrics answers with `decdn_node_boot_ready 0`: the node is still in its
-      RPC preflight or boot chain reads. A slow RPC can make this take minutes;
-      the DecdnNodeBootStuck alert fires if it never finishes. A rising
-      decdn_chain_boot_read_retries_total means the chain reads are retrying;
-      otherwise read the first WARN or ERROR after "deCDN node starting".
+      /metrics answers with
+      `{{ decdn_metrics_probe.content | regex_search('(?m)^decdn_node_boot_ready.*$') }}`:
+      the node is still in its RPC preflight or boot chain reads. A slow RPC can
+      make this take minutes; the DecdnNodeBootStuck alert fires if it never
+      finishes. A rising decdn_chain_boot_read_retries_total means the chain
+      reads are retrying; otherwise read the first WARN or ERROR after
+      "deCDN node starting".
       {% else %}
-      /metrics never answered. A release without `decdn_node_boot_ready` binds it
-      only once boot has finished, so this is OFTEN benign there; on a newer
-      release, or PERSISTENTLY, it means a daemon that died or wedged before its
+      /metrics did not answer on the last attempt
+      ({{ decdn_metrics_probe.msg | default('no response') }}).
+      A release without `decdn_node_boot_ready` binds it only once boot has
+      finished, so this is OFTEN benign there; on a newer release, or
+      PERSISTENTLY, it means a daemon that died, crash-loops or wedged before its
       listener came up (a Type=simple unit still reports `running` even when
       wedged).
       {% endif %}
       Verify before trusting the node:
         curl -s http://127.0.0.1:{{ decdn_metrics_port }}/metrics | grep -E '^decdn_node_boot_ready '
         journalctl -u decdn-node -e   (look for "node runtime ready")
+  # Registered so the molecule scenarios can assert which branch ran, or that none did.
+  register: decdn_readiness_warning
   when:
     - not ansible_check_mode
     - >-
       decdn_metrics_probe.status | default(-1) != 200
-      or decdn_metrics_probe.content | default('') is search('(?m)^decdn_node_boot_ready 0$')
+      or (decdn_metrics_probe.content | default('') is search('(?m)^decdn_node_boot_ready[ {]')
+          and decdn_metrics_probe.content | default('') is not search('(?m)^decdn_node_boot_ready 1$'))
 
 # A stale process can still answer /metrics, so also confirm THIS unit exists and
 # is running. This is a backstop, not a full health check: it catches a daemon

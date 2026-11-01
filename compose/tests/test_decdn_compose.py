@@ -245,26 +245,41 @@ class Guard(unittest.TestCase):
 
 class BootState(unittest.TestCase):
     def test_ready_with_the_gauge_at_1(self) -> None:
-        self.assertIsNone(dc.boot_state(200, "a 1\ndecdn_node_boot_ready 1\nb 2\n"))
+        ready, detail = dc.boot_state(200, "a 1\ndecdn_node_boot_ready 1\nb 2\n")
+        self.assertTrue(ready)
+        self.assertIn("decdn_node_boot_ready 1", detail)
 
     def test_a_release_without_the_gauge_is_ready_on_200(self) -> None:
-        self.assertIsNone(dc.boot_state(200, METRICS_OK))
+        ready, detail = dc.boot_state(200, METRICS_OK)
+        self.assertTrue(ready)
+        self.assertIn("without decdn_node_boot_ready", detail)
 
     def test_booting_with_the_gauge_at_0(self) -> None:
-        reason = dc.boot_state(200, "decdn_node_boot_ready 0\n")
-        self.assertIsNotNone(reason)
-        self.assertIn("booting", reason)
+        ready, detail = dc.boot_state(200, "decdn_node_boot_ready 0\n")
+        self.assertFalse(ready)
+        self.assertIn("booting (decdn_node_boot_ready 0)", detail)
+
+    def test_an_unreadable_sample_is_still_booting(self) -> None:
+        # Not exactly `decdn_node_boot_ready 1`: a format change must not pass as ready.
+        for body in (
+            "decdn_node_boot_ready 0.0\n",
+            "decdn_node_boot_ready 1.0\n",
+            'decdn_node_boot_ready{node="a"} 1\n',
+            "decdn_node_boot_ready 1 1700000000000\n",
+            "decdn_node_boot_ready 1\ndecdn_node_boot_ready 0\n",
+        ):
+            with self.subTest(body=body):
+                self.assertFalse(dc.boot_state(200, body)[0])
 
     def test_only_the_exact_series_counts(self) -> None:
-        # A longer name is another series: no gauge, so a 200 is ready; the gauge
-        # itself still decides when both are present.
-        self.assertIsNone(dc.boot_state(200, "decdn_node_boot_ready_x 0\n"))
-        self.assertIsNotNone(dc.boot_state(200, "decdn_node_boot_ready_x 1\ndecdn_node_boot_ready 0\n"))
+        # A longer name is another series: no gauge, so a 200 is ready.
+        self.assertTrue(dc.boot_state(200, "decdn_node_boot_ready_x 0\n")[0])
+        self.assertFalse(dc.boot_state(200, "decdn_node_boot_ready_x 1\ndecdn_node_boot_ready 0\n")[0])
 
     def test_no_200_is_not_ready(self) -> None:
         for status in (0, -1, 500):
             with self.subTest(status=status):
-                self.assertIsNotNone(dc.boot_state(status, "decdn_node_boot_ready 1\n"))
+                self.assertFalse(dc.boot_state(status, "decdn_node_boot_ready 1\n")[0])
 
 
 class ContainerEnv(unittest.TestCase):

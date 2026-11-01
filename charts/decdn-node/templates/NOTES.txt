@@ -1,9 +1,10 @@
 {{ $admin := dig "observability" "admin_port" 9191 (.Values.config | default dict) -}}
 deCDN node {{ include "decdn-node.fullname" . }} (namespace {{ .Release.Namespace }}).
 
-- Wait for the node to become Ready. Ready means /metrics answers (startup and
-  chain bring-up done); paid QUIC listeners open only after the first
-  ContentBlacklist sync, so check the logs before routing traffic:
+- Wait for the node to become Ready. Ready means the startup probe's
+  `decdn node health` reached the admin RPC (it starts once boot, including the
+  first ContentBlacklist sync, has finished), then /metrics answered. Paid QUIC
+  protocols register just after; check the logs before routing traffic:
 
      kubectl -n {{ .Release.Namespace }} rollout status statefulset/{{ include "decdn-node.fullname" . }}
 {{- $ns := .Release.Namespace }}

@@ -13,15 +13,18 @@
     - role: decdn_node
   post_tasks:
     # A probe that took any 200 as ready would stop at its first attempt; one that
-    # reads the gauge retries until the window runs out on decdn_node_boot_ready 0.
+    # reads the gauge retries until the window runs out on decdn_node_boot_ready 0
+    # (attempts then equals the retries), and its warning names the booting state.
     - name: Assert the readiness probe kept polling a node that is still booting
       ansible.builtin.assert:
         that:
           - decdn_metrics_probe.status == 200
           - decdn_metrics_probe.content is search('(?m)^decdn_node_boot_ready 0$')
-          - decdn_metrics_probe.attempts | int > 1
+          - decdn_metrics_probe.attempts | int == decdn_readiness_retries | int
+          - decdn_readiness_warning is not skipped
+          - "'`decdn_node_boot_ready 0`:' in decdn_readiness_warning.msg"
         fail_msg: >-
           Expected the probe to retry a 200 carrying decdn_node_boot_ready 0 until
-          its window ran out; got status
+          its window ran out, then warn that the node is booting; got status
           {{ decdn_metrics_probe.status | default('none') }} after
           {{ decdn_metrics_probe.attempts | default('?') }} attempt(s).

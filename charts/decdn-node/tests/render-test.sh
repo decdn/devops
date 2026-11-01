@@ -441,6 +441,8 @@ cmd = main["startupProbe"]["exec"]["command"]
 check("--config" in cmd and cmd[cmd.index("--config") + 1] == main["args"][main["args"].index("--config") + 1],
       "startupProbe reads another node.toml than the daemon")
 check(main["startupProbe"]["timeoutSeconds"] >= 5, "startupProbe timeout below the CLI's --timeout-ms")
+check(main["startupProbe"]["periodSeconds"] * main["startupProbe"]["failureThreshold"] >= 600,
+      "startupProbe budget below upstream's 10-minute boot-read retry budget")
 for probe in ("readinessProbe", "livenessProbe"):
     check(main[probe]["httpGet"]["port"] == "metrics", f"{probe} port")
 
@@ -655,6 +657,9 @@ expect_fail "unknown monitoring knob"      schema   "additional propert(y|ies) '
 # the handler only once the default's is nulled.
 http_startup=(--set-json 'startupProbe={"exec":null,"httpGet":{"path":"/metrics","port":"metrics"}}')
 expect_fail "startupProbe, admin RPC off"  template 'startupProbe runs .decdn node health.'      --set config.observability.admin_port=0 --set metrics.port=9191
+expect_fail "startupProbe, admin off (JSON)" template 'startupProbe runs .decdn node health.'     --set-json 'config.observability.admin_port=0' --set metrics.port=9191
+expect_fail "startupProbe, sh -c, admin off" template 'startupProbe runs .decdn node health.'    --set-json 'startupProbe.exec.command=["sh","-c","decdn node health --config /etc/decdn/node.toml"]' --set config.observability.admin_port=0 --set metrics.port=9191
+expect_fail "startupProbe command a string" template 'startupProbe.exec.command must be a list'  --set-json 'startupProbe.exec.command="decdn node health"'
 expect_fail "startupProbe, two handlers"   template 'startupProbe has 2 handlers \(exec, httpGet\)' --set-json 'startupProbe.httpGet={"path":"/metrics","port":"metrics"}'
 expect_fail "livenessProbe, two handlers"  template 'livenessProbe has 2 handlers'             --set-json 'livenessProbe.tcpSocket={"port":"metrics"}'
 

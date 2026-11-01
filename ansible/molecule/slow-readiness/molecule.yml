@@ -6,7 +6,8 @@
 # is still booting instead of taking it as ready, WARNS (does not fail) when the
 # window runs out, and that the hard service-state gate confirms the unit is
 # `running`. side_effect.yml re-runs the role against a daemon that never binds
-# /metrics (a release without the gauge, booting), which must stay advisory too.
+# /metrics (a release without the gauge, booting), which must stay advisory too,
+# and against a /metrics that answers 500, which must fail at once.
 # Reuses the default scenario's stub binary rather than duplicating it.
 #
 # `baseline` is NOT exercised here (same rationale as the default scenario:
