@@ -376,11 +376,11 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
   after a command run at a terminal is wrong advice on a host this role manages (see
   [On-chain onboarding](#on-chain-onboarding)). `true` turns it on; `""`/`null`
   omits the section, which an exact `decdn_node_version` below `0.2` needs.
-- **Abuse limits + load shedding** — the `decdn_security_*` family,
+- **Abuse limits + load shedding** — `decdn_security_max_concurrent_handlers`,
   `decdn_load_shed_*` (`policy` is `resource-pressure`|`always-admit`; the low-water
   serve mark must be `<=` the high), and the `decdn_dht_rate_limit` /
   `decdn_probe_rate_limit` / `decdn_serve_rate_limit` (`[serve.rate_limit]`, decdn v0.3:
-  inbound client requests) **dicts** (any subset of eight keys; rate keys are floats,
+  inbound client requests) **dicts** (any subset of five keys; rate keys are floats,
   the rest integers — an unknown key is rejected at deploy time, because the template
   would otherwise silently drop it).
 - **Receipts + local denylist** — `decdn_receipts_max_file_bytes`,

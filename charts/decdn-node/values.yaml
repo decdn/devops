@@ -77,7 +77,7 @@ service:
   enabled: true
   # LoadBalancer | NodePort | ClusterIP
   type: LoadBalancer
-  # Local preserves the client source IP (per-source rate limits need it).
+  # Local preserves the client source IP the node sees (Cluster SNATs it).
   # Only applied to LoadBalancer/NodePort.
   externalTrafficPolicy: Local
   nodePort: null

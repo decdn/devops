@@ -364,21 +364,10 @@ otlp_endpoint = "{{ decdn_otlp_endpoint }}"
     match grafana_alloy_otlp_grpc_port; preflight + molecule guard both sides. -#}
 otlp_endpoint = "http://127.0.0.1:4317"
 {% endif %}
-{% if decdn_security_max_concurrent_handlers not in ["", none] or decdn_security_per_source_rate_per_sec not in ["", none] or decdn_security_per_source_burst not in ["", none] or decdn_security_max_tracked_sources not in ["", none] %}
+{% if decdn_security_max_concurrent_handlers not in ["", none] %}
 
 [security]
-{% if decdn_security_max_concurrent_handlers not in ["", none] %}
 max_concurrent_handlers = {{ decdn_security_max_concurrent_handlers | int }}
-{% endif %}
-{% if decdn_security_per_source_rate_per_sec not in ["", none] %}
-per_source_rate_per_sec = {{ decdn_security_per_source_rate_per_sec | float }}
-{% endif %}
-{% if decdn_security_per_source_burst not in ["", none] %}
-per_source_burst = {{ decdn_security_per_source_burst | int }}
-{% endif %}
-{% if decdn_security_max_tracked_sources not in ["", none] %}
-max_tracked_sources = {{ decdn_security_max_tracked_sources | int }}
-{% endif %}
 {% endif %}
 {% if decdn_load_shed_policy not in ["", none] or decdn_load_shed_egress_budget_mbps not in ["", none] or decdn_load_shed_max_concurrent_serves_high not in ["", none] or decdn_load_shed_max_concurrent_serves_low not in ["", none] or decdn_load_shed_per_client_serve_cap not in ["", none] %}
 
@@ -403,12 +392,12 @@ per_client_serve_cap = {{ decdn_load_shed_per_client_serve_cap | int }}
 {% if _rl is not none and _rl | length > 0 %}
 
 [{{ _sec }}.rate_limit]
-{% for _k in ["per_peer_rate_per_sec", "per_ip_rate_per_sec", "global_rate_per_sec"] %}
+{% for _k in ["per_peer_rate_per_sec", "global_rate_per_sec"] %}
 {% if _k in _rl %}
 {{ _k }} = {{ _rl[_k] | float }}
 {% endif %}
 {% endfor %}
-{% for _k in ["per_peer_burst", "per_ip_burst", "global_burst", "max_tracked_per_ip", "max_tracked_per_peer"] %}
+{% for _k in ["per_peer_burst", "global_burst", "max_tracked_per_peer"] %}
 {% if _k in _rl %}
 {{ _k }} = {{ _rl[_k] | int }}
 {% endif %}

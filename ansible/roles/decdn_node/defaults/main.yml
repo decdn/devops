@@ -183,7 +183,7 @@ decdn_voucher_commit_interval_ms: ""  # daemon dflt 5000; must be > 0
 # ADR 003 shared payment pool: capped delegated signers + node-addressed cumulative
 # vouchers. The old pairwise-channel knobs (auto-closeChannel triggers, the split
 # initial/working buyer deposits, voucher_interval_mb negotiation) no longer exist.
-decdn_redeem_threshold_micro_usdc: ""    # daemon dflt 1_000_000 (1 USDC) — accrued µUSDC to trigger redeem
+decdn_redeem_threshold_micro_usdc: ""    # daemon dflt 50_000 (0.05 USDC) — accrued µUSDC to trigger redeem
 decdn_redeem_max_vouchers_per_tx: ""     # daemon dflt 300; > 0 — gas-bounded redeemMany chunking
 decdn_redeem_interval_secs: ""           # daemon dflt 300; range 1..=21600 — redeemer self-tick
 decdn_buyer_working_deposit_micro_usdc: ""  # daemon dflt 10_000_000 (10 USDC); > 0
@@ -362,9 +362,6 @@ decdn_grafana_cloud_enabled: false
 # [security] and [load_shed] and [content] are HOT-RELOADABLE: change them and run
 # `decdn node reload` (or systemctl reload decdn-node) instead of restarting.
 decdn_security_max_concurrent_handlers: ""   # daemon dflt 256; 0 disables the cap
-decdn_security_per_source_rate_per_sec: ""   # daemon dflt 100.0 (float); 0.0 disables
-decdn_security_per_source_burst: ""          # daemon dflt 200; > 0 when the rate is > 0
-decdn_security_max_tracked_sources: ""       # daemon dflt 4096; 0 = unbounded
 # Load shedding under resource pressure (#1756).
 decdn_load_shed_policy: ""                     # daemon dflt "resource-pressure"; also "always-admit"
 decdn_load_shed_egress_budget_mbps: ""         # daemon dflt 0 (no budget)
@@ -372,12 +369,12 @@ decdn_load_shed_max_concurrent_serves_high: ""  # daemon dflt 256
 decdn_load_shed_max_concurrent_serves_low: ""   # daemon dflt 192; must be <= the high mark
 decdn_load_shed_per_client_serve_cap: ""        # daemon dflt 32
 # DHT / probe / serve rate limits. Dicts so the three identically-shaped tables share one
-# schema; any subset of the eight keys may be set. Rate keys are floats, the rest
-# integers: per_peer_rate_per_sec, per_ip_rate_per_sec, global_rate_per_sec,
-# per_peer_burst, per_ip_burst, global_burst, max_tracked_per_ip, max_tracked_per_peer.
-# Daemon defaults — dht: 20.0/40, 100.0/200, 1000.0/2000, 4096, 4096
-#                 probe:  5.0/5,  50.0/200, 1000.0/2000, 4096, 4096
-#                 serve: 100.0/400, 200.0/800, 2000.0/5000, 4096, 4096
+# schema; any subset of the five keys may be set. Rate keys are floats, the rest
+# integers: per_peer_rate_per_sec, global_rate_per_sec, per_peer_burst, global_burst,
+# max_tracked_per_peer.
+# Daemon defaults — dht: 20.0/40, 1000.0/2000, 4096
+#                 probe:  5.0/5,  1000.0/2000, 4096
+#                 serve: 100.0/400, 2000.0/5000, 4096
 # [serve.rate_limit] is decdn v0.3: leave it {} under an exact decdn_node_version below 0.3.
 decdn_dht_rate_limit: {}
 decdn_probe_rate_limit: {}

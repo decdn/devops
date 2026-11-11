@@ -598,14 +598,14 @@
             decdn_rejected: "{{ decdn_rejected + ['bounded-range'] }}"
           when: ansible_failed_task.name is match('^Validate optional')
 
-    # --- Case: float (a non-numeric would `| float` to 0.0, disabling a limit) -----
-    - name: "Case float — non-numeric rate limit"
+    # --- Case: float (a non-numeric would `| float` to 0.0, zeroing the knob) ------
+    - name: "Case float — non-numeric float knob"
       block:
         - name: Run decdn_node with a non-numeric float knob
           ansible.builtin.include_role:
             name: decdn_node
           vars:
-            decdn_security_per_source_rate_per_sec: "fast"
+            decdn_serve_economics_discount: "steep"
       rescue:
         - name: Record float rejection (only if a validation assert failed)
           ansible.builtin.set_fact:
