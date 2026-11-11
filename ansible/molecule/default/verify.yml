@@ -215,9 +215,6 @@
                _is_int(bc.get("redeem_threshold_micro_usdc"))
                and bc.get("redeem_threshold_micro_usdc") == 50000000),
               # Floats must render as TOML floats, not ints or strings.
-              ("security.per_source_rate_per_sec (bare float)",
-               _is_float(sec.get("per_source_rate_per_sec"))
-               and sec.get("per_source_rate_per_sec") == 50.5),
               ("cache.serve_economics.discount (bare float)",
                _is_float(cache.get("serve_economics", {}).get("discount"))
                and cache.get("serve_economics", {}).get("discount") == 0.25),
@@ -241,7 +238,7 @@
                _is_float(dht.get("per_peer_rate_per_sec")) and dht.get("per_peer_rate_per_sec") == 10.0
                and _is_int(dht.get("per_peer_burst")) and dht.get("per_peer_burst") == 20),
               ("dht.rate_limit unset keys stay absent", set(dht) == {"per_peer_rate_per_sec", "per_peer_burst"}),
-              ("probe.rate_limit unset keys stay absent", set(probe) == {"max_tracked_per_ip"}),
+              ("probe.rate_limit unset keys stay absent", set(probe) == {"max_tracked_per_peer"}),
           ]
           # The TOML sub-table hazard: every scalar [cache] key must be emitted BEFORE
           # the first [cache.*] header, or it silently nests into that sub-table

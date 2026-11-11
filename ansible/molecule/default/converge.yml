@@ -64,9 +64,7 @@
     decdn_relay_foreign_namespaces: false
     decdn_redeem_threshold_micro_usdc: 50000000
     # A float knob: `| float` must render a bare TOML float, and verify.yml's type
-    # guards have to accept float (not just int) for these. Covers the one rendering
-    # form the old scenario had no example of.
-    decdn_security_per_source_rate_per_sec: 50.5
+    # guards have to accept float (not just int) for it.
     decdn_serve_economics_discount: 0.25
     # One knob per NEW sub-table, so each table's header actually gets emitted and
     # verify.yml can prove the scalar [cache] keys did not fall into it.
@@ -76,13 +74,13 @@
     decdn_circuit_breaker_enabled: false
     decdn_load_shed_per_client_serve_cap: 16
     decdn_receipts_retained_files: 8
-    # Dict-shaped knobs: only a subset of the eight keys is set, which is the case
+    # Dict-shaped knobs: only a subset of the five keys is set, which is the case
     # the template's key loop has to get right (absent keys must not render).
     decdn_dht_rate_limit:
       per_peer_rate_per_sec: 10.0
       per_peer_burst: 20
     decdn_probe_rate_limit:
-      max_tracked_per_ip: 1024
+      max_tracked_per_peer: 1024
     decdn_content_denied_hashes:
       - "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     # Two entries each so the {% for %} comma-join branch (loop.last) is exercised —

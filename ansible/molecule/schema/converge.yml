@@ -132,41 +132,29 @@
     # --- [observability] / [security] / [load_shed] / [dht] / [probe] ---
     decdn_otlp_endpoint: "http://localhost:4317"
     decdn_security_max_concurrent_handlers: 128
-    decdn_security_per_source_rate_per_sec: 50.5
-    decdn_security_per_source_burst: 100
-    decdn_security_max_tracked_sources: 2048
     decdn_load_shed_policy: "always-admit"
     decdn_load_shed_egress_budget_mbps: 500
     decdn_load_shed_max_concurrent_serves_high: 128
     decdn_load_shed_max_concurrent_serves_low: 96
     decdn_load_shed_per_client_serve_cap: 16
-    # All eight keys on all three tables, so the guard sees the complete rate-limit shape.
+    # All five keys on all three tables, so the guard sees the complete rate-limit shape.
     decdn_dht_rate_limit:
       per_peer_rate_per_sec: 10.0
       per_peer_burst: 20
-      per_ip_rate_per_sec: 50.0
-      per_ip_burst: 100
       global_rate_per_sec: 500.0
       global_burst: 1000
-      max_tracked_per_ip: 2048
       max_tracked_per_peer: 2048
     decdn_probe_rate_limit:
       per_peer_rate_per_sec: 2.5
       per_peer_burst: 5
-      per_ip_rate_per_sec: 25.0
-      per_ip_burst: 100
       global_rate_per_sec: 500.0
       global_burst: 1000
-      max_tracked_per_ip: 1024
       max_tracked_per_peer: 1024
     decdn_serve_rate_limit:
       per_peer_rate_per_sec: 50.0
       per_peer_burst: 200
-      per_ip_rate_per_sec: 100.0
-      per_ip_burst: 400
       global_rate_per_sec: 1000.0
       global_burst: 2500
-      max_tracked_per_ip: 2048
       max_tracked_per_peer: 2048
 
     # --- [receipts] / [content] ---

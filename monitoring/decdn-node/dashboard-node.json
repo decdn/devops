@@ -2972,7 +2972,7 @@
       },
       "title": "Rate-limit rejections",
       "type": "timeseries",
-      "description": "Sibling counters rather than one counter with a reason label: a per-IP shed catches one host cycling node IDs, a global shed means the node itself is at its ceiling, and the remedies differ.",
+      "description": "Sibling counters rather than one counter with a reason label: a per-peer shed is one node ID over its bucket, a global shed means the node itself is at its ceiling, and the remedies differ.",
       "targets": [
         {
           "datasource": {
@@ -2982,15 +2982,6 @@
           "expr": "sum(rate(decdn_probe_rate_limit_rejected_per_peer_total{instance=~\"$node\"}[$__rate_interval]))",
           "refId": "A",
           "legendFormat": "probe — per peer"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_probe_rate_limit_rejected_per_ip_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "B",
-          "legendFormat": "probe — per ip"
         },
         {
           "datasource": {
@@ -3009,15 +3000,6 @@
           "expr": "sum(rate(decdn_dht_rate_limit_rejected_per_peer_total{instance=~\"$node\"}[$__rate_interval]))",
           "refId": "D",
           "legendFormat": "dht — per peer"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_dht_rate_limit_rejected_per_ip_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "E",
-          "legendFormat": "dht — per ip"
         },
         {
           "datasource": {
@@ -3118,15 +3100,6 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "decdn_probe_rate_limit_tracked_per_ip{instance=~\"$node\"}",
-          "refId": "A",
-          "legendFormat": "probe — per ip"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
           "expr": "decdn_probe_rate_limit_tracked_per_peer{instance=~\"$node\"}",
           "refId": "B",
           "legendFormat": "probe — per peer"
@@ -3136,36 +3109,9 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "decdn_dht_rate_limit_tracked_per_ip{instance=~\"$node\"}",
-          "refId": "C",
-          "legendFormat": "dht — per ip"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
           "expr": "decdn_dht_rate_limit_tracked_per_peer{instance=~\"$node\"}",
           "refId": "D",
           "legendFormat": "dht — per peer"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_probe_rate_limit_prune_sweeps_per_ip_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "E",
-          "legendFormat": "probe ip sweeps"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_dht_rate_limit_prune_sweeps_per_ip_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "F",
-          "legendFormat": "dht ip sweeps"
         },
         {
           "datasource": {
@@ -3269,7 +3215,7 @@
       },
       "title": "Serve rate-limit rejections",
       "type": "timeseries",
-      "description": "cdn/client/v1 streams reset with RATE_LIMITED before their request is read (ADR 005 § Request rate limiting, decdn v0.3). Sibling counters, one per layer, set under [serve.rate_limit]; a refused stream counts on the first layer that refused it. A per-peer shed is one node ID over its bucket, a per-IP shed catches one host cycling node IDs (relay-only connections skip that layer), and a global shed while per peer and per IP stay flat means aggregate load, or one source cycling node IDs over the relay. Each one ends an inbound stream as failed, so they also show in Serve refusals by reason on the delivery dashboard.",
+      "description": "cdn/client/v1 streams reset with RATE_LIMITED before their request is read (ADR 005 § Request rate limiting, decdn v0.3). Sibling counters, one per layer, set under [serve.rate_limit]; a refused stream counts on the first layer that refused it. A per-peer shed is one node ID over its bucket, and a global shed while per peer stays flat means aggregate load, or one source cycling node IDs. Each one ends an inbound stream as failed, so they also show in Serve refusals by reason on the delivery dashboard.",
       "targets": [
         {
           "datasource": {
@@ -3279,15 +3225,6 @@
           "expr": "sum(rate(decdn_serve_rate_limit_rejected_per_peer_total{instance=~\"$node\"}[$__rate_interval]))",
           "refId": "A",
           "legendFormat": "serve — per peer"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_serve_rate_limit_rejected_per_ip_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "B",
-          "legendFormat": "serve — per ip"
         },
         {
           "datasource": {
@@ -3381,17 +3318,8 @@
       },
       "title": "Serve rate-limit buckets tracked",
       "type": "timeseries",
-      "description": "The serve path's per-IP and per-peer request buckets (decdn v0.3), and the sweeps that expire idle ones. Bucket counts climbing while the sweep rate stays flat is the memory-exhaustion shape.",
+      "description": "The serve path's per-peer request buckets (decdn v0.3), and the sweeps that expire idle ones. Bucket counts climbing while the sweep rate stays flat is the memory-exhaustion shape.",
       "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "decdn_serve_rate_limit_tracked_per_ip{instance=~\"$node\"}",
-          "refId": "A",
-          "legendFormat": "serve — per ip"
-        },
         {
           "datasource": {
             "type": "prometheus",
@@ -3400,15 +3328,6 @@
           "expr": "decdn_serve_rate_limit_tracked_per_peer{instance=~\"$node\"}",
           "refId": "B",
           "legendFormat": "serve — per peer"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_serve_rate_limit_prune_sweeps_per_ip_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "C",
-          "legendFormat": "serve ip sweeps"
         },
         {
           "datasource": {

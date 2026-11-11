@@ -332,8 +332,8 @@ with `decdn_cache_origin_kind` (or `decdn_cache_origins`) set, deployed by
 
 - **QUIC** (`quic.port`, default 4433/udp) is the only public port.
   - `service.type: LoadBalancer` (the default) gives the node a public UDP address,
-    and `externalTrafficPolicy: Local` preserves client source IPs for per-source
-    rate limiting. `service.loadBalancerIP` sets the Service field Kubernetes has
+    and `externalTrafficPolicy: Local` preserves the client source IPs the node
+    sees. `service.loadBalancerIP` sets the Service field Kubernetes has
     deprecated since 1.24; many providers want an annotation in `service.annotations`
     instead, so check yours.
   - For bare-metal-style nodes, set `quic.hostPort.enabled: true` and
