@@ -50,16 +50,12 @@ chain_id = {{ decdn_chain_id }}
 eth_keystore = "{{ decdn_keystore_file }}"
 payment_pool_address = "{{ decdn_payment_pool_address }}"
 capacity_bond_address = "{{ decdn_capacity_bond_address }}"
-slash_judge_address = "{{ decdn_slash_judge_address }}"
 content_blacklist_address = "{{ decdn_content_blacklist_address }}"
 {% if decdn_origin_assignment_address | length > 0 %}
 origin_assignment_address = "{{ decdn_origin_assignment_address }}"
 {% endif %}
 {% if decdn_publisher_registry_address | length > 0 %}
 publisher_registry_address = "{{ decdn_publisher_registry_address }}"
-{% endif %}
-{% if decdn_slash_appeal_address | length > 0 %}
-slash_appeal_address = "{{ decdn_slash_appeal_address }}"
 {% endif %}
 {% if decdn_origin_directory_positive_ttl_sec not in ["", none] %}
 origin_directory_positive_ttl_sec = {{ decdn_origin_directory_positive_ttl_sec | int }}

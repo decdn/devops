@@ -6,13 +6,13 @@
 Writes ansible/roles/decdn_node/vars/main/networks.yml: one entry per chain upstream's
 `decdn config init --chain <name>` knows, holding the contract addresses that command
 would bake into node.toml. Operators then set `decdn_network: <name>` instead of
-hand-copying eight addresses that change wholesale on every upstream redeploy.
+hand-copying six addresses that change wholesale on every upstream redeploy.
 
 Also writes the subsets three other roles need, from the same parsed data, so the
 roles can never disagree about a chain: ansible/roles/sponsord/vars/main/networks.yml
 (chain_id + the PaymentPool address), ansible/roles/sponsord_onramp/vars/main/
-networks.yml (chain_id + CapacityBond and SlashJudge, which the onramp hands to users'
-decdn) and ansible/roles/decdn_gateway/vars/main/networks.yml (chain_id + the
+networks.yml (chain_id + the CapacityBond, which the onramp hands to users' decdn)
+and ansible/roles/decdn_gateway/vars/main/networks.yml (chain_id + the
 addresses the gateway pays through and the PublisherRegistry). --check covers all four
 files.
 
@@ -59,9 +59,7 @@ GATEWAY_OUT = REPO / "ansible/roles/decdn_gateway/vars/main/networks.yml"
 FIELDS = {
     "payment_pool": "payment_pool_address",
     "capacity_bond": "capacity_bond_address",
-    "slash_judge": "slash_judge_address",
     "content_blacklist": "content_blacklist_address",
-    "slash_appeal": "slash_appeal_address",
     "origin_assignment": "origin_assignment_address",
     "publisher_registry": "publisher_registry_address",
     "usdc": "usdc_address",
@@ -71,11 +69,10 @@ FIELDS = {
 # sponsord_<suffix>). Order is the output order.
 SPONSORD_FIELDS = ["payment_pool_address"]
 # Likewise for sponsord_onramp (variables sponsord_onramp_<suffix>).
-ONRAMP_FIELDS = ["capacity_bond_address", "slash_judge_address"]
+ONRAMP_FIELDS = ["capacity_bond_address"]
 # Likewise for decdn_gateway (variables decdn_gateway_<suffix>): what a paying client
 # reads, and the registry it checks namespace pointers against.
-GATEWAY_FIELDS = ["payment_pool_address", "capacity_bond_address", "slash_judge_address",
-                  "publisher_registry_address"]
+GATEWAY_FIELDS = ["payment_pool_address", "capacity_bond_address", "publisher_registry_address"]
 
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 REGISTRY = re.compile(r"KNOWN_CHAINS\s*:\s*&\[\s*KnownChain\s*\]\s*=\s*&\[(?P<body>.*?)\];", re.S)

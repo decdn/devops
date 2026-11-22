@@ -168,7 +168,6 @@
               ("blockchain", "chain_id"): 421614,
               ("blockchain", "payment_pool_address"): "0x1111111111111111111111111111111111111111",
               ("blockchain", "capacity_bond_address"): "0x2222222222222222222222222222222222222222",
-              ("blockchain", "slash_judge_address"): "0x3333333333333333333333333333333333333333",
               ("blockchain", "content_blacklist_address"): "0x4444444444444444444444444444444444444444",
           }
           bad = {

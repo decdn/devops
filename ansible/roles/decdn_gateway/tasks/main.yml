@@ -148,7 +148,7 @@
       decdn_gateway_network "{{ decdn_gateway_network }}" is in use, but inventory
       overrides decdn_gateway_{{ item }}. The inventory value wins over the profile;
       make sure that is deliberate (a stale hand-copied address is the usual cause).
-  loop: [payment_pool_address, capacity_bond_address, slash_judge_address, publisher_registry_address]
+  loop: [payment_pool_address, capacity_bond_address, publisher_registry_address]
   when:
     - decdn_gateway_network | length > 0
     - (lookup('ansible.builtin.vars', 'decdn_gateway_' ~ item) | lower) != (_decdn_gateway_profile[item] | lower)
@@ -167,7 +167,6 @@
   loop:
     - "{{ decdn_gateway_payment_pool_address }}"
     - "{{ decdn_gateway_capacity_bond_address }}"
-    - "{{ decdn_gateway_slash_judge_address }}"
     - "{{ decdn_gateway_publisher_registry_address }}"
 
 # The URL may embed an API key, so the message never echoes it. It lands in a TOML

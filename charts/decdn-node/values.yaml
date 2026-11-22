@@ -192,7 +192,6 @@ config:
     chain_id: null                # e.g. 421614 (Arbitrum Sepolia)
     payment_pool_address: ""
     capacity_bond_address: ""
-    slash_judge_address: ""
     content_blacklist_address: ""
   payment:
     rate_per_mb: 10               # USDC base units (6 decimals)
@@ -216,8 +215,8 @@ terminationGracePeriodSeconds: 300
 # startupProbe asks the admin RPC (`decdn node health`, the CLI the image ships, as
 # Compose's healthcheck does). The admin RPC starts only once boot has finished —
 # RPC preflight, key load, cache/endpoint build, then the chain bring-up
-# (CapacityBond + slash-watcher enumerations, the first ContentBlacklist sync and
-# DHT bootstrap) — so the budget below (10 minutes, upstream's own budget for
+# (the CapacityBond registry read, the first ContentBlacklist sync and DHT
+# bootstrap) — so the budget below (10 minutes, upstream's own budget for
 # retrying the boot chain reads) restarts the container on a boot that never
 # finishes. It needs config.observability.admin_port (default 9191) on. readiness
 # and liveness run only after it passes, on /metrics: from the decdn release that

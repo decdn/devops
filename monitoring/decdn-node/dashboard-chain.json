@@ -48,7 +48,7 @@
       }
     ]
   },
-  "description": "Everything that touches the chain: watcher liveness for all five chain-event watchers, the capacity-bond and active-staker registries, seller and buyer payment flow, and the slash-risk signals. Thresholds here match monitoring/decdn-node/prometheus-alerts.yml rather than sitting looser than the pages.",
+  "description": "Everything that touches the chain: watcher liveness for all four chain-event watchers, the capacity-bond and active-staker registries, seller and buyer payment flow, and the blacklist-compliance signals. Thresholds here match monitoring/decdn-node/prometheus-alerts.yml rather than sitting looser than the pages.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -257,15 +257,6 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "decdn_slash_watcher_down_seconds{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}",
-          "refId": "A",
-          "legendFormat": "slash — {{instance}}"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
           "expr": "decdn_staker_set_watcher_down_seconds{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}",
           "refId": "B",
           "legendFormat": "staker_set — {{instance}}"
@@ -387,15 +378,6 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(decdn_slash_watcher_restarts_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "slash"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
           "expr": "sum(rate(decdn_staker_set_watcher_restarts_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "B",
           "legendFormat": "staker_set"
@@ -512,15 +494,6 @@
       "type": "timeseries",
       "description": "Any non-zero value is a bug, raised by a Drop guard in resumable_watcher::run.",
       "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_slash_watcher_task_panicked_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "slash"
-        },
         {
           "datasource": {
             "type": "prometheus",
@@ -1148,7 +1121,7 @@
       },
       "title": "Registry failures",
       "type": "timeseries",
-      "description": "A dropped nodeIdOf lookup means a Reinstated or UnbondingRequested event never landed, so the cached active set has drifted from chain state for that operator until the next full resync.",
+      "description": "A dropped nodeIdOf lookup means a Reinstated or Unbonded event never landed, so the cached active set has drifted from chain state for that operator until the next full resync.",
       "targets": [
         {
           "datasource": {
@@ -1518,99 +1491,8 @@
       },
       "id": 11,
       "panels": [],
-      "title": "Slash safety",
+      "title": "Blacklist compliance",
       "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "title": "Slashes detected",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_slashes_detected_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "{{instance}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "thresholds"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              }
-            ]
-          },
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 8,
-        "x": 0,
-        "y": 45
-      },
-      "id": 12
     },
     {
       "datasource": {
@@ -1698,8 +1580,8 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 8,
-        "x": 8,
+        "w": 12,
+        "x": 0,
         "y": 45
       },
       "id": 13
@@ -1795,8 +1677,8 @@
       },
       "gridPos": {
         "h": 7,
-        "w": 8,
-        "x": 16,
+        "w": 12,
+        "x": 12,
         "y": 45
       },
       "id": 14
@@ -3669,7 +3551,7 @@
             "type": "loki",
             "uid": "${DS_LOKI}"
           },
-          "expr": "{unit=\"decdn-node.service\", instance=~\"$instance\"} | json lvl=\"level\", tgt=\"target\", msg=\"fields.message\" |~ \"(?i)redeemmany|redeem|topup|top-up|getpool|getauthorization|slash\" | lvl=~\"WARN|ERROR\" | line_format \"{{.instance}} {{.lvl}} {{.tgt}} :: {{.msg}}\"",
+          "expr": "{unit=\"decdn-node.service\", instance=~\"$instance\"} | json lvl=\"level\", tgt=\"target\", msg=\"fields.message\" |~ \"(?i)redeemmany|redeem|topup|top-up|getpool|getauthorization\" | lvl=~\"WARN|ERROR\" | line_format \"{{.instance}} {{.lvl}} {{.tgt}} :: {{.msg}}\"",
           "refId": "A",
           "queryType": "range"
         }
@@ -4257,7 +4139,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "deCDN — chain, payments and slash safety",
+  "title": "deCDN — chain, payments and blacklist compliance",
   "uid": "decdn-chain",
   "version": 1,
   "weekStart": ""

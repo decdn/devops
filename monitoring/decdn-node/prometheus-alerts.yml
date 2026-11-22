@@ -1,7 +1,7 @@
 # deCDN reference Prometheus alerting rules
 #
 # Companion to adr/appendix-observability.md. Thresholds in the
-# `decdn-slash-safety` group are copied verbatim from §2.1
+# `decdn-blacklist-compliance` group are copied verbatim from its
 # "Recommended alert thresholds"; the others are operator-onboarding
 # defaults, not normative.
 #
@@ -17,14 +17,14 @@
 
 groups:
   # ---------------------------------------------------------------
-  # Slash-safety — copied from appendix-observability §2.1.
-  # A sustained alert here means the operator is at slash risk, with one
-  # deliberate exception: DecdnProbeHoldViolations is grouped here because it
-  # is a probe-hold capacity metric, but it signals lost revenue rather than
-  # slash exposure (see its annotation and appendix-observability §Slash-Safety
-  # Metrics). Carries no slash_risk label for that reason.
+  # Blacklist compliance — copied from appendix-observability's thresholds.
+  # A sustained alert here means a takedown may go unenforced past its
+  # compliance window (adr/011-content-takedown.md § Compliance Window), with
+  # one deliberate exception: DecdnProbeHoldViolations is grouped here because
+  # it is a probe-hold capacity metric, but it signals lost revenue rather than
+  # a compliance gap (see its annotation).
   # ---------------------------------------------------------------
-  - name: decdn-slash-safety
+  - name: decdn-blacklist-compliance
     interval: 30s
     rules:
       - alert: DecdnProbeHoldViolations
@@ -34,7 +34,6 @@ groups:
           component: probe
           severity: critical
         annotations:
-          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#slashing-risk"
           summary: "Probe-hold budget exhausted on {{ $labels.instance }}"
           description: |
             decdn_probe_hold_unavailable_total{reason="exhausted"} has been
@@ -43,8 +42,7 @@ groups:
             slot was live. Holds are best-effort, so the node still advertised
             has_blob: true and forwent only the hold — the blob is now visible
             to the LRU driver and may be evicted before the requester's pull
-            arrives, costing a wasted round trip and a lost delivery. Not slash
-            evidence: no offense pairs a probe with a later miss. Reduce load or
+            arrives, costing a wasted round trip and a lost delivery. Reduce load or
             raise max_probe_holds; investigate OOM. The reason filter is
             load-bearing: reason="disabled" (max_probe_holds=0) and
             reason="stake_lane_reserved" are deliberate operator decisions and
@@ -74,7 +72,6 @@ groups:
         labels:
           component: blacklist
           severity: critical
-          slash_risk: blacklist_violation
         annotations:
           runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#contentblacklist-compliance"
           summary: "Blacklist watcher not ticking on {{ $labels.instance }}"
@@ -82,7 +79,7 @@ groups:
             No successful blacklist poll tick for several intervals — the
             watcher has panicked, wedged, or exited, or every poll tick is
             failing. The node may be serving content blacklisted after the
-            failure, which is slashable. Check the RPC provider first (the
+            failure, past its compliance window. Check the RPC provider first (the
             `multiplexed poller tick error` log lines name the cause), then
             restart the daemon. See adr/011-content-takedown.md.
 
@@ -109,23 +106,22 @@ groups:
         labels:
           component: blacklist
           severity: critical
-          slash_risk: blacklist_violation
         annotations:
           runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#contentblacklist-compliance"
           summary: "Blacklist deny-set not fully enforced on {{ $labels.instance }}"
           description: |
             A re-scope could not re-verify or evict every known entry (disk or
-            scope eth_call failure). A blacklisted blob may still be servable and
-            slashable even while blacklist_watcher_down_seconds reads 0. Check
+            scope eth_call failure). A blacklisted blob may still be servable past
+            its compliance window even while blacklist_watcher_down_seconds reads 0. Check
             disk health and the ContentBlacklist RPC. See adr/011-content-takedown.md.
 
       - alert: DecdnWatcherTaskPanicked
-        # One rule covers all five chain-event watchers — slash, staker_set,
+        # One rule covers all four chain-event watchers — staker_set,
         # blacklist, settlement and fee_shares — via the metric-name match.
         #
         # The obvious spelling, `rate({__name__=~"..."}[10m]) > 0`, does not
-        # evaluate: rate() drops __name__, so the five per-watcher series on a
-        # node collapse to five identical label sets and Prometheus refuses the
+        # evaluate: rate() drops __name__, so the four per-watcher series on a
+        # node collapse to four identical label sets and Prometheus refuses the
         # vector. label_replace lifts the watcher out of the metric name while
         # the raw selector still has it, and the offset subtraction takes the
         # place of rate() so nothing ever strips the name mid-expression. A
@@ -133,8 +129,8 @@ groups:
         # this.
         #
         # The extraction regex ends `_watcher_task_panicked_total` so `watcher`
-        # reads `slash`, not `slash_watcher`, and the description does not say
-        # "slash_watcher watcher". The SELECTOR stays broad on purpose: every
+        # reads `blacklist`, not `blacklist_watcher`, and the description does not
+        # say "blacklist_watcher watcher". The SELECTOR stays broad on purpose: every
         # panic counter today is a watcher's, but a future one that is not would
         # still fire this rule, just with an empty `watcher` label. Firing with a
         # thin message beats not firing at all for a counter whose every non-zero
@@ -148,7 +144,6 @@ groups:
           component: watcher
           severity: critical
         annotations:
-          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#slashing-risk"
           summary: "A chain-event watcher task panicked on {{ $labels.instance }}"
           description: |
             The {{ $labels.watcher }} watcher task unwound on a panic. Never
@@ -168,8 +163,8 @@ groups:
         # plain `x - x offset 30m` does not: that form read negative after a
         # restart and cleared a pending alert. It runs as a subquery over the
         # label_replace so the per-watcher names survive (increase() on the raw
-        # regex selector drops __name__ and collides the five series), and
-        # `max without (watcher)` folds them back: the five watchers share one
+        # regex selector drops __name__ and collides the four series), and
+        # `max without (watcher)` folds them back: the four watchers share one
         # poller, so they flap together and this raises one alert per node.
         #
         # A burst steps the 30m increase up for exactly 30m, so `for: 45m`
@@ -229,45 +224,6 @@ groups:
             reporting it — do NOT restart to "clear" it. File the panic with
             the surrounding ERROR log line (emitted once per process).
             See docs/runbook.md § Cache coalescing mutex poisoned.
-
-      # The value, not increase(): the slash watcher's bring-up backfill counts
-      # every still-appealable slash at startup, which can be before the first
-      # scrape, so increase() could miss a slash found then. A non-zero value means this process
-      # has seen a slash; after a restart it re-counts only the slashes whose
-      # appeal window is still open, so the alert clears once the last window
-      # closes and the node restarts.
-      # The slash resync reports success upward on a failed read, so this
-      # counter is the only thing that moves when the repair fails. Attempts
-      # are 15m apart; the 1h window spans several.
-      - alert: DecdnSlashResyncFailing
-        expr: increase(decdn_slash_resync_failures_total[1h]) > 0
-        for: 15m
-        labels:
-          component: slashing
-          severity: warning
-        annotations:
-          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#slashing-risk"
-          summary: "Slash-watcher resync failing on {{ $labels.instance }}"
-          description: |
-            The repair for a slash whose tail event was lost is failing, so
-            such a slash stays off the admin surface while its appeal window
-            runs. Check the RPC provider's eth_call path.
-
-      - alert: DecdnSlashDetected
-        expr: decdn_slashes_detected_total > 0
-        for: 0m
-        labels:
-          component: slashing
-          severity: critical
-          slash_risk: "true"
-        annotations:
-          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#slashing-risk"
-          summary: "Operator slashed on {{ $labels.instance }}"
-          description: |
-            The slash watcher saw a SlashJudge.Slashed event against this
-            operator. The bond lost stake. Read the slash reason from the
-            watcher's log line and consider `decdn appeal slash` inside the
-            30-day appeal window.
 
   # ---------------------------------------------------------------
   # Liveness / capacity — operator-onboarding defaults.
@@ -354,23 +310,8 @@ groups:
       # counts from the first failed poll tick, so it catches a watcher that
       # never ticked because every eth_getLogs fails; an unregistered watcher
       # never fails a tick, so it stays 0. 180s ≈ several poll intervals; tune to
-      # your event_poll_interval. Blacklist has its own (slash-risk) rule in
-      # decdn-slash-safety; settlement is in decdn-delivery.
-      - alert: DecdnSlashWatcherStalled
-        expr: ((decdn_slash_watcher_last_tick_timestamp_seconds > 0) and (time() - decdn_slash_watcher_last_tick_timestamp_seconds > 180)) or (decdn_slash_watcher_down_seconds > 180)
-        for: 5m
-        labels:
-          component: watcher
-          severity: warning
-        annotations:
-          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#slashing-risk"
-          summary: "Slash watcher not ticking on {{ $labels.instance }}"
-          description: |
-            No successful slash-detection poll tick for several intervals — the
-            watcher may have panicked, wedged, or exited, or every poll tick is
-            failing, so a slash against this operator could go undetected.
-            Check the RPC provider, then restart.
-
+      # your event_poll_interval. Blacklist has its own (compliance) rule in
+      # decdn-blacklist-compliance; settlement is in decdn-delivery.
       - alert: DecdnStakerSetWatcherStalled
         expr: ((decdn_staker_set_watcher_last_tick_timestamp_seconds > 0) and (time() - decdn_staker_set_watcher_last_tick_timestamp_seconds > 180)) or (decdn_staker_set_watcher_down_seconds > 180)
         for: 5m
@@ -565,7 +506,7 @@ groups:
           summary: "Chain RPC unreachable from {{ $labels.instance }}"
           description: |
             The RPC watchdog cannot reach blockchain.rpc_url. While it is down
-            the node cannot read blacklist updates (slash exposure), follow
+            the node cannot read blacklist updates (a takedown can go unenforced), follow
             pool events, or redeem vouchers. See docs/runbook.md § RPC
             unreachable.
 
@@ -926,7 +867,6 @@ groups:
           component: probe
           severity: warning
         annotations:
-          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#slashing-risk"
           summary: "Probe-hold slots >90% used on {{ $labels.instance }}"
           description: |
             Saturation means cached content is advertised without an eviction

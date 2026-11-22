@@ -46,7 +46,7 @@ is unreachable.
   | `turnstile-secret` | `sponsord_onramp_turnstile_secret` from the git-ignored `host_vars/<host>/secret.yml`, or a file you write on the host. The two-way rules match `sponsord_rpc_url`: the role replaces a file it did not write only with `sponsord_onramp_turnstile_secret_overwrite_host_file: true`, and an empty value over a file the role wrote fails the deploy, because that means `secret.yml` went missing. Either way the role checks it is a non-empty regular file at `0600`. |
 
 - **Writes non-secret settings** to `/etc/sponsord/sponsord-onramp.env` (0644): the
-  public URL, the public RPC URL, CapacityBond and SlashJudge, the sitekey, the
+  public URL, the public RPC URL, the CapacityBond, the sitekey, the
   `decdn` release pin and any limits you set.
 - **Runs a hardened unit.** `sponsord-onramp.service` runs with `DynamicUser=`, no
   capabilities and a read-only filesystem.
@@ -151,8 +151,8 @@ See [`defaults/main.yml`](defaults/main.yml) for the full list with comments.
 | `sponsord_onramp_source_build_jobs` | `""` | `source` only: `CARGO_BUILD_JOBS` (`""` = one per CPU). |
 | `sponsord_onramp_manual_bin_src` / `_release_target_dir` | `""` / `sponsord_release_target_dir` | `manual` only. |
 | `sponsord_onramp_version` | the pinned release line | `release` mode: a `decdn/decdn` release line (`"X.Y"`, its newest finished release) or an exact `"X.Y.Z"`, quoted; see [`defaults/main.yml`](defaults/main.yml). Keep it equal to `sponsord_version` (and the node's `decdn_node_version`): overriding one does not move the other. |
-| `sponsord_onramp_network` | `sponsord_network` | Supplies CapacityBond and SlashJudge. Must match the daemon's network. |
-| `sponsord_onramp_capacity_bond_address`, `_slash_judge_address` | from profile | Explicit values win. SlashJudge may be `""`. |
+| `sponsord_onramp_network` | `sponsord_network` | Supplies the CapacityBond. Must match the daemon's network. |
+| `sponsord_onramp_capacity_bond_address` | from profile | An explicit value wins. |
 | `sponsord_onramp_rpc_url` | `""` | **Required. Public**: served to every user. No credentials, query or API key. |
 | `sponsord_onramp_proxy` | `nginx` | `nginx` or `none`. Set it in inventory: the firewall holes read it. |
 | `sponsord_onramp_domain` | `""` | Required with nginx. |

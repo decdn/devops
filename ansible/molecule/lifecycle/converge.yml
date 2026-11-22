@@ -9,10 +9,10 @@
     decdn_cli_manual_bin_src: "{{ stub_bin }}"
     decdn_rpc_url: "https://rpc.example.invalid/"
     decdn_region: "US"
-    # The profile supplies chain_id and all eight addresses ...
+    # The profile supplies chain_id and all six addresses ...
     decdn_network: arbitrum-sepolia
     # ... and an explicit inventory value must still win over it.
-    decdn_slash_appeal_address: "0x5555555555555555555555555555555555555555"
+    decdn_publisher_registry_address: "0x5555555555555555555555555555555555555555"
   roles:
     - role: decdn_node
   post_tasks:

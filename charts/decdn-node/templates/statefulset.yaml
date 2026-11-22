@@ -10,7 +10,7 @@ metadata:
     {{- include "decdn-node.labels" . | nindent 4 }}
 spec:
   # One release = one node identity. Never scale this: two pods would share one
-  # keystore and node.secret (a double-signing / slashing hazard).
+  # keystore and node.secret (a double-signing hazard).
   replicas: 1
   # The headless governing Service: per-pod DNS only, no ports. Immutable after install.
   serviceName: {{ include "decdn-node.headlessServiceName" . }}

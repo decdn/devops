@@ -24,7 +24,7 @@
           - _t is search('(?m)^payment_pool_address = "' ~ _profile.payment_pool_address ~ '"$')
           - _t is search('(?m)^content_blacklist_address = "' ~ _profile.content_blacklist_address ~ '"$')
           - _t is search('(?m)^usdc_address = "' ~ _profile.usdc_address ~ '"$')
-          - _t is search('(?m)^slash_appeal_address = "0x5555555555555555555555555555555555555555"$')
+          - _t is search('(?m)^publisher_registry_address = "0x5555555555555555555555555555555555555555"$')
         fail_msg: node.toml does not carry the profile values with the inventory override on top.
 
     # --- Backups --------------------------------------------------------------------

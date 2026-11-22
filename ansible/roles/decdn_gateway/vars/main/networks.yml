@@ -13,5 +13,4 @@ _decdn_gateway_network_profiles:
     chain_id: 421614
     payment_pool_address: "0x351E5544471e11638b89DF8E3A3299c28E00cEc3"
     capacity_bond_address: "0x65a9e38F41B9bE2fcB97950a0E3c33e506E6E353"
-    slash_judge_address: "0x8e4d5945615bDF00106ff429da07bd08bCdEdB94"
     publisher_registry_address: "0x5db5079e2C8A60ecc9297bE16e1a167794E382a6"

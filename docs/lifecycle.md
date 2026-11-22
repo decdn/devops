@@ -26,7 +26,7 @@ lists them and maps every target.
 | File | What it is | Lose it and… |
 |------|-----------|--------------|
 | `/var/lib/decdn/node.secret` | iroh node key (the wire identity) | peers see a new node; the on-chain binding points at a key you no longer hold |
-| `/var/lib/decdn/keystore.json` | operator Ethereum key, encrypted | you cannot unbond, withdraw or appeal a slash: **the bond is stranded** |
+| `/var/lib/decdn/keystore.json` | operator Ethereum key, encrypted | you cannot deregister or unbond: **the bond is stranded** |
 | `/etc/decdn/keystore.password` | password for the keystore | same as losing the keystore |
 | `/var/lib/decdn/*.redb`, receipts | daemon state, including vouchers not yet redeemed | unredeemed revenue and settlement progress |
 | `/var/lib/decdn/cache/` | cached blobs | nothing lasting: it refills from origins and peers |
@@ -173,16 +173,16 @@ cache. It refuses to run on more than one host unless you raise
 keys with it.
 
 It **keeps** the identity, `/etc/decdn` and the binaries, because the keystore is
-what withdraws the bond. It does **not** touch the chain. The exit is two operator
+what signs the unbond that returns the bond. It does **not** touch the chain. The exit is two operator
 steps with the `decdn` CLI, both with `--dry-run` first (use `decdn_chain` from
 [Running on-chain commands](#running-on-chain-commands)):
 
-1. `decdn_chain node deregister` leaves the active node set. The bond is **not**
-   returned: it stays deposited and slashable.
-2. `decdn_chain node unbond --all` starts the unbonding window. Run it again after the
-   window to withdraw.
+1. `decdn_chain node deregister` leaves the active node set and clears the declared
+   tier. The bond is **not** returned: it stays deposited.
+2. `decdn_chain node unbond --all` returns the whole bond in the same transaction.
+   There is no unbonding window.
 
-Delete the keystore only after the withdrawal has landed. The public `udp/4433`
+Delete the keystore only after the unbond has landed. The public `udp/4433`
 firewall rule stays until baseline is re-run without it.
 
 An **origin node** (`decdn_origin_nodes`) decommissions the same way, and the same

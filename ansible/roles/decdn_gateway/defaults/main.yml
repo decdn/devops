@@ -78,7 +78,6 @@ _decdn_gateway_profile: "{{ _decdn_gateway_network_profiles.get(decdn_gateway_ne
 decdn_gateway_chain_id: "{{ _decdn_gateway_profile.get('chain_id', '') }}"
 decdn_gateway_payment_pool_address: "{{ _decdn_gateway_profile.get('payment_pool_address', '') }}"
 decdn_gateway_capacity_bond_address: "{{ _decdn_gateway_profile.get('capacity_bond_address', '') }}"
-decdn_gateway_slash_judge_address: "{{ _decdn_gateway_profile.get('slash_judge_address', '') }}"
 decdn_gateway_publisher_registry_address: "{{ _decdn_gateway_profile.get('publisher_registry_address', '') }}"
 # REQUIRED. The JSON-RPC endpoint the gateway signs and reads the chain through.
 # SENSITIVE when it embeds an API key: it is written only into the 0600

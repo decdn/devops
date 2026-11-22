@@ -12,4 +12,3 @@ _sponsord_onramp_network_profiles:
   arbitrum-sepolia:
     chain_id: 421614
     capacity_bond_address: "0x65a9e38F41B9bE2fcB97950a0E3c33e506E6E353"
-    slash_judge_address: "0x8e4d5945615bDF00106ff429da07bd08bCdEdB94"

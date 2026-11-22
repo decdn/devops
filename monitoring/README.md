@@ -11,11 +11,11 @@ this repo's MIT license. sponsord's were written here.
 
 | File | What it is |
 |------|------------|
-| `decdn-node/grafana-dashboard.json` | Fleet overview (`uid: decdn-poc-overview`): status, delivery funnel, slash safety, logs and traces. |
+| `decdn-node/grafana-dashboard.json` | Fleet overview (`uid: decdn-poc-overview`): status, delivery funnel, blacklist compliance, logs and traces. |
 | `decdn-node/dashboard-delivery.json` | Delivery and cache (`uid: decdn-delivery`): serve leg, paying pull leg, cache, origin, warming. |
-| `decdn-node/dashboard-chain.json` | Chain, payments and slash safety (`uid: decdn-chain`): watcher liveness, chain RPC, registries, payments, settlement re-anchor. |
+| `decdn-node/dashboard-chain.json` | Chain, payments and blacklist compliance (`uid: decdn-chain`): watcher liveness, chain RPC, registries, payments, settlement re-anchor. |
 | `decdn-node/dashboard-node.json` | Single-node drilldown (`uid: decdn-node`): host, process, iroh transport, DHT and probe, logs, traces. |
-| `decdn-node/prometheus-alerts.yml` | Rule groups `decdn-slash-safety`, `decdn-liveness`, `decdn-delivery`. A rule with a matching runbook section carries a `runbook_url` into upstream's `docs/runbook.md`. |
+| `decdn-node/prometheus-alerts.yml` | Rule groups `decdn-blacklist-compliance`, `decdn-liveness`, `decdn-delivery`. A rule with a matching runbook section carries a `runbook_url` into upstream's `docs/runbook.md`. |
 | `decdn-node/prometheus-alerts_test.yml` | promtool unit tests for `DecdnNodeDown`, `DecdnCapacityBondRegistryResyncFailing`, `DecdnBuyerTopupUnresolved`, `DecdnRedemptionMaybeBroadcast`, `DecdnNodeClockSkew`, `DecdnSettlementLedgerWriteFailing`, `DecdnSettlementReanchorBacklog`, `DecdnSettlementReanchorLowerDeposit` and `DecdnNodeBootStuck` (run by `make lint-helm`; the chart's `.helmignore` keeps them out of the package). |
 | `sponsord/` | The onboarding sponsor's dashboard and alert rules ([below](#sponsord)). Not rendered by the chart. |
 | `iroh-relay/` | The iroh relay's dashboard and alert rules ([below](#iroh-relay)). Not rendered by the chart. |

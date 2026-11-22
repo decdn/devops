@@ -136,7 +136,7 @@ in the daemon.
 | `secrets.env.existingSecret` | Holds `DECDN_RPC_URL` (key name: `secrets.env.rpcUrlKey`). |
 | `config.identity.region` | ISO 3166-1 alpha-2, uppercase. |
 | `config.blockchain.chain_id` | For example, `421614` (Arbitrum Sepolia). |
-| `config.blockchain.{payment_pool,capacity_bond,slash_judge,content_blacklist}_address` | Non-zero `0x` addresses. |
+| `config.blockchain.{payment_pool,capacity_bond,content_blacklist}_address` | Non-zero `0x` addresses. |
 
 Take chain IDs and contract addresses from the deployment manifest for your chain. Never
 make them up. The quickest correct source is the CLI itself: `decdn config init --chain
@@ -160,7 +160,6 @@ config:
     chain_id: 421614
     payment_pool_address: "0x…"
     capacity_bond_address: "0x…"
-    slash_judge_address: "0x…"
     content_blacklist_address: "0x…"
 ```
 
@@ -432,8 +431,8 @@ metrics:
 - **The startup probe asks the admin RPC.** The default `startupProbe` runs
   `decdn node health` (the CLI the image ships, as the Compose healthcheck does). The
   admin RPC starts only once boot has finished: RPC preflight, identity and keystore
-  load, cache and endpoint build, then the chain bring-up (CapacityBond registry and
-  slash-watcher enumerations, the first ContentBlacklist sync and DHT bootstrap).
+  load, cache and endpoint build, then the chain bring-up (the CapacityBond registry
+  read, the first ContentBlacklist sync and DHT bootstrap).
   - The default `startupProbe` allows 10 minutes (5s × 120), upstream's own budget for
     retrying the boot chain reads, then restarts the container. A slow RPC delays
     readiness.

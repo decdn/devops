@@ -40,4 +40,4 @@
 # verified SHA256SUMS, on each deploy. To serve one exact release, set its tag and digest:
 # sponsord_onramp_decdn_release: v0.3.1
 # sponsord_onramp_decdn_sums_sha256: "…"
-# CapacityBond and SlashJudge come from sponsord_network (group_vars/sponsord_hosts.yml).
+# The CapacityBond comes from sponsord_network (group_vars/sponsord_hosts.yml).
