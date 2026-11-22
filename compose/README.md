@@ -698,7 +698,9 @@ iroh ones ([Security notes](#security-notes)).
      `Access-Control-Allow-Origin` makes browsers refuse the answer;
    - stream: no response buffering;
    - limit `PUT /_pointer` per client address: the gateway budgets owner lookups
-     globally and reads no `X-Forwarded-*` header.
+     globally and reads no `X-Forwarded-*` header;
+   - limit the requests in flight per client address: the gateway runs a fixed
+     number of pulls at once, for every client together.
 
    The Ansible role's
    [nginx site](../ansible/roles/decdn_gateway/templates/decdn-gateway.nginx.j2) is

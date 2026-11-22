@@ -247,6 +247,14 @@
       (got "{{ decdn_gateway_pointer_rate }}"), and decdn_gateway_pointer_burst a
       non-negative integer (got "{{ decdn_gateway_pointer_burst }}").
 
+- name: Validate the per-client request limit
+  ansible.builtin.assert:
+    that:
+      - decdn_gateway_conn_limit | string is match('^[0-9]+$')
+    fail_msg: >-
+      decdn_gateway_conn_limit must be a non-negative integer, 0 for no limit
+      (got "{{ decdn_gateway_conn_limit }}").
+
 # --- Host files -------------------------------------------------------------------
 # The DNS provider's credentials are the operator's, written on the host: the role
 # checks the file is there and non-empty, locks it to root 0600, and never reads it

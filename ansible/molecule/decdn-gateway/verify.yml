@@ -244,6 +244,41 @@
           The burst answered {{ _gw_burst.stdout }} (want some 204s, then 429s) and a GET
           after it {{ _gw_after_burst.stdout }} (want 200).
 
+    - name: Read the host's own address
+      ansible.builtin.setup:
+        gather_subset: ['!all', 'network']
+
+    # The inventory allows 8 requests in flight per address. Eight held requests from
+    # loopback fill it: a ninth from loopback gets 429, one from the host's own address
+    # does not, and once the eight end loopback gets through again.
+    - name: Fill one address's request limit with held requests
+      ansible.builtin.shell:
+        cmd: >-
+          for i in 1 2 3 4 5 6 7 8; do
+          curl --silent --insecure --output /dev/null
+          --resolve {{ _gw_domain }}:443:127.0.0.1 https://{{ _gw_domain }}/_hold & done;
+          sleep 1;
+          ninth=$(curl --silent --insecure --output /dev/null --write-out '%{http_code}'
+          --resolve {{ _gw_domain }}:443:127.0.0.1 https://{{ _gw_domain }}/);
+          other=$(curl --silent --insecure --output /dev/null --write-out '%{http_code}'
+          --resolve {{ _gw_domain }}:443:{{ ansible_facts['default_ipv4']['address'] }}
+          https://{{ _gw_domain }}/);
+          wait;
+          after=$(curl --silent --insecure --output /dev/null --write-out '%{http_code}'
+          --resolve {{ _gw_domain }}:443:127.0.0.1 https://{{ _gw_domain }}/);
+          echo "$ninth $other $after"
+      register: _gw_conn
+      changed_when: false
+
+    - name: Require the limit per address, released when the requests end
+      ansible.builtin.assert:
+        that:
+          - _gw_conn.stdout.split() == ['429', '200', '200']
+        fail_msg: >-
+          With 8 requests held from loopback, a ninth answered, one from the host's
+          address, and loopback once they ended answered {{ _gw_conn.stdout }}
+          (want 429 200 200).
+
     - name: Read the metrics listener with a loopback Host
       ansible.builtin.uri:
         url: http://127.0.0.1:9094/metrics

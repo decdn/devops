@@ -157,6 +157,14 @@ decdn_gateway_lego_bin: /usr/local/lib/decdn-gateway/lego
 decdn_gateway_pointer_rate: 6r/m
 decdn_gateway_pointer_burst: 5
 
+# Requests in flight per client address, on every path; past it a client gets 429.
+# The gateway runs 16 pulls at once and cannot tell clients apart behind nginx, so
+# this is the only per-client bound on them. HTTP/2 counts each stream, so a page
+# that loads many assets at once counts each one, as do users behind one NAT. A value
+# below 16 keeps one address from holding every pull, at the cost of refusing such
+# pages; the default refuses none. 0 turns the limit off.
+decdn_gateway_conn_limit: 32
+
 # --- Readiness --------------------------------------------------------------------
 # The gateway binds once its keystore unlocks and its pointers load, so `GET /`
 # answering 200 on loopback is the config gate. A timeout FAILS the deploy. ~60s.

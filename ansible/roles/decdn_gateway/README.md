@@ -80,6 +80,12 @@ client address: the gateway budgets owner lookups globally and reads no
   - Streaming is unbuffered, and request bodies are capped at 64 KiB.
   - `PUT /_pointer` is limited per client address (`decdn_gateway_pointer_rate`,
     `decdn_gateway_pointer_burst`). A client past the limit gets `429`.
+  - Requests in flight are limited per client address on every path
+    (`decdn_gateway_conn_limit`, 32 by default). A client past the limit gets `429`.
+    The gateway runs 16 pulls at once and cannot tell clients apart behind nginx.
+    HTTP/2 counts each stream, so a value below 16 keeps one address from holding
+    every pull, but can refuse a page that loads many assets at once, or users
+    behind one NAT.
   - It probes the http redirect and the whole https chain on this host.
 
 ## Before the first deploy
@@ -138,6 +144,7 @@ a deploy sets:
 | `decdn_gateway_acme_server` | `letsencrypt` | A lego shortcode or directory URL. |
 | `decdn_gateway_lego_version` / `_lego_sha256` | the pinned lego release | Bump with `sponsord_onramp_lego_*`: `make test-scripts` checks they agree. |
 | `decdn_gateway_pointer_rate` / `_burst` | `6r/m` / `5` | The per-client limit on `PUT /_pointer`. |
+| `decdn_gateway_conn_limit` | `32` | Requests in flight per client address, on every path; `0` for no limit. |
 | `decdn_gateway_generate_keystore` | `false` | Mint a fresh wallet when none exists. |
 | `decdn_gateway_version` | the decdn line | Kept equal to `decdn_node_version` (`make test-scripts` checks). |
 

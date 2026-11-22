@@ -329,9 +329,9 @@ services:
   decdn-gateway:
     <<: *hardened
     # The public gateway (publishers), on loopback only. TLS for <domain> and
-    # *.<domain>, and the per-client limit on PUT /_pointer, are your own proxy's
-    # (README.md, A public gateway): stock nginx cannot bind tcp/80 and tcp/443 as a
-    # non-root account on the host network.
+    # *.<domain>, and the per-client limits (PUT /_pointer, requests in flight), are
+    # your own proxy's (README.md, A public gateway): stock nginx cannot bind tcp/80
+    # and tcp/443 as a non-root account on the host network.
     profiles: [gateway]
     # The decdn CLI from the node image: one release ships both, so it runs on the
     # node's digest.

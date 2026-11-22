@@ -51,7 +51,8 @@ them into inventory or docs.
      nginx sets `X-Forwarded-For` to the client it saw, never appends a client's.
    - `decdn gateway` behind the role's nginx (tcp/80 + tcp/443): every request spends
      its pool, bounded by the gateway's own daily allowance; nginx's per-address
-     `limit_req` covers `PUT /_pointer`, since the gateway reads no `X-Forwarded-*`.
+     `limit_req` covers `PUT /_pointer` and `limit_conn` the requests in flight,
+     since the gateway reads no `X-Forwarded-*`.
    - `iroh-relay` (tcp/80, tcp/443, udp/7842) and `iroh-dns-server` (tcp/443, udp/53 +
      tcp/53) terminate their own TLS (TLS-ALPN-01; QUIC address discovery needs the
      certificate in-process), so no proxy. On Compose they run as uid 0 holding
@@ -263,7 +264,8 @@ boundaries or exists nowhere else.
   single-label form.
 - The site adds no header: the gateway sets its own CORS (a second
   `Access-Control-Allow-Origin` breaks browsers), routes on the exact `Host`, and reads
-  no `X-Forwarded-*`. Per-client limits on `PUT /_pointer` are nginx's `limit_req`.
+  no `X-Forwarded-*`. Per-client limits are nginx's: `limit_req` on `PUT /_pointer`,
+  `limit_conn` on the requests in flight (the gateway's pull slots are global).
 - Compose's `gateway` profile runs the gateway only, on the node image's `decdn`
   (`DECDN_IMAGE_DIGEST`, so no fourth decdn digest), with the operator's own TLS proxy:
   stock nginx cannot bind 80/443 as non-root on the host network, and `root_allowed`

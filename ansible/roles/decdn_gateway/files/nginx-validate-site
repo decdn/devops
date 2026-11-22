@@ -4,7 +4,7 @@
 # nginx-validate-site <file>: `nginx -t` on one site file alone, inside an http
 # block, so the role's template step can refuse a site that does not load before it
 # replaces the live one. The real nginx.conf is not read: the site carries every
-# http-level directive it needs (its limit_req_zone and map).
+# http-level directive it needs (its limit_req_zone, limit_conn_zone and map).
 set -eu
 d=$(mktemp -d)
 trap 'rm -rf "$d"' EXIT
