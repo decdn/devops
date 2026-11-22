@@ -5,6 +5,11 @@
 #   github-actions  rewrites `uses: owner/repo@<sha> # vX.Y.Z` to the new sha + comment
 #   pre-commit      bumps the `rev:` of each repo in .pre-commit-config.yaml
 #
+# Each also watches examples/collection-fleet/, whose action SHAs and hook revs must
+# equal this repo's (make test-scripts): both directories sit in one group, so one PR
+# bumps both copies. A non-root github-actions directory is scanned for *.yml itself
+# (only `/` means `.github/workflows/`), hence the example's full workflows path.
+#
 # Considered and not applicable here, so not listed:
 #   docker-compose  compose/compose.yaml builds its image from ${DECDN_IMAGE_REPO} and
 #                   ${DECDN_IMAGE_DIGEST}, which the operator pins to a signed
@@ -28,7 +33,9 @@
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /examples/collection-fleet/.github/workflows
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -39,7 +46,9 @@ updates:
       actions:
         patterns: ["*"]
   - package-ecosystem: pre-commit
-    directory: /
+    directories:
+      - /
+      - /examples/collection-fleet
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

@@ -142,7 +142,7 @@ they are maintained here. See [its README](monitoring/README.md).
   hijacked action — pinned by a digest verified against Docker Hub, currently
   `v2.1.20`. The engine's `--fail-on high` exit code is the gate.
 - **Dependabot** (`.github/dependabot.yml`) bumps the action SHAs and the pre-commit
-  hook revs weekly.
+  hook revs weekly, with their copies in `examples/collection-fleet/` in the same PR.
 - **Bump manually** (Dependabot can't parse them): the `KICS_IMAGE`,
   `KUBECONFORM_IMAGE` and `PROMTOOL_IMAGE` digests in the `Makefile`; the molecule image digests in
   `ansible/molecule/*/molecule.yml` (all together, `docker buildx imagetools inspect`);
