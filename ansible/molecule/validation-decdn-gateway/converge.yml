@@ -534,6 +534,19 @@
             decdn_rejected: "{{ decdn_rejected + ['pointer-burst'] }}"
           when: ansible_failed_task.name == "Validate the PUT /_pointer rate limit"
 
+    - name: "Case conn-limit — a negative per-client request limit"
+      block:
+        - name: Run decdn_gateway with a negative per-client request limit
+          ansible.builtin.include_role:
+            name: decdn_gateway
+          vars:
+            decdn_gateway_conn_limit: -1
+      rescue:
+        - name: Record conn-limit rejection (only if its assert failed)
+          ansible.builtin.set_fact:
+            decdn_rejected: "{{ decdn_rejected + ['conn-limit'] }}"
+          when: ansible_failed_task.name == "Validate the per-client request limit"
+
     - name: "Case acme-env-missing — acme with no credentials file on the host"
       block:
         - name: Run decdn_gateway with acme with no credentials file on the host
@@ -618,6 +631,7 @@
           - lego-sha256
           - pointer-rate
           - pointer-burst
+          - conn-limit
           - acme-env-missing
           - nginx-foreign
       ansible.builtin.assert:

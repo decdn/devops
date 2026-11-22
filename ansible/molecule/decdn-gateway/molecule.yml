@@ -75,6 +75,7 @@ provisioner:
         decdn_gateway_working_deposit_micro_usdc: 5000000
         decdn_gateway_pointer_rate: 6r/m
         decdn_gateway_pointer_burst: 2
+        decdn_gateway_conn_limit: 8
         decdn_gateway_readiness_retries: 10
         decdn_gateway_readiness_delay: 1
 verifier:
