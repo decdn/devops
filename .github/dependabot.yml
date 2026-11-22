@@ -5,6 +5,12 @@
 #   github-actions  rewrites `uses: owner/repo@<sha> # vX.Y.Z` to the new sha + comment
 #   pre-commit      bumps the `rev:` of each repo in .pre-commit-config.yaml
 #
+# Each also watches examples/collection-fleet/, whose action SHAs and hook revs must
+# each be one this repo pins (make test-scripts): both directories sit in one group,
+# so each weekly PR bumps both copies. A non-root github-actions directory is scanned
+# for its own *.yml/*.yaml, not recursively (only `/` adds `.github/workflows/`;
+# dependabot-core's github_actions file_fetcher), hence the example's full path.
+#
 # Considered and not applicable here, so not listed:
 #   docker-compose  compose/compose.yaml builds its image from ${DECDN_IMAGE_REPO} and
 #                   ${DECDN_IMAGE_DIGEST}, which the operator pins to a signed
@@ -24,11 +30,14 @@
 #   - the Galaxy collections in ansible/requirements.yml, and their exact pins in
 #     cloud-init/collections.lock.yml
 #   - ansible-core in cloud-init/requirements.in (then recompile requirements.txt)
-#   - the local yamllint hook's `additional_dependencies` pin
+#   - the local yamllint hook's `additional_dependencies` pin (every copy, including
+#     examples/collection-fleet's)
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /examples/collection-fleet/.github/workflows
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -39,7 +48,9 @@ updates:
       actions:
         patterns: ["*"]
   - package-ecosystem: pre-commit
-    directory: /
+    directories:
+      - /
+      - /examples/collection-fleet
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
