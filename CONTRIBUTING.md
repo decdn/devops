@@ -142,7 +142,8 @@ they are maintained here. See [its README](monitoring/README.md).
   hijacked action — pinned by a digest verified against Docker Hub, currently
   `v2.1.20`. The engine's `--fail-on high` exit code is the gate.
 - **Dependabot** (`.github/dependabot.yml`) bumps the action SHAs and the pre-commit
-  hook revs weekly, with their copies in `examples/collection-fleet/` in the same PR.
+  hook revs weekly, and the example's matching pins in `examples/collection-fleet/` in
+  the same PR.
 - **Bump manually** (Dependabot can't parse them): the `KICS_IMAGE`,
   `KUBECONFORM_IMAGE` and `PROMTOOL_IMAGE` digests in the `Makefile`; the molecule image digests in
   `ansible/molecule/*/molecule.yml` (all together, `docker buildx imagetools inspect`);
@@ -151,7 +152,8 @@ they are maintained here. See [its README](monitoring/README.md).
   their exact pins in `cloud-init/collections.lock.yml` (the full transitive set, from
   a fresh `make deps` resolve); ansible-core in `cloud-init/requirements.in`, followed by a
   recompile of the hash-locked `requirements.txt` (command in `cloud-init/README.md`);
-  and the local yamllint hook's `additional_dependencies` pin.
+  and the local yamllint hook's `additional_dependencies` pin (every copy, including
+  `examples/collection-fleet/`'s).
 - **Bump the `cache-epoch:` counter in `ansible/requirements.yml` to make CI
   re-resolve the collections.** Those are `>=` ranges, so a warm cache pins the
   resolved set — transitive collections like `community.crypto` included — until the

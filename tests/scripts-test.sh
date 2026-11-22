@@ -483,8 +483,9 @@ expect 0 "fleet inventory check allows a header-only edit" fleet_check_fixture
 # commit), and the example's CI and hooks pin what this repo's own do: every `uses:`
 # in its ci.yml is pinned to a commit SHA this repo's ci.yml uses, and every pre-commit
 # `rev:` and the yamllint pin is this repo's for the same hook repo. This repo's
-# Dependabot bumps our action SHAs and hook revs (the yamllint pin is bumped by hand);
-# its PR fails here until the example is moved too.
+# Dependabot bumps the action SHAs and hook revs of both in one PR
+# (.github/dependabot.yml `directories`); the yamllint pin is bumped by hand, in every
+# copy. A hand edit to one copy fails here.
 fleet_pins_check() {
   local root="$1" ex="$1/examples/collection-fleet" c f floor ver line repo_url rev mine theirs n=0
   for c in node publisher; do
