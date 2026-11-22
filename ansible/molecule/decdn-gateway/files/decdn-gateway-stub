@@ -18,7 +18,8 @@ funded wallet or a chain:
       - the marker file UNHEALTHY_MARKER makes it exit 1 at start, which is how the
         scenarios prove the readiness gate is fatal.
     Routes on --listen, by Host as upstream routes them: the bare host (or the listen
-    address) answers GET / and PUT /_pointer; a <hash32>. or <ns>. host answers GET
+    address) answers GET / and PUT /_pointer, and GET /_hold after HOLD_SECS, which
+    stands in for a pull in flight; a <hash32>. or <ns>. host answers GET
     with an echo of the request (Host and every header, as JSON) and refuses PUT
     /_pointer with 404; any other Host gets 403. Every answer carries one
     Access-Control-Allow-Origin, as upstream's does. --metrics-listen answers
@@ -34,9 +35,13 @@ import re
 import signal
 import sys
 import threading
+import time
 import tomllib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
+
+# How long GET /_hold keeps its request open.
+HOLD_SECS = 5
 
 VERSION = "decdn 0.0.0-molecule-stub"
 UNHEALTHY_MARKER = "/etc/decdn-gateway/gateway-stub-unhealthy"
@@ -174,6 +179,9 @@ def gateway(args, config):
             route = self.route()
             if route is None:
                 return self.answer(403, b"unknown Host\n")
+            if route == "bare" and self.path == "/_hold":
+                time.sleep(HOLD_SECS)
+                return self.answer(200, b"held\n")
             if route == "bare" and self.path == "/":
                 return self.answer(200, b"<html>decdn gateway stub</html>\n", "text/html")
             echo = {"route": route, "path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}}
