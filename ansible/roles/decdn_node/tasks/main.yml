@@ -389,20 +389,18 @@
       - decdn_chain_id | int > 0
       - decdn_payment_pool_address is match('^0x[0-9a-fA-F]{40}$')
       - decdn_capacity_bond_address is match('^0x[0-9a-fA-F]{40}$')
-      - decdn_slash_judge_address is match('^0x[0-9a-fA-F]{40}$')
       - decdn_content_blacklist_address is match('^0x[0-9a-fA-F]{40}$')
       - decdn_payment_pool_address != decdn_zero_address
       - decdn_capacity_bond_address != decdn_zero_address
-      - decdn_slash_judge_address != decdn_zero_address
       - decdn_content_blacklist_address != decdn_zero_address
       - decdn_region is match('^[A-Z]{2}$')
     fail_msg: >-
-      A positive decdn_chain_id, the FOUR contract addresses
+      A positive decdn_chain_id, the THREE contract addresses
       (0x + 40 hex, none the zero address), and an uppercase ISO-3166 2-letter
       decdn_region are required. decdn_content_blacklist_address joined this list
       upstream (ADR 011/031): the daemon now refuses to resolve a config without a
       ContentBlacklist, because an absent or zero address is a fail-open compliance
-      trap — serving a blacklisted hash past its window is slashable. Source
+      trap — a takedown would go unenforced past its compliance window. Source
       chain-id + contract addresses from the deCDN contract deployment manifest
       (contracts/deployments/<chainId>.json in decdn/decdn) — never guess — or set
       decdn_network (e.g. "arbitrum-sepolia") to take them from the role's mirror of
@@ -539,23 +537,6 @@
   when:
     - decdn_rpc_url | length == 0
     - decdn_env_pre_stat.stat.exists
-
-# slash_appeal_address is optional (only `decdn appeal slash` uses it — the daemon
-# validates but ignores the key), so it is not in the hard assert above. But if an
-# operator sets it, a half-filled/zero value would silently render a bad node.toml,
-# so validate it the same fail-loud way as the required addresses when present.
-- name: Validate the optional SlashAppeal address when set
-  ansible.builtin.assert:
-    that:
-      - decdn_slash_appeal_address is match('^0x[0-9a-fA-F]{40}$')
-      - decdn_slash_appeal_address != decdn_zero_address
-    fail_msg: >-
-      decdn_slash_appeal_address is set but is not a valid contract address
-      (0x + 40 hex, not the zero address). Leave it empty to omit it, or set the
-      deployed SlashAppeal address (source it from the deployment / ADR 028).
-  vars:
-    decdn_zero_address: "0x0000000000000000000000000000000000000000"
-  when: decdn_slash_appeal_address | length > 0
 
 # The ADR 022 origin-directory contracts are INDEPENDENTLY optional upstream — the
 # old "both or neither" rule went away when the daemon stopped mirroring the whole

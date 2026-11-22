@@ -229,7 +229,7 @@ security
 serve.rate_limit"
 [ "$tables" = "$expected" ] || { diff <(echo "$expected") <(echo "$tables") >&2 || true; fail "table set of ci-values render"; }
 keys="$(grep -cE '^[a-z_0-9]+ = ' "$toml" || true)"
-[ "$keys" -ge 125 ] || fail "only $keys scalar keys in ci-values render (expected >= 125)"
+[ "$keys" -ge 123 ] || fail "only $keys scalar keys in ci-values render (expected >= 123)"
 pass "breadth: $keys keys, $(echo "$tables" | grep -c '') tables"
 
 for name in ci-values ci-origins ci-resolve-only; do
@@ -575,8 +575,10 @@ expect_fail "missing env Secret"           template 'secrets.env.existingSecret 
 expect_fail "DECDN_* passthrough key"      template 'passthroughKeys: DECDN_BIND_PORT is refused'  --set 'secrets.env.passthroughKeys[0]=DECDN_BIND_PORT'
 # A --set null is dropped by some Helm versions (missing property) and kept by others
 # (got null); both are correct rejections.
-expect_fail "missing required address"     schema   "missing propert(y|ies) 'slash_judge_address'|/config/blockchain/slash_judge_address': got null" --set config.blockchain.slash_judge_address=null
-expect_fail "malformed address"            schema   "/config/blockchain/slash_judge_address"      --set config.blockchain.slash_judge_address=0x12
+expect_fail "missing required address"     schema   "missing propert(y|ies) 'capacity_bond_address'|/config/blockchain/capacity_bond_address': got null" --set config.blockchain.capacity_bond_address=null
+expect_fail "malformed address"            schema   "/config/blockchain/capacity_bond_address"    --set config.blockchain.capacity_bond_address=0x12
+expect_fail "retired slash_judge_address"  template 'config.blockchain.slash_judge_address was removed upstream' --set config.blockchain.slash_judge_address=0x3333333333333333333333333333333333333333
+expect_fail "retired slash_appeal_address" template 'config.blockchain.slash_appeal_address was removed upstream' --set config.blockchain.slash_appeal_address=0x5555555555555555555555555555555555555555
 expect_fail "zero address"                 schema   "/config/blockchain/payment_pool_address.*'not' failed|payment_pool_address.*not" --set config.blockchain.payment_pool_address=0x0000000000000000000000000000000000000000
 expect_fail "lowercase region"             schema   "/config/identity/region.*does not match"    --set config.identity.region=de
 expect_fail "missing chain_id"             schema   "missing propert(y|ies) 'chain_id'|/config/blockchain/chain_id': got null" --set config.blockchain.chain_id=null

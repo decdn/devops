@@ -436,7 +436,6 @@
             "chain_id",
             "payment_pool_address",
             "capacity_bond_address",
-            "slash_judge_address",
             "content_blacklist_address"
           ],
           "properties": {
@@ -448,9 +447,6 @@
               "$ref": "#/definitions/requiredAddress"
             },
             "capacity_bond_address": {
-              "$ref": "#/definitions/requiredAddress"
-            },
-            "slash_judge_address": {
               "$ref": "#/definitions/requiredAddress"
             },
             "content_blacklist_address": {

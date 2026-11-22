@@ -13,7 +13,7 @@
 # a leaf-name inventory cannot tell the two apart. See gen-schema-keys.py for
 # the struct -> path mapping and molecule/schema/README.md for why this exists.
 #
-# 154 paths.
+# 152 paths.
 blockchain.buyer_max_approve
 blockchain.buyer_working_deposit_micro_usdc
 blockchain.capacity_bond_address
@@ -38,8 +38,6 @@ blockchain.redeem_max_vouchers_per_tx
 blockchain.redeem_threshold_micro_usdc
 blockchain.rpc_url
 blockchain.rpc_watchdog_interval_sec
-blockchain.slash_appeal_address
-blockchain.slash_judge_address
 blockchain.usdc_address
 cache.admission_policy
 cache.cache_dir

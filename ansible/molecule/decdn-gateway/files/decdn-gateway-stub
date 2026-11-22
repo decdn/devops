@@ -48,7 +48,7 @@ UNHEALTHY_MARKER = "/etc/decdn-gateway/gateway-stub-unhealthy"
 STOPPED_MARKER = "stopped-by-sigint"
 BLOCKCHAIN_KEYS = {
     "rpc_url", "chain_id", "payment_pool_address", "capacity_bond_address",
-    "slash_judge_address", "publisher_registry_address", "buyer_working_deposit_micro_usdc",
+    "publisher_registry_address", "buyer_working_deposit_micro_usdc",
 }
 BYTES = re.compile(r"^[0-9]+([KMG]i?B?|B)?$", re.I)
 HASH32 = re.compile(r"^[a-z2-7]{52}$")

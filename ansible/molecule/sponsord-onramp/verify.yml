@@ -52,7 +52,7 @@
           - "'ONRAMP_RPC_URL=https://sepolia-rollup.arbitrum.io/rpc' in _env"
           # Exactly the mirror's addresses for the daemon's sponsord_network.
           - "('ONRAMP_CAPACITY_BOND_ADDR=' ~ _profile.capacity_bond_address ~ '\n') in _env"
-          - "('ONRAMP_SLASH_JUDGE_ADDR=' ~ _profile.slash_judge_address ~ '\n') in _env"
+          - "'ONRAMP_SLASH_JUDGE_ADDR' not in _env"
           - "'ONRAMP_CLIENT_IP_HEADER=X-Forwarded-For' in _env"
           - "'ONRAMP_FUND_RATE_PER_MIN=0' in _env"
           - "'ONRAMP_TTL_SECS' not in _env"

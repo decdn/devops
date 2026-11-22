@@ -48,7 +48,7 @@
       }
     ]
   },
-  "description": "Fleet-wide health for every decdn-node: status, delivery, slash safety, and the logs and traces that explain them. Deep dives live in the deCDN dashboard dropdown. Companion to adr/appendix-observability.md, monitoring/decdn-node/prometheus-alerts.yml and docs/runbook.md.",
+  "description": "Fleet-wide health for every decdn-node: status, delivery, blacklist compliance, and the logs and traces that explain them. Deep dives live in the deCDN dashboard dropdown. Companion to adr/appendix-observability.md, monitoring/decdn-node/prometheus-alerts.yml and docs/runbook.md.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -251,7 +251,7 @@
       },
       "title": "Oldest watcher tick",
       "type": "stat",
-      "description": "Age of the least recently ticked chain-event watcher, across all five watchers and every node. A watcher that has never ticked because its poll keeps failing counts by its down-seconds (time since the first failed tick) instead of dropping out. Red at 180s matches DecdnBlacklistWatcherStalled \u2014 a stalled blacklist watcher is a slash risk, not a cosmetic lag.",
+      "description": "Age of the least recently ticked chain-event watcher, across all four watchers and every node. A watcher that has never ticked because its poll keeps failing counts by its down-seconds (time since the first failed tick) instead of dropping out. Red at 180s matches DecdnBlacklistWatcherStalled \u2014 a stalled blacklist watcher can leave a takedown unenforced past its compliance window, not a cosmetic lag.",
       "targets": [
         {
           "datasource": {
@@ -1490,7 +1490,7 @@
       },
       "id": 16,
       "panels": [],
-      "title": "Slash safety",
+      "title": "Blacklist compliance",
       "type": "row"
     },
     {
@@ -1690,7 +1690,7 @@
       },
       "title": "Blacklist enforcement failures",
       "type": "timeseries",
-      "description": "Hashes a batched re-scope could not re-verify or evict. Non-zero means the deny-set is not fully enforced and a blacklisted blob may still be servable \u2014 directly slashable.",
+      "description": "Hashes a batched re-scope could not re-verify or evict. Non-zero means the deny-set is not fully enforced and a blacklisted blob may still be servable past its compliance window.",
       "targets": [
         {
           "datasource": {
@@ -1784,15 +1784,6 @@
       "type": "timeseries",
       "description": "Any non-zero value is a bug. Capture the error! line and file it.",
       "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_slash_watcher_task_panicked_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "slash"
-        },
         {
           "datasource": {
             "type": "prometheus",

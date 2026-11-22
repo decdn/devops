@@ -31,16 +31,16 @@ the iroh relay's in `monitoring/iroh-relay/`, the iroh DNS server's in
 `monitoring/iroh-dns-server/`, the public gateway's in `monitoring/decdn-gateway/`):
 
 - `grafana-dashboard.json` — "deCDN — fleet overview", uid `decdn-poc-overview`.
-  Fleet status, delivery funnel, slash safety, logs and traces.
+  Fleet status, delivery funnel, blacklist compliance, logs and traces.
 - `dashboard-delivery.json` — uid `decdn-delivery`. Serve leg, paying pull leg,
   cache, origin, warming.
 - `dashboard-chain.json` — uid `decdn-chain`. Watcher liveness, registries,
   seller payments, settlement re-anchor, buyer payments.
 - `dashboard-node.json` — uid `decdn-node`. Single-node drilldown: host,
   process, iroh transport, DHT and probe, logs, traces.
-- `prometheus-alerts.yml` — three groups: `decdn-slash-safety`, `decdn-liveness`,
+- `prometheus-alerts.yml` — three groups: `decdn-blacklist-compliance`, `decdn-liveness`,
   `decdn-delivery`. Every rule carries a `component` label. Only rules with a matching
-  section in upstream's `docs/runbook.md` (21 of 58) also carry a `runbook_url`.
+  section in upstream's `docs/runbook.md` (16 of 55) also carry a `runbook_url`.
   `DecdnNodeDown`, `DecdnCapacityBondRegistryResyncFailing`, `DecdnBuyerTopupUnresolved`,
   `DecdnRedemptionMaybeBroadcast`, `DecdnNodeClockSkew`,
   `DecdnSettlementLedgerWriteFailing`, `DecdnSettlementReanchorBacklog`,

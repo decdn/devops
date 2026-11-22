@@ -67,16 +67,14 @@ sponsord_onramp_release_keyring: decdn-release-KEYS.asc
 
 # --- Chain ----------------------------------------------------------------------
 # The onramp takes the chain id and the PaymentPool from the daemon (/v1/info). It
-# hands users' decdn the CapacityBond (node discovery) and, if set, the SlashJudge
-# contract. With a network profile both come from upstream's deployment manifest,
+# hands users' decdn the CapacityBond (node discovery and the signing domain). With a
+# network profile it comes from upstream's deployment manifest,
 # mirrored into vars/main/networks.yml by scripts/sync-network-profiles.py; an
 # explicit inventory value still wins. Defaults to the daemon's sponsord_network.
 sponsord_onramp_network: "{{ sponsord_network | default('') }}"
 # Internal: set sponsord_onramp_network, not this.
 _sponsord_onramp_profile: "{{ _sponsord_onramp_network_profiles.get(sponsord_onramp_network, {}) }}"
 sponsord_onramp_capacity_bond_address: "{{ _sponsord_onramp_profile.get('capacity_bond_address', '') }}"
-# "" omits it.
-sponsord_onramp_slash_judge_address: "{{ _sponsord_onramp_profile.get('slash_judge_address', '') }}"
 
 # REQUIRED. The JSON-RPC endpoint users' decdn reads the chain through. NOT a
 # secret, and it must not hold one: the onramp bakes it into the installers every

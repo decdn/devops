@@ -5,8 +5,8 @@
 # What it does: stop the daemon, disable and remove its systemd unit, and
 # (opt-in) purge the cache. What it deliberately KEEPS: the identity (node.secret,
 # keystore.json, the password file), /etc/decdn and the binaries. The eth keystore
-# is what withdraws the bond after the unbonding window, so deleting it here would
-# strand the stake; remove it by hand once the withdrawal has landed.
+# is what signs the unbond that returns the bond, so deleting it here would strand
+# the stake; remove it by hand once the unbond has landed.
 #
 # It does NOT touch the chain. Deregistering and unbonding are operator steps with
 # the decdn CLI; the final task prints them. Stop with systemctl, never `decdn node
@@ -127,13 +127,13 @@
       - >-
         Kept: {{ decdn_home }} (node.secret, keystore.json{{ '' if decdn_decommission_purge_cache | bool
         else ', cache' }}), {{ decdn_etc }} and the binaries. Keep the keystore until
-        the bond is withdrawn.
+        the bond is returned.
       - >-
         On-chain, with the decdn CLI on this host (each takes --dry-run first):
-        `decdn node deregister` removes the node from the active set but does NOT
-        return the bond, which stays deposited and slashable; then
-        `decdn node unbond --all` starts the unbonding window; re-run it after the
-        window to withdraw. The CLI does not read decdn.env: pass the RPC URL with
+        `decdn node deregister` removes the node from the active set and clears
+        its declared tier but does NOT return the bond; then
+        `decdn node unbond --all` returns the whole bond in the same transaction.
+        The CLI does not read decdn.env: pass the RPC URL with
         --rpc-url, as in docs/lifecycle.md § Running on-chain commands.
       - >-
         The public udp/{{ decdn_bind_port }} firewall rule stays until you re-run

@@ -240,8 +240,8 @@
     fail_msg: >-
       sponsord_onramp_network "{{ sponsord_onramp_network }}" is chain
       {{ _sponsord_onramp_profile.chain_id }}, but the daemon's sponsord_chain_id is
-      {{ sponsord_chain_id }}. Its CapacityBond and SlashJudge would belong to another
-      chain. Set the onramp's contract addresses for chain {{ sponsord_chain_id }}
+      {{ sponsord_chain_id }}. Its CapacityBond would belong to another
+      chain. Set the onramp's contract address for chain {{ sponsord_chain_id }}
       explicitly and clear sponsord_onramp_network.
   when:
     - sponsord_onramp_network | length > 0
@@ -253,25 +253,20 @@
       sponsord_onramp_network "{{ sponsord_onramp_network }}" is in use, but inventory
       overrides {{ item }}. The inventory value wins over the profile; make sure that
       is deliberate (a stale hand-copied address is the usual cause).
-  loop: [capacity_bond_address, slash_judge_address]
+  loop: [capacity_bond_address]
   when:
     - sponsord_onramp_network | length > 0
     - (lookup('ansible.builtin.vars', 'sponsord_onramp_' ~ item) | lower) != (_sponsord_onramp_profile[item] | lower)
 
-- name: Require the CapacityBond (and a well-formed SlashJudge) address
+- name: Require the CapacityBond address
   ansible.builtin.assert:
     that:
       - sponsord_onramp_capacity_bond_address is match('^0x[0-9a-fA-F]{40}$')
       - sponsord_onramp_capacity_bond_address != '0x' ~ '0' * 40
-      - >-
-        sponsord_onramp_slash_judge_address == ''
-        or (sponsord_onramp_slash_judge_address is match('^0x[0-9a-fA-F]{40}$')
-            and sponsord_onramp_slash_judge_address != '0x' ~ '0' * 40)
     fail_msg: >-
-      sponsord_onramp_capacity_bond_address must be 0x + 40 hex, not zero, and
-      sponsord_onramp_slash_judge_address "" or the same shape. Set
-      sponsord_onramp_network (or the daemon's sponsord_network) to take both from the
-      role's mirror of upstream's deployment manifest — never hand-copy them.
+      sponsord_onramp_capacity_bond_address must be 0x + 40 hex, not zero. Set
+      sponsord_onramp_network (or the daemon's sponsord_network) to take it from the
+      role's mirror of upstream's deployment manifest — never hand-copy it.
 
 # --- Listener -----------------------------------------------------------------------
 # AGENTS.md hard rule 2: the onramp's own listener stays on loopback; the public

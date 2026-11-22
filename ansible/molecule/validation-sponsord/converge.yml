@@ -795,7 +795,7 @@
         - name: Record onramp-zero-address rejection (only if its assert failed)
           ansible.builtin.set_fact:
             decdn_rejected: "{{ decdn_rejected + ['onramp-zero-address'] }}"
-          when: ansible_failed_task.name == "Require the CapacityBond (and a well-formed SlashJudge) address"
+          when: ansible_failed_task.name == "Require the CapacityBond address"
 
     - name: "Case onramp-bind — a wildcard listener"
       block:

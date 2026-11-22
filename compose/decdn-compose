@@ -781,8 +781,7 @@ def render_gateway_toml(chain: str) -> str:
     manifest, and the RPC URL from the 0600 env file, which the CLI expands at start
     (blockchain.rpc_url takes `${VAR}`), so this file holds no secret."""
     prof = network_profile("decdn_gateway", chain)
-    keys = ("chain_id", "payment_pool_address", "capacity_bond_address", "slash_judge_address",
-            "publisher_registry_address")
+    keys = ("chain_id", "payment_pool_address", "capacity_bond_address", "publisher_registry_address")
     if not all(prof.get(k) for k in keys):
         raise Refused(f"--chain {chain!r} is not a chain the decdn_gateway role's networks mirror knows")
     lines = [
@@ -911,7 +910,7 @@ def init_sponsord(project: Project, args: argparse.Namespace, wanted: list[str])
             onramp_env,
             "sponsord_onramp",
             args.chain,
-            {"ONRAMP_CAPACITY_BOND_ADDR": "capacity_bond_address", "ONRAMP_SLASH_JUDGE_ADDR": "slash_judge_address"},
+            {"ONRAMP_CAPACITY_BOND_ADDR": "capacity_bond_address"},
         )
 
 

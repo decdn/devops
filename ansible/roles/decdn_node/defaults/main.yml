@@ -100,7 +100,7 @@ decdn_network: ""
 # the name before anything reads it). Internal: set decdn_network, not this.
 _decdn_profile: "{{ _decdn_network_profiles.get(decdn_network, {}) }}"
 #
-# Without a profile, the FOUR required contract addresses and region have no usable
+# Without a profile, the THREE required contract addresses and region have no usable
 # default (empty → the asserts in tasks/main.yml fail loud). Supply via host_vars.
 # region is never in a profile: it is where the node is, not a chain fact.
 # chain_id falls back to the upstream binary's own default (Arbitrum Sepolia).
@@ -114,16 +114,11 @@ _decdn_profile: "{{ _decdn_network_profiles.get(decdn_network, {}) }}"
 decdn_rpc_url: ""               # SENSITIVE; may embed an API key — or provision decdn.env on the host
 decdn_payment_pool_address: "{{ _decdn_profile.get('payment_pool_address', '') }}"
 decdn_capacity_bond_address: "{{ _decdn_profile.get('capacity_bond_address', '') }}"
-decdn_slash_judge_address: "{{ _decdn_profile.get('slash_judge_address', '') }}"
 # REQUIRED (ADR 011/031). ContentBlacklist watcher — evicts blacklisted blobs in
 # your region scope. Upstream now refuses to resolve a config without it: an
-# absent or zero address is a fail-open compliance trap, and serving a
-# blacklisted hash past its compliance window is slashable.
+# absent or zero address is a fail-open compliance trap: a takedown would go
+# unenforced past its compliance window.
 decdn_content_blacklist_address: "{{ _decdn_profile.get('content_blacklist_address', '') }}"
-# Optional (ADR 028). SlashAppeal contract — only needed to file appeals with
-# `decdn appeal slash`; the daemon accepts but never reads it. Empty => key
-# omitted from node.toml.
-decdn_slash_appeal_address: "{{ _decdn_profile.get('slash_appeal_address', '') }}"
 # Optional (ADR 022). Chain-backed origin directory. These are INDEPENDENTLY
 # optional upstream — the old "both or neither" rule is gone. The daemon reads
 # origin_assignment_address for cache-miss pull-through fallback; it only

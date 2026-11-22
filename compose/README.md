@@ -223,7 +223,7 @@ what each setting does; this section covers the Compose side.
    ```
 
    This creates the `sponsord` account, `/etc/sponsord`, the API token, and the env
-   files, with the chain id and the PaymentPool, CapacityBond and SlashJudge addresses
+   files, with the chain id and the PaymentPool and CapacityBond addresses
    filled in from this repo's mirror of upstream's deployment manifest. Use
    `sponsord` instead of `onramp` for the daemon alone.
 

@@ -42,8 +42,8 @@ decdn_node_install_method: release
 # --- Chain (Arbitrum Sepolia, chain 421614) -----------------------------------
 # The RPC endpoint is the one sensitive value — provision it as DECDN_RPC_URL in
 # /etc/decdn/decdn.env on the host, or set decdn_rpc_url in secret.yml.
-# The profile supplies decdn_chain_id and all eight contract addresses (the four
-# required ones, SlashAppeal, OriginAssignment, PublisherRegistry and USDC). Set any
+# The profile supplies decdn_chain_id and all six contract addresses (the three
+# required ones, OriginAssignment, PublisherRegistry and USDC). Set any
 # decdn_*_address here only to override it deliberately; the role reports overrides.
 decdn_network: arbitrum-sepolia
 

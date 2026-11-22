@@ -310,6 +310,13 @@ Arg: dict "cfg" <map> "root" <$>
 {{- fail (printf "config.%s must be a table (map), got %s" $section (kindOf $v)) }}
 {{- end }}
 {{- end }}
+{{- /* Retired with slashing (decdn/decdn#2938): [blockchain] denies unknown fields,
+     so a values file (or --reuse-values) still carrying one would crash-loop the pod. */}}
+{{- range list "slash_judge_address" "slash_appeal_address" }}
+{{- if hasKey (default (dict) $cfg.blockchain) . }}
+{{- fail (printf "config.blockchain.%s was removed upstream with slashing (decdn/decdn#2938) and the daemon refuses it; delete it from your values" .) }}
+{{- end }}
+{{- end }}
 
 {{- /* [section, key, managed value, what to set instead (hint)] */}}
 {{- $managed := list
