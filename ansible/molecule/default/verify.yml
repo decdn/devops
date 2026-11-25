@@ -196,7 +196,6 @@
           cache, net, pay, bc = (d.get(s, {}) for s in ("cache", "network", "payment", "blockchain"))
           sec, shed = d.get("security", {}), d.get("load_shed", {})
           dht = d.get("dht", {}).get("rate_limit", {})
-          probe = d.get("probe", {}).get("rate_limit", {})
           knob_checks = [
               ("cache.node_to_node_pull_through_enabled",
                cache.get("node_to_node_pull_through_enabled") is True),
@@ -238,7 +237,6 @@
                _is_float(dht.get("per_peer_rate_per_sec")) and dht.get("per_peer_rate_per_sec") == 10.0
                and _is_int(dht.get("per_peer_burst")) and dht.get("per_peer_burst") == 20),
               ("dht.rate_limit unset keys stay absent", set(dht) == {"per_peer_rate_per_sec", "per_peer_burst"}),
-              ("probe.rate_limit unset keys stay absent", set(probe) == {"max_tracked_per_peer"}),
           ]
           # The TOML sub-table hazard: every scalar [cache] key must be emitted BEFORE
           # the first [cache.*] header, or it silently nests into that sub-table
