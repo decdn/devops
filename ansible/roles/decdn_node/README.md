@@ -355,8 +355,7 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
   poller halves its window on a range rejection and grows it back, so leave this
   unset unless `decdn_chain_get_logs_range_rejections_total` keeps rising; then set
   it to the lowest `decdn_chain_get_logs_span` reached while it does, not to the
-  limit your provider quotes),
-  and the `decdn_origin_directory_*` cache knobs.
+  limit your provider quotes).
 - **Network** — `decdn_relay_urls` (list; the singular `relay_url` config key no
   longer exists). Operator-run address discovery (#818) via
   `decdn_discovery_pkarr_url` (publishes this node's record — **requires**
