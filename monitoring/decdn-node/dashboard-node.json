@@ -1627,7 +1627,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "title": "Operator-path failures",
+      "title": "Config reload failures",
       "type": "timeseries",
       "targets": [
         {
@@ -1638,15 +1638,6 @@
           "expr": "sum(rate(decdn_config_reload_failures_total{instance=~\"$node\"}[$__rate_interval]))",
           "refId": "A",
           "legendFormat": "config reload failures"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_receipt_write_failures_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "B",
-          "legendFormat": "receipt write failures"
         }
       ],
       "fieldConfig": {
@@ -1730,7 +1721,7 @@
         "y": 34
       },
       "id": 47,
-      "description": "A failed config reload kept the previous values; a failed receipt write is a lost audit-log row. Neither affects settlement."
+      "description": "A failed config reload kept the previous values; the warn! line beside it names the cause. It does not affect settlement."
     },
     {
       "collapsed": false,

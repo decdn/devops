@@ -120,7 +120,6 @@ Everything lives on the data volume (`/var/lib/decdn`, or the PVC):
 ```
 cache_size_mb                    the cache (role default 10 GiB)
 + disk_headroom_mb               free space the daemon keeps on the volume (default 8 GiB)
-+ receipts                       rotated download-receipt log, bounded by its [receipts] settings
 + daemon state (redb stores)     small, grows with activity; no published bound
 + an fs origin, if the node holds one
 ```

@@ -2145,9 +2145,9 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "title": "Lane and receipt-log writes",
+      "title": "Lane flush failures",
       "type": "timeseries",
-      "description": "Lane flush failures are background lane-store flushes that failed. Each retries on the next tick, but the frontier a crash would replay keeps growing (DecdnLaneFlushFailures). Dropped or failed receipt writes are lost audit-log rows, not lost revenue.",
+      "description": "Background lane-store flushes that failed. Each retries on the next tick, but the frontier a crash would replay keeps growing (DecdnLaneFlushFailures).",
       "targets": [
         {
           "datasource": {
@@ -2157,24 +2157,6 @@
           "expr": "sum(rate(decdn_lane_flush_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "B",
           "legendFormat": "lane flush failures"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_receipt_writes_dropped_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
-          "refId": "C",
-          "legendFormat": "receipt writes dropped"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_receipt_write_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
-          "refId": "D",
-          "legendFormat": "receipt writes failed"
         }
       ],
       "fieldConfig": {

@@ -162,9 +162,6 @@ config:
       global_rate_per_sec: 1000.0
       global_burst: 2500
       max_tracked_per_peer: 2048
-  receipts:
-    max_file_bytes: 67108864
-    retained_files: 8
   content:
     denied_hashes: ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
     denied_origins: ["0x000000000000000000000000000000000000dEaD"]

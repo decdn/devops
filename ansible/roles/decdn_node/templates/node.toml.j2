@@ -395,16 +395,6 @@ per_client_serve_cap = {{ decdn_load_shed_per_client_serve_cap | int }}
 {% endfor %}
 {% endif %}
 {% endfor %}
-{% if decdn_receipts_max_file_bytes not in ["", none] or decdn_receipts_retained_files not in ["", none] %}
-
-[receipts]
-{% if decdn_receipts_max_file_bytes not in ["", none] %}
-max_file_bytes = {{ decdn_receipts_max_file_bytes | int }}
-{% endif %}
-{% if decdn_receipts_retained_files not in ["", none] %}
-retained_files = {{ decdn_receipts_retained_files | int }}
-{% endif %}
-{% endif %}
 {% if (decdn_content_denied_hashes is not none and decdn_content_denied_hashes | length > 0) or (decdn_content_denied_origins is not none and decdn_content_denied_origins | length > 0) %}
 
 [content]

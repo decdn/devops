@@ -804,8 +804,7 @@
         decdn_circuit_breaker_cooldown_ms, decdn_circuit_breaker_half_open_max_calls,
         decdn_security_max_concurrent_handlers, decdn_load_shed_egress_budget_mbps,
         decdn_load_shed_max_concurrent_serves_high, decdn_load_shed_max_concurrent_serves_low,
-        decdn_load_shed_per_client_serve_cap, decdn_receipts_max_file_bytes,
-        decdn_receipts_retained_files] }}
+        decdn_load_shed_per_client_serve_cap] }}
 
 # Float-shaped knobs render through `| float` into a bare TOML float. A non-numeric
 # value would make `| float` coerce to 0.0 and silently zero the knob, so assert
@@ -950,9 +949,6 @@
        min: 16384, max: 9223372036854775807}
     - {name: decdn_origin_retry_buffered_max_bytes, value: "{{ decdn_origin_retry_buffered_max_bytes }}",
        min: 1, max: 67108864}
-    - {name: decdn_receipts_max_file_bytes, value: "{{ decdn_receipts_max_file_bytes }}",
-       min: 1048576, max: 1073741824}
-    - {name: decdn_receipts_retained_files, value: "{{ decdn_receipts_retained_files }}", min: 1, max: 100}
     - {name: decdn_redeem_interval_secs, value: "{{ decdn_redeem_interval_secs }}", min: 1, max: 21600}
   loop_control:
     label: "{{ item.name }}"

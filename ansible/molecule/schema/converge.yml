@@ -148,9 +148,7 @@
       global_burst: 2500
       max_tracked_per_peer: 2048
 
-    # --- [receipts] / [content] ---
-    decdn_receipts_max_file_bytes: 67108864
-    decdn_receipts_retained_files: 8
+    # --- [content] ---
     decdn_content_denied_hashes: ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
     decdn_content_denied_origins: ["0x000000000000000000000000000000000000dEaD"]
 

@@ -223,7 +223,6 @@ network.discovery
 network.discovery.peers.253bad481e6371866c9f6276b2a7b3a10ca16255668e740e6fc01da1cacc4350
 observability
 payment
-receipts
 security
 serve.rate_limit"
 [ "$tables" = "$expected" ] || { diff <(echo "$expected") <(echo "$tables") >&2 || true; fail "table set of ci-values render"; }

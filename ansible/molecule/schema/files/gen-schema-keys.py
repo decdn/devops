@@ -51,7 +51,6 @@ STRUCT_PATHS = {
     "ProbeRateLimitConfig": "probe.rate_limit",
     "ServeConfig": "serve",
     "ServeRateLimitConfig": "serve.rate_limit",
-    "ReceiptsConfig": "receipts",
     "ContentConfig": "content",
 }
 

@@ -573,22 +573,9 @@ groups:
             warn! line beside it names the cause. Fix the config file and
             reload again.
 
-      - alert: DecdnReceiptLogWriteFailing
-        expr: increase(decdn_receipt_write_failures_total[1h]) > 0
-        for: 0m
-        labels:
-          component: receipts
-          severity: warning
-        annotations:
-          summary: "Download-receipt log writes failing on {{ $labels.instance }}"
-          description: |
-            The receipt writer could not persist audit records. Settlement is
-            unaffected, but the audit log has gaps. Check disk space and
-            permissions under identity.data_dir.
-
       # The settlement ledger (decdn/decdn#2598) is observability, not a claim:
       # the redemption stands and only `decdn node earnings` misses the row, so
-      # it sits with the receipt log here rather than with the payment rules.
+      # it sits here rather than with the payment rules.
       # Like DecdnWatcherPersistFailures, every write failure is worth a look,
       # and increase(...[1h]) resolves the alert an hour after the last one.
       # No runbook_url: upstream's "A settlement ledger row that does not

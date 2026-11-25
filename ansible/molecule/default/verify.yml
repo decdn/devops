@@ -224,7 +224,6 @@
               ("cache.origin_retry", cache.get("origin_retry", {}).get("max_retries") == 5),
               ("cache.circuit_breaker", cache.get("circuit_breaker", {}).get("enabled") is False),
               ("load_shed", shed.get("per_client_serve_cap") == 16),
-              ("receipts", d.get("receipts", {}).get("retained_files") == 8),
               ("content.denied_hashes", d.get("content", {}).get("denied_hashes") == ["c" * 64]),
               # The role default: the CLI's self-update notice is off on a managed
               # host (a bare TOML bool, not a string).
