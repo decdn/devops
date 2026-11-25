@@ -857,7 +857,6 @@
       - max_tracked_per_peer
   loop:
     - {name: decdn_dht_rate_limit, value: "{{ decdn_dht_rate_limit }}"}
-    - {name: decdn_probe_rate_limit, value: "{{ decdn_probe_rate_limit }}"}
     - {name: decdn_serve_rate_limit, value: "{{ decdn_serve_rate_limit }}"}
   loop_control:
     label: "{{ item.name }}"

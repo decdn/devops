@@ -918,7 +918,7 @@
       },
       "title": "Clock skew refusals",
       "type": "timeseries",
-      "description": "Requests refused because their timestamp and the receiver's clock differ by more than 30 s (TIMESTAMP_SKEW, decdn v0.3). `refused by upstreams` is this node's probes and pulls that upstream peers refused; the inbound lines are probes and streams this node refused. When this node's clock is off, they rise against every peer and every upstream pull and probe it sends fails: check chrony or systemd-timesyncd on the host (DecdnNodeClockSkew alerts on it). If the throttled warn! lines name one peer, that peer's clock is off instead.",
+      "description": "Requests refused because their timestamp and the receiver's clock differ by more than 30 s (TIMESTAMP_SKEW, decdn v0.3). `refused by upstreams` is this node's opens and pulls that upstream peers refused; `inbound streams refused` is the streams this node refused. When this node's clock is off, both rise against every peer and every upstream pull and open it sends fails: check chrony or systemd-timesyncd on the host (DecdnNodeClockSkew alerts on it). If the throttled warn! lines name one peer, that peer's clock is off instead.",
       "targets": [
         {
           "datasource": {
@@ -928,15 +928,6 @@
           "expr": "sum(rate(decdn_node_upstream_timestamp_rejected_total{instance=~\"$node\"}[$__rate_interval]))",
           "refId": "A",
           "legendFormat": "refused by upstreams"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_probe_timestamp_skew_refusals_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "B",
-          "legendFormat": "inbound probes refused"
         },
         {
           "datasource": {
@@ -2970,28 +2961,10 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "title": "Rate-limit rejections",
+      "title": "DHT rate-limit rejections",
       "type": "timeseries",
       "description": "Sibling counters rather than one counter with a reason label: a per-peer shed is one node ID over its bucket, a global shed means the node itself is at its ceiling, and the remedies differ.",
       "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_probe_rate_limit_rejected_per_peer_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "probe — per peer"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_probe_rate_limit_rejected_global_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "C",
-          "legendFormat": "probe — global"
-        },
         {
           "datasource": {
             "type": "prometheus",
@@ -3091,7 +3064,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "title": "Rate-limit buckets tracked",
+      "title": "DHT rate-limit buckets tracked",
       "type": "timeseries",
       "description": "Bucket counts climbing while the sweep rate stays flat is the memory-exhaustion shape.",
       "targets": [
@@ -3100,27 +3073,9 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "decdn_probe_rate_limit_tracked_per_peer{instance=~\"$node\"}",
-          "refId": "B",
-          "legendFormat": "probe — per peer"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
           "expr": "decdn_dht_rate_limit_tracked_per_peer{instance=~\"$node\"}",
           "refId": "D",
           "legendFormat": "dht — per peer"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_probe_rate_limit_prune_sweeps_per_peer_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "G",
-          "legendFormat": "probe peer sweeps"
         },
         {
           "datasource": {
@@ -3420,228 +3375,6 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "title": "Probe serving and probe cache",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_probe_requests_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "A",
-          "legendFormat": "probe requests served"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_probe_cache_hits_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "B",
-          "legendFormat": "probe-cache hits"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_probe_cache_misses_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "C",
-          "legendFormat": "probe-cache misses"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_probe_read_faults_total{instance=~\"$node\"}[$__rate_interval]))",
-          "refId": "D",
-          "legendFormat": "probe read faults"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "calcs": [
-            "sum"
-          ],
-          "displayMode": "table",
-          "placement": "right",
-          "showLegend": true
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 0,
-        "y": 85
-      },
-      "id": 32
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
-      "title": "Probe-hold slots",
-      "type": "timeseries",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "decdn_probe_hold_slots_used{instance=~\"$node\"}",
-          "refId": "A",
-          "legendFormat": "used"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "decdn_probe_hold_slots_max{instance=~\"$node\"}",
-          "refId": "B",
-          "legendFormat": "configured max"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "calcs": [
-            "last"
-          ],
-          "displayMode": "table",
-          "placement": "right",
-          "showLegend": true
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 85
-      },
-      "id": 33
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
-      },
       "title": "DHT discovery and publishing",
       "type": "timeseries",
       "targets": [
@@ -3889,7 +3622,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "title": "Probe collection latency",
+      "title": "Open collection latency",
       "type": "timeseries",
       "targets": [
         {
@@ -3897,7 +3630,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(decdn_probe_collection_latency_seconds_bucket{instance=~\"$node\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(decdn_open_collection_latency_seconds_bucket{instance=~\"$node\"}[$__rate_interval])))",
           "refId": "A",
           "legendFormat": "collection p50"
         },
@@ -3906,7 +3639,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(decdn_probe_collection_latency_seconds_bucket{instance=~\"$node\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(decdn_open_collection_latency_seconds_bucket{instance=~\"$node\"}[$__rate_interval])))",
           "refId": "B",
           "legendFormat": "collection p95"
         },
@@ -3915,7 +3648,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(decdn_probe_collection_latency_seconds_bucket{instance=~\"$node\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(decdn_open_collection_latency_seconds_bucket{instance=~\"$node\"}[$__rate_interval])))",
           "refId": "C",
           "legendFormat": "collection p99"
         }
@@ -3995,7 +3728,7 @@
         "y": 99
       },
       "id": 48,
-      "description": "p50, p95 and p99 duration of one probe collection window on the cache-miss path, from the start of the concurrent probes (dials included) to the end of collection (ADR 001 §Probe response collection). Collection stops early once enough holders answer, or when every probe resolves; the 1 s probe timeout bounds each probe. A p95 near 1 s means rounds wait on a slow or unreachable peer before enough holders answer. A probe-cache hit sends no probe and is not in these series."
+      "description": "p50, p95 and p99 duration of one collection window of discovery opens on the cache-miss path, from the start of the concurrent voucher-less opens (dials included) to the end of collection (ADR 001 §Open response collection). Collection stops early once enough holders answer, or when every open resolves; the 2.5 s open ceiling bounds each open. A p95 near 2.5 s means rounds wait on a slow or unreachable peer before enough holders answer. A candidate-cache hit sends no open and is not in these series."
     },
     {
       "collapsed": false,
