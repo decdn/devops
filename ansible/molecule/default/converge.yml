@@ -79,8 +79,6 @@
     decdn_dht_rate_limit:
       per_peer_rate_per_sec: 10.0
       per_peer_burst: 20
-    decdn_probe_rate_limit:
-      max_tracked_per_peer: 1024
     decdn_content_denied_hashes:
       - "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     # Two entries each so the {% for %} comma-join branch (loop.last) is exercised —

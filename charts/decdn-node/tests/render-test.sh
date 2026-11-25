@@ -223,13 +223,12 @@ network.discovery
 network.discovery.peers.253bad481e6371866c9f6276b2a7b3a10ca16255668e740e6fc01da1cacc4350
 observability
 payment
-probe.rate_limit
 receipts
 security
 serve.rate_limit"
 [ "$tables" = "$expected" ] || { diff <(echo "$expected") <(echo "$tables") >&2 || true; fail "table set of ci-values render"; }
 keys="$(grep -cE '^[a-z_0-9]+ = ' "$toml" || true)"
-[ "$keys" -ge 117 ] || fail "only $keys scalar keys in ci-values render (expected >= 117)"
+[ "$keys" -ge 112 ] || fail "only $keys scalar keys in ci-values render (expected >= 112)"
 pass "breadth: $keys keys, $(echo "$tables" | grep -c '') tables"
 
 for name in ci-values ci-origins ci-resolve-only; do

@@ -18,41 +18,11 @@
 groups:
   # ---------------------------------------------------------------
   # Slash-safety — copied from appendix-observability §2.1.
-  # A sustained alert here means the operator is at slash risk, with one
-  # deliberate exception: DecdnProbeHoldViolations is grouped here because it
-  # is a probe-hold capacity metric, but it signals lost revenue rather than
-  # slash exposure (see its annotation and appendix-observability §Slash-Safety
-  # Metrics). Carries no slash_risk label for that reason.
+  # A sustained alert here means the operator is at slash risk.
   # ---------------------------------------------------------------
   - name: decdn-slash-safety
     interval: 30s
     rules:
-      - alert: DecdnProbeHoldViolations
-        expr: rate(decdn_probe_hold_unavailable_total{reason="exhausted"}[5m]) > 0
-        for: 5m
-        labels:
-          component: probe
-          severity: critical
-        annotations:
-          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#slashing-risk"
-          summary: "Probe-hold budget exhausted on {{ $labels.instance }}"
-          description: |
-            decdn_probe_hold_unavailable_total{reason="exhausted"} has been
-            incrementing for 5m on {{ $labels.instance }}. Each increment is a
-            blob that IS present but could not be held because every probe-hold
-            slot was live. Holds are best-effort, so the node still advertised
-            has_blob: true and forwent only the hold — the blob is now visible
-            to the LRU driver and may be evicted before the requester's pull
-            arrives, costing a wasted round trip and a lost delivery. Not slash
-            evidence: no offense pairs a probe with a later miss. Reduce load or
-            raise max_probe_holds; investigate OOM. The reason filter is
-            load-bearing: reason="disabled" (max_probe_holds=0) and
-            reason="stake_lane_reserved" are deliberate operator decisions and
-            must not fire this alert. Note max_probe_holds is
-            restart-required — editing it and reloading logs "requires restart"
-            and changes nothing. See
-            adr/005-protocol.md#probe-triggered-eviction-hold.
-
       # There is no blacklist sync-lag or version-delta alert: the watcher
       # rebuilds the deny-set by full enumeration and keeps no version cursor
       # (adr/011-content-takedown.md § Node Behavior), so no such gauge exists to
@@ -747,8 +717,8 @@ groups:
 
       # A request whose timestamp is more than 30 s from the receiver's clock is
       # refused with TIMESTAMP_SKEW (ADR 005, ADR 013). The first arm counts this
-      # node's probes and pulls that upstreams refused, the second the inbound
-      # probes this node refused; when this node's clock is off, both rise with
+      # node's opens and pulls that upstreams refused, the second the inbound
+      # streams this node refused; when this node's clock is off, both rise with
       # every peer it talks to. The node records no reputation outcome for
       # either, so nothing else alerts on it. The counters carry no peer label,
       # so one peer with a bad clock that keeps talking to this node trips it
@@ -761,7 +731,7 @@ groups:
         expr: >-
           increase(decdn_node_upstream_timestamp_rejected_total[15m]) > 0
           or
-          increase(decdn_probe_timestamp_skew_refusals_total[15m]) > 0
+          increase(decdn_serve_stream_rejected_timestamp_skew_total[15m]) > 0
         for: 30m
         labels:
           component: node
@@ -770,13 +740,13 @@ groups:
           summary: "Requests refused for clock skew on {{ $labels.instance }}: its clock is likely more than 30 s off"
           description: |
             For 30 minutes, upstream peers have kept refusing this node's
-            probes and pulls with TIMESTAMP_SKEW
+            opens and pulls with TIMESTAMP_SKEW
             (decdn_node_upstream_timestamp_rejected_total), or this node has
-            kept refusing inbound probes for the same reason
-            (decdn_probe_timestamp_skew_refusals_total): a request's
+            kept refusing inbound streams for the same reason
+            (decdn_serve_stream_rejected_timestamp_skew_total): a request's
             timestamp and the receiving node's clock differ by more than
             30 seconds. Most likely this node's clock is off, and then every
-            upstream pull and probe it sends fails. Check time sync on the
+            upstream pull and open it sends fails. Check time sync on the
             host (on Kubernetes, the cluster node): `chronyc tracking` or
             `timedatectl status` should show the clock synchronised, and
             chronyd or systemd-timesyncd must be running and able to reach
@@ -896,24 +866,6 @@ groups:
       # node logs it, but nothing counts it. This is a real coverage gap, not a
       # naming fix; it is recorded in docs/runbook.md rather than papered over
       # with another rule that cannot fire.
-
-      - alert: DecdnProbeHoldsSaturated
-        expr: |
-          (decdn_probe_hold_slots_used / clamp_min(decdn_probe_hold_slots_max, 1)) > 0.9
-        for: 5m
-        labels:
-          component: probe
-          severity: warning
-        annotations:
-          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#slashing-risk"
-          summary: "Probe-hold slots >90% used on {{ $labels.instance }}"
-          description: |
-            Saturation means cached content is advertised without an eviction
-            hold, so it can be evicted before the pull arrives — wasted round
-            trips and lost deliveries. Raise max_probe_holds — on a small cache keep it
-            proportional to cache size (recommended: no more than 25% of cache
-            capacity); a production node serving many peers should scale the
-            default up instead. max_probe_holds is restart-required.
 
       # Chain-event watcher liveness (#1316) for the payment-settlement watcher
       # — staleness of its last successful poll tick, or a failing poll that

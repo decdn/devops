@@ -143,9 +143,8 @@ region) emits nothing — read a stray hit with that in mind. `decdn_health` is 
    But check its **Status** column before using a name you found *there*: a `planned` row
    emits nothing, so a panel built on it is permanently empty. The exporter is the source of
    truth; the appendix is a view of it.
-2. `reason`-style splits are usually **sibling counters, not labels** — one unlabeled counter per
-   reason. `decdn_probe_hold_unavailable{reason}` is the single documented exception.
-   Do not write a `by (reason)` query against a series that has no such label.
+2. `reason`-style splits are **sibling counters, not labels** — one unlabeled counter per
+   reason. Do not write a `by (reason)` query against a series that has no such label.
 3. A name that resolves can still sit at a permanent zero because nothing increments it.
 4. A panel or alert that names a *new* metric needs the metric in upstream
    `crates/node/src/metrics.rs` first, in a released or pinned `decdn-node`.

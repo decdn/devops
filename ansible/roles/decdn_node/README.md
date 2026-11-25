@@ -378,7 +378,7 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
 - **Abuse limits + load shedding** — `decdn_security_max_concurrent_handlers`,
   `decdn_load_shed_*` (`policy` is `resource-pressure`|`always-admit`; the low-water
   serve mark must be `<=` the high), and the `decdn_dht_rate_limit` /
-  `decdn_probe_rate_limit` / `decdn_serve_rate_limit` (`[serve.rate_limit]`, decdn v0.3:
+  `decdn_serve_rate_limit` (`[serve.rate_limit]`, decdn v0.3:
   inbound client requests) **dicts** (any subset of five keys; rate keys are floats,
   the rest integers — an unknown key is rejected at deploy time, because the template
   would otherwise silently drop it).

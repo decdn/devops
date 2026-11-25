@@ -926,15 +926,6 @@
           "expr": "sum(rate(decdn_client_idle_close_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
           "refId": "E",
           "legendFormat": "idle close"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_probe_read_faults_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
-          "refId": "F",
-          "legendFormat": "probe read faults"
         }
       ],
       "fieldConfig": {
