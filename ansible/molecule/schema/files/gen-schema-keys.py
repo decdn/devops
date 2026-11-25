@@ -47,8 +47,6 @@ STRUCT_PATHS = {
     "LoadShedConfig": "load_shed",
     "DhtConfig": "dht",
     "DhtRateLimitConfig": "dht.rate_limit",
-    "ProbeConfig": "probe",
-    "ProbeRateLimitConfig": "probe.rate_limit",
     "ServeConfig": "serve",
     "ServeRateLimitConfig": "serve.rate_limit",
     "ContentConfig": "content",
