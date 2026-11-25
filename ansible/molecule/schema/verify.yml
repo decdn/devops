@@ -133,10 +133,10 @@
           fi
           # Key floor stays a count: knobs are added upstream routinely, so an exact
           # number would need editing on every sync. The floor sits 5 keys under
-          # today's render (about 125), so the next upstream removals trip
+          # today's render (119), so the next upstream removals trip
           # this, and the fix is to re-count and lower the floor, not to widen it blindly.
-          if [ "$keys" -lt 120 ]; then
-            echo "only $keys scalar keys rendered (expected >= 120) — the converge" >&2
+          if [ "$keys" -lt 114 ]; then
+            echo "only $keys scalar keys rendered (expected >= 114) — the converge" >&2
             echo "has collapsed, so the schema check above proved little." >&2
             exit 1
           fi

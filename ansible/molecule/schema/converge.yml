@@ -43,9 +43,6 @@
     decdn_origin_assignment_address: "0x6666666666666666666666666666666666666666"
     decdn_publisher_registry_address: "0x7777777777777777777777777777777777777777"
     decdn_usdc_address: "0x8888888888888888888888888888888888888888"
-    decdn_origin_directory_positive_ttl_sec: 600
-    decdn_origin_directory_negative_ttl_sec: 60
-    decdn_origin_directory_cache_capacity: 8192
     decdn_content_blacklist_poll_interval_sec: 300
     decdn_chain_staleness_grace_sec: 900
     decdn_rpc_watchdog_interval_sec: 15

@@ -228,7 +228,7 @@ security
 serve.rate_limit"
 [ "$tables" = "$expected" ] || { diff <(echo "$expected") <(echo "$tables") >&2 || true; fail "table set of ci-values render"; }
 keys="$(grep -cE '^[a-z_0-9]+ = ' "$toml" || true)"
-[ "$keys" -ge 120 ] || fail "only $keys scalar keys in ci-values render (expected >= 120)"
+[ "$keys" -ge 112 ] || fail "only $keys scalar keys in ci-values render (expected >= 112)"
 pass "breadth: $keys keys, $(echo "$tables" | grep -c '') tables"
 
 for name in ci-values ci-origins ci-resolve-only; do

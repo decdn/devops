@@ -3220,7 +3220,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "title": "Origin directory",
+      "title": "Origin seats and pins",
       "type": "timeseries",
       "targets": [
         {
@@ -3228,18 +3228,9 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(decdn_origin_directory_cache_size{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"})",
+          "expr": "max(decdn_seated_origins{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"})",
           "refId": "A",
-          "legendFormat": "cached entries"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
-          },
-          "expr": "sum(rate(decdn_origin_directory_get_origins_failures_total{deployment_environment=\"$env\",region=~\"$region\",instance=~\"$instance\"}[$__rate_interval]))",
-          "refId": "B",
-          "legendFormat": "getOrigins failures"
+          "legendFormat": "seated origins"
         },
         {
           "datasource": {

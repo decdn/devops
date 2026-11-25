@@ -61,15 +61,6 @@ publisher_registry_address = "{{ decdn_publisher_registry_address }}"
 {% if decdn_slash_appeal_address | length > 0 %}
 slash_appeal_address = "{{ decdn_slash_appeal_address }}"
 {% endif %}
-{% if decdn_origin_directory_positive_ttl_sec not in ["", none] %}
-origin_directory_positive_ttl_sec = {{ decdn_origin_directory_positive_ttl_sec | int }}
-{% endif %}
-{% if decdn_origin_directory_negative_ttl_sec not in ["", none] %}
-origin_directory_negative_ttl_sec = {{ decdn_origin_directory_negative_ttl_sec | int }}
-{% endif %}
-{% if decdn_origin_directory_cache_capacity not in ["", none] %}
-origin_directory_cache_capacity = {{ decdn_origin_directory_cache_capacity | int }}
-{% endif %}
 {% if decdn_content_blacklist_poll_interval_sec not in ["", none] %}
 content_blacklist_poll_interval_sec = {{ decdn_content_blacklist_poll_interval_sec | int }}
 {% endif %}

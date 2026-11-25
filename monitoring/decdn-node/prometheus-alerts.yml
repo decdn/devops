@@ -404,27 +404,6 @@ groups:
             emits nothing — not even the failure counter. Correlate with
             decdn_staker_set_watcher_down_seconds and check the RPC provider.
 
-      # The origin directory is a lazy on-demand cache, not a watcher, so it has
-      # no last-tick gauge to stale out; alert on its getOrigins failure counter
-      # instead. Each failure means a DHT provider-lookup miss fell back to
-      # resolving no origins (fail-closed), so sustained failures degrade origin
-      # discovery silently. Warning, not critical: normal DHT provider lookup is
-      # the primary path and is unaffected. See adr/appendix-observability.md §3.
-      - alert: DecdnOriginDirectoryLookupFailing
-        expr: rate(decdn_origin_directory_get_origins_failures_total[5m]) > 0
-        for: 15m
-        labels:
-          component: origin
-          severity: warning
-        annotations:
-          runbook_url: "https://github.com/decdn/decdn/blob/main/docs/runbook.md#origin-rescan-probes-faulting"
-          summary: "Origin directory getOrigins lookups failing on {{ $labels.instance }}"
-          description: |
-            The lazy origin directory cannot read getOrigins from chain, so a DHT
-            provider-lookup miss resolves no origins (fail-closed). Sustained
-            failures degrade origin discovery silently. Check the RPC provider and
-            the OriginAssignment contract address.
-
       # Only meaningful when observability.otlp_endpoint is set; the counter
       # stays 0 otherwise. Warning: lost traces do not affect delivery.
       - alert: DecdnOtlpExportFailing
