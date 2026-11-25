@@ -354,7 +354,7 @@ decdn_otlp_endpoint: ""    # OTLP/gRPC span export; http://host:port only (e.g. 
 # definitions byte-identical by intent — do not fork the semantics.
 decdn_grafana_cloud_enabled: false
 
-# --- Abuse limits, load shedding, receipts, local denylist --------------------
+# --- Abuse limits, load shedding, local denylist ------------------------------
 # [security] and [load_shed] and [content] are HOT-RELOADABLE: change them and run
 # `decdn node reload` (or systemctl reload decdn-node) instead of restarting.
 decdn_security_max_concurrent_handlers: ""   # daemon dflt 256; 0 disables the cap
@@ -373,9 +373,6 @@ decdn_load_shed_per_client_serve_cap: ""        # daemon dflt 32
 # [serve.rate_limit] is decdn v0.3: leave it {} under an exact decdn_node_version below 0.3.
 decdn_dht_rate_limit: {}
 decdn_serve_rate_limit: {}
-# Download-receipt log at <data_dir>/download_receipts.jsonl (path not configurable).
-decdn_receipts_max_file_bytes: ""   # daemon dflt 134217728 (128 MiB); floor 1 MiB, ceiling 1 GiB
-decdn_receipts_retained_files: ""   # daemon dflt 4; cap 100
 # Node-local denylist, independent of the on-chain ContentBlacklist. Hot-reloadable.
 decdn_content_denied_hashes: []     # 64-char lowercase-hex BLAKE3 hashes
 decdn_content_denied_origins: []    # 0x publisher addresses (checksum-agnostic; zero address rejected)
@@ -465,7 +462,7 @@ decdn_bin: /usr/local/bin/decdn-node
 decdn_cli_bin: /usr/local/bin/decdn
 
 # systemd TimeoutStopSec for the node unit (seconds). SIGTERM triggers a full
-# graceful drain (await in-flight streams, flush settlement + receipt/audit tail);
+# graceful drain (await in-flight streams, flush settlement);
 # the process exits the instant that finishes, so this is only the CAP before a
 # SIGKILL. It is generous on purpose — a SIGKILL mid-drain truncates paid, in-flight
 # deliveries (a money-losing cut), so prefer waiting over cutting. See

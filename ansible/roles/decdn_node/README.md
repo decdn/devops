@@ -382,8 +382,7 @@ asserts miss. See `defaults/main.yml` for every knob's upstream default, unit an
   inbound client requests) **dicts** (any subset of five keys; rate keys are floats,
   the rest integers — an unknown key is rejected at deploy time, because the template
   would otherwise silently drop it).
-- **Receipts + local denylist** — `decdn_receipts_max_file_bytes`,
-  `decdn_receipts_retained_files`, and `decdn_content_denied_hashes` /
+- **Local denylist** — `decdn_content_denied_hashes` /
   `decdn_content_denied_origins` (node-local, independent of the on-chain blacklist).
 - **Observability** — `decdn_otlp_endpoint` (OTLP/gRPC span export, always compiled in;
   must be `http://host:port`, e.g. `http://localhost:4317` — no `https://`, path or

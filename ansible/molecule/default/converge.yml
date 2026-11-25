@@ -73,7 +73,6 @@
     decdn_origin_retry_max_retries: 5
     decdn_circuit_breaker_enabled: false
     decdn_load_shed_per_client_serve_cap: 16
-    decdn_receipts_retained_files: 8
     # Dict-shaped knobs: only a subset of the five keys is set, which is the case
     # the template's key loop has to get right (absent keys must not render).
     decdn_dht_rate_limit:

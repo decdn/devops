@@ -34,7 +34,7 @@ image carries the `decdn` CLI since v0.0.2, but the chart does not call it).
 | Object | Purpose |
 |--------|---------|
 | `StatefulSet` (1 replica) | `decdn-node run` under a non-root, read-only-rootfs, all-caps-dropped pod. It includes a `prepare` init container. |
-| `PersistentVolumeClaim` (`data`) | The data dir: node identity, voucher state, receipts, and the cache. |
+| `PersistentVolumeClaim` (`data`) | The data dir: node identity, voucher state, and the cache. |
 | `ConfigMap` | The rendered `node.toml`. Its checksum rolls the pod on any change. |
 | `Service` (quic) | Public UDP. The type is `LoadBalancer`, `NodePort` or `ClusterIP`, with `externalTrafficPolicy: Local`. |
 | `Service` (metrics) | ClusterIP only, never public. |
