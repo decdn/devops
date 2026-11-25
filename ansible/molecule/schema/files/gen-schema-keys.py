@@ -36,6 +36,8 @@ STRUCT_PATHS = {
     # Keyed by NodeId, so the concrete hop is a wildcard.
     "DiscoveryPeer": "network.discovery.peers.*",
     "BlockchainConfig": "blockchain",
+    # The [[blockchain.payment_chains]] array of tables: one entry per payment chain.
+    "PaymentChainConfig": "blockchain.payment_chains",
     "CacheConfig": "cache",
     "TinyLfuConfig": "cache.tinylfu",
     "ServeEconomicsConfig": "cache.serve_economics",
