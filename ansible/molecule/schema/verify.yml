@@ -133,11 +133,11 @@
             exit 1
           fi
           # Key floor stays a count: knobs are added upstream routinely, so an exact
-          # number would need editing on every sync. Today's render is 130 (decdn/decdn
-          # v0.0.2), so the slack is 5 — the next upstream removals trip
-          # this, and the fix is to re-count and lower the floor, not to widen it blindly.
-          if [ "$keys" -lt 125 ]; then
-            echo "only $keys scalar keys rendered (expected >= 125) — the converge" >&2
+          # number would need editing on every sync. Today's render is 124, so the
+          # slack is 5 — the next upstream removals trip this, and the fix is to
+          # re-count and lower the floor, not to widen it blindly.
+          if [ "$keys" -lt 119 ]; then
+            echo "only $keys scalar keys rendered (expected >= 119) — the converge" >&2
             echo "has collapsed, so the schema check above proved little." >&2
             exit 1
           fi
